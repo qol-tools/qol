@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 pub(super) const NAME: &str = "qol-switchboard";
 pub(super) const BOARD_TOOL: &str = "mcp__qol-switchboard__fork_board";
 pub(super) const RESUME_TOOL: &str = "mcp__qol-switchboard__resume_session";
-pub(super) const DONE_TOOL: &str = "mcp__qol-switchboard__fork_done";
 pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
@@ -93,7 +92,8 @@ mod tests {
             "if (e.agentId !== undefined && CROSS_SESSION.test(e.tool)) return { deny: FORK_RESUME }",
             "const prompt = withLauncher(e.prompt, e.parentAgentId)",
             "const claimed = await recordClaim($, e.description, cwd)",
-            "return next({ ...e, cwd, prompt, description: claimed.description })",
+            "const spawnAs = { ...e, cwd, prompt, ...(model === undefined ? {} : { model }) }",
+            "return next({ ...spawnAs, description: claimed.description })",
             "if (key !== undefined) await recordPart($, key, agentId)",
             "on('session.send', async ($, e, next) => {",
             "mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }",
@@ -147,8 +147,8 @@ mod tests {
             "const HANDBACK = /^(Another Claude session sent a message:\\n<agent-message from=",
             "const NOTIFICATION = /^<task-notification>\\n[\\s\\S]*<\\/task-notification>$/",
             "if (agentId === undefined || !isFork(agentId)) return undefined",
-            "Send \"{entry.recommend}\" to {keyName(entry.name)}?",
-            "const KINDS: readonly Kind[] = ['ask', 'test', 'failed', 'blocked', 'waiting', 'merged', 'note']",
+            "Send \"{one.recommend}\" to {keyName(one.name)}?",
+            "const KINDS: readonly Kind[] = ['ask', 'test', 'failed', 'blocked', 'merged', 'note']",
             "const boardLine = (entry: Entry): string => `[fork board] ${keyName(entry.name)}: ${entry.headline}`",
             "headline: headlineOf(report)",
             "model: 'haiku'",
@@ -165,7 +165,16 @@ mod tests {
             "on('prompt.autocomplete', async ($, e, next) => {",
             "on('prompt.edit', async ($, e, next) => {",
             "return dropAs(`→ ${keyOf(at.entry)}`)",
-            "const sent = await sendTo($, at.entry, fromUser(at.message), direct($))",
+            "const said = withHookContext(fromUser(at.message), hooked.context)",
+            "const sent = await sendTo($, at.entry, said, direct($))",
+            "const hooked = await promptHooks($, at.entry, at.message)",
+            "return next({ ...e, text, ...(hooked.context.length === 0 ? {} : { context: [...(e.context ?? []), ...hooked.context] }) })",
+            "$.env.get('CLAUDE_CONFIG_DIR')",
+            "const own = project === undefined || !(await isTrustedFolder($, project)) ? [] : await Promise.all(",
+            "await file($, { agentId, status: 'completed', report: last.answer })",
+            "if (last !== undefined && last.turnId !== turnId) return",
+            "if (e.agentId !== undefined && !isHeld && !isKilledOnly(e.text)) {",
+            "await fillLaunchers($).catch(() => undefined)",
             "await $.session.messages({ agentId: target })",
             "...missingForks(rows, [...records.values()], await $.clock.now())",
             "WRITING TO",
@@ -186,11 +195,13 @@ mod tests {
         assert!(MODULE.contains(&format!("const RESUME = '{resume}'")));
         assert!(MODULE.contains("'adopt', '--conversations', conversations"));
         assert!(MODULE_TESTS.contains(RESUME_TOOL));
-        assert!(MODULE.contains(&format!("const FORK_DONE_NAME = '{DONE_TOOL}'")));
-        let done = DONE_TOOL.strip_prefix(&format!("mcp__{NAME}__")).unwrap();
-        assert!(MODULE.contains(&format!("const FORK_DONE = '{done}'")));
-        assert!(MODULE_TESTS.contains(DONE_TOOL));
-        for retired in ["Recommend(?:ed)?", "<kind>: <headline>", "const HEADER"] {
+        for retired in [
+            "Recommend(?:ed)?",
+            "<kind>: <headline>",
+            "const HEADER",
+            "fork_done",
+            "isDoneOpen",
+        ] {
             assert!(!MODULE.contains(retired), "{retired}");
         }
     }
@@ -204,19 +215,22 @@ mod tests {
             "$.process.run([program, 'fork-watch', '--deliver']",
             "$.env.get('QOL_CLI_SESSIONS')",
             "$.env.get('QOL_SWITCHBOARD_WATCHES')",
+            "$.env.get('QOL_SWITCHBOARD_STATE_LOOKS')",
+            "$.env.get('QOL_SWITCHBOARD_MARKS')",
+            "[program, 'sessions', 'switchboard', 'hook', 'fork-states']",
             "if (result.exit_code === MERGED_EXIT && (await fileMerged($, result, fork).then(() => true, () => false))) return true",
             "'open · CLI Sessions watching' : 'open · no watcher'",
-            "const cutIfWorking = (entry: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) })",
+            "const cutIfWorking = ({ isRunOver, ...entry }: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking && isRunOver !== true ? { isInterrupted: true } : {}) })",
             "mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own)",
             "const sent = await sendTo($, entry, CONTINUE)",
             "!entry.isDismissed && entry.successor === undefined && entry.isDone !== true",
             "[program, 'sessions', 'record', verb, ...args]",
             "await recordRun($, 'resume', ['--key', marked])",
             "'--description', claimed?.description ?? session.description",
-            "on('tool.call', { tool: FORK_DONE_NAME }, async ($, e) => {",
-            "{ deny: 'Only a fork marks itself done.' }",
+            "await recordRun($, 'done', ['--key', row.key, '--reason', CLOSED_REASON])",
+            "const recent = recentlyClosed(everyRow)",
             "void recordRun($, 'archive', ['--key', entry.key])",
-            "void recordRun($, 'stopped', ['--key', key])",
+            "void recordRun($, 'stopped', ['--key', before.key])",
             "const merged = await withRecords($, mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own))",
             "const sent = await sendTo($, entry, REOPENED, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry)))",
             "await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry)))",

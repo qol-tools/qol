@@ -1,3 +1,4 @@
+mod gate;
 mod transport;
 
 #[cfg(test)]
@@ -18,6 +19,7 @@ use crate::admin::{AttemptState, EnrollmentFailure, Error};
 use crate::enrollment::{ExportedInvitation, TransactionId};
 use crate::service::{enrollment::Invitation, PeerAuthority, PeerPin};
 use crate::StoreRevision;
+pub(super) use gate::Gate;
 use nearby::{OfferJob, Offers};
 
 pub(super) const MAX_EXCHANGES: usize = 8;
@@ -35,6 +37,7 @@ pub(super) struct Control {
     attempts: Attempts,
     offer_commands: mpsc::Sender<OfferJob>,
     offers: Offers,
+    gate: Arc<Gate>,
     pub(super) loopback: bool,
 }
 
@@ -43,7 +46,7 @@ pub(super) struct Owner {
     attempts: Attempts,
     offer_commands: mpsc::Receiver<OfferJob>,
     offers: Offers,
-    control: (mpsc::WeakSender<Job>, mpsc::WeakSender<OfferJob>, bool),
+    gate: Arc<Gate>,
 }
 
 struct Job {
@@ -55,17 +58,19 @@ struct Job {
     cancel: watch::Receiver<bool>,
 }
 
-pub(super) fn prepare(loopback: bool) -> (Control, Owner) {
+pub(super) fn prepare(bind: std::net::Ipv4Addr, loopback: bool) -> (Control, Owner) {
     let (commands, incoming) = mpsc::channel(MAX_EXCHANGES);
     let (offer_commands, offer_incoming) = mpsc::channel(MAX_EXCHANGES);
     let attempts = Arc::new(Mutex::new(HashMap::new()));
     let offers = Offers::default();
+    let gate = Arc::new(Gate::new(bind));
     (
         Control {
-            commands: commands.clone(),
+            commands,
             attempts: attempts.clone(),
-            offer_commands: offer_commands.clone(),
+            offer_commands,
             offers: offers.clone(),
+            gate: gate.clone(),
             loopback,
         },
         Owner {
@@ -73,22 +78,9 @@ pub(super) fn prepare(loopback: bool) -> (Control, Owner) {
             attempts,
             offer_commands: offer_incoming,
             offers,
-            control: (commands.downgrade(), offer_commands.downgrade(), loopback),
+            gate,
         },
     )
-}
-
-impl Owner {
-    fn control(&self) -> Option<Control> {
-        let (commands, offer_commands, loopback) = &self.control;
-        Some(Control {
-            commands: commands.upgrade()?,
-            attempts: self.attempts.clone(),
-            offer_commands: offer_commands.upgrade()?,
-            offers: self.offers.clone(),
-            loopback: *loopback,
-        })
-    }
 }
 
 impl Control {
@@ -150,6 +142,14 @@ impl Control {
         })
     }
 
+    pub(super) fn reserve_listener(&self) -> Result<u16, Error> {
+        self.gate.hold_for_invitation()
+    }
+
+    pub(super) fn open_to_nearby(&self) -> Result<u16, Error> {
+        self.gate.hold_for_nearby()
+    }
+
     pub(super) fn attempt(&self, transaction: TransactionId) -> Result<AttemptState, Error> {
         let attempts = self.attempts.lock().map_err(|_| Error::HostUnavailable)?;
         Ok(attempts
@@ -205,6 +205,10 @@ fn refusal(error: EnrollmentFailure) -> Error {
 }
 
 impl Owner {
+    pub(super) fn gate(&self) -> Arc<Gate> {
+        self.gate.clone()
+    }
+
     fn state(&self, transaction: TransactionId, state: AttemptState, complete: bool) {
         let mut attempts = self
             .attempts

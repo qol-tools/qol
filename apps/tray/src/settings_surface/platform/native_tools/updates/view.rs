@@ -1,4 +1,5 @@
 use qol_gpui::key::Key;
+use qol_gpui::ActionMark;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
@@ -14,7 +15,7 @@ use qol_gpui::settings_panel::components::{
     SettingsHint, DIMMED_OPACITY,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_busy_message,
+    adjacent_visible_row, escape_step, intent, settings_action_mark, settings_busy_message,
     settings_connection_spinner, settings_description, settings_list, settings_value_text,
     CustomHints, CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier,
     CustomSettingsBreadcrumbs, EscapeStep, Intent, SettingsDestination, SettingsGroupHeader,
@@ -538,11 +539,10 @@ impl UpdatesView {
             ));
         row.child(label)
             .child(
-                settings_value_group().children(summary.action_label.map(|label| {
-                    settings_action_affordance(
+                settings_value_group().children(summary.action_label.map(|_| {
+                    settings_action_mark(
                         ("updates-summary-action", index),
-                        label,
-                        None,
+                        ActionMark::Run,
                         false,
                         ground,
                         kit,
@@ -590,11 +590,10 @@ impl UpdatesView {
                     ground,
                     kit,
                 ))
-                .children(target.action_label.map(|label| {
-                    settings_action_affordance(
+                .children(target.action_label.map(|_| {
+                    settings_action_mark(
                         ("updates-target-action", index),
-                        label,
-                        None,
+                        ActionMark::Run,
                         false,
                         ground,
                         kit,

@@ -9,7 +9,12 @@ pub(super) fn dispatch(
     request: NearbyRequest,
 ) -> Result<Response, Error> {
     match request {
-        NearbyRequest::List {} => list(active),
+        NearbyRequest::List {} => {
+            if let Some(network) = &active.network {
+                let _ = network.open_to_nearby();
+            }
+            list(active)
+        }
         NearbyRequest::Link {
             expected,
             peer_id,
@@ -32,7 +37,7 @@ pub(super) fn dispatch(
             if inbound(active, peer_id)? {
                 authority.confirm_nearby(expected.revision, peer_id, grants)?;
             } else {
-                network(active)?.confirm_nearby(authority, expected.revision, peer_id, grants)?;
+                network(active)?.confirm_nearby(authority, expected.revision, peer_id)?;
             }
             changed(active)
         }

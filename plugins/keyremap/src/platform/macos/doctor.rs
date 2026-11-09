@@ -83,7 +83,10 @@ fn install_command() -> String {
 }
 
 fn install_fix() -> String {
-    format!("Run: {}", install_command())
+    format!(
+        "Run: {} (run it again after every Key Remap update, because the helper trusts only the Key Remap build it was installed with)",
+        install_command()
+    )
 }
 
 fn unknown(id: &str, reason: &str) -> DoctorCheckResult {

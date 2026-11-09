@@ -1,6 +1,5 @@
 mod graph;
 
-use std::fs::File;
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
@@ -170,11 +169,8 @@ impl Tap {
             processes: session.processes.clone(),
         };
         let request = serde_json::to_string(&request).context("failed to encode the request")?;
-        let log_file = File::options()
-            .create(true)
-            .append(true)
-            .open(super::super::CAPTURE_LOG)
-            .context("failed to open the recording log")?;
+        let log_file =
+            super::super::open_capture_log(false).context("failed to open the recording log")?;
         let executable = std::env::current_exe().context("failed to resolve qol-shot")?;
         let mut keeper = Command::new(executable)
             .env(KEEPER_ENV, request)

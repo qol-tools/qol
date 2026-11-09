@@ -177,7 +177,7 @@ impl ProfileScopeStore {
     }
 
     pub fn task_runner_path(&self) -> PathBuf {
-        self.os_dir().join(TASK_RUNNER_FILE)
+        self.device_dir().join(TASK_RUNNER_FILE)
     }
 
     pub fn device_sync_dir(&self) -> PathBuf {
@@ -364,10 +364,7 @@ mod tests {
         );
         assert_eq!(s.hotkeys_path(), active.join("os/macos/hotkeys.json"));
         assert_eq!(s.shortcuts_path(), active.join("os/macos/shortcuts.json"));
-        assert_eq!(
-            s.task_runner_path(),
-            active.join("os/macos/task-runner.json")
-        );
+        assert_eq!(s.task_runner_path(), active.join("device/task-runner.json"));
         assert_eq!(s.device_sync_dir(), active.join("device/sync"));
         assert_eq!(s.sync_state_path(), active.join("device/sync/state.json"));
         assert_eq!(

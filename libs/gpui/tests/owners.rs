@@ -1,5 +1,7 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use qol_gpui::ActionMark;
 use serde_json::Value;
 
 fn workspace() -> PathBuf {
@@ -86,6 +88,49 @@ fn every_exception_names_a_function_that_exists() {
         assert!(
             item["why"].as_str().is_some_and(|why| !why.is_empty()),
             "{path} needs a why"
+        );
+    }
+}
+
+fn marks_entry() -> Value {
+    let text = std::fs::read_to_string(workspace().join(".qac/owners.json")).unwrap();
+    let mut owners: Value = serde_json::from_str(&text).unwrap();
+    owners["action marks"].take()
+}
+
+fn drawn_by_marks() -> BTreeSet<String> {
+    ActionMark::ALL
+        .iter()
+        .flat_map(|mark| mark.drawn_by().iter().map(|item| item.to_string()))
+        .collect()
+}
+
+#[test]
+fn action_marks_are_owned_by_the_kit() {
+    assert_eq!(marks_entry()["owner"].as_str(), Some("libs/gpui/"));
+}
+
+#[test]
+fn action_mark_paths_are_what_the_marks_draw_with() {
+    let listed: BTreeSet<String> = strings(&marks_entry()["paths"]).into_iter().collect();
+    assert_eq!(listed, drawn_by_marks());
+}
+
+#[test]
+fn every_action_mark_path_names_a_kit_item() {
+    let kit = workspace().join("libs/gpui/src");
+    for item in drawn_by_marks() {
+        let (owner, name) = item.split_once("::").unwrap();
+        let (file, shape) = match owner {
+            "Icon" => ("icon.rs", format!("Self::{name} =>")),
+            "pictures" => ("pictures/raster.rs", format!("pub fn {name}(")),
+            "Busy" => ("busy.rs", format!("pub fn {name}(")),
+            other => panic!("{item}: no kit file draws {other}"),
+        };
+        let source = std::fs::read_to_string(kit.join(file)).unwrap();
+        assert!(
+            source.contains(&shape),
+            "{item} is not in libs/gpui/src/{file}"
         );
     }
 }

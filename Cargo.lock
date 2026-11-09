@@ -93,9 +93,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "approx"
@@ -237,7 +237,7 @@ version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "435a87a52755b8f27fcf321ac4f04b2802e337c8c4872923137471ec39c37532"
 dependencies = [
- "event-listener 5.4.1",
+ "event-listener 5.4.2",
  "event-listener-strategy",
  "futures-core",
  "pin-project-lite",
@@ -280,9 +280,9 @@ dependencies = [
 
 [[package]]
 name = "async-executor"
-version = "1.14.0"
+version = "1.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c96bf972d85afc50bf5ab8fe2d54d1586b4e0b46c97c50a0c9e71e2f7bcd812a"
+checksum = "f426a31126c735126297bc5ea7a521263c9faff4f63ca415267ee625651c4f37"
 dependencies = [
  "async-task",
  "concurrent-queue",
@@ -342,7 +342,7 @@ version = "3.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "290f7f2596bd5b78a9fec8088ccd89180d7f9f55b94b0576823bbbdc72ee8311"
 dependencies = [
- "event-listener 5.4.1",
+ "event-listener 5.4.2",
  "event-listener-strategy",
  "pin-project-lite",
 ]
@@ -371,7 +371,7 @@ dependencies = [
  "async-task",
  "blocking",
  "cfg-if",
- "event-listener 5.4.1",
+ "event-listener 5.4.2",
  "futures-lite 2.6.1",
  "rustix 1.1.4",
 ]
@@ -1140,9 +1140,9 @@ dependencies = [
 
 [[package]]
 name = "chacha20"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
@@ -1677,9 +1677,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "dc74980687109a3b14c72fd458107bf0baa1da1a1a805e178d15501ba9b86d9d"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -2163,7 +2163,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2410,7 +2410,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2458,11 +2458,10 @@ checksum = "0206175f82b8d6bf6652ff7d71a1e27fd2e4efde587fd368662814d6ec1d9ce0"
 
 [[package]]
 name = "event-listener"
-version = "5.4.1"
+version = "5.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13b66accf52311f30a0db42147dadea9850cb48cd070028831ae5f5d4b856ab"
+checksum = "5a23add41df1562121a9393cb065eab5146a1242410f23a644851e90cfd669d2"
 dependencies = [
- "concurrent-queue",
  "parking",
  "pin-project-lite",
 ]
@@ -2473,7 +2472,7 @@ version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
- "event-listener 5.4.1",
+ "event-listener 5.4.2",
  "pin-project-lite",
 ]
 
@@ -3739,9 +3738,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.15"
+version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb093c84e8bd9b188d4c4a8cb6579fc016968d14c99882163cd3ff402a4f155"
+checksum = "7d29020232d6aa3fb1daca64c1127cf662cf97f254ae16c18c05b8ab635fc118"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -4615,9 +4614,9 @@ dependencies = [
 
 [[package]]
 name = "libz-sys"
-version = "1.1.29"
+version = "1.1.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85bc9657773828b90eeb625adff10eeac83cc21bbfd8e23a03eaa8a33c9e28d9"
+checksum = "69965d2409bff8c8cea3829009fff66a86f05a0570656552ef70f616e8e4bd85"
 dependencies = [
  "cc",
  "libc",
@@ -4679,9 +4678,9 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.18.0"
+version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a860605968fce16869fd239cf4237a82f3ac470723415db603b0e8b6c8d4fb9"
+checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -4845,9 +4844,9 @@ checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "memmap2"
-version = "0.9.10"
+version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "714098028fe011992e1c3962653c96b2d578c4b4bce9036e15ff220319b1e0e3"
+checksum = "6b0ca1155a9ecc25aa12e8313a119f32edf0255fea2f44839c4ac0a12b2ac157"
 dependencies = [
  "libc",
  "stable_deref_trait",
@@ -5129,7 +5128,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6363,7 +6362,7 @@ dependencies = [
 
 [[package]]
 name = "qol-alt-tab"
-version = "0.126.4"
+version = "0.127.0"
 dependencies = [
  "block2",
  "core-foundation 0.10.0",
@@ -6461,7 +6460,7 @@ dependencies = [
 
 [[package]]
 name = "qol-bluetooth"
-version = "0.82.1"
+version = "0.82.4"
 dependencies = [
  "anyhow",
  "bluer",
@@ -6533,7 +6532,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.146.3"
+version = "0.151.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6564,7 +6563,7 @@ dependencies = [
 
 [[package]]
 name = "qol-clipboard"
-version = "0.21.1"
+version = "0.21.4"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -6627,7 +6626,7 @@ dependencies = [
 
 [[package]]
 name = "qol-controllers"
-version = "0.72.1"
+version = "0.72.4"
 dependencies = [
  "anyhow",
  "evdev",
@@ -6737,7 +6736,7 @@ dependencies = [
 
 [[package]]
 name = "qol-explorer"
-version = "0.26.3"
+version = "0.27.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6751,6 +6750,7 @@ dependencies = [
  "qol-apps",
  "qol-config",
  "qol-conventions",
+ "qol-fs",
  "qol-gpui",
  "qol-headless",
  "qol-log",
@@ -6921,7 +6921,7 @@ dependencies = [
 
 [[package]]
 name = "qol-input"
-version = "0.21.1"
+version = "0.21.4"
 dependencies = [
  "anyhow",
  "libc",
@@ -6948,7 +6948,7 @@ dependencies = [
 
 [[package]]
 name = "qol-keyremap"
-version = "1.86.4"
+version = "1.86.8"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.0",
@@ -6978,7 +6978,7 @@ dependencies = [
 
 [[package]]
 name = "qol-launcher"
-version = "1.117.3"
+version = "1.118.0"
 dependencies = [
  "anyhow",
  "block2",
@@ -7025,7 +7025,7 @@ dependencies = [
 
 [[package]]
 name = "qol-lights"
-version = "1.83.1"
+version = "1.83.5"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -7075,7 +7075,7 @@ dependencies = [
 
 [[package]]
 name = "qol-memory"
-version = "0.49.1"
+version = "0.49.4"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7127,7 +7127,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.54.2"
+version = "0.54.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7162,7 +7162,7 @@ dependencies = [
 
 [[package]]
 name = "qol-os-themes"
-version = "0.85.1"
+version = "0.85.4"
 dependencies = [
  "anyhow",
  "libc",
@@ -7195,6 +7195,7 @@ version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
+ "curve25519-dalek",
  "hkdf",
  "hmac",
  "if-addrs 0.15.0",
@@ -7217,7 +7218,6 @@ dependencies = [
  "tokio-rustls",
  "windows-sys 0.59.0",
  "workspace-hack",
- "x25519-dalek",
  "x509-cert",
  "x509-parser",
  "zeroize",
@@ -7318,7 +7318,7 @@ dependencies = [
 
 [[package]]
 name = "qol-pointz"
-version = "1.80.1"
+version = "1.81.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7378,7 +7378,7 @@ dependencies = [
 
 [[package]]
 name = "qol-removeapp"
-version = "0.101.3"
+version = "0.102.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7454,7 +7454,7 @@ dependencies = [
 
 [[package]]
 name = "qol-session"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "qol-conventions",
@@ -7494,7 +7494,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.116.3"
+version = "1.117.0"
 dependencies = [
  "anyhow",
  "block2",
@@ -7533,7 +7533,7 @@ dependencies = [
 
 [[package]]
 name = "qol-sound"
-version = "0.41.1"
+version = "0.41.4"
 dependencies = [
  "anyhow",
  "log",
@@ -7608,7 +7608,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.138.6"
+version = "3.139.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7700,7 +7700,7 @@ dependencies = [
 
 [[package]]
 name = "qol-update-manager"
-version = "0.25.1"
+version = "0.26.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7725,7 +7725,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.81.1"
+version = "0.81.5"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -7766,7 +7766,7 @@ dependencies = [
 
 [[package]]
 name = "qol-window-actions"
-version = "2.79.2"
+version = "2.79.5"
 dependencies = [
  "log",
  "proptest",
@@ -8003,7 +8003,7 @@ version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
 dependencies = [
- "chacha20 0.10.1",
+ "chacha20 0.10.2",
  "getrandom 0.4.3",
  "rand_core 0.10.1",
 ]
@@ -8544,7 +8544,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9189,7 +9189,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9205,9 +9205,9 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.9.8"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 dependencies = [
  "lock_api",
 ]
@@ -9259,7 +9259,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9672,7 +9672,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9970,9 +9970,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.52.3"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
@@ -10441,7 +10441,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -11138,7 +11138,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -11865,6 +11865,8 @@ dependencies = [
  "windows 0.61.3",
  "windows-core 0.61.2",
  "windows-numerics",
+ "windows-sys 0.48.0",
+ "windows-sys 0.52.0",
  "windows-sys 0.59.0",
  "windows-sys 0.60.2",
  "windows-sys 0.61.2",
@@ -11938,18 +11940,6 @@ name = "x11rb-protocol"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
-
-[[package]]
-name = "x25519-dalek"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
-dependencies = [
- "curve25519-dalek",
- "rand_core 0.6.4",
- "serde",
- "zeroize",
-]
 
 [[package]]
 name = "x509-cert"
@@ -12126,7 +12116,7 @@ dependencies = [
  "async-trait",
  "blocking",
  "enumflags2",
- "event-listener 5.4.1",
+ "event-listener 5.4.2",
  "futures-core",
  "futures-lite 2.6.1",
  "hex",

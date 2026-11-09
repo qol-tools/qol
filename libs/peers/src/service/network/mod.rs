@@ -79,27 +79,19 @@ impl NetworkControl {
         &self,
         addresses: Vec<std::net::IpAddr>,
     ) -> Result<Vec<std::net::SocketAddr>, crate::admin::Error> {
-        use crate::{
-            admin::{EnrollmentFailure, Error},
-            network::ListenerStatus,
-        };
-        if *self.stop.borrow() {
-            return Err(Error::Enrollment {
-                error: EnrollmentFailure::Unavailable,
-            });
-        }
-        let ListenerStatus::Listening { port } = self.view.borrow().status.enrollment_listener
-        else {
-            return Err(Error::Enrollment {
-                error: EnrollmentFailure::Unavailable,
-            });
-        };
+        self.running()?;
+        let port = self.enrollment.reserve_listener()?;
         let endpoints: Vec<_> = addresses
             .into_iter()
             .map(|address| std::net::SocketAddr::new(address, port))
             .collect();
         enrollment::validate_endpoints(&endpoints, self.enrollment.loopback)?;
         Ok(endpoints)
+    }
+
+    pub fn open_to_nearby(&self) -> Result<(), crate::admin::Error> {
+        self.running()?;
+        self.enrollment.open_to_nearby().map(drop)
     }
 
     pub fn validate_invitation(
@@ -158,11 +150,9 @@ impl NetworkControl {
         authority: &PeerAuthority,
         expected: crate::StoreRevision,
         peer: crate::PeerId,
-        grants: Vec<qol_conventions::operations::OperationKey>,
     ) -> Result<crate::admin::AttemptState, crate::admin::Error> {
         self.running()?;
-        self.enrollment
-            .confirm_nearby(authority, expected, peer, grants)
+        self.enrollment.confirm_nearby(authority, expected, peer)
     }
 
     pub fn decline_nearby(&self, peer: crate::PeerId) -> Option<crate::enrollment::TransactionId> {
@@ -234,7 +224,7 @@ fn prepare_inner(
         sessions: Vec::new(),
         nearby: Vec::new(),
     });
-    let (enrollment, owner) = enrollment::prepare(options.allow_loopback_hints);
+    let (enrollment, owner) = enrollment::prepare(options.bind, options.allow_loopback_hints);
     let task = Box::pin(run(
         authority,
         options,
@@ -265,14 +255,7 @@ async fn run(
     workers: tokio::sync::mpsc::Receiver<operations::Worker>,
 ) -> Result<(), NetworkFailure> {
     let (closing, closed) = watch::channel(false);
-    let listener = tokio::net::TcpListener::bind(std::net::SocketAddrV4::new(options.bind, 0))
-        .await
-        .map_err(|_| NetworkFailure::Listener);
-    let link = listener
-        .as_ref()
-        .ok()
-        .and_then(|listener| listener.local_addr().ok())
-        .map(|address| address.port());
+    let gate = enrollment.gate();
     let normal = supervisor::run(
         authority.clone(),
         options.clone(),
@@ -280,9 +263,9 @@ async fn run(
         view.clone(),
         operations,
         workers,
-        link,
+        gate,
     );
-    let enrollment = enrollment.run(authority, listener, closed, view);
+    let enrollment = enrollment.run(authority, closed, view);
     tokio::pin!(normal, enrollment);
     tokio::select! {
         biased;

@@ -115,6 +115,10 @@ impl Fixture {
     }
 
     async fn ready(&mut self) {
+        self.request(Request::Nearby {
+            request: qol_peers::admin::NearbyRequest::List {},
+        })
+        .await;
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if *self.started.borrow() > 0 {
@@ -334,6 +338,7 @@ async fn standby_promotion_and_writer_reopen_use_the_real_host_request_owner() {
         }
     ));
     assert_eq!(authority(&fixture.shared).peer_id, identity);
+    fixture.ready().await;
     tokio::time::timeout(Duration::from_secs(5), async {
         while *fixture.started.borrow() < 2 {
             fixture.started.changed().await.unwrap();

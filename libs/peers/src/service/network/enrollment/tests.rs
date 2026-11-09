@@ -10,7 +10,7 @@ fn retained_unknown_results_are_not_evicted_to_admit_a_new_transaction() {
     let transaction = authority
         .prepare_join(authority.projection().unwrap().revision, &invitation)
         .unwrap();
-    let (control, _owner) = prepare(true);
+    let (control, _owner) = prepare(std::net::Ipv4Addr::LOCALHOST, true);
     for index in 0..=MAX_RESULTS {
         let key = TransactionId::from_random((index as u128).to_be_bytes());
         if key == transaction {

@@ -29,3 +29,7 @@ pub(crate) fn set_mode(_: &File, _: u32) -> io::Result<()> {
 pub fn file_identity(_: &Path, _: &std::fs::Metadata) -> Option<crate::FileIdentity> {
     None
 }
+
+pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    super::rename_check::rename_if_absent(from, to)
+}

@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::fs::File;
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
@@ -367,7 +366,7 @@ fn start_cinnamon_capture(
     );
 
     let log_file =
-        File::create(super::super::CAPTURE_LOG).context("failed to create recording log file")?;
+        super::super::open_capture_log(true).context("failed to create recording log file")?;
     let stdout_log = log_file
         .try_clone()
         .context("failed to clone recording log file")?;
@@ -429,7 +428,7 @@ fn start_nvfbc_capture(rect: &Rect, config: &Config, output_file: &Path) -> Resu
     );
 
     let log_file =
-        File::create(super::super::CAPTURE_LOG).context("failed to create recording log file")?;
+        super::super::open_capture_log(true).context("failed to create recording log file")?;
     let stdout_log = log_file
         .try_clone()
         .context("failed to clone recording log file")?;
@@ -1013,7 +1012,7 @@ fn start_x11grab_capture(
 ) -> Result<CaptureSession> {
     let args = x11grab_args(rect, config, output_file, encoder, &x11_display());
     let log_file =
-        File::create(super::super::CAPTURE_LOG).context("failed to create recording log file")?;
+        super::super::open_capture_log(true).context("failed to create recording log file")?;
     let stdout_log = log_file
         .try_clone()
         .context("failed to clone recording log file")?;
@@ -1099,7 +1098,7 @@ fn ffmpeg_args(video_input: Vec<String>, config: &Config, encoder: X11grabEncode
 
 pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
     let log_file =
-        File::create(super::super::CAPTURE_LOG).context("failed to create capture log file")?;
+        super::super::open_capture_log(true).context("failed to create capture log file")?;
     let stdout_log = log_file
         .try_clone()
         .context("failed to clone capture log file")?;
@@ -1169,11 +1168,8 @@ fn convert_cinnamon_recording(
 ) -> Result<()> {
     let args = cinnamon_conversion_args(capture_file, output_file, config);
 
-    let log_file = File::options()
-        .create(true)
-        .append(true)
-        .open(super::super::CAPTURE_LOG)
-        .context("failed to open recording conversion log")?;
+    let log_file =
+        super::super::open_capture_log(false).context("failed to open recording conversion log")?;
     let stdout_log = log_file
         .try_clone()
         .context("failed to clone recording conversion log")?;

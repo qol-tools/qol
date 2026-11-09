@@ -10,8 +10,8 @@ pub use capture::{capture_frozen_frame, capture_screenshot, grab_preview_rgba};
 pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
 pub use display::{full_screen_bounds, get_monitors};
 pub use recording::{
-    capture_log_path, recording_format, recording_started, recording_stopped, start_capture,
-    stop_capture, watch_daemon_stop,
+    recording_format, recording_started, recording_stopped, start_capture, stop_capture,
+    watch_daemon_stop,
 };
 pub use selector::{monitor_capture_rect, select_region, select_region_in_app};
 pub use system::{
@@ -101,4 +101,8 @@ pub fn configure_pin_window(_title: String, _origin: (f64, f64), source_preview:
         qol_gpui::popup_window::hide_invisible(&source_preview);
         qol_gpui::popup_window::restore_composite(&source_preview);
     }
+}
+
+pub fn owned_by_current_user(_: &std::fs::Metadata) -> bool {
+    true
 }

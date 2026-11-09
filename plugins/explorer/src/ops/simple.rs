@@ -77,10 +77,7 @@ pub fn rename(path: &Path, name: &str) -> Result<PathBuf, NameProblem> {
     if differs_by_case_only(path, &target) {
         rename_case(path, &target)?;
     } else {
-        if occupied(&target) {
-            return Err(NameProblem::Taken);
-        }
-        fs::rename(path, &target).map_err(problem)?;
+        qol_fs::rename_noreplace(path, &target).map_err(problem)?;
     }
     Ok(target)
 }

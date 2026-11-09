@@ -1,21 +1,29 @@
 #![cfg(feature = "service")]
 
 use std::{
-    net::Ipv4Addr,
-    sync::Arc,
+    net::{Ipv4Addr, SocketAddrV4},
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
 
+use qol_conventions::{
+    operations::{OperationKey, OperationKind},
+    plugin_id::PluginUid,
+};
 use qol_peers::{
-    admin::{AttemptState, EnrollmentFailure, Error},
+    admin::{AttemptState, EnrollmentFailure, Error, NearbyState},
+    network::{IdleReason, ListenerStatus},
     service::{
         network::{
-            discovery::{Advertisement, DiscoveryEvent, DiscoveryFactory, DiscoveryFuture},
-            prepare, NetworkOptions,
+            discovery::{
+                Advertisement, DiscoveryEvent, DiscoveryFactory, DiscoveryFuture,
+                NearbyAdvertisement,
+            },
+            prepare, NetworkControl, NetworkOptions,
         },
         PeerAuthority,
     },
-    StoreRevision,
+    PeerId, StoreRevision,
 };
 use tokio::sync::{mpsc, watch};
 
@@ -242,18 +250,20 @@ async fn checked_invitation_expiry_and_stale_cancellation_preserve_the_authority
 }
 
 #[tokio::test]
-async fn inbound_tls_capacity_and_shutdown_are_owned_without_stopping_normal_listener() {
+async fn inbound_tls_capacity_and_shutdown_are_owned_by_the_enrollment_listener() {
     let local = authority();
     let remote = authority();
     let (control, task) = prepare(local.clone(), options(true));
     let task = tokio::spawn(task);
+    let port = control
+        .invitation_endpoints(vec![Ipv4Addr::LOCALHOST.into()])
+        .unwrap()[0]
+        .port();
     let mut view = control.subscribe();
-    let port = tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let qol_peers::network::ListenerStatus::Listening { port } =
-                view.borrow().status.enrollment_listener
-            {
-                break port;
+            if view.borrow().status.enrollment_listener == (ListenerStatus::Listening { port }) {
+                break;
             }
             view.changed().await.unwrap();
         }
@@ -283,10 +293,12 @@ async fn inbound_tls_capacity_and_shutdown_are_owned_without_stopping_normal_lis
             .await
             .is_err()
     );
-    assert!(matches!(
+    assert_eq!(
         control.snapshot().status.listener,
-        qol_peers::network::ListenerStatus::Listening { .. }
-    ));
+        ListenerStatus::Idle {
+            reason: IdleReason::NoLinkedPeers
+        }
+    );
     control.stop();
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(5), task)
@@ -331,4 +343,195 @@ fn outbound_pages_bind_the_authority_revision_and_remain_bounded() {
         local.outbound_enrollment_page(next),
         Err(Error::StaleCursor)
     );
+}
+
+struct Injected(Mutex<Option<mpsc::Receiver<DiscoveryEvent>>>);
+
+impl DiscoveryFactory for Injected {
+    fn run(
+        &self,
+        _: Advertisement,
+        events: mpsc::Sender<DiscoveryEvent>,
+        mut stop: watch::Receiver<bool>,
+    ) -> DiscoveryFuture {
+        let mut incoming = self.0.lock().unwrap().take().unwrap();
+        Box::pin(async move {
+            let _ = events.send(DiscoveryEvent::Ready).await;
+            loop {
+                tokio::select! {
+                    changed = stop.changed() => {
+                        if changed.is_err() || *stop.borrow() {
+                            break;
+                        }
+                    },
+                    event = incoming.recv() => match event {
+                        Some(event) => {
+                            let _ = events.send(event).await;
+                        }
+                        None => {
+                            while !*stop.borrow_and_update() {
+                                if stop.changed().await.is_err() {
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    },
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+fn grant() -> OperationKey {
+    OperationKey::new(
+        PluginUid::new("nearby-fixture-uid"),
+        OperationKind::Action,
+        "release",
+    )
+}
+
+async fn until(mut probe: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !probe() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+struct Rig {
+    initiator: PeerAuthority,
+    responder: PeerAuthority,
+    initiator_control: NetworkControl,
+    responder_control: NetworkControl,
+    tasks: Vec<tokio::task::JoinHandle<Result<(), qol_peers::network::NetworkFailure>>>,
+    responder_id: PeerId,
+    _events: mpsc::Sender<DiscoveryEvent>,
+}
+
+impl Rig {
+    async fn offered() -> Self {
+        let initiator = authority();
+        let responder = authority();
+        let responder_id = responder.local_pin().unwrap().peer_id();
+        let (events, incoming) = mpsc::channel(8);
+        let (initiator_control, initiator_task) = prepare(
+            initiator.clone(),
+            NetworkOptions {
+                bind: Ipv4Addr::LOCALHOST,
+                allow_loopback_hints: true,
+                discovery: Arc::new(Injected(Mutex::new(Some(incoming)))),
+            },
+        );
+        let (responder_control, responder_task) = prepare(responder.clone(), options(true));
+        let tasks = vec![tokio::spawn(initiator_task), tokio::spawn(responder_task)];
+        let link = responder_control
+            .invitation_endpoints(vec![Ipv4Addr::LOCALHOST.into()])
+            .unwrap()[0]
+            .port();
+        initiator_control.open_to_nearby().unwrap();
+        responder_control.open_to_nearby().unwrap();
+        events
+            .send(DiscoveryEvent::Resolved {
+                source: "responder".into(),
+                peer: responder_id,
+                endpoints: vec![SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1)],
+                claim: Some(NearbyAdvertisement {
+                    name: "Desk".into(),
+                    link,
+                }),
+            })
+            .await
+            .unwrap();
+        until(|| !initiator_control.snapshot().nearby.is_empty()).await;
+        initiator_control
+            .link_nearby(&initiator, responder_id, vec![grant()])
+            .unwrap();
+        let rig = Self {
+            initiator,
+            responder,
+            initiator_control,
+            responder_control,
+            tasks,
+            responder_id,
+            _events: events,
+        };
+        until(|| rig.offer_state() == Some(NearbyState::Confirm {})).await;
+        rig
+    }
+
+    fn offer_state(&self) -> Option<NearbyState> {
+        self.initiator_control
+            .nearby_links()
+            .unwrap()
+            .into_iter()
+            .find(|(peer, _, _)| *peer == self.responder_id)
+            .map(|(_, _, link)| link.state)
+    }
+
+    fn assert_unlinked(&self) {
+        assert!(self.initiator.projection().unwrap().peers.is_empty());
+        assert!(self.initiator.outbound_enrollments().unwrap().is_empty());
+        assert_eq!(revision(&self.initiator).value(), 0);
+    }
+
+    async fn stop(self) {
+        self.initiator_control.stop();
+        self.responder_control.stop();
+        for task in self.tasks {
+            tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_completed_offer_links_nothing_until_the_initiator_confirms() {
+    let rig = Rig::offered().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(rig.offer_state(), Some(NearbyState::Confirm {}));
+    rig.assert_unlinked();
+    let initiator_id = rig.initiator.local_pin().unwrap().peer_id();
+    rig.responder
+        .confirm_nearby(revision(&rig.responder), initiator_id, Vec::new())
+        .unwrap();
+    rig.initiator_control
+        .confirm_nearby(&rig.initiator, revision(&rig.initiator), rig.responder_id)
+        .unwrap();
+    until(|| {
+        rig.initiator
+            .projection()
+            .unwrap()
+            .peers
+            .first()
+            .is_some_and(|peer| peer.grants == vec![grant()])
+    })
+    .await;
+    assert_eq!(rig.initiator.projection().unwrap().peers.len(), 1);
+    rig.stop().await;
+}
+
+#[tokio::test]
+async fn declining_a_completed_offer_links_nothing() {
+    let rig = Rig::offered().await;
+    assert_eq!(rig.initiator_control.decline_nearby(rig.responder_id), None);
+    assert!(rig.offer_state().is_none());
+    assert_eq!(
+        rig.initiator_control.confirm_nearby(
+            &rig.initiator,
+            revision(&rig.initiator),
+            rig.responder_id
+        ),
+        Err(Error::Enrollment {
+            error: EnrollmentFailure::UnknownTransaction
+        })
+    );
+    rig.assert_unlinked();
+    rig.stop().await;
 }

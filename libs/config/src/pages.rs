@@ -15,6 +15,14 @@ pub struct Page {
     pub groups: Vec<Group>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leave: Option<Leave>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Leave {
+    pub row: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -43,13 +51,13 @@ pub struct Row {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enter: Option<Enter>,
     #[serde(default, skip_serializing_if = "is_false")]
-    pub info: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
     pub attention: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub dim: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub busy: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub opens: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +77,9 @@ pub enum Control {
     Toggle(bool),
     Button(String),
     Check,
+    Feature { on: bool, count: String },
+    Destroy { verb: String, ask: String },
+    Qr(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +103,8 @@ pub struct Press {
     pub row: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -184,11 +197,24 @@ impl Pages {
                 if !seen.insert(row.id.as_str()) {
                     problems.push(format!("page `{id}` repeats row `{}`", row.id));
                 }
-                if row.info && row.enter.is_some() {
-                    problems.push(format!(
-                        "row `{}` on page `{id}` is info yet reacts to enter",
+                match (&row.control, &row.enter) {
+                    (Some(Control::Toggle(_) | Control::Check | Control::Button(_)), None) => {
+                        problems.push(format!(
+                            "row `{}` on page `{id}` shows a control yet does nothing",
+                            row.id
+                        ))
+                    }
+                    (Some(Control::Feature { .. }), Some(Enter::Open(_))) => {}
+                    (Some(Control::Feature { .. }), _) => problems.push(format!(
+                        "row `{}` on page `{id}` is a feature yet opens no page",
                         row.id
-                    ));
+                    )),
+                    (Some(Control::Destroy { .. }), Some(Enter::Press)) => {}
+                    (Some(Control::Destroy { .. }), _) => problems.push(format!(
+                        "row `{}` on page `{id}` destroys yet is not pressed",
+                        row.id
+                    )),
+                    _ => {}
                 }
             }
         }
@@ -202,11 +228,20 @@ impl Page {
             title: title.into(),
             groups: Vec::new(),
             focus: None,
+            leave: None,
         }
     }
 
     pub fn focus(mut self, row: impl Into<String>) -> Self {
         self.focus = Some(row.into());
+        self
+    }
+
+    pub fn leave(mut self, row: impl Into<String>, label: impl Into<String>) -> Self {
+        self.leave = Some(Leave {
+            row: row.into(),
+            label: label.into(),
+        });
         self
     }
 
@@ -254,10 +289,10 @@ impl Row {
         }
     }
 
-    pub fn info(id: impl Into<String>, label: impl Into<String>) -> Self {
-        Self {
-            info: true,
-            ..Self::new(id, label)
+    pub fn copies(&self) -> Option<&str> {
+        match (&self.control, &self.enter) {
+            (None, None) => Some(self.value.as_deref().unwrap_or(&self.label)),
+            _ => None,
         }
     }
 
@@ -294,6 +329,35 @@ impl Row {
 
     pub fn check(mut self, checked: bool) -> Self {
         self.control = checked.then_some(Control::Check);
+        self
+    }
+
+    pub fn feature(mut self, on: bool, count: impl Into<String>, page: impl Into<String>) -> Self {
+        self.control = Some(Control::Feature {
+            on,
+            count: count.into(),
+        });
+        self.enter = Some(Enter::Open(page.into()));
+        self
+    }
+
+    pub fn destroy(mut self, verb: impl Into<String>, ask: impl Into<String>) -> Self {
+        self.control = Some(Control::Destroy {
+            verb: verb.into(),
+            ask: ask.into(),
+        });
+        self.enter = Some(Enter::Press);
+        self
+    }
+
+    pub fn qr(mut self, url: impl Into<String>) -> Self {
+        self.control = Some(Control::Qr(url.into()));
+        self
+    }
+
+    pub fn press_open(mut self) -> Self {
+        self.enter = Some(Enter::Press);
+        self.opens = true;
         self
     }
 
@@ -376,7 +440,7 @@ mod tests {
             "waiting",
             Page::new("waiting").group(
                 Group::new("waiting", "each tagged with its updater.").row(
-                    Row::info("apparmor", "AppArmor 4.0.1")
+                    Row::new("apparmor", "AppArmor 4.0.1")
                         .detail("3 packages, held by Ubuntu")
                         .tag("Update Manager")
                         .dim(true),
@@ -432,7 +496,7 @@ mod tests {
                 Group::new("g", "c.")
                     .row(Row::new("a", "A").open("nowhere"))
                     .row(Row::new("a", "A again").replace("elsewhere"))
-                    .row(Row::info("b", "B").press()),
+                    .row(Row::new("b", "B").button("go")),
             ),
         );
         assert_eq!(
@@ -440,7 +504,7 @@ mod tests {
             [
                 "the root page `home` is missing",
                 "page `dup` repeats row `a`",
-                "row `b` on page `dup` is info yet reacts to enter",
+                "row `b` on page `dup` shows a control yet does nothing",
             ]
         );
         assert_eq!(
@@ -470,6 +534,7 @@ mod tests {
             page: "main".into(),
             row: "guard".into(),
             open: Vec::new(),
+            set: None,
         };
         assert_eq!(
             serde_json::to_value(&bare).expect("serialize"),
@@ -479,6 +544,11 @@ mod tests {
             serde_json::from_value(json!({"page": "main", "row": "guard", "open": ["main"]}))
                 .expect("parse press");
         assert_eq!(parsed.open, ["main"]);
+        assert_eq!(parsed.set, None);
+        let switched: Press =
+            serde_json::from_value(json!({"page": "main", "row": "server", "set": false}))
+                .expect("parse a switch press");
+        assert_eq!(switched.set, Some(false));
         let stack: Stack = serde_json::from_value(json!({})).expect("empty stack");
         assert!(stack.open.is_empty());
         assert_eq!(
@@ -507,5 +577,100 @@ mod tests {
         }
         let empty: PressReply = serde_json::from_value(json!({})).expect("empty reply");
         assert_eq!(empty, PressReply::default());
+    }
+
+    #[test]
+    fn feature_destroy_qr_and_leave_travel_on_the_wire() {
+        let feature = Row::new("server", "PointZerver").detail("Running").feature(
+            true,
+            "1 phone",
+            "pointzerver",
+        );
+        assert_eq!(
+            serde_json::to_value(&feature).expect("serialize"),
+            json!({
+                "id": "server",
+                "label": "PointZerver",
+                "detail": "Running",
+                "control": {"feature": {"on": true, "count": "1 phone"}},
+                "enter": {"open": "pointzerver"}
+            })
+        );
+        let remove = Row::new("remove", "Remove this phone").destroy("remove", "remove Pixel 8");
+        assert_eq!(
+            serde_json::to_value(&remove).expect("serialize")["control"],
+            json!({"destroy": {"verb": "remove", "ask": "remove Pixel 8"}})
+        );
+        assert_eq!(remove.enter, Some(Enter::Press));
+        let pair = Row::new("pair", "Pair a phone").press_open();
+        assert_eq!(
+            serde_json::to_value(&pair).expect("serialize"),
+            json!({"id": "pair", "label": "Pair a phone", "enter": "press", "opens": true})
+        );
+        let qr = Row::new("app", "Get the phone app").qr("https://example.com");
+        assert_eq!(
+            serde_json::to_value(&qr).expect("serialize")["control"],
+            json!({"qr": "https://example.com"})
+        );
+        let page = Page::new("pair a phone").leave("stop", "stop pairing");
+        let wire = serde_json::to_value(&page).expect("serialize");
+        assert_eq!(
+            wire["leave"],
+            json!({"row": "stop", "label": "stop pairing"})
+        );
+        let back: Page = serde_json::from_value(wire).expect("round trip");
+        assert_eq!(back, page);
+    }
+
+    #[test]
+    fn a_feature_must_open_a_page_and_a_destroy_must_press() {
+        let mut pages = Pages::new("main");
+        pages.insert(
+            "main",
+            Page::new("main").group(
+                Group::new("g", "c.")
+                    .row(Row::new("ok", "Ok").feature(false, "0 phones", "main"))
+                    .row(
+                        Row::new("lost", "Lost")
+                            .feature(true, "1 phone", "main")
+                            .press(),
+                    )
+                    .row(Row::new("gone", "Gone").destroy("remove", "remove it"))
+                    .row(
+                        Row::new("dull", "Dull")
+                            .destroy("remove", "remove it")
+                            .back(),
+                    ),
+            ),
+        );
+        assert_eq!(
+            pages.problems(),
+            [
+                "row `lost` on page `main` is a feature yet opens no page",
+                "row `dull` on page `main` destroys yet is not pressed",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_row_that_neither_reacts_nor_carries_a_control_copies_what_it_shows() {
+        assert_eq!(
+            Row::new("ip", "IP address").value("10.0.0.2").copies(),
+            Some("10.0.0.2")
+        );
+        assert_eq!(
+            Row::new("qol", "qol stops with it").detail("why").copies(),
+            Some("qol stops with it")
+        );
+        assert_eq!(Row::new("open", "Open").open("x").copies(), None);
+        assert_eq!(Row::new("on", "On").toggle(true).press().copies(), None);
+        assert_eq!(Row::new("qr", "App").qr("https://x").copies(), None);
+        let old: Row = serde_json::from_value(json!({
+            "id": "kernel",
+            "label": "Linux kernel",
+            "info": true
+        }))
+        .expect("an older plugin's row still reads");
+        assert_eq!(old.copies(), Some("Linux kernel"));
     }
 }

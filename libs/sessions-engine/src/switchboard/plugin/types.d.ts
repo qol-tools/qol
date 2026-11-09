@@ -15,7 +15,9 @@ export type Entry = {
   launcher?: string
   resumedFrom?: string
   isStoppedByUser?: boolean
+  isClosed?: true
   isInterrupted?: boolean
+  isRunOver?: true
   key?: string
   isDone?: boolean
   hasNewReply?: boolean
@@ -29,16 +31,42 @@ export type Pull = {
   isWatched: boolean
 }
 
+export type PullState = 'open' | 'draft' | 'closed' | 'merged'
+
+export type CheckResult = 'pass' | 'fail' | 'running'
+
+export type PullDetail = {
+  at: number
+  state: PullState
+  passed: number
+  failed: number
+  running: number
+  total: number
+  review?: CheckResult
+  liveTest?: 'needed' | 'not needed'
+  merge?: 'auto' | 'queued'
+}
+
+export type ModelChoice = { model?: string; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; at: number }
+
+export type ModelSeen = { model: string; effort?: string; at: number }
+
+export type RunState = { state: string; pulls?: string[] }
+
 declare module 'claude-code' {
   interface PluginState {
     'qol-switchboard': {
       board: Shaped<Entry[]>
-      isDoneOpen: boolean
       confirming: string
       pulls: Pull[]
       writingTo: string
       writingSaid: { isUser: boolean; text: string }[]
-      switchboardLog: { who: string; text: string }[]
+      switchboardLog: { who: string; text: string; at?: number }[]
+      pullDetails: Record<string, PullDetail>
+      modelChoices: Record<string, ModelChoice>
+      modelsSeen: Record<string, ModelSeen>
+      forkStates: Record<string, RunState>
+      idleShown: boolean
       focusActivity: string
       freshReply: string
       focusShown: { id: string; prevId: string; agentId: string; key: string; rows: { isUser: boolean; text: string }[] }

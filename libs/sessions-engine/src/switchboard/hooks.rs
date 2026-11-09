@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use qol_platform::windows_path::strip_verbatim;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Map, Value};
 
 use super::agents::admit_model;
 use super::context;
+use super::fork_state::{self, ForkState};
 use super::paths::{claude_home, switchboard_dir};
 use super::plugin;
 use super::resume::FORK_AGENT;
@@ -17,6 +18,7 @@ use super::resume::FORK_AGENT;
 pub(super) const PRE_AGENT: &str = "pre-agent";
 pub(super) const FORK_CONTEXT: &str = "fork-context";
 pub(super) const AGENT_ROWS: &str = "agent-rows";
+pub(super) const FORK_STATES: &str = "fork-states";
 pub(super) const ROLE_REFRESH: &str = "role-refresh";
 pub(super) const ROLE_REFRESH_SLOTS: usize = 3;
 pub(super) const ROLE_REFRESH_SOURCES: &str = "resume|compact";
@@ -44,6 +46,13 @@ struct Payload {
     source: Option<String>,
     transcript_path: Option<String>,
     agent_id: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct StatesQuery {
+    conversation: String,
+    ids: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -189,6 +198,39 @@ fn current_role(cwd: Option<&str>) -> String {
     super::role(&projects)
 }
 
+fn state_entry(state: &ForkState) -> Value {
+    let mut entry = json!({"state": super::rows::state_word(state)});
+    if let ForkState::Waiting(pulls) = state {
+        if !pulls.is_empty() {
+            entry["pulls"] = json!(pulls);
+        }
+    }
+    entry
+}
+
+fn fork_states(raw: &str) -> Result<String> {
+    let query: StatesQuery = if raw.trim().is_empty() {
+        StatesQuery::default()
+    } else {
+        serde_json::from_str(raw).context("the fork states payload is not valid JSON")?
+    };
+    let mut states = Map::new();
+    let conversation = query.conversation.trim();
+    if conversation.is_empty() {
+        return Ok(Value::Object(states).to_string());
+    }
+    for id in &query.ids {
+        let Some(transcript) = fork_state::transcript_of(Path::new(conversation), id) else {
+            continue;
+        };
+        let state = fork_state::state(Some(fork_state::SETTLED_STATUS), Some(transcript.as_path()));
+        if let Some(state) = state {
+            states.insert(id.clone(), state_entry(&state));
+        }
+    }
+    Ok(Value::Object(states).to_string())
+}
+
 fn deny_json(reason: &str) -> String {
     json!({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -219,11 +261,19 @@ fn read_payload() -> Result<Payload> {
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let name = args.first().and_then(|arg| arg.to_str()).ok_or_else(|| {
         anyhow!(
-            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}>"
+            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}|{FORK_STATES}>"
         )
     })?;
     match name {
         AGENT_ROWS => super::rows::run(),
+        FORK_STATES => {
+            let mut raw = String::new();
+            std::io::stdin()
+                .read_to_string(&mut raw)
+                .context("failed to read the fork states payload")?;
+            crate::cli::line(fork_states(&raw)?);
+            Ok(())
+        }
         RETIRED_POST_AGENT => Ok(()),
         RETIRED_WORKTREE_CREATE => bail!(
             "this switchboard was started by an older CLI Sessions whose forks ran in worktree isolation; close the switchboard and open it again to start forks"
@@ -489,6 +539,74 @@ mod tests {
         assert!(!root.path().join(RETIRED_PINS).exists());
         assert!(root.path().join("kept").exists());
         remove_retired_pins(root.path()).unwrap();
+    }
+
+    #[test]
+    fn fork_states_reads_each_fork_from_what_it_left_running() {
+        use super::super::background::fixtures::waiting;
+        use super::super::background::HOLD_COMMAND;
+        let root = tempfile::tempdir().unwrap();
+        let conversation = root.path().join("c0ab.jsonl");
+        let subagents = root.path().join("c0ab").join("subagents");
+        fs::create_dir_all(&subagents).unwrap();
+        let hold = waiting("bhold", HOLD_COMMAND);
+        for (id, transcript) in [
+            (
+                "a1",
+                [
+                    hold.clone(),
+                    waiting(
+                        "bwatch",
+                        "node /x/bin/pr-watch.cjs https://github.com/o/r/pull/7 --pretty",
+                    ),
+                ]
+                .concat(),
+            ),
+            ("a2", hold.clone()),
+            ("a3", String::new()),
+            (
+                "a4",
+                [hold, waiting("bci", "gh run watch 42 --repo o/r")].concat(),
+            ),
+        ] {
+            fs::write(subagents.join(format!("agent-{id}.jsonl")), transcript).unwrap();
+        }
+        let query = json!({
+            "conversation": conversation.to_string_lossy(),
+            "ids": ["a1", "a2", "a3", "a4", "a5", "../a1", ""],
+        });
+        let states: serde_json::Value =
+            serde_json::from_str(&fork_states(&query.to_string()).unwrap()).unwrap();
+        assert_eq!(
+            states,
+            json!({
+                "a1": {"state": "waiting", "pulls": ["https://github.com/o/r/pull/7"]},
+                "a2": {"state": "your turn"},
+                "a3": {"state": "idle"},
+                "a4": {"state": "waiting"},
+                "a5": {"state": "idle"},
+            })
+        );
+        assert_eq!(fork_states("").unwrap(), "{}");
+        assert_eq!(
+            fork_states(&json!({"conversation": " ", "ids": ["a1"]}).to_string()).unwrap(),
+            "{}"
+        );
+        assert!(fork_states("{").is_err());
+    }
+
+    #[test]
+    fn the_usage_names_every_hook_verb() {
+        let error = run(&[]).unwrap_err().to_string();
+        for verb in [
+            PRE_AGENT,
+            FORK_CONTEXT,
+            ROLE_REFRESH,
+            AGENT_ROWS,
+            FORK_STATES,
+        ] {
+            assert!(error.contains(verb), "{verb}: {error}");
+        }
     }
 
     #[test]

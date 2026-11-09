@@ -1,5 +1,7 @@
+use std::ffi::{c_char, c_int, c_uint, CString};
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -8,6 +10,7 @@ use anyhow::{bail, ensure, Context, Result};
 use qol_hotkeys::layout::physical_layout;
 use qol_hotkeys::macos_keycode::PhysicalLayout;
 
+use super::peer_signature::{client_requirement, is_cdhash};
 use super::protocol::SOCKET_PATH;
 use crate::platform::macos::doctor::INPUT_MONITORING_FIX;
 use crate::platform::macos::virtual_hid::client::request::{
@@ -18,8 +21,12 @@ use crate::platform::macos::virtual_hid::{
 };
 
 pub(crate) const HELPER_LABEL: &str = "com.qol-tools.keyremap.hid-helper";
+const PRIVILEGED_DIR: &str = "/Library/PrivilegedHelperTools";
 pub(crate) const HELPER_BINARY: &str =
     "/Library/PrivilegedHelperTools/com.qol-tools.keyremap.hid-helper";
+pub(crate) const CLIENT_IDENTIFIER: &str = "com.qol-tools.keyremap";
+pub(crate) const REQUIREMENT_PATH: &str =
+    "/Library/PrivilegedHelperTools/com.qol-tools.keyremap.hid-helper.requirement";
 pub(crate) const HELPER_PLIST: &str =
     "/Library/LaunchDaemons/com.qol-tools.keyremap.hid-helper.plist";
 pub(crate) const OWN_DAEMON_PLIST: &str =
@@ -42,9 +49,13 @@ pub(crate) fn install() -> Result<String> {
     let current = std::env::current_exe().context("find the running qol-keyremap binary")?;
     match qol_config::codesign_identity() {
         Some(identity) => {
-            install_signed(&current, &identity)?;
+            let cdhash = install_signed(&current, &identity)?;
             steps.push(format!(
                 "Copied {} to {HELPER_BINARY} and signed it as {identity}.",
+                current.display()
+            ));
+            steps.push(format!(
+                "Pinned {} (cdhash {cdhash}) as the only Key Remap build the helper trusts. Install the helper again after every Key Remap update.",
                 current.display()
             ));
         }
@@ -85,7 +96,7 @@ pub(crate) fn uninstall() -> Result<String> {
     ensure_root("uninstall-hid-helper")?;
     let mut steps = Vec::new();
     bootout(HELPER_LABEL);
-    for path in [HELPER_PLIST, HELPER_BINARY, SOCKET_PATH] {
+    for path in [HELPER_PLIST, HELPER_BINARY, REQUIREMENT_PATH, SOCKET_PATH] {
         remove_if_present(path)?;
     }
     steps.push(format!("Stopped and removed {HELPER_LABEL}."));
@@ -159,20 +170,203 @@ fn install_file(source: &Path, target: &str, mode: u32) -> Result<()> {
     finish_file(&staging, target, mode)
 }
 
-fn install_signed(source: &Path, identity: &str) -> Result<()> {
+fn install_signed(source: &Path, identity: &str) -> Result<String> {
     let keychain = login_keychain()?;
-    let staging = format!("{HELPER_BINARY}.new");
-    fs::copy(source, &staging).with_context(|| format!("copy to {staging}"))?;
-    let arguments = codesign_arguments(identity, &keychain, &staging);
-    let signed = run(
-        CODESIGN,
-        &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
-    );
+    let client = fs::canonicalize(source).context("resolve the running qol-keyremap binary")?;
+    let stage = Stage::create_in(Path::new(PRIVILEGED_DIR))?;
+    let staged = stage.copy_of(&client)?;
+    sign(&codesign_arguments(
+        identity,
+        &keychain,
+        CLIENT_IDENTIFIER,
+        &staged,
+    ))?;
+    let cdhash = client_cdhash(&staged)?;
+    let requirement = client_requirement(CLIENT_IDENTIFIER, &cdhash)?;
+    let helper = format!("{HELPER_BINARY}.new");
+    fs::copy(&staged, &helper).with_context(|| format!("copy to {helper}"))?;
+    let signed = sign(&codesign_arguments(
+        identity,
+        &keychain,
+        HELPER_LABEL,
+        &helper,
+    ));
     if signed.is_err() {
-        let _ = fs::remove_file(&staging);
+        let _ = fs::remove_file(&helper);
     }
     signed?;
-    finish_file(&staging, HELPER_BINARY, 0o755)
+    finish_file(&helper, HELPER_BINARY, 0o755)?;
+    write_file(REQUIREMENT_PATH, &requirement, 0o644)?;
+    if let Err(error) = place_signed_client(Path::new(&staged), &client) {
+        let _ = fs::remove_file(REQUIREMENT_PATH);
+        return Err(error);
+    }
+    Ok(cdhash)
+}
+
+struct Stage(std::path::PathBuf);
+
+impl Stage {
+    fn create_in(root: &Path) -> Result<Self> {
+        let dir = root.join(format!("{HELPER_LABEL}.stage-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).with_context(|| format!("create {}", dir.display()))?;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("chmod {}", dir.display()))?;
+        Ok(Self(dir))
+    }
+
+    fn copy_of(&self, client: &Path) -> Result<String> {
+        let staged = self.0.join("qol-keyremap");
+        fs::copy(client, &staged).with_context(|| format!("copy to {}", staged.display()))?;
+        staged
+            .to_str()
+            .map(str::to_owned)
+            .context("the staging path is not valid UTF-8")
+    }
+}
+
+impl Drop for Stage {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+extern "C" {
+    fn openat(dir: c_int, path: *const c_char, flags: c_int, ...) -> c_int;
+    fn renameat(from_dir: c_int, from: *const c_char, to_dir: c_int, to: *const c_char) -> c_int;
+    fn unlinkat(dir: c_int, path: *const c_char, flags: c_int) -> c_int;
+    fn fchown(fd: c_int, uid: u32, gid: u32) -> c_int;
+    fn fchmod(fd: c_int, mode: u16) -> c_int;
+}
+
+const O_WRONLY: c_int = 0x1;
+const O_CREAT: c_int = 0x200;
+const O_EXCL: c_int = 0x800;
+const O_NOFOLLOW: c_int = 0x100;
+const O_DIRECTORY: c_int = 0x0010_0000;
+const O_CLOEXEC: c_int = 0x0100_0000;
+
+fn place_signed_client(staged: &Path, client: &Path) -> Result<()> {
+    let folder = client
+        .parent()
+        .with_context(|| format!("{} has no folder", client.display()))?;
+    let name = client
+        .file_name()
+        .with_context(|| format!("{} has no name", client.display()))?;
+    let original =
+        fs::symlink_metadata(client).with_context(|| format!("stat {}", client.display()))?;
+    ensure!(
+        original.is_file(),
+        "{} is not a regular file",
+        client.display()
+    );
+    let folder_fd = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(O_DIRECTORY | O_NOFOLLOW)
+        .open(folder)
+        .with_context(|| format!("open {}", folder.display()))?;
+    let temp_name = c_name(&format!(
+        ".{}.signed-{}",
+        name.to_string_lossy(),
+        std::process::id()
+    ))?;
+    let fd = unsafe {
+        openat(
+            folder_fd.as_raw_fd(),
+            temp_name.as_ptr(),
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            0o700 as c_uint,
+        )
+    };
+    ensure!(
+        fd >= 0,
+        "cannot create the signed copy in {}: {}",
+        folder.display(),
+        std::io::Error::last_os_error()
+    );
+    let mut file = unsafe { fs::File::from_raw_fd(fd) };
+    let placed = fill_and_swap(
+        &mut file,
+        staged,
+        &folder_fd,
+        &temp_name,
+        &c_name(&name.to_string_lossy())?,
+        &original,
+    );
+    if placed.is_err() {
+        let _ = unsafe { unlinkat(folder_fd.as_raw_fd(), temp_name.as_ptr(), 0) };
+    }
+    placed
+}
+
+fn fill_and_swap(
+    file: &mut fs::File,
+    staged: &Path,
+    folder_fd: &fs::File,
+    temp_name: &CString,
+    name: &CString,
+    original: &fs::Metadata,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    std::io::copy(
+        &mut fs::File::open(staged).with_context(|| format!("open {}", staged.display()))?,
+        file,
+    )
+    .context("write the signed copy")?;
+    file.sync_all().context("flush the signed copy")?;
+    let fd = file.as_raw_fd();
+    ensure!(
+        unsafe { fchown(fd, original.uid(), original.gid()) } == 0,
+        "cannot give the signed copy back to its owner: {}",
+        std::io::Error::last_os_error()
+    );
+    ensure!(
+        unsafe { fchmod(fd, (original.mode() & 0o7777) as u16) } == 0,
+        "cannot restore the signed copy's mode: {}",
+        std::io::Error::last_os_error()
+    );
+    let folder = folder_fd.as_raw_fd();
+    ensure!(
+        unsafe { renameat(folder, temp_name.as_ptr(), folder, name.as_ptr()) } == 0,
+        "cannot move the signed copy over the client: {}",
+        std::io::Error::last_os_error()
+    );
+    Ok(())
+}
+
+fn c_name(name: &str) -> Result<CString> {
+    CString::new(name).context("the file name holds a NUL byte")
+}
+
+fn sign(arguments: &[String]) -> Result<()> {
+    run(
+        CODESIGN,
+        &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
+    )
+}
+
+fn client_cdhash(path: &str) -> Result<String> {
+    let output = Command::new(CODESIGN)
+        .args(["--display", "--verbose=4", path])
+        .output()
+        .with_context(|| format!("run {CODESIGN}"))?;
+    ensure!(
+        output.status.success(),
+        "{CODESIGN} --display {path} failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    parse_cdhash(&String::from_utf8_lossy(&output.stderr))
+        .with_context(|| format!("{CODESIGN} printed no CDHash for {path}"))
+}
+
+fn parse_cdhash(display: &str) -> Option<String> {
+    display
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("CDHash="))
+        .map(str::trim)
+        .filter(|hash| is_cdhash(hash))
+        .map(str::to_owned)
 }
 
 fn login_keychain() -> Result<String> {
@@ -187,15 +381,17 @@ fn login_keychain() -> Result<String> {
     Ok(keychain.to_string_lossy().into_owned())
 }
 
-fn codesign_arguments(identity: &str, keychain: &str, path: &str) -> Vec<String> {
+fn codesign_arguments(identity: &str, keychain: &str, identifier: &str, path: &str) -> Vec<String> {
     [
         "--force",
         "--sign",
         identity,
         "--keychain",
         keychain,
+        "--options",
+        "runtime",
         "--identifier",
-        HELPER_LABEL,
+        identifier,
         path,
     ]
     .map(str::to_owned)
@@ -355,6 +551,7 @@ mod tests {
             codesign_arguments(
                 "KMRH47",
                 "/Users/me/Library/Keychains/login.keychain-db",
+                HELPER_LABEL,
                 "/tmp/helper"
             ),
             [
@@ -363,11 +560,115 @@ mod tests {
                 "KMRH47",
                 "--keychain",
                 "/Users/me/Library/Keychains/login.keychain-db",
+                "--options",
+                "runtime",
                 "--identifier",
                 "com.qol-tools.keyremap.hid-helper",
                 "/tmp/helper"
             ]
         );
+    }
+
+    #[test]
+    fn the_client_is_signed_in_place_under_its_own_identifier() {
+        assert_eq!(
+            codesign_arguments(
+                "KMRH47",
+                "/Users/me/Library/Keychains/login.keychain-db",
+                CLIENT_IDENTIFIER,
+                "/plugins/keyremap/qol-keyremap"
+            ),
+            [
+                "--force",
+                "--sign",
+                "KMRH47",
+                "--keychain",
+                "/Users/me/Library/Keychains/login.keychain-db",
+                "--options",
+                "runtime",
+                "--identifier",
+                "com.qol-tools.keyremap",
+                "/plugins/keyremap/qol-keyremap"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_cdhash_is_read_from_the_codesign_display_output() {
+        let display = "Executable=/plugins/keyremap/qol-keyremap\n\
+Identifier=com.qol-tools.keyremap\n\
+Format=Mach-O thin (arm64)\n\
+CodeDirectory v=20500 size=1234 flags=0x10000(runtime) hashes=30+2 location=embedded\n\
+Hash type=sha256 size=32\n\
+CandidateCDHash sha256=1111111111111111111111111111111111111111\n\
+CandidateCDHashFull sha256=2222222222222222222222222222222222222222222222222222222222222222\n\
+CDHash=0123456789abcdef0123456789abcdef01234567\n\
+Signature size=9000\n";
+        assert_eq!(
+            parse_cdhash(display).as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
+        assert_eq!(parse_cdhash("Identifier=x\nCDHash=xyz\n"), None);
+        assert_eq!(parse_cdhash("Identifier=x\n"), None);
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("qol-keyremap-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_stage_is_a_private_folder_removed_when_dropped() {
+        let root = scratch("stage");
+        let source = root.join("source");
+        fs::write(&source, b"binary").unwrap();
+        let stage = Stage::create_in(&root).unwrap();
+        let dir = stage.0.clone();
+        assert_eq!(
+            fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let staged = stage.copy_of(&source).unwrap();
+        assert_eq!(fs::read(&staged).unwrap(), b"binary");
+        drop(stage);
+        assert!(!dir.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_signed_copy_replaces_the_client_and_keeps_its_mode() {
+        let root = scratch("place");
+        let client = root.join("plugins").join("qol-keyremap");
+        fs::create_dir_all(client.parent().unwrap()).unwrap();
+        fs::write(&client, b"old").unwrap();
+        fs::set_permissions(&client, fs::Permissions::from_mode(0o750)).unwrap();
+        let staged = root.join("staged");
+        fs::write(&staged, b"signed").unwrap();
+        place_signed_client(&staged, &client).unwrap();
+        assert_eq!(fs::read(&client).unwrap(), b"signed");
+        assert_eq!(
+            fs::metadata(&client).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(fs::read_dir(client.parent().unwrap()).unwrap().count(), 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_planted_entry_at_the_temporary_name_stops_the_placement() {
+        let root = scratch("planted");
+        let client = root.join("qol-keyremap");
+        fs::write(&client, b"old").unwrap();
+        let planted = root.join(format!(".qol-keyremap.signed-{}", std::process::id()));
+        std::os::unix::fs::symlink(root.join("victim"), &planted).unwrap();
+        let staged = root.join("staged");
+        fs::write(&staged, b"signed").unwrap();
+        assert!(place_signed_client(&staged, &client).is_err());
+        assert_eq!(fs::read(&client).unwrap(), b"old");
+        assert!(!root.join("victim").exists());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

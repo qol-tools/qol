@@ -37,7 +37,7 @@ fn page(session: &Session, now: NaiveDateTime) -> Sheet {
     let mut sheet = Sheet::new("last", "history");
     sheet.heading("history");
     if session.host.runs.is_empty() {
-        sheet.row(Row::info("none", "No run yet").value("nothing in the log"));
+        sheet.row(Row::new("none", "No run yet").value("nothing in the log"));
     }
     for (index, run) in session.host.runs.iter().take(SHOWN).enumerate() {
         let id = format!("run:{index}");
@@ -71,12 +71,12 @@ fn one(index: usize, run: &Run, now: NaiveDateTime) -> Sheet {
     });
     for (name, count) in &run.groups {
         sheet.row(
-            Row::info(format!("group:{name}"), name.as_str())
+            Row::new(format!("group:{name}"), name.as_str())
                 .value(plural(*count, "package", "packages")),
         );
     }
     if run.added > 0 {
-        let row = Row::info("added", "Added").value(plural(run.added, "package", "packages"));
+        let row = Row::new("added", "Added").value(plural(run.added, "package", "packages"));
         sheet.row(match run.added_detail.as_str() {
             "" => row,
             detail => row.detail(detail),
@@ -84,18 +84,18 @@ fn one(index: usize, run: &Run, now: NaiveDateTime) -> Sheet {
     }
     if let Some(at) = run.bluetooth {
         sheet.row(
-            Row::info("bluetooth", "Bluetooth restarted")
+            Row::new("bluetooth", "Bluetooth restarted")
                 .value(at.format("%H:%M").to_string())
                 .tone(Tone::Attention),
         );
     }
-    let took = Row::info("took", "Took");
+    let took = Row::new("took", "Took");
     sheet.row(match run.end {
         Some(end) => took.value(minutes(run.start, end)),
         None => took.value("still going"),
     });
     if let Some(after) = run.after_startup {
-        sheet.row(Row::info("startup", "After startup").value(format!("{after} min")));
+        sheet.row(Row::new("startup", "After startup").value(format!("{after} min")));
     }
     sheet
 }

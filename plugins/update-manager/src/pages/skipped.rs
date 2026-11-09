@@ -14,7 +14,7 @@ pub(super) fn page(session: &Session) -> Option<Sheet> {
     if let Some(error) = error {
         sheet.heading("right now");
         sheet.row(
-            Row::info("error", "Could not change the skipped list")
+            Row::new("error", "Could not change the skipped list")
                 .detail(error.as_str())
                 .tone(Tone::Attention),
         );
@@ -39,7 +39,7 @@ pub(super) fn page(session: &Session) -> Option<Sheet> {
     }
     if skips.is_empty() {
         sheet.heading("skipped");
-        sheet.row(Row::info("none", "Nothing skipped").busy(busy));
+        sheet.row(Row::new("none", "Nothing skipped").busy(busy));
     }
     Some(sheet)
 }

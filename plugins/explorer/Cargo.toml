@@ -1,6 +1,6 @@
 [package]
 name = "qol-explorer"
-version = "0.26.3"
+version = "0.27.0"
 edition = "2021"
 description = "Keyboard-first file explorer for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -20,6 +20,7 @@ md-5 = "0.10"
 png = "0.17"
 qol-apps.workspace = true
 qol-config.workspace = true
+qol-fs.workspace = true
 qol-gpui.workspace = true
 qol-headless.workspace = true
 qol-log.workspace = true

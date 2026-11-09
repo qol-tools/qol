@@ -11,8 +11,6 @@ const CONFIG: DaemonConfig = DaemonConfig {
     support_replace_existing: false,
 };
 
-const APP_DOWNLOAD_URL: &str = "https://github.com/qol-tools/pointz/releases/latest";
-
 pub enum Command {
     Settings,
     BeginPairing,
@@ -49,9 +47,10 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
             "ip": network::get_local_ip().map(|ip| ip.to_string()),
             "discovery_port": ServerConfig::DISCOVERY_PORT,
             "command_port": ServerConfig::COMMAND_PORT,
-            "app_download_url": APP_DOWNLOAD_URL,
+            "app_download_url": ServerConfig::APP_DOWNLOAD_URL,
         })),
-        "pairing_status" => ReadResult::HandledWithData(super::pairing::status_json()),
+        "pages" => super::panel::pages(&request.input),
+        "press" => super::panel::press(&request.input),
         _ => ReadResult::Fallback,
     }
 }

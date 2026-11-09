@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const LOCK_FILE_NAME: &str = "qol-shot-capture.lock";
 
@@ -10,17 +10,29 @@ pub(crate) struct CaptureGuard {
 }
 
 pub(crate) fn try_acquire(action: &'static str) -> Option<CaptureGuard> {
-    try_acquire_at(&lock_path(), action)
+    let dir = match crate::platform::ensure_runtime_dir() {
+        Ok(dir) => dir,
+        Err(error) => {
+            qol_runtime::probe!(
+                "SHOT_CAPTURE_LOCK",
+                "action={action} result=dir-error err={}",
+                error.kind()
+            );
+            return None;
+        }
+    };
+    try_acquire_at(&dir.join(LOCK_FILE_NAME), action)
 }
 
 fn try_acquire_at(path: &Path, action: &'static str) -> Option<CaptureGuard> {
-    let mut file = match OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(path)
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true).truncate(false);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = match options.open(path) {
         Ok(file) => file,
         Err(error) => {
             qol_runtime::probe!(
@@ -56,10 +68,6 @@ impl Drop for CaptureGuard {
             self.action
         );
     }
-}
-
-fn lock_path() -> PathBuf {
-    std::env::temp_dir().join(LOCK_FILE_NAME)
 }
 
 #[cfg(test)]

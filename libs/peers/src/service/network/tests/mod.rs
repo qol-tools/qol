@@ -1,3 +1,4 @@
+mod gating;
 mod lifecycle;
 mod sessions;
 

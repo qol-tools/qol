@@ -19,7 +19,7 @@ pub struct Advertisement {
     pub port: u16,
     pub bind: std::net::Ipv4Addr,
     pub name: String,
-    pub link: Option<u16>,
+    pub link: watch::Receiver<Option<u16>>,
 }
 
 #[derive(Clone, Debug)]

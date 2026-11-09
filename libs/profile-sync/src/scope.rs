@@ -25,6 +25,15 @@ pub const PLUGINS_LOCK_FILE: &str = "plugins.lock.json";
 /// limited to the sync allowlist plus anything the user adds.
 pub const GITIGNORE_CONTENTS: &str = "/active\n/sync.json\n*/device/\n";
 
+pub fn ensure_gitignore(repo_path: &Path) -> std::io::Result<()> {
+    let path = repo_path.join(".gitignore");
+    let current = std::fs::read_to_string(&path).ok();
+    if current.as_deref() == Some(GITIGNORE_CONTENTS) {
+        return Ok(());
+    }
+    std::fs::write(&path, GITIGNORE_CONTENTS)
+}
+
 /// Whether a relative profile path is part of the synced profile.
 pub fn is_sync_allowlisted(rel: &Path) -> bool {
     if rel
@@ -46,6 +55,32 @@ pub fn is_sync_allowlisted(rel: &Path) -> bool {
         [_, scope, _, ..] if *scope == CORE_SUBDIR => true,
         [_, scope, _bucket, _, ..] if *scope == OS_SUBDIR => true,
         [_, top, sub, _, ..] if *top == SYNC_SUBDIR && *sub == BACKUPS_SUBDIR => true,
+        _ => false,
+    }
+}
+
+pub fn is_device_local(rel: &Path) -> bool {
+    let mut parts: Vec<&str> = Vec::new();
+    for component in rel.components() {
+        match component {
+            Component::Normal(part) => match part.to_str() {
+                Some(part) => parts.push(part),
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+    let folded: Vec<&str> = parts
+        .iter()
+        .map(|part| part.trim_end_matches(['.', ' ']))
+        .collect();
+    match folded.as_slice() {
+        [first, ..]
+            if first.eq_ignore_ascii_case("active") || first.eq_ignore_ascii_case("sync.json") =>
+        {
+            true
+        }
+        [_, second, ..] => second.eq_ignore_ascii_case(DEVICE_SUBDIR),
         _ => false,
     }
 }
@@ -115,6 +150,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ensure_gitignore_rewrites_a_changed_file_and_leaves_a_matching_one() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join(".gitignore");
+        std::fs::write(&path, "!/active\n").unwrap();
+
+        ensure_gitignore(tmp.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), GITIGNORE_CONTENTS);
+
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        ensure_gitignore(tmp.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), GITIGNORE_CONTENTS);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            before
+        );
+    }
+
+    #[test]
     fn allowlist_accepts_gitignore_manifest_core_os_bucket_and_sync_backups() {
         let cases = [
             ".gitignore",
@@ -153,6 +206,39 @@ mod tests {
             assert!(
                 !is_sync_allowlisted(Path::new(raw)),
                 "must not allowlist: {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn device_local_paths_are_the_gitignore_set() {
+        for raw in [
+            "active",
+            "sync.json",
+            "default/device/task-runner.json",
+            "work/device/plugin-configs/x.json",
+            "Default/DEVICE/x",
+            "default/device./x",
+            "default/Device /x",
+            "ACTIVE",
+            "Sync.JSON",
+            "active/x",
+            "Sync.JSON/nested/y",
+        ] {
+            assert!(
+                is_device_local(Path::new(raw)),
+                "must be device-local: {raw}"
+            );
+        }
+        for raw in [
+            "default/os/linux/task-runner.json",
+            "default/core/plugins.lock.json",
+            ".gitignore",
+            "default/active",
+        ] {
+            assert!(
+                !is_device_local(Path::new(raw)),
+                "must not be device-local: {raw}"
             );
         }
     }

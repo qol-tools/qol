@@ -39,6 +39,8 @@ impl DiscoveryFactory for Lan {
             for (other, sender) in others {
                 let _ = sender.send(resolved(&advertisement)).await;
                 let _ = events.send(resolved(&other)).await;
+                tokio::spawn(follow_link(advertisement.clone(), sender));
+                tokio::spawn(follow_link(other, events.clone()));
             }
             while !*stop.borrow_and_update() {
                 if stop.changed().await.is_err() {
@@ -50,12 +52,21 @@ impl DiscoveryFactory for Lan {
     }
 }
 
+async fn follow_link(advertisement: Advertisement, listener: mpsc::Sender<DiscoveryEvent>) {
+    let mut link = advertisement.link.clone();
+    while link.changed().await.is_ok() {
+        if listener.send(resolved(&advertisement)).await.is_err() {
+            return;
+        }
+    }
+}
+
 fn resolved(advertisement: &Advertisement) -> DiscoveryEvent {
     DiscoveryEvent::Resolved {
         source: advertisement.peer.to_string(),
         peer: advertisement.peer,
         endpoints: vec![SocketAddrV4::new(Ipv4Addr::LOCALHOST, advertisement.port)],
-        claim: advertisement.link.map(|link| NearbyAdvertisement {
+        claim: (*advertisement.link.borrow()).map(|link| NearbyAdvertisement {
             name: advertisement.name.clone(),
             link,
         }),
@@ -186,6 +197,8 @@ async fn pair(temporary: &std::path::Path) -> (Fixture, Fixture) {
     .await;
     laptop.shared.peer_admin(Request::Enable);
     desk.shared.peer_admin(Request::Enable);
+    nearby(&laptop);
+    nearby(&desk);
     (laptop, desk)
 }
 
@@ -228,6 +241,22 @@ fn connected(fixture: &Fixture, peer: PeerId) -> bool {
         })
 }
 
+fn redeemed(fixture: &Fixture, peer: PeerId) -> bool {
+    fixture
+        .owner
+        .handle
+        .inner
+        .lock()
+        .unwrap()
+        .authority()
+        .unwrap()
+        .authority
+        .inbound_nearby()
+        .unwrap()
+        .iter()
+        .any(|request| request.peer_id == peer && request.redeemed)
+}
+
 fn linked(fixture: &Fixture, peer: PeerId) -> bool {
     fixture
         .owner
@@ -262,7 +291,14 @@ async fn a_device_links_once_the_other_accepts_its_request() {
 
     let linking = link(&desk, laptop_id);
     assert!(matches!(linking, Response::Nearby { .. }), "{linking:?}");
+    let desk_code = until(|| code(&desk, laptop_id)).await;
+    assert!(!linked(&desk, laptop_id));
+    assert!(matches!(
+        confirm(&desk, laptop_id),
+        Response::Changed { .. }
+    ));
     let laptop_code = until(|| code(&laptop, desk_id)).await;
+    assert_eq!(desk_code, laptop_code);
     let desk_link = until(|| {
         nearby(&desk)
             .into_iter()
@@ -299,6 +335,8 @@ async fn unlinking_forgets_the_link_on_both_devices_and_they_can_link_again() {
     })
     .await;
     link(&desk, laptop_id);
+    until(|| code(&desk, laptop_id)).await;
+    confirm(&desk, laptop_id);
     until(|| code(&laptop, desk_id)).await;
     confirm(&laptop, desk_id);
     until(|| (connected(&laptop, desk_id) && connected(&desk, laptop_id)).then_some(())).await;
@@ -345,7 +383,12 @@ async fn two_devices_that_both_click_link_need_one_accept() {
     } else {
         ((&laptop, desk_id), (&desk, laptop_id))
     };
-    until(|| code(accepter.0, accepter.1)).await;
+    until(|| code(requester.0, requester.1)).await;
+    assert!(matches!(
+        confirm(requester.0, requester.1),
+        Response::Changed { .. }
+    ));
+    until(|| redeemed(accepter.0, accepter.1).then_some(())).await;
     assert_eq!(code(requester.0, requester.1), None);
     assert!(matches!(
         confirm(accepter.0, accepter.1),
@@ -387,6 +430,8 @@ async fn a_cancelled_request_disappears_from_the_other_device() {
     })
     .await;
     link(&desk, laptop_id);
+    until(|| code(&desk, laptop_id)).await;
+    confirm(&desk, laptop_id);
     until(|| code(&laptop, desk_id)).await;
     until(|| (link_state(&desk, laptop_id) == Some(NearbyState::WaitingForPeer {})).then_some(()))
         .await;
@@ -418,6 +463,8 @@ async fn a_declined_request_tells_the_requester() {
     })
     .await;
     link(&desk, laptop_id);
+    until(|| code(&desk, laptop_id)).await;
+    confirm(&desk, laptop_id);
     until(|| code(&laptop, desk_id)).await;
     until(|| (link_state(&desk, laptop_id) == Some(NearbyState::WaitingForPeer {})).then_some(()))
         .await;

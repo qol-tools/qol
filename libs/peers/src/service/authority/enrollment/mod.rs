@@ -26,6 +26,17 @@ impl PeerAuthority {
         self.changes.subscribe()
     }
 
+    pub(in crate::service) fn invitation_open_until(&self) -> Option<Instant> {
+        let inner = self.lock().ok()?;
+        let now = Instant::now();
+        inner
+            .invitations
+            .iter()
+            .map(|entry| entry.deadline)
+            .filter(|deadline| *deadline > now)
+            .max()
+    }
+
     pub fn enrollment_server_config(&self) -> Result<EnrollmentServerConfig, EnrollmentError> {
         let identity = {
             let inner = self.lock()?;

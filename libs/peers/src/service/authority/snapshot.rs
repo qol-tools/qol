@@ -63,6 +63,8 @@ struct StoredPointzDevice {
     key: Secret,
     name: String,
     paired_at_ms: u64,
+    #[serde(default)]
+    sealed_only: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -196,6 +198,7 @@ impl StoredPointz {
                         key: Secret::copy(device.key.as_slice()),
                         name: device.name.clone(),
                         paired_at_ms: device.paired_at_ms,
+                        sealed_only: device.sealed_only,
                     })
                     .collect(),
             ),
@@ -216,6 +219,7 @@ impl StoredPointz {
                         key: device.key.exact::<32>()?,
                         name: device.name,
                         paired_at_ms: device.paired_at_ms,
+                        sealed_only: device.sealed_only,
                     })
                 })
                 .collect::<Result<_, AuthorityError>>()?,

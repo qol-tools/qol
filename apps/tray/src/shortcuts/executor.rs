@@ -89,11 +89,13 @@ fn open_url(url: &str, browser: Option<&AppRef>) -> Result<()> {
         "Shortcut open_url using browser override: kind={}",
         app_ref_kind(browser)
     );
+    super::validation::ensure_program_allowed(browser).map_err(|error| anyhow!(error))?;
     platform::open_url_in_browser(url, browser)
 }
 
 fn launch_app(app: &AppRef) -> Result<()> {
     log::debug!("Shortcut launch_app: kind={}", app_ref_kind(app));
+    super::validation::ensure_program_allowed(app).map_err(|error| anyhow!(error))?;
     platform::launch_app(app)
 }
 

@@ -23,7 +23,8 @@ use crate::service::{AuthorityError, PeerAuthority, WeakPeerAuthority};
 pub const DISCOVERY_PORT: u16 = 45454;
 pub const COMMAND_PORT: u16 = 45455;
 const DISCOVER_MESSAGE: &str = "DISCOVER";
-const AUTHENTICATION: &str = "pair-x25519-v1";
+const AUTHENTICATION: &str = "pair-spake2-v2";
+const COMMAND_PROTECTION: &str = "sealed-v3";
 const DATAGRAM_BYTES: usize = 4096;
 const FORWARD_QUEUE: usize = 256;
 const COMMAND_CLOCK_SKEW_MS: u64 = 30_000;
@@ -64,6 +65,7 @@ struct DiscoveryResponse<'a> {
     hostname: &'a str,
     server_id: &'a str,
     authentication: &'static str,
+    command: &'static str,
     pairing_open: bool,
 }
 
@@ -250,6 +252,7 @@ fn discovery_reply(
         hostname,
         server_id,
         authentication: AUTHENTICATION,
+        command: COMMAND_PROTECTION,
         pairing_open,
     })
     .ok()
@@ -331,9 +334,12 @@ fn authenticate(
     if parsed.sent_at_ms.abs_diff(now_ms) > COMMAND_CLOCK_SKEW_MS {
         return None;
     }
-    let key = authority.pointz_key(&PointzDeviceId::from_bytes(parsed.device_id))?;
-    let payload = parsed.verify(&key)?;
-    let command: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    let device = authority.pointz_key(&PointzDeviceId::from_bytes(parsed.device_id))?;
+    if device.sealed_only && !parsed.is_sealed() {
+        return None;
+    }
+    let payload = parsed.open(&device.key)?;
+    let command: serde_json::Value = serde_json::from_slice(&payload).ok()?;
     let expires_at_ms = parsed.sent_at_ms.saturating_add(COMMAND_CLOCK_SKEW_MS);
     if !command.is_object()
         || !replay.insert(&parsed.device_id, &parsed.nonce, expires_at_ms, now_ms)

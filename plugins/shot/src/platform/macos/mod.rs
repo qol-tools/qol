@@ -52,7 +52,7 @@ pub fn run_internal_mode() -> Option<std::process::ExitCode> {
     None
 }
 
-pub use super::unix::{capture_log_path, directory_is_read_only, watch_daemon_stop};
+pub use super::unix::{directory_is_read_only, owned_by_current_user, watch_daemon_stop};
 pub use system::{
     capture_frozen_frame, configure_pin_window, external_services_check, grab_preview_rgba,
     list_audio_apps, list_audio_sinks, list_audio_sources, pin_focus, pin_release_focus,

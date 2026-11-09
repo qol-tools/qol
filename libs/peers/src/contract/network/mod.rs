@@ -13,9 +13,17 @@ pub enum NetworkFailure {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IdleReason {
+    NoLinkedPeers,
+    NothingOpen,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ListenerStatus {
     Starting {},
+    Idle { reason: IdleReason },
     Listening { port: u16 },
     Closed {},
     Failed { error: NetworkFailure },

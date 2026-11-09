@@ -12,6 +12,9 @@ pub enum PointzRequest {
     },
     BeginPairing {},
     CancelPairing {},
+    Serve {
+        on: bool,
+    },
     Remove {
         expected: ExpectedAuthority,
         device_id: PointzDeviceId,
@@ -29,6 +32,7 @@ impl PointzRequest {
             Self::Devices { .. } => "pointz_devices",
             Self::BeginPairing {} => "pointz_begin_pairing",
             Self::CancelPairing {} => "pointz_cancel_pairing",
+            Self::Serve { .. } => "pointz_serve",
             Self::Remove { .. } => "pointz_remove",
         }
     }
@@ -44,4 +48,22 @@ pub struct PointzStatus {
     pub device_count: u32,
     pub pairing: PointzPairing,
     pub transport: PointzTransport,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serve_is_a_named_mutation_on_the_wire() {
+        let request = PointzRequest::Serve { on: false };
+        assert!(request.is_mutation());
+        assert_eq!(request.action_name(), "pointz_serve");
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire, serde_json::json!({"action": "serve", "on": false}));
+        assert_eq!(
+            serde_json::from_value::<PointzRequest>(wire).unwrap(),
+            request
+        );
+    }
 }

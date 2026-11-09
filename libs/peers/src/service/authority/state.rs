@@ -35,6 +35,7 @@ pub(super) struct PointzDeviceRecord {
     pub key: Zeroizing<[u8; 32]>,
     pub name: String,
     pub paired_at_ms: u64,
+    pub sealed_only: bool,
 }
 
 #[derive(Clone)]

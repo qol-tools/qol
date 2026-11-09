@@ -1,0 +1,46 @@
+[graph]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+]
+
+[advisories]
+version = 2
+yanked = "deny"
+unmaintained = "workspace"
+ignore = [
+  { id = "RUSTSEC-2026-0194", reason = "quick-xml: build-time codegen and plist's plain Reader only (security review T12)" },
+  { id = "RUSTSEC-2026-0195", reason = "quick-xml: no NsReader at runtime (security review T12)" },
+  { id = "RUSTSEC-2026-0183", reason = "git2 Remote::list is never called (security review T12)" },
+  { id = "RUSTSEC-2026-0184", reason = "git2 blame_buffer is never called (security review T12)" },
+  { id = "RUSTSEC-2026-0387", reason = "crypto-bigint: p256 only parses public keys in shipped code (security review T12)" },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser: unmaintained font parser pinned by cosmic-text and usvg under gpui; no fixed fork exists yet (security review T12)" },
+  { id = "RUSTSEC-2026-0370", reason = "zvariant: folded into zbus, which still ships it (security review T12)" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: folded into zbus, which still ships it (security review T12)" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+deny = [
+  { crate = "native-tls", reason = "one HTTP TLS stack: rustls on ring" },
+  { crate = "openssl", reason = "only libgit2 may link OpenSSL" },
+  { crate = "openssl-sys", wrappers = ["libgit2-sys", "git2"] },
+  { crate = "aws-lc-rs", reason = "one HTTP TLS stack: rustls on ring" },
+  { crate = "aws-lc-sys", reason = "one HTTP TLS stack: rustls on ring" },
+  { crate = "rustls", deny-multiple-versions = true },
+  { crate = "ring", deny-multiple-versions = true },
+  { crate = "h2", deny-multiple-versions = true },
+  { crate = "hyper", deny-multiple-versions = true },
+  { crate = "http", deny-multiple-versions = true },
+  { crate = "serde", deny-multiple-versions = true },
+  { crate = "hmac", deny-multiple-versions = true },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/servo/core-foundation-rs"]
