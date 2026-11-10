@@ -4099,19 +4099,15 @@ default = true
             let resolved = qol_config::normalized::resolve_config(spec, &serde_json::json!({}))
                 .unwrap_or_else(|errors| panic!("{plugin}: {errors:?}"));
             let shown = resolved.for_this_platform();
-            let field_count = shown.fields.len()
-                + shown
-                    .sections
-                    .iter()
-                    .map(|section| section.fields.len())
-                    .sum::<usize>();
             let rows = rows_from_resolved(&resolved, 0);
             let shown_ids = shown
                 .fields
                 .iter()
                 .chain(shown.sections.iter().flat_map(|section| &section.fields))
+                .filter(|field| !field.hidden)
                 .map(|field| field.id.as_str())
                 .collect::<std::collections::BTreeSet<_>>();
+            let field_count = shown_ids.len();
             for field in resolved
                 .fields
                 .iter()

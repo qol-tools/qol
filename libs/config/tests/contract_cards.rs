@@ -47,6 +47,9 @@ fn configs() -> Vec<(PathBuf, ConfigSpec)> {
 }
 
 fn opens_card(field: &FieldSpec) -> bool {
+    if field.kind == FieldKind::List && field.inline == Some(true) {
+        return false;
+    }
     let card_kinds = [
         FieldKind::Select,
         FieldKind::ObjectArray,
