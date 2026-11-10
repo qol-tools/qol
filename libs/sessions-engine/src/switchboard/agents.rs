@@ -13,6 +13,7 @@ use crate::launch::LaunchDefaults;
 
 pub(super) const AGENT: &str = "switchboard";
 const CLAUDE: &str = "claude";
+const CLAUDE_FAMILIES: [&str; 4] = ["sonnet", "opus", "haiku", "fable"];
 const SESSIONS_TOOLS: &str = "mcp__sessions__*";
 const AGENT_TOOL_FOR_FORKS: &str = "Agent(project-fork)";
 const PROMPT_CACHE_TTL: &str = "1h";
@@ -51,12 +52,27 @@ impl ForkAgent {
     }
 }
 
+fn admit(model: &str, defaults: &LaunchDefaults, policy: &DispatchPolicy) -> anyhow::Result<()> {
+    let named = defaults.alias(Some(model.to_owned())).unwrap_or_default();
+    let listed = |id: &str| -> anyhow::Result<()> {
+        enforce_allowed_model(id, &policy.allowed_models)?;
+        enforce_tool_model(CLAUDE, id, &policy.tool_models)
+    };
+    if !CLAUDE_FAMILIES.contains(&named.as_str()) {
+        return listed(&named);
+    }
+    let family = format!("claude-{named}-");
+    listed(&family).with_context(|| {
+        format!(
+            "`{named}` is Claude Code's name for its newest {family}* model, so it launches only where every {family}* model may; a full model id on a `Model:` line under the Project line is checked on its own"
+        )
+    })
+}
+
 pub(super) fn admit_model(model: &str) -> anyhow::Result<()> {
     let defaults = crate::spawn::config_launch_defaults()?;
     let policy = crate::spawn::config_dispatch_policy()?;
-    let model = defaults.alias(Some(model.to_owned())).unwrap_or_default();
-    enforce_allowed_model(&model, &policy.allowed_models)?;
-    enforce_tool_model(CLAUDE, &model, &policy.tool_models)
+    admit(model, &defaults, &policy)
 }
 
 fn definitions(fork: &ForkAgent) -> Map<String, Value> {
@@ -233,6 +249,58 @@ mod tests {
             ForkAgent::resolve(&defaults(None, None), &open),
             ForkAgent::default()
         );
+    }
+
+    #[test]
+    fn a_family_name_is_admitted_only_where_its_whole_family_is() {
+        let unaliased = LaunchDefaults::default();
+        let every_claude = policy(&[("claude", &["claude-*"])], &["claude-*", "glm-5.3-flash"]);
+        for model in [
+            "sonnet",
+            "opus",
+            "haiku",
+            "fable",
+            "claude-fable-5-2",
+            "claude-opus-5-5[1m]",
+        ] {
+            assert!(admit(model, &unaliased, &every_claude).is_ok(), "{model}");
+        }
+        for model in ["gpt-9-turbo", "glm-5.3-flash", "mythos", "Fable", ""] {
+            assert!(admit(model, &unaliased, &every_claude).is_err(), "{model}");
+        }
+        let one_family = policy(&[], &["claude-fable-*", "claude-opus-5-5"]);
+        assert!(admit("fable", &unaliased, &one_family).is_ok());
+        assert!(admit("claude-opus-5-5", &unaliased, &one_family).is_ok());
+        let error = admit("opus", &unaliased, &one_family).unwrap_err();
+        let reason = format!("{error:#}");
+        assert!(
+            reason.starts_with("`opus` is Claude Code's name for its newest claude-opus-* model"),
+            "{reason}"
+        );
+        assert!(reason.contains("a `Model:` line"), "{reason}");
+        assert!(
+            reason.contains("sessions.toml allows: claude-fable-*, claude-opus-5-5"),
+            "{reason}"
+        );
+        let other_tool = policy(&[("claude", &["claude-opus-*"])], &["claude-*"]);
+        assert!(admit("opus", &unaliased, &other_tool).is_ok());
+        assert!(admit("haiku", &unaliased, &other_tool).is_err());
+        assert!(admit("haiku", &unaliased, &policy(&[], &[])).is_ok());
+    }
+
+    #[test]
+    fn a_sessions_alias_wins_over_the_family_name() {
+        let pinned = LaunchDefaults {
+            aliases: BTreeMap::from([
+                ("opus".to_owned(), "claude-opus-5-5".to_owned()),
+                ("cheap".to_owned(), "haiku".to_owned()),
+            ]),
+            ..LaunchDefaults::default()
+        };
+        let one_model = policy(&[], &["claude-opus-5-5", "claude-haiku-*"]);
+        assert!(admit("opus", &pinned, &one_model).is_ok());
+        assert!(admit("cheap", &pinned, &one_model).is_ok());
+        assert!(admit("sonnet", &pinned, &one_model).is_err());
     }
 
     #[test]

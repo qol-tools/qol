@@ -30,6 +30,9 @@ const RETIRED_POST_AGENT: &str = "post-agent";
 const RETIRED_WORKTREE_CREATE: &str = "worktree-create";
 const RETIRED_PINS: &str = "fork-pins";
 const PROJECT_PREFIX: &str = "Project:";
+const LAUNCHER_PREFIX: &str = "Launcher: ";
+const MODEL_PREFIX: &str = "Model:";
+const MODEL_ID_MARKS: &str = "_.[]-";
 const FORMAT_HELP: &str = "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`, followed by the user's words.";
 
 #[derive(Default, Deserialize)]
@@ -104,14 +107,36 @@ fn check_project(prompt: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn is_model_id(id: &str) -> bool {
+    let mut letters = id.chars();
+    letters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphanumeric())
+        && letters.all(|one| one.is_ascii_alphanumeric() || MODEL_ID_MARKS.contains(one))
+}
+
+fn model_line(prompt: &str) -> Option<&str> {
+    let mut lines = prompt.split('\n').skip(1);
+    let second = lines.next()?;
+    let line = if second.starts_with(LAUNCHER_PREFIX) {
+        lines.next()?
+    } else {
+        second
+    };
+    let id = line.trim().strip_prefix(MODEL_PREFIX)?.trim();
+    is_model_id(id).then_some(id)
+}
+
 fn pre_agent(payload: &Payload, admit: &dyn Fn(&str) -> Result<()>) -> Verdict {
     if payload.tool_input.subagent_type.as_deref() != Some(FORK_AGENT) {
         return Verdict::Pass;
     }
-    if let Err(reason) = check_project(payload.tool_input.prompt.as_deref().unwrap_or_default()) {
+    let prompt = payload.tool_input.prompt.as_deref().unwrap_or_default();
+    if let Err(reason) = check_project(prompt) {
         return Verdict::Deny(reason);
     }
-    if let Some(model) = payload.tool_input.model.as_deref() {
+    let named = [model_line(prompt), payload.tool_input.model.as_deref()];
+    for model in named.into_iter().flatten() {
         if let Err(error) = admit(model) {
             return Verdict::Deny(format!("{error:#}"));
         }
@@ -477,6 +502,85 @@ mod tests {
         assert_eq!(pre_agent(&named, &admit_all), Verdict::Pass);
         let unnamed = fork_call(&rig.project_a);
         assert_eq!(pre_agent(&unnamed, &admit_none), Verdict::Pass);
+    }
+
+    #[test]
+    fn a_model_line_is_read_as_the_plugin_reads_it() {
+        for (prompt, model) in [
+            (
+                "Project: /work\nModel: claude-mythos-5-1\nreview it",
+                Some("claude-mythos-5-1"),
+            ),
+            (
+                "Project: /work\nLauncher: whoever\nModel: claude-opus-5-5[1m]\nfix it",
+                Some("claude-opus-5-5[1m]"),
+            ),
+            (
+                "Project: /work\n  Model:gpt_9.turbo \r\nfix it",
+                Some("gpt_9.turbo"),
+            ),
+            ("Project: /work\nModel: fable", Some("fable")),
+            ("Project: /work\nfix it\nModel: claude-mythos-5-1", None),
+            ("Project: /work\nModel: two words\nfix it", None),
+            ("Project: /work\nModel: -dash\nfix it", None),
+            ("Project: /work\nModel:\nfix it", None),
+            ("Project: /work\nmodel: claude-mythos-5-1\nfix it", None),
+            ("Project: /work\nLauncher: whoever", None),
+            (
+                "Project: /work\nLauncher: whoever\nfix it\nModel: claude-mythos-5-1",
+                None,
+            ),
+            ("Project: /work", None),
+            ("", None),
+        ] {
+            assert_eq!(model_line(prompt), model, "{prompt}");
+        }
+    }
+
+    #[test]
+    fn a_model_line_passes_the_same_policy_as_the_model_parameter() {
+        fn only_opus(model: &str) -> Result<()> {
+            match model {
+                "opus" | "claude-opus-5-5" => Ok(()),
+                other => bail!("model {other} is not allowed"),
+            }
+        }
+        let rig = rig();
+        let lined = |line: &str, model: Option<&str>| {
+            let mut payload = call(
+                FORK_AGENT,
+                &format!("Project: {}\n{line}\nfix it", rig.project_a.display()),
+            );
+            payload.tool_input.model = model.map(str::to_owned);
+            payload
+        };
+        let refused = denied(pre_agent(&lined("Model: gpt-9-turbo", None), &only_opus));
+        assert!(
+            refused.contains("model gpt-9-turbo is not allowed"),
+            "{refused}"
+        );
+        let launched = "Launcher: whoever\nModel: gpt-9-turbo";
+        let refused = denied(pre_agent(&lined(launched, Some("opus")), &only_opus));
+        assert!(
+            refused.contains("model gpt-9-turbo is not allowed"),
+            "{refused}"
+        );
+        let refused = denied(pre_agent(
+            &lined("Model: claude-opus-5-5", Some("haiku")),
+            &only_opus,
+        ));
+        assert!(refused.contains("model haiku is not allowed"), "{refused}");
+        for passing in [
+            lined("Model: claude-opus-5-5", None),
+            lined("Model: claude-opus-5-5", Some("opus")),
+            lined("Model: two words", None),
+            lined("fix it\nModel: gpt-9-turbo", None),
+        ] {
+            assert_eq!(pre_agent(&passing, &only_opus), Verdict::Pass);
+        }
+        let mut other = call("general-purpose", "Project: /work\nModel: gpt-9-turbo");
+        other.tool_input.model = Some("haiku".to_owned());
+        assert_eq!(pre_agent(&other, &only_opus), Verdict::Pass);
     }
 
     fn context_line(line: &str) -> String {
