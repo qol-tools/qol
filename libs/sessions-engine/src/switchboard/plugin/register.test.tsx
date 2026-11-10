@@ -3240,6 +3240,7 @@ test('a model id reads as its family and version', () => {
   expect(modelName('claude-sonnet-4-20250514')).toBe('Sonnet 4')
   expect(modelName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
   expect(modelName('opus')).toBe('Opus')
+  expect(modelName('opus[1m]')).toBe('Opus')
   expect(modelName('claude-mythos-5-1')).toBe('Mythos 5.1')
   expect(modelName('claude-saga-7')).toBe('Saga 7')
   expect(modelName('claude-opus-4-6[1m]')).toBe('Opus 4.6')
@@ -3417,6 +3418,7 @@ test('the fork you write to shows its model and effort on one row, its pickers c
     cursor: e.start + e.inputText.length,
   }))
   on('session.messages', () => ({ value: [] }))
+  on('prompt.autocomplete', () => ({ suggestions: [] }))
   on('command.run', { command: 'model' }, () => ({ text: 'the switchboard model picker' }))
   on('turn.step', async function* (_: unknown, e: { agentId?: string; turnId: string; index: number; model: string; effort?: unknown }) {
     steps.push({ ...(e.agentId === undefined ? {} : { agentId: e.agentId }), model: e.model, effort: e.effort })
@@ -3435,8 +3437,40 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'claude-opus-5-5', effort: 'medium' })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const command = async (name: string, args: string) => String((await $.command.run({ command: name, args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })).text)
+  const offered = async (text: string) => {
+    const token = text.split(/\s+/).at(-1) ?? ''
+    return (await $.prompt.autocomplete({ text, cursor: text.length, token, start: text.length - token.length })).suggestions.map(one => [one.text, one.description])
+  }
+  const tabbed = (text: string) => $.prompt.edit({ origin: { kind: 'composer' }, text, cursor: text.length, start: text.length, end: text.length, inputText: '', key: { key: 'tab' } })
   expect(await command('model', 'haiku')).toBe('the switchboard model picker')
+  expect(await offered('/model')).toEqual([])
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
+  expect(await offered('/model')).toEqual([
+    ['/model opus', 'Opus 5.5'],
+    ['/model mythos', 'Mythos 5.1'],
+    ['/model sonnet', 'Sonnet'],
+    ['/model haiku', 'Haiku'],
+    ['/model fable', 'Fable'],
+  ])
+  expect(await offered('/model m')).toEqual([['mythos', 'Mythos 5.1']])
+  expect(await offered('/model o')).toEqual([['opus', 'current · Opus 5.5']])
+  expect(await offered('/model mythos')).toEqual([
+    ['mythos low', 'effort'],
+    ['mythos medium', 'current · effort'],
+    ['mythos high', 'effort'],
+    ['mythos xhigh', 'effort'],
+    ['mythos max', 'effort'],
+  ])
+  expect(await offered('/model mythos h')).toEqual([['high', 'effort']])
+  expect(await offered('/effort m')).toEqual([
+    ['medium', 'current · effort'],
+    ['max', 'effort'],
+  ])
+  expect(await offered('/models')).toEqual([])
+  expect(await tabbed('/model')).toMatchObject({ text: '/model opus', decorations: [{ virtualText: ' low · medium (current) · high · xhigh · max' }] })
+  expect(await tabbed('/model opus')).toMatchObject({ text: '/model mythos' })
+  expect(await tabbed('/model opus ')).toMatchObject({ text: '/model opus low' })
+  expect(await tabbed('/effort h')).toMatchObject({ text: '/effort high' })
   const picker = await ui.find({ type: 'Select', key: 'model-asking-fork' })
   expect(picker).toMatchObject({ props: { value: 'claude-opus-5-5' } })
   expect((picker?.props as { options: { label?: string }[] }).options.map(one => one.label)).toEqual(['Opus 5.5', 'Mythos 5.1', 'Sonnet', 'Haiku', 'Fable'])
@@ -3471,6 +3505,12 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   await step('a8', 'claude-opus-5-5', 'medium')
   expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'fable', effort: 'high' })
   expect(await command('model', 'max haiku')).toBe('asking-fork uses Haiku at max effort from its next model call.')
+  env.QOL_SWITCHBOARD_MODELS = '["claude-opus-4-6","claude-opus-5-5","haiku"]'
+  expect(await command('model', 'opus')).toMatch(/\/model claude-opus-4-6\|claude-opus-5-5\|haiku and a level, such as \/model claude-opus-4-6 max, changes it/)
+  expect(await offered('/model c')).toEqual([
+    ['claude-opus-4-6', 'Opus 4.6'],
+    ['claude-opus-5-5', 'Opus 5.5'],
+  ])
   env.QOL_SWITCHBOARD_MODELS = '[]'
   expect(await command('model', 'opus')).toBe('asking-fork model: Haiku at max effort. sessions.toml lets a fork run no model, so /model has none to set; with no fork picked, /model changes the switchboard.')
   expect(await ui.find({ type: 'Select', key: 'model-asking-fork' })).toBeUndefined()
