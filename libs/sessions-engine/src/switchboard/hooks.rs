@@ -33,6 +33,8 @@ const PROJECT_PREFIX: &str = "Project:";
 const LAUNCHER_PREFIX: &str = "Launcher: ";
 const MODEL_PREFIX: &str = "Model:";
 const MODEL_ID_MARKS: &str = "_.[]-";
+const BYTE_ORDER_MARK: char = '\u{FEFF}';
+const NEXT_LINE: char = '\u{85}';
 const FORMAT_HELP: &str = "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`, followed by the user's words.";
 
 #[derive(Default, Deserialize)]
@@ -107,6 +109,14 @@ fn check_project(prompt: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn is_plugin_space(one: char) -> bool {
+    match one {
+        BYTE_ORDER_MARK => true,
+        NEXT_LINE => false,
+        other => other.is_whitespace(),
+    }
+}
+
 fn is_model_id(id: &str) -> bool {
     let mut letters = id.chars();
     letters
@@ -123,7 +133,10 @@ fn model_line(prompt: &str) -> Option<&str> {
     } else {
         second
     };
-    let id = line.trim().strip_prefix(MODEL_PREFIX)?.trim();
+    let id = line
+        .trim_matches(is_plugin_space)
+        .strip_prefix(MODEL_PREFIX)?
+        .trim_matches(is_plugin_space);
     is_model_id(id).then_some(id)
 }
 
@@ -520,6 +533,12 @@ mod tests {
                 Some("gpt_9.turbo"),
             ),
             ("Project: /work\nModel: fable", Some("fable")),
+            (
+                "Project: /work\n\u{FEFF}Model:\u{FEFF}\u{2028}gpt-9-turbo\u{A0}\u{FEFF}\nfix it",
+                Some("gpt-9-turbo"),
+            ),
+            ("Project: /work\n\u{85}Model: gpt-9-turbo\nfix it", None),
+            ("Project: /work\nModel: gpt-9-turbo\u{85}\nfix it", None),
             ("Project: /work\nfix it\nModel: claude-mythos-5-1", None),
             ("Project: /work\nModel: two words\nfix it", None),
             ("Project: /work\nModel: -dash\nfix it", None),
@@ -558,6 +577,14 @@ mod tests {
         assert!(
             refused.contains("model gpt-9-turbo is not allowed"),
             "{refused}"
+        );
+        let marked = denied(pre_agent(
+            &lined("\u{FEFF}Model: gpt-9-turbo", None),
+            &only_opus,
+        ));
+        assert!(
+            marked.contains("model gpt-9-turbo is not allowed"),
+            "{marked}"
         );
         let launched = "Launcher: whoever\nModel: gpt-9-turbo";
         let refused = denied(pre_agent(&lined(launched, Some("opus")), &only_opus));

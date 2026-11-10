@@ -58,8 +58,9 @@ fn admit(model: &str, defaults: &LaunchDefaults, policy: &DispatchPolicy) -> any
         enforce_allowed_model(id, &policy.allowed_models)?;
         enforce_tool_model(CLAUDE, id, &policy.tool_models)
     };
-    if !CLAUDE_FAMILIES.contains(&named.as_str()) {
-        return listed(&named);
+    let by_name = listed(&named);
+    if by_name.is_ok() || !CLAUDE_FAMILIES.contains(&named.as_str()) {
+        return by_name;
     }
     let family = format!("claude-{named}-");
     listed(&family).with_context(|| {
@@ -286,6 +287,10 @@ mod tests {
         assert!(admit("opus", &unaliased, &other_tool).is_ok());
         assert!(admit("haiku", &unaliased, &other_tool).is_err());
         assert!(admit("haiku", &unaliased, &policy(&[], &[])).is_ok());
+        let by_name = policy(&[("claude", &["opus", "claude-*"])], &["opus", "sonnet"]);
+        assert!(admit("opus", &unaliased, &by_name).is_ok());
+        assert!(admit("sonnet", &unaliased, &by_name).is_err());
+        assert!(admit("claude-opus-5-5", &unaliased, &by_name).is_err());
     }
 
     #[test]
