@@ -456,7 +456,7 @@ test('a sub-fork row an earlier board lost its parent on gets the parent back fr
   const store = new Map<string, unknown>()
   const row = (agentId: string, name: string) => ({ agentId, name, headline: '', report: '', at: 1, isWorking: false, isInterrupted: true, isDismissed: false })
   store.set('board:earlier-session', [row('p1', 'parent-fork: parent'), row('s1', 'sub-one: first'), row('s2', 'sub-two: second')])
-  store.set('cuts-healed-1', true)
+  store.set('cuts-healed-2', true)
   engine(on, [], [], [], store)
   const metas: Record<string, string> = {
     '/conv/switchboard-session/subagents/agent-s1.meta.json': JSON.stringify({ agentType: 'project-fork', parentAgentId: 'p1' }),
@@ -3532,7 +3532,7 @@ test('a reply the fork gives in its own view, which sends no notification, is fi
 })
 
 test('the message that puts a fork back after a restart leaves its row as it was: its time, its report, not working and no new reply', async ($, on) => {
-  const store = new Map<string, unknown>([['cuts-healed-1', true]])
+  const store = new Map<string, unknown>([['cuts-healed-2', true]])
   const sent: any[] = []
   const forks = [
     { agentId: 'a1', name: 'kept-fork: words', kind: 'note', headline: 'Done for now.', report: 'Done for now.', at: 7, isWorking: false, isDismissed: false },
@@ -3571,8 +3571,8 @@ test('the message that puts a fork back after a restart leaves its row as it was
   ])
 })
 
-test('the first open with this version drops the stopped mid-turn marks an earlier board kept, and a fork that was working when it closed still gets one', async ($, on) => {
-  const store = new Map<string, unknown>()
+test('the first open with this version drops the stopped mid-turn marks an earlier board kept, also a board the first such pass went over, and a fork that was working when it closed still gets one', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-1', true]])
   const row = (agentId: string, extra: object) => ({ agentId, name: `${agentId}-fork: a fork`, kind: 'note', headline: 'h', report: 'r', at: 1, isWorking: false, isDismissed: false, ...extra })
   store.set('board:earlier-session', [row('old1', { isInterrupted: true }), row('w1', { isWorking: true }), row('n1', {})])
   engine(on, [], [], [], store)
@@ -3582,7 +3582,7 @@ test('the first open with this version drops the stopped mid-turn marks an earli
   await settle()
   const cut = (store.get('board:switchboard-session') as any[]).filter(one => one.isInterrupted === true).map(one => one.agentId)
   expect(cut).toEqual(['w1'])
-  expect(store.get('cuts-healed-1')).toBe(true)
+  expect(store.get('cuts-healed-2')).toBe(true)
 })
 
 test('withoutCut drops the mark from a row at rest and keeps a working row and anything else as it is', () => {
@@ -3640,7 +3640,7 @@ const killedHold = (taskId: string) =>
   `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>toolu_hold_1</tool-use-id>\n<status>killed</status>\n<summary>Background command "Hold this fork in the agent list" was stopped</summary>\n</task-notification>`
 
 test('a board whose rows vanished mid-conversation gets them back from its saved copy, and a fork woken only by its killed hold is not working', async ($, on) => {
-  const store = new Map<string, unknown>([['cuts-healed-1', true]])
+  const store = new Map<string, unknown>([['cuts-healed-2', true]])
   engine(on, [], [], [], store)
   on('agent.list', () => ({ value: [] }))
   on('clock.after', () => new Promise(() => {}))
@@ -3677,7 +3677,7 @@ test('a board whose rows vanished mid-conversation gets them back from its saved
 })
 
 test('a board state that stays empty, as while the switchboard shuts down, never overwrites the saved rows', async ($, on) => {
-  const store = new Map<string, unknown>([['cuts-healed-1', true]])
+  const store = new Map<string, unknown>([['cuts-healed-2', true]])
   engine(on, [], [], [], store)
   on('agent.list', () => ({ value: [] }))
   on('clock.after', () => new Promise(() => {}))
@@ -3700,7 +3700,7 @@ test('a board state that stays empty, as while the switchboard shuts down, never
 })
 
 test('a fork its killed hold wakes as the switchboard shuts down keeps its row, and the next real message makes it work', async ($, on) => {
-  const store = new Map<string, unknown>([['cuts-healed-1', true]])
+  const store = new Map<string, unknown>([['cuts-healed-2', true]])
   engine(on, [], [], [], store)
   on('agent.list', () => ({ value: [] }))
   on('clock.after', () => new Promise(() => {}))
@@ -3722,7 +3722,7 @@ test('a fork its killed hold wakes as the switchboard shuts down keeps its row, 
 })
 
 test('a restart puts only the forks the switchboard started back in the agent list, and leaves their sub-forks and the sub-forks of a fork that is gone on the board', async ($, on) => {
-  const store = new Map<string, unknown>([['cuts-healed-1', true]])
+  const store = new Map<string, unknown>([['cuts-healed-2', true]])
   const sent: any[] = []
   const fork = (agentId: string, name: string, extra: object = {}) => ({ agentId, name, kind: 'note', headline: 'Done for now.', report: 'Done for now.', at: 7, isWorking: false, isDismissed: false, ...extra })
   store.set('board:earlier-session', [fork('m1', 'main-fork: words'), fork('s1', 'sub-fork: words', { launcher: 'm1' }), fork('o1', 'orphan-fork: words', { launcher: 'gone1' }), fork('c1', 'cut-sub: words', { launcher: 'm1', isWorking: true })])
