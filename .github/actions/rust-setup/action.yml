@@ -33,6 +33,11 @@ inputs:
     required: false
     default: "true"
 
+  workspace:
+    description: Directory holding the Cargo workspace to cache
+    required: false
+    default: "."
+
 outputs:
   build-cache-hit:
     description: Whether the exact build cache key already exists
@@ -64,6 +69,7 @@ runs:
 
     - name: Key the build cache on the Cargo profiles
       shell: bash
+      working-directory: ${{ inputs.workspace }}
       run: echo "RUST_PROFILES_HASH=$(sed -n '/^\[profile/,$p' Cargo.toml | git hash-object --stdin)" >> "${GITHUB_ENV}"
 
     # Every job that saves only compiles, so a failed or cancelled one would
@@ -73,6 +79,7 @@ runs:
       id: build-cache
       uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
+        workspaces: ${{ inputs.workspace }}
         shared-key: ${{ inputs.cache-key }}-${{ env.ImageOS }}
         lookup-only: ${{ inputs.lookup-only }}
         save-if: ${{ github.ref == 'refs/heads/main' && inputs.save-cache == 'true' && inputs.lookup-only != 'true' }}

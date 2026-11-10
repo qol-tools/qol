@@ -508,7 +508,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           sparse-checkout: .github/scripts
+          persist-credentials: false
 
       - name: Open one pull request for the batch
         id: combine
@@ -538,7 +540,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name == 'merge_group'
         with:
+          ref: main
           sparse-checkout: .github/scripts
+          persist-credentials: false
 
       - name: Every job passed or was skipped
         id: verdict
@@ -587,7 +591,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           sparse-checkout: .github/scripts
+          persist-credentials: false
 
       - name: Cancel older runs for this pull request
         env:
@@ -612,7 +618,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           sparse-checkout: .github/scripts
+          persist-credentials: false
 
       - name: Comment on the pull request
         env:
