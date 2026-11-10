@@ -3721,3 +3721,22 @@ test('a fork its killed hold wakes as the switchboard shuts down keeps its row, 
   expect(saved().map(one => one.slice(0, 3))).toEqual([['a1', true, 'The first report.']])
 })
 
+test('a restart puts only the forks the switchboard started back in the agent list, and leaves their sub-forks and the sub-forks of a fork that is gone on the board', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-1', true]])
+  const sent: any[] = []
+  const fork = (agentId: string, name: string, extra: object = {}) => ({ agentId, name, kind: 'note', headline: 'Done for now.', report: 'Done for now.', at: 7, isWorking: false, isDismissed: false, ...extra })
+  store.set('board:earlier-session', [fork('m1', 'main-fork: words'), fork('s1', 'sub-fork: words', { launcher: 'm1' }), fork('o1', 'orphan-fork: words', { launcher: 'gone1' }), fork('c1', 'cut-sub: words', { launcher: 'm1', isWorking: true })])
+  engine(on, sent, [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let round = 0; round < 4; round += 1) {
+    await renderBand($)
+    for (const fire of timers.splice(0)) fire()
+    await settle()
+  }
+  expect(sent.map(one => [one.to, one.text])).toEqual([['m1', 'Back in the agent list.']])
+  expect((store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isInterrupted === true]).sort()).toEqual([['c1', true], ['m1', false], ['o1', false], ['s1', false]])
+})
+

@@ -2574,7 +2574,8 @@ export const register: Register = on => {
       for (const key of (await $.store.keys()).filter(one => one.startsWith(REOPEN_PREFIX) && one !== REOPEN_PREFIX + id)) await $.store.delete(key)
       for (const key of (await $.store.keys()).filter(one => one.startsWith(OLD_LOG_PREFIX))) await $.store.delete(key)
       if (live.length === 0) for (const key of (await $.store.keys()).filter(one => one.startsWith(HOLD_PREFIX))) await $.store.delete(key)
-      const pending = e.isInteractive && live.length === 0 ? merged.filter(isUnfinished).map(one => one.agentId) : []
+      const placed = await read($, board)
+      const pending = e.isInteractive && live.length === 0 ? merged.filter(one => isUnfinished(one) && placed.find(row => row.agentId === one.agentId)?.launcher === undefined).map(one => one.agentId) : []
       reopenTries = 0
       await noteReopen($, { at: await $.clock.now(), start: id, boards: others.length, carried: earlier.length, own: own.length, rows: merged.map(one => one.agentId), pending })
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
