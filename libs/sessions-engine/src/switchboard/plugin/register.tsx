@@ -48,7 +48,6 @@ const NEW_REPLY = '◉'
 const NO_MARK = '  '
 const SINCE_WIDTH = 6
 const MERGED_EXIT = 0
-const MODELS = ['opus', 'sonnet', 'haiku'] as const
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const CHOICES_KEY = 'model-choices'
 const SEEN_KEY = 'models-seen'
@@ -1626,17 +1625,37 @@ const ledgerOf = (rows: readonly LedgerRow[]): Pull[] =>
 const PULL_REPO = /^https:\/\/github\.com\/([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})\/pull\/([0-9]{1,10})$/
 const IN_QUEUE_QUERY = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){isInMergeQueue}}}'
 const HEAD_SHA = /^[0-9a-f]{40}$/
-const MODEL_NAME = /(opus|sonnet|haiku|fable|mythos)(?:-(\d{1,3}))?(?:-(\d{1,2})(?!\d))?/i
+const MODEL_NAME = /claude-([a-z]+)(?:-(\d{1,3}))?(?:-(\d{1,2})(?!\d))?|^([a-z]+)$/i
 
 export const modelName = (model: string): string => {
   const match = MODEL_NAME.exec(model)
-  const family = match?.[1]?.toLowerCase()
+  const family = (match?.[1] ?? match?.[4])?.toLowerCase()
   if (match === null || family === undefined) return printable(model)
   const name = `${family.charAt(0).toUpperCase()}${family.slice(1)}`
   return match[2] === undefined ? name : `${name} ${match[2]}${match[3] === undefined ? '' : `.${match[3]}`}`
 }
 
-const familyOf = (model: string | undefined): string | undefined => (model === undefined ? undefined : MODEL_NAME.exec(model)?.[1]?.toLowerCase())
+const wordOf = (model: string): string => {
+  const match = MODEL_NAME.exec(model)
+  return (match?.[1] ?? match?.[4])?.toLowerCase() ?? model
+}
+
+export const forkModels = (text: string | undefined): string[] => {
+  try {
+    const parsed: unknown = JSON.parse(text ?? '')
+    return Array.isArray(parsed) ? parsed.filter((one): one is string => typeof one === 'string' && one !== '') : []
+  } catch {
+    return []
+  }
+}
+
+const modelsOf = async ($: EngineInterface): Promise<string[]> => forkModels(await $.env.get('QOL_SWITCHBOARD_MODELS').catch(() => undefined))
+
+const listedAs = (models: string[], model: string | undefined): string | undefined => {
+  if (model === undefined) return undefined
+  const word = wordOf(model)
+  return models.find(id => model === id || model.startsWith(`${id}[`) || model.startsWith(`${id}-`)) ?? models.find(id => wordOf(id) === word && (id === word || model === word))
+}
 
 const checkResult = (row: Record<string, unknown>): CheckResult | 'skipped' => {
   if (typeof row.context === 'string') return row.state === 'SUCCESS' ? 'pass' : row.state === 'PENDING' || row.state === 'EXPECTED' ? 'running' : 'fail'
@@ -1826,8 +1845,6 @@ const noteSeen = async ($: EngineInterface, key: string, model: string, effort: 
   queueMarks($)
 }
 
-const SETTING = /^(model|effort)-(.+)-([a-z]+)$/
-
 const settingOf = async ($: EngineInterface, key: string): Promise<{ model?: string; effort?: string }> => {
   await loadModels($)
   const was = (await read($, modelsSeen))[key]
@@ -1838,16 +1855,12 @@ const settingOf = async ($: EngineInterface, key: string): Promise<{ model?: str
   return { ...(model === undefined ? {} : { model }), ...(effort === undefined ? {} : { effort }) }
 }
 
-const pickSetting = async ($: EngineInterface, element: string): Promise<void> => {
-  const parts = SETTING.exec(element)
-  if (parts === null) return
-  const [, kind, key = '', value] = parts
+const pickSetting = async ($: EngineInterface, kind: 'model' | 'effort', key: string, value: string): Promise<void> => {
   const now = await settingOf($, key)
   if (kind === 'model') {
-    const to = MODELS.find(one => one === value)
-    const from = now.model
-    if (to === undefined || familyOf(from) === to) return
-    await choose($, key, { model: to })
+    const models = await modelsOf($)
+    if (!models.includes(value) || listedAs(models, now.model) === value) return
+    await choose($, key, { model: value })
     return
   }
   const to = EFFORTS.find(one => one === value)
@@ -1866,17 +1879,20 @@ const setByCommand = async ($: EngineInterface, kind: 'model' | 'effort', args: 
   if (target === undefined) return undefined
   const key = keyOf(target)
   const words = args.trim().toLowerCase().split(/\s+/).filter(word => word !== '')
-  const model = kind === 'model' ? MODELS.find(one => words.includes(one)) : undefined
+  const models = await modelsOf($)
+  const model = kind === 'model' ? models.find(id => words.includes(id) || words.includes(wordOf(id))) : undefined
   const effort = EFFORTS.find(one => words.includes(one))
   if (words.length > 0 && words.length === (model === undefined ? 0 : 1) + (effort === undefined ? 0 : 1)) {
-    if (model !== undefined) await pickSetting($, `model-${key}-${model}`)
-    if (effort !== undefined) await pickSetting($, `effort-${key}-${effort}`)
+    if (model !== undefined) await pickSetting($, 'model', key, model)
+    if (effort !== undefined) await pickSetting($, 'effort', key, effort)
     const picked = [model === undefined ? '' : modelName(model), effort === undefined ? '' : `${effort} effort`].filter(part => part !== '')
     return `${key} uses ${picked.join(' at ')} from its next model call.`
   }
   const now = await settingOf($, key)
   if (kind === 'effort') return `${key} effort: ${now.effort ?? 'shows at its next model call'}. /effort ${EFFORTS.join('|')} changes it; with no fork picked, /effort changes the switchboard.`
-  return `${key} model: ${now.model === undefined ? 'shows at its next model call' : modelName(now.model)}${now.effort === undefined ? '' : ` at ${now.effort} effort`}. /model ${MODELS.join('|')} and a level, such as /model haiku max, changes it; with no fork picked, /model changes the switchboard.`
+  const names = models.map(wordOf)
+  const how = names.length === 0 ? 'sessions.toml lets a fork run no model, so /model has none to set' : `/model ${names.join('|')} and a level, such as /model ${names[0]} max, changes it`
+  return `${key} model: ${now.model === undefined ? 'shows at its next model call' : modelName(now.model)}${now.effort === undefined ? '' : ` at ${now.effort} effort`}. ${how}; with no fork picked, /model changes the switchboard.`
 }
 
 export const withChoice = async <T extends { agentId?: string; model: string; effort?: string | number }>($: EngineInterface, e: T): Promise<T> => {
@@ -3111,6 +3127,7 @@ export const register: Register = on => {
     const firstAsk = askers.find(entry => entry.recommend !== undefined)
     const labelOf = (entry: Entry): string => shownState(entry, list, states).label
     const looks = await looksOf($)
+    const models = await modelsOf($)
     const lookOf = (entry: Entry): StateLook | undefined => {
       const state = sessionState(entry, list, states)
       return state === undefined ? undefined : looks.get(state)
@@ -3291,16 +3308,18 @@ export const register: Register = on => {
     }
     const forkModel = (key: string) => {
       const one = modelOf(key, undefined, true)
-      const family = familyOf(one.model)
+      const listed = listedAs(models, one.model)
       const level = EFFORTS.findIndex(choice => choice === one.effort)
       return (
         <Box flexDirection="row">
-          <Select
-            key={`model-${key}`}
-            options={MODELS.map(choice => ({ value: choice, label: choice === family && one.model !== undefined ? modelName(one.model) : modelName(choice) }))}
-            {...(family === undefined ? {} : { value: family })}
-            onSelect={value => void pickSetting($, `model-${key}-${value}`)}
-          />
+          {models.length > 0 && (
+            <Select
+              key={`model-${key}`}
+              options={models.map(id => ({ value: id, label: modelName(id === listed && one.model !== undefined ? one.model : id) }))}
+              {...(listed === undefined ? {} : { value: listed })}
+              onSelect={value => void pickSetting($, 'model', key, value)}
+            />
+          )}
           <Text>{'   '}</Text>
           {one.takesNone ? (
             <Text dimColor>no effort on {modelName(one.was?.model ?? '')}</Text>
@@ -3312,7 +3331,7 @@ export const register: Register = on => {
                   <Text dimColor>{'□'.repeat(EFFORTS.length - level - 1)} </Text>
                 </Text>
               )}
-              <Select key={`effort-${key}`} options={EFFORTS.map(choice => ({ value: choice }))} {...(one.effort === undefined ? {} : { value: one.effort })} onSelect={value => void pickSetting($, `effort-${key}-${value}`)} />
+              <Select key={`effort-${key}`} options={EFFORTS.map(choice => ({ value: choice }))} {...(one.effort === undefined ? {} : { value: one.effort })} onSelect={value => void pickSetting($, 'effort', key, value)} />
             </Box>
           )}
         </Box>

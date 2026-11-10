@@ -217,6 +217,7 @@ mod tests {
             "$.env.get('QOL_SWITCHBOARD_WATCHES')",
             "$.env.get('QOL_SWITCHBOARD_STATE_LOOKS')",
             "$.env.get('QOL_SWITCHBOARD_MARKS')",
+            "$.env.get('QOL_SWITCHBOARD_MODELS')",
             "[program, 'sessions', 'switchboard', 'hook', 'fork-states']",
             "if (result.exit_code === MERGED_EXIT && (await fileMerged($, result, fork).then(() => true, () => false))) return true",
             "'open · CLI Sessions watching' : 'open · no watcher'",
