@@ -27,9 +27,41 @@ pub fn inspect() -> Result<
     qol_config::inspect_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
 }
 
+pub(crate) fn without_managed(managed: &[String], address: &str) -> Option<Vec<String>> {
+    let kept: Vec<String> = managed
+        .iter()
+        .filter(|entry| !entry.eq_ignore_ascii_case(address))
+        .cloned()
+        .collect();
+    (kept.len() != managed.len()).then_some(kept)
+}
+
+pub(crate) fn forget_managed(config: &ReconnectConfig, address: &str) {
+    let Some(kept) = without_managed(&config.managed_devices, address) else {
+        return;
+    };
+    std::mem::drop(std::thread::spawn(move || {
+        let id = qol_config::plugin_id_from_env(crate::PLUGIN_ID);
+        let keys = serde_json::json!({ "managed_devices": kept });
+        if let Err(error) = qol_plugin_api::host_exec::save_plugin_config_keys(&id, &keys) {
+            log::warn!("Bluetooth could not drop a removed device from reconnecting: {error}");
+        }
+    }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_removed_device_leaves_the_reconnect_list_whatever_its_letter_case() {
+        let managed = vec!["AA:BB".to_string(), "CC:DD".to_string()];
+        assert_eq!(
+            without_managed(&managed, "aa:bb"),
+            Some(vec!["CC:DD".to_string()])
+        );
+        assert_eq!(without_managed(&managed, "EE:FF"), None);
+    }
 
     #[test]
     fn contract_defaults_match_runtime_type() {

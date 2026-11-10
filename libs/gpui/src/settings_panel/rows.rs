@@ -1693,11 +1693,11 @@ fn page_status_text(
     (label, tone)
 }
 
-pub(super) fn page_switch_plan<'a>(
-    switch: &'a PageSwitch,
+pub(super) fn page_switch_plan(
+    switch: &PageSwitch,
     ready: bool,
     turn_on: Option<bool>,
-) -> Option<&'a str> {
+) -> Option<&str> {
     if switch.pending || !ready {
         return None;
     }
@@ -1806,6 +1806,46 @@ pub(super) fn inline_slot_item<'a>(
     };
     let index = *inline_item_indices(control, needle).get(slot)?;
     items.get(index)
+}
+
+pub(super) fn inline_selected_ids(rows: &[Row], needle: Option<&str>) -> Vec<(usize, String)> {
+    rows.iter()
+        .enumerate()
+        .filter_map(|(index, row)| {
+            let RowControl::List { list, .. } = &row.control else {
+                return None;
+            };
+            if !is_inline_list(&row.control) {
+                return None;
+            }
+            inline_slot_item(&row.control, needle, list.selected)
+                .map(|item| (index, item.id.clone()))
+        })
+        .collect()
+}
+
+pub(super) fn restore_inline_selected(
+    rows: &mut [Row],
+    needle: Option<&str>,
+    held: &[(usize, String)],
+) {
+    for (index, id) in held {
+        let Some(row) = rows.get_mut(*index) else {
+            continue;
+        };
+        let slot = inline_item_indices(&row.control, needle)
+            .into_iter()
+            .position(|item| {
+                matches!(
+                    &row.control,
+                    RowControl::List { items, .. }
+                        if items.get(item).is_some_and(|item| &item.id == id)
+                )
+            });
+        if let (Some(slot), RowControl::List { list, .. }) = (slot, &mut row.control) {
+            list.selected = slot;
+        }
+    }
 }
 
 pub(super) fn inline_row_matches(control: &RowControl, needle: &str) -> bool {
@@ -2133,13 +2173,13 @@ mod tests {
     use super::{
         absent_reason, apply_level_query, apply_runtime_query, begin_list_item_action,
         clear_slider_hold, filtered_list_items, inline_empty_text, inline_item_indices,
-        inline_line_count, level_query_names, list_item_actions, list_items, list_slider_value,
-        member_on, merged_config, option_accent, options_from_value, page_chain, page_sections_for,
-        page_switch_plan, parse_level, primary_list_item_action, row_action, row_is_visible,
-        row_streams, row_value_json, rows_from_resolved, runtime_query_names,
-        sections_from_resolved, selected_list_item, set_config_value, set_member, stream_gated,
-        visible_row_indices, FieldDefault, ListActions, ListItem, ResolvedConfig, Row, RowControl,
-        RowSection, SelectOption, SliderHold,
+        inline_line_count, inline_selected_ids, level_query_names, list_item_actions, list_items,
+        list_slider_value, member_on, merged_config, option_accent, options_from_value, page_chain,
+        page_sections_for, page_switch_plan, parse_level, primary_list_item_action,
+        restore_inline_selected, row_action, row_is_visible, row_streams, row_value_json,
+        rows_from_resolved, runtime_query_names, sections_from_resolved, selected_list_item,
+        set_config_value, set_member, stream_gated, visible_row_indices, FieldDefault, ListActions,
+        ListItem, ResolvedConfig, Row, RowControl, RowSection, SelectOption, SliderHold,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -4931,6 +4971,38 @@ hide_when_empty = true
         apply_query(&mut rows, "devices", Ok(serde_json::json!([])));
         assert_eq!(inline_line_count(&rows[list].control, None), 1);
         assert_eq!(inline_empty_text(&rows[list].control), "No devices");
+    }
+
+    #[test]
+    fn a_reordered_answer_keeps_the_same_inline_item_selected() {
+        let (mut rows, _) = collapse_rows();
+        answer_devices(&mut rows);
+        let list = index_of(&rows, "devices");
+        if let RowControl::List { list, .. } = &mut rows[list].control {
+            list.selected = 1;
+        }
+        let held = inline_selected_ids(&rows, None);
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].0, list);
+        apply_query(
+            &mut rows,
+            "devices",
+            Ok(serde_json::json!([
+                { "address": "BB:BB", "name": "Mouse", "connected": true },
+                { "address": "AA:AA", "name": "Keys", "connected": true },
+            ])),
+        );
+        restore_inline_selected(&mut rows, None, &held);
+        let RowControl::List { list: state, .. } = &rows[list].control else {
+            panic!("expected a list");
+        };
+        assert_eq!(state.selected, 0);
+        let gone = vec![(list, "gone".to_string())];
+        restore_inline_selected(&mut rows, None, &gone);
+        let RowControl::List { list: state, .. } = &rows[list].control else {
+            panic!("expected a list");
+        };
+        assert_eq!(state.selected, 0);
     }
 
     #[test]

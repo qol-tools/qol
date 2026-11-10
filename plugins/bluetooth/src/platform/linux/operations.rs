@@ -178,6 +178,7 @@ pub(super) fn complete(
                 retries.remove(&address);
                 subscribed.remove(&address);
                 watch_states.remove(&address);
+                crate::config::forget_managed(config, &address.to_string());
             }
             trace_remove_action(address, result);
         }

@@ -93,7 +93,7 @@ fn localize_plugin(
     Ok(())
 }
 
-fn device_fields_by_uid(
+pub(crate) fn device_fields_by_uid(
     profile_dir: &Path,
     plugins: PluginFields,
 ) -> Vec<(String, &'static [&'static str])> {
@@ -124,7 +124,7 @@ fn device_fields_by_uid(
     out
 }
 
-fn synced_slices(profile_dir: &Path, uid: &str) -> [PathBuf; 2] {
+pub(crate) fn synced_slices(profile_dir: &Path, uid: &str) -> [PathBuf; 2] {
     [
         slice_path(profile_dir.join("core"), uid),
         slice_path(profile_dir.join("os").join(current_os_subdir()), uid),
@@ -135,7 +135,7 @@ pub(crate) fn slice_path(scope_dir: PathBuf, uid: &str) -> PathBuf {
     scope_dir.join("plugin-configs").join(format!("{uid}.json"))
 }
 
-fn read_object(path: &Path) -> Option<Map<String, Value>> {
+pub(crate) fn read_object(path: &Path) -> Option<Map<String, Value>> {
     let raw = std::fs::read_to_string(path).ok()?;
     match serde_json::from_str::<Value>(&raw) {
         Ok(Value::Object(map)) => Some(map),

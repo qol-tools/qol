@@ -502,9 +502,11 @@ fn handle_daemon_command<S: PairedStack>(
         DaemonCommand::Disconnect(address) => run_device_command(&address, "disconnect", || {
             S::disconnect_device(&address).map(std::mem::drop)
         }),
-        DaemonCommand::Remove(address) => {
-            run_device_command(&address, "remove", || S::remove_device(&address))
-        }
+        DaemonCommand::Remove(address) => run_device_command(&address, "remove", || {
+            S::remove_device(&address)?;
+            crate::config::forget_managed(config, &address);
+            Ok(())
+        }),
         DaemonCommand::StartSearch => {
             if S::search_devices(config).is_err() {
                 report_daemon_failure("search", reset_discovery_state());

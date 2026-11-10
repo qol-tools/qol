@@ -52,9 +52,10 @@ use super::object_array_row::ObjectArrayState;
 use super::persistence::{panel_base, save_values};
 use super::rows::{
     absent_reason, answers_absent, apply_level_query, apply_runtime_query, filtered_list_items,
-    inline_row_matches, is_inline_list, level_query_names, merged_config, query_flag_value,
-    retire_number_holds, row_action, row_query_names, row_streams, row_value_source, stream_gated,
-    Row, RowControl, RowQueryState, RowSection, SliderHold, ITEM_ROW_DANGER, ITEM_ROW_MEMBER,
+    inline_row_matches, inline_selected_ids, is_inline_list, level_query_names, merged_config,
+    query_flag_value, restore_inline_selected, retire_number_holds, row_action, row_query_names,
+    row_streams, row_value_source, stream_gated, Row, RowControl, RowQueryState, RowSection,
+    SliderHold, ITEM_ROW_DANGER, ITEM_ROW_MEMBER,
 };
 use super::{
     AttentionFeed, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
@@ -1708,6 +1709,8 @@ impl SettingsPanelView {
         let pending = self.slider_pending.clone();
         let holds = self.slider_holds.clone();
         let now = std::time::Instant::now();
+        let needle = self.filter_needle();
+        let held = inline_selected_ids(&self.root().rows, needle.as_deref());
         apply_runtime_query(
             &mut self.root_mut().rows,
             source,
@@ -1715,6 +1718,7 @@ impl SettingsPanelView {
             result,
             &|index, id| slider_protected(drag.as_ref(), &pending, &holds, index, id, now),
         );
+        restore_inline_selected(&mut self.root_mut().rows, needle.as_deref(), &held);
         self.height_revision += 1;
         if source != self.materialized_source {
             return;
