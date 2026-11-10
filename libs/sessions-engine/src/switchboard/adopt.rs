@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -153,11 +153,31 @@ fn resumable_meta(meta: &serde_json::Map<String, Value>) -> Value {
     Value::Object(meta)
 }
 
-fn copy_transcript(source: &Path, destination: &Path, from: &str, to: &str) -> Result<()> {
-    let partial = destination.with_extension(format!(
+pub(super) fn partial_of(destination: &Path) -> PathBuf {
+    destination.with_extension(format!(
         "jsonl.{}{PARTIAL_SUFFIX}",
         fresh_id(&destination.to_string_lossy())
-    ));
+    ))
+}
+
+fn ends_on_a_row(transcript: &Path) -> bool {
+    let Ok(mut file) = fs::File::open(transcript) else {
+        return false;
+    };
+    let mut last = [0u8; 1];
+    match file.seek(SeekFrom::End(-1)) {
+        Ok(_) => file.read_exact(&mut last).is_ok() && last[0] == b'\n',
+        Err(_) => file.metadata().is_ok_and(|metadata| metadata.len() == 0),
+    }
+}
+
+fn share_transcript(source: &Path, destination: &Path) -> bool {
+    ends_on_a_row(source)
+        && crate::file_link::link(source, destination, &partial_of(destination)).is_ok()
+}
+
+fn copy_transcript(source: &Path, destination: &Path, from: &str, to: &str) -> Result<()> {
+    let partial = partial_of(destination);
     let reader = BufReader::new(
         fs::File::open(source).with_context(|| format!("failed to open {}", source.display()))?,
     );
@@ -197,7 +217,9 @@ fn bring(found: &Candidate, subagents: &Path, agent_id: &str) -> Result<()> {
         .with_context(|| format!("failed to create {}", subagents.display()))?;
     let transcript = subagents.join(format!("{AGENT_PREFIX}{agent_id}{TRANSCRIPT_SUFFIX}"));
     let meta = subagents.join(format!("{AGENT_PREFIX}{agent_id}{META_SUFFIX}"));
-    copy_transcript(&found.transcript, &transcript, &found.agent_id, agent_id)?;
+    if found.agent_id != agent_id || !share_transcript(&found.transcript, &transcript) {
+        copy_transcript(&found.transcript, &transcript, &found.agent_id, agent_id)?;
+    }
     qol_fs::atomic_write(&meta, resumable_meta(&found.meta).to_string().as_bytes())
         .with_context(|| format!("failed to write {}", meta.display()))
 }
@@ -343,7 +365,7 @@ fn parse(args: &[OsString]) -> Result<AdoptArgs> {
     }
 }
 
-fn is_switchboards(conversations: &Path, switchboard: Option<&Path>) -> bool {
+pub(super) fn is_switchboards(conversations: &Path, switchboard: Option<&Path>) -> bool {
     conversations.is_absolute()
         && switchboard.is_some_and(|switchboard| {
             conversations.file_name().and_then(|name| name.to_str())
@@ -508,17 +530,54 @@ mod tests {
             read_meta(here.join("agent-a1.meta.json")),
             serde_json::json!({"agentType": "project-fork", "description": "kcd2-modding: aim the rifle", "cwd": "/work/app"})
         );
+        let earlier = conversations.join("older/subagents/agent-a1.jsonl");
         assert!(
-            conversations
-                .join("older/subagents/agent-a1.jsonl")
-                .exists(),
-            "the earlier conversation keeps its own copy"
+            crate::file_link::is_same_file(&earlier, &here.join("agent-a1.jsonl")),
+            "the earlier conversation and this one hold one file, so a restart copies nothing"
         );
+        let leftovers = fs::read_dir(&here).unwrap().count();
+        assert_eq!(leftovers, 2, "no partial file is left behind");
         let again = adopt(conversations, "current", "a1", None).unwrap();
         assert_eq!(
             (again.agent_id.as_str(), again.brought),
             ("a1", Brought::Here)
         );
+    }
+
+    #[test]
+    fn a_transcript_cut_inside_a_row_is_copied_with_the_row_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let conversations = root.path();
+        fork(
+            conversations,
+            "older",
+            "a1",
+            &meta("fix-board: fix it", ""),
+            &rows("a1"),
+        );
+        let earlier = conversations.join("older/subagents/agent-a1.jsonl");
+        fs::write(&earlier, r#"{"agentId":"a1","type":"user"}"#).unwrap();
+        fs::create_dir_all(conversations.join("current")).unwrap();
+
+        let adopted = adopt(conversations, "current", "a1", None).unwrap();
+
+        assert_eq!(adopted.brought, Brought::Copied);
+        let here = conversations.join("current/subagents/agent-a1.jsonl");
+        assert!(!crate::file_link::is_same_file(&earlier, &here));
+        assert_eq!(
+            fs::read_to_string(&here).unwrap(),
+            "{\"agentId\":\"a1\",\"type\":\"user\"}\n",
+            "the next row Claude Code appends starts on its own line"
+        );
+    }
+
+    #[test]
+    fn an_empty_transcript_ends_on_a_row_and_a_missing_one_does_not() {
+        let root = tempfile::tempdir().unwrap();
+        let empty = root.path().join("empty.jsonl");
+        fs::write(&empty, "").unwrap();
+        assert!(ends_on_a_row(&empty));
+        assert!(!ends_on_a_row(&root.path().join("missing.jsonl")));
     }
 
     #[test]

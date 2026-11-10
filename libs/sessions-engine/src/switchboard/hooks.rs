@@ -19,6 +19,8 @@ pub(super) const PRE_AGENT: &str = "pre-agent";
 pub(super) const FORK_CONTEXT: &str = "fork-context";
 pub(super) const AGENT_ROWS: &str = "agent-rows";
 pub(super) const FORK_STATES: &str = "fork-states";
+pub(super) const FOLD_TRANSCRIPTS: &str = "fold-transcripts";
+pub(super) const FORK_SAID: &str = "fork-said";
 pub(super) const ROLE_REFRESH: &str = "role-refresh";
 pub(super) const ROLE_REFRESH_SLOTS: usize = 3;
 pub(super) const ROLE_REFRESH_SOURCES: &str = "resume|compact";
@@ -28,6 +30,11 @@ const RETIRED_POST_AGENT: &str = "post-agent";
 const RETIRED_WORKTREE_CREATE: &str = "worktree-create";
 const RETIRED_PINS: &str = "fork-pins";
 const PROJECT_PREFIX: &str = "Project:";
+const LAUNCHER_PREFIX: &str = "Launcher: ";
+const MODEL_PREFIX: &str = "Model:";
+const MODEL_ID_MARKS: &str = "_.[]-";
+const BYTE_ORDER_MARK: char = '\u{FEFF}';
+const NEXT_LINE: char = '\u{85}';
 const FORMAT_HELP: &str = "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`, followed by the user's words.";
 
 #[derive(Default, Deserialize)]
@@ -53,6 +60,14 @@ struct Payload {
 struct StatesQuery {
     conversation: String,
     ids: Vec<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct SaidQuery {
+    conversation: String,
+    id: String,
+    rows: usize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -94,14 +109,47 @@ fn check_project(prompt: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn is_plugin_space(one: char) -> bool {
+    match one {
+        BYTE_ORDER_MARK => true,
+        NEXT_LINE => false,
+        other => other.is_whitespace(),
+    }
+}
+
+fn is_model_id(id: &str) -> bool {
+    let mut letters = id.chars();
+    letters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphanumeric())
+        && letters.all(|one| one.is_ascii_alphanumeric() || MODEL_ID_MARKS.contains(one))
+}
+
+fn model_line(prompt: &str) -> Option<&str> {
+    let mut lines = prompt.split('\n').skip(1);
+    let second = lines.next()?;
+    let line = if second.starts_with(LAUNCHER_PREFIX) {
+        lines.next()?
+    } else {
+        second
+    };
+    let id = line
+        .trim_matches(is_plugin_space)
+        .strip_prefix(MODEL_PREFIX)?
+        .trim_matches(is_plugin_space);
+    is_model_id(id).then_some(id)
+}
+
 fn pre_agent(payload: &Payload, admit: &dyn Fn(&str) -> Result<()>) -> Verdict {
     if payload.tool_input.subagent_type.as_deref() != Some(FORK_AGENT) {
         return Verdict::Pass;
     }
-    if let Err(reason) = check_project(payload.tool_input.prompt.as_deref().unwrap_or_default()) {
+    let prompt = payload.tool_input.prompt.as_deref().unwrap_or_default();
+    if let Err(reason) = check_project(prompt) {
         return Verdict::Deny(reason);
     }
-    if let Some(model) = payload.tool_input.model.as_deref() {
+    let named = [model_line(prompt), payload.tool_input.model.as_deref()];
+    for model in named.into_iter().flatten() {
         if let Err(error) = admit(model) {
             return Verdict::Deny(format!("{error:#}"));
         }
@@ -231,6 +279,15 @@ fn fork_states(raw: &str) -> Result<String> {
     Ok(Value::Object(states).to_string())
 }
 
+fn fork_said(raw: &str) -> Result<String> {
+    let query: SaidQuery =
+        serde_json::from_str(raw).context("the fork said payload is not valid JSON")?;
+    let said = fork_state::transcript_of(Path::new(query.conversation.trim()), &query.id)
+        .map(|transcript| super::said::newest(&transcript, query.rows))
+        .unwrap_or_default();
+    Ok(serde_json::to_string(&said)?)
+}
+
 fn deny_json(reason: &str) -> String {
     json!({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -261,7 +318,7 @@ fn read_payload() -> Result<Payload> {
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let name = args.first().and_then(|arg| arg.to_str()).ok_or_else(|| {
         anyhow!(
-            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}|{FORK_STATES}>"
+            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}|{FORK_STATES}|{FORK_SAID}|{FOLD_TRANSCRIPTS} DIR>"
         )
     })?;
     match name {
@@ -272,6 +329,28 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
                 .read_to_string(&mut raw)
                 .context("failed to read the fork states payload")?;
             crate::cli::line(fork_states(&raw)?);
+            Ok(())
+        }
+        FORK_SAID => {
+            let mut raw = String::new();
+            std::io::stdin()
+                .read_to_string(&mut raw)
+                .context("failed to read the fork said payload")?;
+            crate::cli::line(fork_said(&raw)?);
+            Ok(())
+        }
+        FOLD_TRANSCRIPTS => {
+            let conversations = args
+                .get(1)
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("{FOLD_TRANSCRIPTS} takes the conversations folder"))?;
+            if !super::adopt::is_switchboards(&conversations, switchboard_dir().as_deref()) {
+                bail!(
+                    "{} is not the switchboard's conversations folder",
+                    conversations.display()
+                );
+            }
+            crate::cli::line(serde_json::to_string(&super::fold::fold(&conversations))?);
             Ok(())
         }
         RETIRED_POST_AGENT => Ok(()),
@@ -438,6 +517,99 @@ mod tests {
         assert_eq!(pre_agent(&unnamed, &admit_none), Verdict::Pass);
     }
 
+    #[test]
+    fn a_model_line_is_read_as_the_plugin_reads_it() {
+        for (prompt, model) in [
+            (
+                "Project: /work\nModel: claude-mythos-5-1\nreview it",
+                Some("claude-mythos-5-1"),
+            ),
+            (
+                "Project: /work\nLauncher: whoever\nModel: claude-opus-5-5[1m]\nfix it",
+                Some("claude-opus-5-5[1m]"),
+            ),
+            (
+                "Project: /work\n  Model:gpt_9.turbo \r\nfix it",
+                Some("gpt_9.turbo"),
+            ),
+            ("Project: /work\nModel: fable", Some("fable")),
+            (
+                "Project: /work\n\u{FEFF}Model:\u{FEFF}\u{2028}gpt-9-turbo\u{A0}\u{FEFF}\nfix it",
+                Some("gpt-9-turbo"),
+            ),
+            ("Project: /work\n\u{85}Model: gpt-9-turbo\nfix it", None),
+            ("Project: /work\nModel: gpt-9-turbo\u{85}\nfix it", None),
+            ("Project: /work\nfix it\nModel: claude-mythos-5-1", None),
+            ("Project: /work\nModel: two words\nfix it", None),
+            ("Project: /work\nModel: -dash\nfix it", None),
+            ("Project: /work\nModel:\nfix it", None),
+            ("Project: /work\nmodel: claude-mythos-5-1\nfix it", None),
+            ("Project: /work\nLauncher: whoever", None),
+            (
+                "Project: /work\nLauncher: whoever\nfix it\nModel: claude-mythos-5-1",
+                None,
+            ),
+            ("Project: /work", None),
+            ("", None),
+        ] {
+            assert_eq!(model_line(prompt), model, "{prompt}");
+        }
+    }
+
+    #[test]
+    fn a_model_line_passes_the_same_policy_as_the_model_parameter() {
+        fn only_opus(model: &str) -> Result<()> {
+            match model {
+                "opus" | "claude-opus-5-5" => Ok(()),
+                other => bail!("model {other} is not allowed"),
+            }
+        }
+        let rig = rig();
+        let lined = |line: &str, model: Option<&str>| {
+            let mut payload = call(
+                FORK_AGENT,
+                &format!("Project: {}\n{line}\nfix it", rig.project_a.display()),
+            );
+            payload.tool_input.model = model.map(str::to_owned);
+            payload
+        };
+        let refused = denied(pre_agent(&lined("Model: gpt-9-turbo", None), &only_opus));
+        assert!(
+            refused.contains("model gpt-9-turbo is not allowed"),
+            "{refused}"
+        );
+        let marked = denied(pre_agent(
+            &lined("\u{FEFF}Model: gpt-9-turbo", None),
+            &only_opus,
+        ));
+        assert!(
+            marked.contains("model gpt-9-turbo is not allowed"),
+            "{marked}"
+        );
+        let launched = "Launcher: whoever\nModel: gpt-9-turbo";
+        let refused = denied(pre_agent(&lined(launched, Some("opus")), &only_opus));
+        assert!(
+            refused.contains("model gpt-9-turbo is not allowed"),
+            "{refused}"
+        );
+        let refused = denied(pre_agent(
+            &lined("Model: claude-opus-5-5", Some("haiku")),
+            &only_opus,
+        ));
+        assert!(refused.contains("model haiku is not allowed"), "{refused}");
+        for passing in [
+            lined("Model: claude-opus-5-5", None),
+            lined("Model: claude-opus-5-5", Some("opus")),
+            lined("Model: two words", None),
+            lined("fix it\nModel: gpt-9-turbo", None),
+        ] {
+            assert_eq!(pre_agent(&passing, &only_opus), Verdict::Pass);
+        }
+        let mut other = call("general-purpose", "Project: /work\nModel: gpt-9-turbo");
+        other.tool_input.model = Some("haiku".to_owned());
+        assert_eq!(pre_agent(&other, &only_opus), Verdict::Pass);
+    }
+
     fn context_line(line: &str) -> String {
         let value: serde_json::Value = serde_json::from_str(line).unwrap();
         assert_eq!(
@@ -596,6 +768,40 @@ mod tests {
     }
 
     #[test]
+    fn fork_said_reads_the_newest_words_of_one_fork_from_its_transcript() {
+        let root = tempfile::tempdir().unwrap();
+        let subagents = root.path().join("c0").join("subagents");
+        fs::create_dir_all(&subagents).unwrap();
+        let rows = [
+            json!({"type": "user", "message": {"content": "pick one"}}),
+            json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Amber or teal?"}]}}),
+        ];
+        fs::write(
+            subagents.join("agent-a1.jsonl"),
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let conversation = root.path().join("c0.jsonl");
+        let query =
+            |id: &str| json!({"conversation": conversation, "id": id, "rows": 5}).to_string();
+
+        let said: Value = serde_json::from_str(&fork_said(&query("a1")).unwrap()).unwrap();
+
+        assert_eq!(
+            said,
+            json!([
+                {"role": "user", "text": "pick one"},
+                {"role": "assistant", "text": "Amber or teal?"},
+            ])
+        );
+        assert_eq!(fork_said(&query("missing")).unwrap(), "[]");
+        assert_eq!(fork_said(&query("../a1")).unwrap(), "[]");
+        assert!(fork_said("{").is_err());
+    }
+
+    #[test]
     fn the_usage_names_every_hook_verb() {
         let error = run(&[]).unwrap_err().to_string();
         for verb in [
@@ -604,6 +810,8 @@ mod tests {
             ROLE_REFRESH,
             AGENT_ROWS,
             FORK_STATES,
+            FORK_SAID,
+            FOLD_TRANSCRIPTS,
         ] {
             assert!(error.contains(verb), "{verb}: {error}");
         }

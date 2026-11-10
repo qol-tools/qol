@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { forksUnder, fromUser, hasUnread, hookAnswer, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
+import { forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -456,6 +456,7 @@ test('a sub-fork row an earlier board lost its parent on gets the parent back fr
   const store = new Map<string, unknown>()
   const row = (agentId: string, name: string) => ({ agentId, name, headline: '', report: '', at: 1, isWorking: false, isInterrupted: true, isDismissed: false })
   store.set('board:earlier-session', [row('p1', 'parent-fork: parent'), row('s1', 'sub-one: first'), row('s2', 'sub-two: second')])
+  store.set('cuts-healed-2', true)
   engine(on, [], [], [], store)
   const metas: Record<string, string> = {
     '/conv/switchboard-session/subagents/agent-s1.meta.json': JSON.stringify({ agentType: 'project-fork', parentAgentId: 'p1' }),
@@ -484,7 +485,7 @@ test('the board names the key that reaches it until it holds the keys, and close
   await runBoard($)
 
   const outside = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, isFocused: false } })
-  expect(await outside.find({ type: 'Text', text: /ctrl\+x tab to use the board · qols board or ctrl\+x x closes it/ })).toBeDefined()
+  expect(await outside.find({ type: 'Text', text: 'ctrl+x tab to use the board' })).toBeDefined()
   expect(await outside.find({ type: 'Text', text: /tab walks/ })).toBeUndefined()
   await outside.unmount()
 
@@ -1760,7 +1761,7 @@ test('a fork Esc kept under its own id is stopped like any other once it works a
   expect(verbs(calls, 'stopped')).toHaveLength(1)
 })
 
-test('bringing a closed fork back from RECENT lists it once, under the id it came back with', async ($, on) => {
+test('bringing a closed fork back from the closed list lists it once, under the id it came back with', async ($, on) => {
   const calls: string[][] = []
   const store = new Map<string, unknown>()
   const viewed: string[] = []
@@ -1785,6 +1786,7 @@ test('bringing a closed fork back from RECENT lists it once, under the id it cam
   await deliver($, stopNotification('a1', 'one-fork: one'))
   await settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'closed-fold' })
   await ui.press({ key: 'open-a1' })
   await ui.unmount()
   expect(viewed.slice(-2)).toEqual(['a1', 'a1-copy'])
@@ -1794,7 +1796,8 @@ test('bringing a closed fork back from RECENT lists it once, under the id it cam
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(board.match(/one-fork/g)).toHaveLength(1)
   const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await again.find({ type: 'Text', text: 'RECENT' })).toBeUndefined()
+  expect(await again.find({ type: 'Text', text: 'CLOSED' })).toBeUndefined()
+  expect(await again.find({ type: 'Text', text: 'hide closed' })).toBeUndefined()
   await again.unmount()
 })
 
@@ -1814,11 +1817,11 @@ test('a fork that reports or is stopped reads idle or stopped, on the board and 
   expect(board).not.toContain('(done')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: '2 idle' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'RECENT' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /closed$/ })).toBeUndefined()
   await ui.unmount()
 })
 
-test('closing is the only end of a fork: a merge leaves it open, the close marks the record done and RECENT lists it', async ($, on) => {
+test('closing is the only end of a fork: a merge leaves it open, the close marks the record done and the board counts it as closed', async ($, on) => {
   const calls: string[][] = []
   engine(on)
   recordEngine(on, calls)
@@ -1835,18 +1838,23 @@ test('closing is the only end of a fork: a merge leaves it open, the close marks
   await settle()
   expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('(idle, agent id a1)')
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'one-fork hi' })
-  expect(await close()).toContain('Closed one-fork. It moved to RECENT on the board')
+  expect(await close()).toContain('Closed one-fork. The board counts it under closed, and r there lists it')
   expect(verbs(calls, 'done')).toEqual([['done', '--key', 'one-fork', '--reason', 'Closed by the user.']])
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(board).not.toContain('agent id a1')
   expect(board).toContain('(idle, agent id a2)')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: 'RECENT' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '1 closed' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /r shows the closed forks/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'CLOSED' })).toBeUndefined()
+  await ui.press({ key: 'closed-fold' })
+  expect(await ui.find({ type: 'Text', text: 'CLOSED' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'closed' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'hide closed' })).toBeDefined()
   await ui.unmount()
 })
 
-test('RECENT holds the five newest closed forks once each, never one open again or carried on by another', () => {
+test('the closed list holds the five newest closed forks once each, never one open again or carried on by another', () => {
   const row = (agentId: string, at: number, extra: Record<string, unknown> = {}) => ({ agentId, name: `${agentId}-fork: a fork`, headline: '', report: '', at, isWorking: false, isDismissed: true, isClosed: true as const, isDone: true as const, ...extra })
   const list = [
     row('c1', 1),
@@ -1887,7 +1895,9 @@ test('waiting comes from what a fork runs, and a fork that started forks counts 
   for (const broken of ['', 'nope', '[]', 'null', '7']) expect(runStatesOf(broken)).toEqual({})
   const waiting = { a1: { state: 'waiting', pulls: ['https://github.com/o/r/pull/7', 'https://github.com/o/r/pull/9'] } }
   expect(shownState(row('a1', { kind: 'note' }), [], waiting)).toEqual({ label: 'waiting #7,#9', state: 'waiting' })
-  expect(shownState(row('a1', { kind: 'waiting' }))).toEqual({ label: 'note' })
+  expect(shownState(row('a1', { kind: 'waiting' }))).toEqual({ label: 'idle' })
+  expect(shownState(row('a1', { kind: 'note' }))).toEqual({ label: 'idle' })
+  expect(shownState(row('a1', { kind: 'merged' }))).toEqual({ label: 'merged' })
   expect(shownState(row('a1', { kind: 'ask' }), [], waiting)).toEqual({ label: 'ask', state: 'your turn' })
   expect(shownState(row('a1', { kind: 'note', isStoppedByUser: true }))).toEqual({ label: 'stopped' })
   const parent = row('p1', { kind: 'note' })
@@ -1897,7 +1907,7 @@ test('waiting comes from what a fork runs, and a fork that started forks counts 
   const quiet = list.filter(one => one.agentId !== 'k3')
   expect(shownState(parent, quiet)).toEqual({ label: 'waits on 1', state: 'waiting' })
   expect(shownState(parent, quiet, { k2: { state: 'waiting' } })).toEqual({ label: 'waits on 2', state: 'waiting' })
-  expect(shownState(parent, quiet.filter(one => one.agentId !== 'k1'), { k2: { state: 'your turn' } })).toEqual({ label: 'note' })
+  expect(shownState(parent, quiet.filter(one => one.agentId !== 'k1'), { k2: { state: 'your turn' } })).toEqual({ label: 'idle' })
   expect(shownState(row('p1', { isWorking: true }), list)).toEqual({ label: 'working', state: 'working' })
   expect(shownState(row('p1', { kind: 'test' }), list)).toEqual({ label: 'test', state: 'your turn' })
   expect(parentOf(list, row('k9', { launcher: 'gone' }))).toBeUndefined()
@@ -2093,14 +2103,17 @@ test('a terminal session brought back as a fork is claimed with the description 
   expect(verbs(calls, 'stopped')).toEqual([['stopped', '--key', 'gen1']])
 })
 
-test('a row marked done lists under RECENT even without a kind', async ($, on) => {
+test('a row marked done counts as closed even without a kind', async ($, on) => {
   const store = new Map<string, unknown>()
   store.set('board:switchboard-session', [{ agentId: 'd1', name: 'd1-fork: a fork', headline: 'All finished.', report: '', at: 1, isWorking: false, isDismissed: false, isDone: true }])
   engine(on, [], [], [], store)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: false })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /Nothing needs you/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'RECENT' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '1 closed' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /All finished\./ })).toBeUndefined()
+  await ui.press({ key: 'closed-fold' })
+  expect(await ui.find({ type: 'Text', text: 'CLOSED' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /All finished\./ })).toBeDefined()
   await ui.unmount()
 })
@@ -2256,7 +2269,7 @@ test('missingForks adds an unfinished record whose last fork has no board row, o
     { key: 'twin', parts: [{ agent_id: 'b1' }] },
     { key: 'done', parts: [{ agent_id: 'c1' }], done: {} },
   ]
-  expect(missingForks([row], records, 9)).toEqual([{ agentId: 'b1', name: 'lost: words', key: 'lost', headline: '', report: '', at: 7, isWorking: false, isInterrupted: true, isDismissed: false, project: '/w' }])
+  expect(missingForks([row], records, 9)).toEqual([{ agentId: 'b1', name: 'lost: words', key: 'lost', headline: '', report: '', at: 7, isWorking: false, isDismissed: false, project: '/w' }])
 })
 
 test('the board shows the fork whose key starts the prompt under WRITING TO, and drops it when the key goes', async ($, on) => {
@@ -2337,20 +2350,6 @@ test('a fork whose run ended before its report was filed stays working on the bo
   await typed($, notification('a8', 'asking-fork: asks', 'Teal it is.'), 'task-notification')
   await settle()
   expect(rows().find(row => row.agentId === 'a8')?.isRunOver).toBeUndefined()
-})
-
-test("a fork's restart reply leaves no line in the SWITCHBOARD log, while a report does", async ($, on) => {
-  const store = new Map<string, unknown>()
-  engine(on, [], [], [], store)
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await spawn($, 'a8', 'asking-fork: asks')
-  await typed($, notification('a8', 'asking-fork: asks', 'Should I use teal?'), 'task-notification')
-  await settle()
-  const logged = () => ((store.get('sblog-3') as { who: string; text: string }[]) ?? []).filter(row => row.who === 'asking-fork').map(row => row.text)
-  expect(logged()).toEqual(['Should I use teal?'])
-  await typed($, notification('a8', 'asking-fork: asks', 'Back on the fork board.'), 'task-notification')
-  await settle()
-  expect(logged()).toEqual(['Should I use teal?'])
 })
 
 test('the fork chat shows the reply a fork gives while its key stays in the prompt', async ($, on) => {
@@ -2711,7 +2710,7 @@ test('a fork that started forks holds them on its row: their asks show under it,
 
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'parent-fork ', cursor: 12 })
   const writing = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await writing.find({ type: 'Text', text: /SUB-FORKS/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: 'sub-forks' })).toBeDefined()
   expect(await writing.find({ type: 'Text', text: /^parent-fork \+2 +$/ })).toBeDefined()
   expect(await writing.find({ type: 'Text', text: /letter opens a sub-fork/ })).toBeDefined()
   expect(await writing.find({ type: 'Text', text: /child-fork/ })).toBeDefined()
@@ -2830,7 +2829,7 @@ test('the fork chat names the fork state, says what it works on, and the board m
   await ui.unmount()
 })
 
-test('while writing to a fork the board shows the switchboard log, newest first, not the fork chat', async ($, on) => {
+test('while writing to a fork the board draws the forks, that fork and one switchboard line, never a log or the fork chat', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
   on('clock.after', () => new Promise(() => {}))
@@ -2843,12 +2842,62 @@ test('while writing to a fork the board shows the switchboard log, newest first,
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await typed($, 'asking-fork teal')
   await settle()
-  expect(await ui.find({ type: 'Text', text: 'SWITCHBOARD' })).toBeDefined()
-  const rows = (await ui.findAll({ type: 'Text', text: /^(you|you → asking-fork|switchboard|teal|Two forks work\.|what is running\?)$/ })).map((one: any) => one.text)
-  expect(rows).toEqual(['you → asking-fork', 'teal', 'switchboard', 'Two forks work.', 'you', 'what is running?'])
-  expect(await ui.find({ type: 'Text', text: 'Amber or teal?' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'FORKS' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^switchboard · / })).toBeDefined()
+  expect(await ui.findAll({ type: 'Text', text: /^(SWITCHBOARD|LOG|you|you → asking-fork|switchboard|teal|Two forks work\.|what is running\?|Amber or teal\?)$/ })).toEqual([])
   expect(await forkChat($, panes)).toEqual(['Amber or teal?', 'teal'])
   await ui.unmount()
+})
+
+test('a start drops the switchboard log an older board saved', async ($, on) => {
+  const store = new Map<string, unknown>([
+    ['sblog-3', [{ who: 'you', text: 'one' }]],
+    ['sblog-2:first-session', [{ who: 'you', text: 'two' }]],
+    ['model-choices', {}],
+  ])
+  engine(on, [], [], [], store)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect([...store.keys()].filter(key => key.startsWith('sblog'))).toEqual([])
+  expect(store.has('model-choices')).toBe(true)
+})
+
+test('an idle fork with an open pull request never folds, and the fork you write to folds its finished sub-forks', async ($, on) => {
+  engine(on)
+  on('session.messages', () => ({ value: [] }))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  watchEngine(on, { p1: { cwd: '/work', description: 'p1-fork: a fork' }, p2: { cwd: '/work', description: 'p2-fork: a fork' }, p3: { cwd: '/work', description: 'p3-fork: a fork' } })
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (e.argv[1] === 'fork-watch' && e.argv[2] === '--deliver')
+      return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ results: [], pulls: [{ agent_id: 'p1', pull_request: 'https://github.com/o/r/pull/11', number: 11, merge_commit: null, is_watched: true }] }) } }
+    return { value: NO_RECORD }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const id of ['p1', 'p2', 'p3']) await spawn($, id, `${id}-fork: a fork`)
+  await spawn($, 'k1', 'done-sub: a sub-fork', 'p2')
+  await spawn($, 'k2', 'busy-sub: a sub-fork', 'p2')
+  for (const [id, name] of [['p1', 'p1-fork: a fork'], ['p2', 'p2-fork: a fork'], ['p3', 'p3-fork: a fork'], ['k1', 'done-sub: a sub-fork']] as const) await deliver($, notification(id, name, 'Done for now.'))
+  await settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'IDLE' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'p1-fork' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'p3-fork' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '1 idle' })).toBeDefined()
+  await ui.unmount()
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'p2-fork ', cursor: 8 })
+  const writing = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await writing.find({ type: 'Text', text: /^p1-fork +$/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /^p3-fork +$/ })).toBeUndefined()
+  expect(await writing.find({ type: 'Text', text: 'sub-forks' })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /^busy-sub +$/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /^done-sub +$/ })).toBeUndefined()
+  expect(await writing.find({ type: 'Text', text: '1 finished' })).toBeDefined()
+  await writing.press({ key: 'finished-fold' })
+  expect(await writing.find({ type: 'Text', text: /^done-sub +$/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /^p3-fork +$/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: 'hide finished' })).toBeDefined()
+  await writing.unmount()
 })
 
 test('writing to a fork shows its whole conversation in the chat, the old block kept until the new one draws, without harness notes', async ($, on) => {
@@ -2919,97 +2968,6 @@ test('a fork key and message typed on the phone through Remote Control go to tha
   await spawn($, 'a8', 'asking-fork: asks')
   expect((await typed($, 'asking-fork teal', 'bridge')).drop).toContain('→ asking-fork')
   expect(sent.map(one => one.text)).toEqual([fromUser('teal')])
-})
-
-test('a switchboard log moved from its old key keeps each old entry once, and repeats saved under the new key stay', () => {
-  const a = { who: 'you → fork', text: 'teal' }
-  const b = { who: 'fork', text: 'Teal it is.' }
-  const c = { who: 'switchboard', text: 'Started fork.' }
-  const yes = { who: 'you → fork', text: 'yes' }
-  expect(mergedLog([a, b, a, b], [b, c, yes, yes])).toEqual([a, b, c, yes, yes])
-  expect(mergedLog([], [yes, yes])).toEqual([yes, yes])
-})
-
-test('the switchboard log keeps the lines of earlier conversations after a restart, oldest first', async ($, on) => {
-  const store = new Map<string, unknown>()
-  const line = (text: string) => ({ who: 'you → asking-fork', text })
-  store.set('sblog:first-session', [line('one'), line('one')])
-  store.set('sblog-2:first-session', [line('one'), line('two')])
-  store.set('board:switchboard-session', [])
-  store.set('sblog-2:second-session', [line('three')])
-  engine(on, [], [], [], store)
-  on('clock.after', () => new Promise(() => {}))
-  on('session.messages', () => ({ value: [] }))
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await spawn($, 'a8', 'asking-fork: asks')
-  await typed($, 'qols board')
-  await typed($, 'asking-fork four')
-  await settle()
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  const rows = (await ui.findAll({ type: 'Text', text: /^(one|two|three|four)$/ })).map((one: any) => one.text)
-  expect(rows).toEqual(['four', 'three', 'two', 'one'])
-  expect([...store.keys()].filter(key => key.startsWith('sblog'))).toEqual(['sblog-3'])
-  await ui.unmount()
-  store.set('sblog-3', [...(store.get('sblog-3') as unknown[]), { who: 'you → other-fork', text: 'elsewhere' }])
-  await typed($, 'asking-fork five')
-  await settle()
-  const saved = (store.get('sblog-3') as { text: string }[]).map(one => one.text)
-  expect([...saved].sort()).toEqual(['elsewhere', 'five', 'four', 'one', 'three', 'two'])
-  expect(saved.at(-1)).toBe('five')
-})
-
-test('a saved switchboard log keeps repeated lines in place when it loads and saves', async ($, on) => {
-  const store = new Map<string, unknown>()
-  const yes = { who: 'you → asking-fork', text: 'yes' }
-  const asked = { who: 'asking-fork', text: 'Sure?' }
-  store.set('sblog-3', [yes, asked, yes])
-  engine(on, [], [], [], store)
-  on('clock.after', () => new Promise(() => {}))
-  on('session.messages', () => ({ value: [] }))
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await spawn($, 'a8', 'asking-fork: asks')
-  await typed($, 'asking-fork yes')
-  await settle()
-  expect((store.get('sblog-3') as { who: string; text: string }[]).map(({ who, text }) => ({ who, text }))).toEqual([yes, asked, yes, yes])
-})
-
-test('a switchboard log that fails its first load saves nothing until it loads, so earlier conversations still move in', async ($, on) => {
-  class FlakyStore extends Map<string, unknown> {
-    failures = 1
-    override get(key: string): unknown {
-      if (key === 'sblog-3' && this.failures-- > 0) throw new Error('busy')
-      return super.get(key)
-    }
-  }
-  const store = new FlakyStore()
-  store.set('sblog-2:first-session', [{ who: 'you → asking-fork', text: 'one' }])
-  engine(on, [], [], [], store)
-  on('clock.after', () => new Promise(() => {}))
-  on('session.messages', () => ({ value: [] }))
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await spawn($, 'a8', 'asking-fork: asks')
-  await typed($, 'asking-fork two')
-  await settle()
-  await typed($, 'asking-fork three')
-  await settle()
-  expect((store.get('sblog-3') as { text: string }[]).map(one => one.text)).toEqual(['one', 'two', 'three'])
-})
-
-test('two switchboard lines logged at once both stay in the log', async ($, on) => {
-  const panes: string[] = []
-  engine(on, [], panes)
-  on('clock.after', () => new Promise(() => {}))
-  on('session.messages', () => ({ value: [] }))
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await spawn($, 'a8', 'asking-fork: asks')
-  await typed($, 'qols board')
-  await Promise.all([$.turn.start({ turnId: 'main-1', text: 'first' }), $.turn.start({ turnId: 'main-2', text: 'second' })])
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await typed($, 'asking-fork teal')
-  await settle()
-  const rows = (await ui.findAll({ type: 'Text', text: /^(first|second|teal)$/ })).map((one: any) => one.text)
-  expect([...rows].sort()).toEqual(['first', 'second', 'teal'])
-  await ui.unmount()
 })
 
 test('leaving the fork empties its chat block', async ($, on) => {
@@ -3149,6 +3107,7 @@ test('a project the user never trusted keeps its own prompt hooks from running, 
   expect(isTrusted({ projects: { '/': { hasTrustDialogAccepted: true } } }, '/anything')).toBe(true)
   for (const config of [undefined, null, {}, { projects: null }, { projects: { '/work': { hasTrustDialogAccepted: 'yes' } } }, { projects: { '/work/sub': { hasTrustDialogAccepted: true } } }]) expect(isTrusted(config, '/work')).toBe(false)
   expect(isTrusted({ projects: { work: { hasTrustDialogAccepted: true } } }, 'work')).toBe(false)
+  for (const folder of ['/work/../tmp/planted', '/work/sub/../../tmp/planted', '/work/..', '/work/./sub']) expect(isTrusted({ projects: { '/work': { hasTrustDialogAccepted: true } } }, folder)).toBe(false)
 })
 
 test('a prompt hook answer reads as context, a block or nothing', () => {
@@ -3282,7 +3241,20 @@ test('a model id reads as its family and version', () => {
   expect(modelName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
   expect(modelName('opus')).toBe('Opus')
   expect(modelName('claude-mythos-5-1')).toBe('Mythos 5.1')
+  expect(modelName('claude-saga-7')).toBe('Saga 7')
+  expect(modelName('claude-opus-4-6[1m]')).toBe('Opus 4.6')
   expect(modelName('gpt-x')).toBe('gpt-x')
+  expect(modelName('glm-5.3-flash')).toBe('glm-5.3-flash')
+})
+
+test('the fork models the engine hands over read as a list of ids, and anything else as none', () => {
+  for (const [text, models] of [
+    ['["claude-opus-5-5","haiku"]', ['claude-opus-5-5', 'haiku']],
+    ['["haiku",7,"",null]', ['haiku']],
+    ['{"haiku":true}', []],
+    ['not json', []],
+    [undefined, []],
+  ] as const) expect(forkModels(text)).toEqual(models)
 })
 
 test('a picked model keeps the full id the agent list labels, with its [1m] suffix', () => {
@@ -3375,13 +3347,67 @@ test('the close command stops the fork you write to and drops it from the board,
   expect(rows().find(row => row.agentId === 'a8')?.isClosed).toBeUndefined()
 })
 
+test('closing a fork closes the sub-forks it started before it, and a busy sub-fork holds the close until it is pressed again', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const stops: string[] = []
+  const calls: string[][] = []
+  engine(on, [], [], [], store)
+  recordEngine(on, calls)
+  on('clock.after', () => new Promise(() => {}))
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  on('session.messages', () => ({ value: [] }))
+  on('agent.list', () => ({ value: ['p1', 'k1', 'k2', 'g1', 'o1', 'p2', 'k3'].map(id => ({ id, status: 'running' })) }))
+  on('tool.call', (_: unknown, e: { tool: string; task_id?: string }) => {
+    stops.push(`${e.tool} ${e.task_id ?? ''}`)
+    return { result: { message: 'stopped' } }
+  })
+  const close = async () => String((await $.command.run({ command: 'close-fork', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })).text)
+  const write = (name: string) => $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: `${name} hi` })
+  const closed = () => ((store.get('board:switchboard-session') as { agentId: string; isClosed?: boolean }[] | undefined) ?? []).filter(row => row.isClosed === true).map(row => row.agentId).sort()
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'p1', 'parent-fork: parent')
+  await spawn($, 'k1', 'child-fork: child', 'p1')
+  await spawn($, 'k2', 'helper-fork: helper', 'p1')
+  await spawn($, 'g1', 'grand-fork: grand', 'k1')
+  await spawn($, 'o1', 'other-fork: other')
+  await deliver($, notification('p1', 'parent-fork: parent', 'Split the work in two.'))
+  await deliver($, notification('k1', 'child-fork: child', 'Half of it is in.'))
+  await deliver($, notification('g1', 'grand-fork: grand', 'Looked it up.'))
+  await deliver($, notification('o1', 'other-fork: other', 'The build is green.'))
+  await settle()
+  await write('parent-fork')
+  expect(await close()).toContain("parent-fork's sub-fork helper-fork is still working, so parent-fork stays open. ctrl+x ctrl+x again closes it anyway, with its 3 sub-forks.")
+  expect(stops).toEqual([])
+  expect(closed()).toEqual([])
+  expect(await close()).toContain('Closed parent-fork and its 3 sub-forks. The board counts them under closed, and r there lists them')
+  expect([...stops].sort()).toEqual(['TaskStop g1', 'TaskStop k1', 'TaskStop k2', 'TaskStop p1'])
+  expect(stops.at(-1)).toBe('TaskStop p1')
+  expect(stops.indexOf('TaskStop g1')).toBeLessThan(stops.indexOf('TaskStop k1'))
+  expect(closed()).toEqual(['g1', 'k1', 'k2', 'p1'])
+  expect(verbs(calls, 'done').map(call => call[2]).sort()).toEqual(['child-fork', 'grand-fork', 'helper-fork', 'parent-fork'])
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('agent id o1')
+  for (const gone of ['p1', 'k1', 'k2', 'g1']) expect(board).not.toContain(`agent id ${gone}`)
+  await spawn($, 'p2', 'second-fork: second')
+  await spawn($, 'k3', 'aide-fork: aide', 'p2')
+  await deliver($, notification('k3', 'aide-fork: aide', 'Read the file.'))
+  await settle()
+  await write('second-fork')
+  expect(await close()).toContain('second-fork is still working, so it stays open. ctrl+x ctrl+x again closes it anyway, with its 1 sub-fork.')
+  expect(closed()).toEqual(['g1', 'k1', 'k2', 'p1'])
+})
+
 test('the fork you write to shows its model and effort on one row, its pickers change its next model call, and the switchboard keeps its own', async ($, on) => {
   const store = new Map<string, unknown>()
   const steps: { agentId?: string; model: string; effort?: unknown }[] = []
   const written: Record<string, string> = {}
   engine(on, [], [], [], store)
   on('clock.after', () => new Promise(() => {}))
-  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_MARKS' ? '/data/marks' : undefined }))
+  const env: Record<string, string> = { QOL_SWITCHBOARD_MARKS: '/data/marks', QOL_SWITCHBOARD_MODELS: '["claude-opus-5-5","claude-mythos-5-1","sonnet","haiku","fable"]' }
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: env[e.name] }))
   on('fs.write', (_: unknown, e: { path: string; text: string }) => {
     written[e.path] = e.text
     return { value: undefined }
@@ -3412,8 +3438,8 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   expect(await command('model', 'haiku')).toBe('the switchboard model picker')
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
   const picker = await ui.find({ type: 'Select', key: 'model-asking-fork' })
-  expect(picker).toMatchObject({ props: { value: 'opus' } })
-  expect((picker?.props as { options: { label?: string }[] }).options.map(one => one.label)).toEqual(['Opus 5.5', 'Sonnet', 'Haiku'])
+  expect(picker).toMatchObject({ props: { value: 'claude-opus-5-5' } })
+  expect((picker?.props as { options: { label?: string }[] }).options.map(one => one.label)).toEqual(['Opus 5.5', 'Mythos 5.1', 'Sonnet', 'Haiku', 'Fable'])
   expect(await ui.find({ type: 'Select', key: 'effort-asking-fork' })).toMatchObject({ props: { value: 'medium' } })
   await ui.select({ key: 'model-asking-fork', value: 'sonnet' })
   expect(await ui.find({ type: 'Select', key: 'model-asking-fork' })).toMatchObject({ props: { value: 'sonnet' } })
@@ -3426,15 +3452,28 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   await step(undefined, 'claude-opus-5-5', 'medium')
   expect(steps.at(-1)).toEqual({ model: 'claude-opus-5-5', effort: 'medium' })
   expect(await ui.find({ type: 'Text', text: /applies at its next model call/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /effort medium → high, from its next model call/ })).toBeDefined()
   expect(await command('model', 'haiku')).toBe('asking-fork uses Haiku from its next model call.')
   expect(await command('effort', ' MAX ')).toBe('asking-fork uses max effort from its next model call.')
-  expect(await command('model', '')).toBe('asking-fork model: Haiku at max effort. /model opus|sonnet|haiku and a level, such as /model haiku max, changes it; with no fork picked, /model changes the switchboard.')
+  expect(await command('model', '')).toBe('asking-fork model: Haiku at max effort. /model opus|mythos|sonnet|haiku|fable and a level, such as /model opus max, changes it; with no fork picked, /model changes the switchboard.')
   expect(await command('effort', 'loud')).toMatch(/^asking-fork effort: max\. \/effort low\|medium\|high\|xhigh\|max changes it/)
   for (const wrong of ['haiku loud', 'haiku sonnet', 'max max', 'max haiku extra']) expect(await command('model', wrong)).toMatch(/^asking-fork model: Haiku at max effort\./)
   expect(await command('effort', 'haiku max')).toMatch(/^asking-fork effort: max\./)
   expect(await command('model', 'Sonnet LOW')).toBe('asking-fork uses Sonnet at low effort from its next model call.')
+  await ui.select({ key: 'model-asking-fork', value: 'claude-mythos-5-1' })
+  expect(await ui.find({ type: 'Select', key: 'model-asking-fork' })).toMatchObject({ props: { value: 'claude-mythos-5-1' } })
+  await ui.select({ key: 'model-asking-fork', value: 'gpt-x' })
+  await step('a8', 'claude-opus-5-5', 'medium')
+  expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'claude-mythos-5-1', effort: 'low' })
+  expect(await command('model', 'claude-opus-5-5')).toBe('asking-fork uses Opus 5.5 from its next model call.')
+  await step('a8', 'claude-fable-5-2', 'medium')
+  expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'claude-opus-5-5', effort: 'low' })
+  expect(await command('model', 'fable high')).toBe('asking-fork uses Fable at high effort from its next model call.')
+  await step('a8', 'claude-opus-5-5', 'medium')
+  expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'fable', effort: 'high' })
   expect(await command('model', 'max haiku')).toBe('asking-fork uses Haiku at max effort from its next model call.')
+  env.QOL_SWITCHBOARD_MODELS = '[]'
+  expect(await command('model', 'opus')).toBe('asking-fork model: Haiku at max effort. sessions.toml lets a fork run no model, so /model has none to set; with no fork picked, /model changes the switchboard.')
+  expect(await ui.find({ type: 'Select', key: 'model-asking-fork' })).toBeUndefined()
   await settle()
   expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}').models).toEqual({ a8: { model: 'Haiku', effort: 'max' } })
   await step('a8', 'claude-opus-5-5', 'medium')
@@ -3454,6 +3493,7 @@ test('saved model choices that fail their first load are never overwritten by on
   store.set('model-choices', { 'other-fork': { model: 'haiku', at: 1 } })
   engine(on, [], [], [], store)
   on('clock.after', () => new Promise(() => {}))
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_MODELS' ? '["opus","haiku"]' : undefined }))
   on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
     cursor: e.start + e.inputText.length,
@@ -3520,18 +3560,212 @@ test('a reply the fork gives in its own view, which sends no notification, is fi
   expect(rows().find(one => one.agentId === 'a8')).toMatchObject({ headline: 'Glad it fits.', isWorking: false })
 })
 
-test('a hand-back that starts a switchboard turn leaves no you row in the SWITCHBOARD log', async ($, on) => {
-  const store = new Map<string, unknown>()
+test('the message that puts a fork back after a restart leaves its row as it was: its time, its report, not working and no new reply', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-2', true]])
+  const sent: any[] = []
+  const forks = [
+    { agentId: 'a1', name: 'kept-fork: words', kind: 'note', headline: 'Done for now.', report: 'Done for now.', at: 7, isWorking: false, isDismissed: false },
+    { agentId: 'b1', name: 'bare-fork: no report yet', headline: '', report: '', at: 8, isWorking: false, isDismissed: false },
+    { agentId: 'c1', name: 'cut-fork: was mid-turn', kind: 'note', headline: 'Half way.', report: 'Half way.', at: 9, isWorking: true, isDismissed: false },
+  ]
+  store.set('board:earlier-session', forks)
+  engine(on, sent, [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  const rounds = async () => {
+    for (let round = 0; round < 4; round += 1) {
+      await renderBand($)
+      for (const fire of timers.splice(0)) fire()
+      await settle()
+    }
+  }
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await rounds()
+  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['b1', 'Back in the agent list.'], ['c1', 'Back in the agent list.']])
+  for (const fork of forks) {
+    await $.agent.spawn({ prompt: `Project: /work\nLauncher: the switchboard\nfork ${fork.agentId}`, description: fork.name, subagentType: 'project-fork', resume: { agentId: fork.agentId } } as any)
+    await $.turn.start({ text: 'Back in the agent list.', turnId: `turn-${fork.agentId}`, agentId: fork.agentId })
+    expect((await answered($, fork.agentId, 0))[0]).toMatchObject({ kind: 'tool', name: 'Bash' })
+    expect((await answered($, fork.agentId, 1)).find(one => one.kind === 'text')?.text).toBe('Back on the fork board.')
+    await $.turn.complete({ turnId: `turn-${fork.agentId}`, agentId: fork.agentId, answer: 'Back on the fork board.', durationMs: 1, isAborted: false, reason: 'done' })
+    await typed($, notification(fork.agentId, fork.name, 'Back on the fork board.'), 'task-notification')
+  }
+  await rounds()
+  const rows = (store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.at, one.isWorking, one.kind ?? '', one.headline, one.isInterrupted === true, one.hasNewReply === true])
+  expect(rows.sort()).toEqual([
+    ['a1', 7, false, 'note', 'Done for now.', false, false],
+    ['b1', 8, false, '', '', false, false],
+    ['c1', 9, false, 'note', 'Half way.', true, false],
+  ])
+})
+
+test('the first open with this version drops the stopped mid-turn marks an earlier board kept, also a board the first such pass went over, and a fork that was working when it closed still gets one', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-1', true]])
+  const row = (agentId: string, extra: object) => ({ agentId, name: `${agentId}-fork: a fork`, kind: 'note', headline: 'h', report: 'r', at: 1, isWorking: false, isDismissed: false, ...extra })
+  store.set('board:earlier-session', [row('old1', { isInterrupted: true }), row('w1', { isWorking: true }), row('n1', {})])
   engine(on, [], [], [], store)
+  on('agent.list', () => ({ value: [{ id: 'old1' }, { id: 'w1' }, { id: 'n1' }] }))
   on('clock.after', () => new Promise(() => {}))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await spawn($, 'a8', 'asking-fork: asks')
-  await $.turn.start({ turnId: 'main-1', text: handback('a8', 'May I mark it ready?') })
-  await $.turn.start({ turnId: 'main-2', text: '<agent-message from="a8">\n[Subagent hand-back] The report follows:\n  May I mark it ready?\n</agent-message>' })
   await settle()
-  const log = (store.get('sblog-3') as { who: string }[] | undefined) ?? []
-  expect(log.filter(row => row.who === 'you')).toEqual([])
-  await $.turn.start({ turnId: 'main-3', text: 'hello there' })
-  await settle()
-  expect(((store.get('sblog-3') as { who: string }[] | undefined) ?? []).filter(row => row.who === 'you')).toHaveLength(1)
+  const cut = (store.get('board:switchboard-session') as any[]).filter(one => one.isInterrupted === true).map(one => one.agentId)
+  expect(cut).toEqual(['w1'])
+  expect(store.get('cuts-healed-2')).toBe(true)
 })
+
+test('withoutCut drops the mark from a row at rest and keeps a working row and anything else as it is', () => {
+  const row = { agentId: 'a1', name: 'a', headline: '', report: '', at: 1, isWorking: false, isDismissed: false }
+  expect(withoutCut({ ...row, isInterrupted: true })).toEqual(row)
+  expect(withoutCut({ ...row, isWorking: true, isInterrupted: true })).toEqual({ ...row, isWorking: true, isInterrupted: true })
+  expect(withoutCut(row)).toBe(row)
+  expect(withoutCut('junk')).toBe('junk')
+})
+
+test('saidOf reads the rows the transcript reader prints and nothing else', () => {
+  expect(saidOf('[{"role":"assistant","text":"hi"}]')).toEqual([{ role: 'assistant', text: 'hi' }])
+  expect(saidOf('[]')).toEqual([])
+  expect(saidOf('{"deny":"no"}')).toBeUndefined()
+  expect(saidOf('not json')).toBeUndefined()
+})
+
+test("a fork Claude Code cannot read back shows its conversation from its transcript on disk, read again only once the transcript changed", async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  on('clock.after', () => ({ value: undefined }))
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  const env: Record<string, string> = { QOL_CLI_SESSIONS: '/bin/qol-cli-sessions', QOL_SWITCHBOARD_CONVERSATIONS: '/conv' }
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: env[e.name] }))
+  on('session.messages', () => ({ value: { deny: 'a8 is not one of the agents of this session' } }))
+  let size = 10
+  on('fs.stat', (_: unknown, e: { path: string }) => ({ value: e.path === '/conv/switchboard-session/subagents/agent-a8.jsonl' ? { size, mtimeMs: 5 } : { size: 0, mtimeMs: 0 } }))
+  const asked: unknown[] = []
+  on('process.run', (_: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
+    if (e.argv.slice(1).join(' ') !== 'sessions switchboard hook fork-said') return { value: NO_RECORD }
+    asked.push(JSON.parse(e.init?.stdin ?? '{}'))
+    return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify([{ role: 'user', text: fromUser('pick one') }, { role: 'assistant', text: 'Amber or teal?' }]) } }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await deliver($, notification('a8', 'asking-fork: asks', 'Which colour, amber or teal?'), 'task-notification')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
+  expect(await forkChat($, panes)).toEqual(['pick one', 'Amber or teal?'])
+  expect(asked).toEqual([{ conversation: '/conv/switchboard-session.jsonl', id: 'a8', rows: 80 }])
+  await $.turn.complete({ turnId: 'held-1', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
+  await settle()
+  expect(asked).toHaveLength(1)
+  size = 20
+  await $.turn.complete({ turnId: 'held-2', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
+  await settle()
+  expect(asked).toHaveLength(2)
+  await ui.unmount()
+})
+
+const killedHold = (taskId: string) =>
+  `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>toolu_hold_1</tool-use-id>\n<status>killed</status>\n<summary>Background command "Hold this fork in the agent list" was stopped</summary>\n</task-notification>`
+
+test('a board whose rows vanished mid-conversation gets them back from its saved copy, and a fork woken only by its killed hold is not working', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-2', true]])
+  engine(on, [], [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  on('clock.after', () => new Promise(() => {}))
+  let isGone = false
+  const isBoard = (e: { plugin?: string; key?: string }) => e.plugin === 'qol-switchboard' && e.key === 'board'
+  on('state.get', async (_: unknown, e: any, next: any) => {
+    const held = await next(e)
+    return isGone && isBoard(e) ? { value: { ...held.value, value: undefined } } : held
+  })
+  on('state.set', (_: unknown, e: any, next: any) => {
+    if (isBoard(e)) isGone = false
+    return next(e)
+  })
+  await spawn($, 'a1', 'first-fork: one')
+  await spawn($, 'b1', 'second-fork: two')
+  await spawn($, 'c1', 'third-fork: three')
+  await typed($, notification('a1', 'first-fork: one', 'The first report.'), 'task-notification')
+  await settle()
+  const saved = () => (store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isWorking, one.report]).sort()
+  expect(saved().map(one => one[0])).toEqual(['a1', 'b1', 'c1'])
+  const report = saved()[0]?.[2]
+  isGone = true
+  await $.agent.spawn({ prompt: killedHold('hold-a1'), description: 'first-fork: one', subagentType: 'project-fork', resume: { agentId: 'a1' } } as any)
+  await settle()
+  expect(saved().map(one => one[0])).toEqual(['a1', 'b1', 'c1'])
+  expect(saved()[0]).toEqual(['a1', false, report])
+  await $.agent.spawn({ prompt: 'Project: /work\nLauncher: the switchboard\nfork b1', description: 'second-fork: two', subagentType: 'project-fork', resume: { agentId: 'b1' } } as any)
+  await settle()
+  expect(saved()).toEqual([
+    ['a1', false, report],
+    ['b1', true, ''],
+    ['c1', true, ''],
+  ])
+})
+
+test('a board state that stays empty, as while the switchboard shuts down, never overwrites the saved rows', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-2', true]])
+  engine(on, [], [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  on('clock.after', () => new Promise(() => {}))
+  let isGone = false
+  on('state.get', async (_: unknown, e: any, next: any) => {
+    const held = await next(e)
+    return isGone && e.plugin === 'qol-switchboard' && e.key === 'board' ? { value: { ...held.value, value: undefined } } : held
+  })
+  await spawn($, 'a1', 'first-fork: one')
+  await spawn($, 'b1', 'second-fork: two')
+  await typed($, notification('a1', 'first-fork: one', 'The first report.'), 'task-notification')
+  await typed($, notification('b1', 'second-fork: two', 'The second report.'), 'task-notification')
+  await settle()
+  const before = JSON.stringify(store.get('board:switchboard-session'))
+  expect((store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isWorking])).toEqual([['a1', false], ['b1', false]])
+  isGone = true
+  await $.agent.spawn({ prompt: 'Project: /work\nLauncher: the switchboard\nfork b1', description: 'second-fork: two', subagentType: 'project-fork', resume: { agentId: 'b1' } } as any)
+  await settle()
+  expect(JSON.stringify(store.get('board:switchboard-session'))).toBe(before)
+})
+
+test('a fork its killed hold wakes as the switchboard shuts down keeps its row, and the next real message makes it work', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-2', true]])
+  engine(on, [], [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  on('clock.after', () => new Promise(() => {}))
+  await spawn($, 'a1', 'first-fork: one')
+  await typed($, notification('a1', 'first-fork: one', 'The first report.'), 'task-notification')
+  await settle()
+  const saved = () => (store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isWorking, one.report, one.at])
+  const before = saved()
+  expect(before.map(one => one.slice(0, 3))).toEqual([['a1', false, 'The first report.']])
+  const resume = () => $.agent.spawn({ prompt: 'Project: /work\nLauncher: the switchboard\nfork a1', description: 'first-fork: one', subagentType: 'project-fork', resume: { agentId: 'a1' } } as any)
+  await resume()
+  await $.turn.start({ text: killedHold('hold-a1'), turnId: 'turn-killed', agentId: 'a1' })
+  await settle()
+  expect(saved()).toEqual(before)
+  await resume()
+  await $.turn.start({ text: 'Carry on with the next part.', turnId: 'turn-real', agentId: 'a1' })
+  await settle()
+  expect(saved().map(one => one.slice(0, 3))).toEqual([['a1', true, 'The first report.']])
+})
+
+test('a restart puts only the forks the switchboard started back in the agent list, and leaves their sub-forks and the sub-forks of a fork that is gone on the board', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-2', true]])
+  const sent: any[] = []
+  const fork = (agentId: string, name: string, extra: object = {}) => ({ agentId, name, kind: 'note', headline: 'Done for now.', report: 'Done for now.', at: 7, isWorking: false, isDismissed: false, ...extra })
+  store.set('board:earlier-session', [fork('m1', 'main-fork: words'), fork('s1', 'sub-fork: words', { launcher: 'm1' }), fork('o1', 'orphan-fork: words', { launcher: 'gone1' }), fork('c1', 'cut-sub: words', { launcher: 'm1', isWorking: true })])
+  engine(on, sent, [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let round = 0; round < 4; round += 1) {
+    await renderBand($)
+    for (const fire of timers.splice(0)) fire()
+    await settle()
+  }
+  expect(sent.map(one => [one.to, one.text])).toEqual([['m1', 'Back in the agent list.']])
+  expect((store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isInterrupted === true]).sort()).toEqual([['c1', true], ['m1', false], ['o1', false], ['s1', false]])
+})
+
