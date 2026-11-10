@@ -1,7 +1,7 @@
 use super::Mark;
 
-pub(super) fn markup(mark: Mark) -> Option<&'static str> {
-    Some(match mark {
+pub(super) fn markup(mark: Mark) -> &'static str {
+    match mark {
         Mark::Settings => {
             r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><defs><mask id="h" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16"><rect width="16" height="16" fill="#fff" stroke="#000"/><g stroke="#000" stroke-width="1.25"><circle cx="8" cy="8" r="1.9"/></g></mask></defs><g mask="url(#h)"><g fill="currentColor" stroke-width="1"><path d="M6.24 3.75L6.94 1.59L9.06 1.59L9.76 3.75L10.80 4.35L13.02 3.88L14.08 5.71L12.56 7.40L12.56 8.60L14.08 10.29L13.02 12.12L10.80 11.65L9.76 12.25L9.06 14.41L6.94 14.41L6.24 12.25L5.20 11.65L2.98 12.12L1.92 10.29L3.44 8.60L3.44 7.40L1.92 5.71L2.98 3.88L5.20 4.35Z"/></g></g></svg>"##
         }
@@ -86,6 +86,35 @@ pub(super) fn markup(mark: Mark) -> Option<&'static str> {
         Mark::WindowActions => {
             r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><defs><mask id="h" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16"><rect width="16" height="16" fill="#fff" stroke="none"/><g fill="none" stroke="#000" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 0v16M7.5 8.5H16"/></g></mask></defs><g mask="url(#h)" fill="currentColor"><rect x="1" y="2" width="14" height="12" rx="2"/></g></svg>"##
         }
-        _ => return None,
-    })
+        Mark::Qol => {
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><defs><mask id="h" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16"><rect width="16" height="16" fill="#fff"/><g fill="#000"><path d="M5.1 3.68L2.48 1.06L1.06 2.48L3.68 5.1z"/></g><g fill="none" stroke="#000" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></g><g fill="#000" stroke="#000"><path d="M8 5.1L10.51 6.55L10.51 9.45L8 10.9L5.49 9.45L5.49 6.55Z" stroke-width="2.5" stroke-linejoin="round"/></g></mask></defs><g mask="url(#h)" fill="currentColor"><circle cx="4.6" cy="4.6" r="3.1"/><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.6 4.6L12.6 12.6"/></g><g fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M12.9 3.1L9.2 6.8"/></g><g fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.2 7.8L3.6 12.4"/></g></g><g fill="currentColor"><path fill-rule="evenodd" d="M8 5.1L10.51 6.55L10.51 9.45L8 10.9L5.49 9.45L5.49 6.55ZM9.1 8a1.1 1.1 0 1 0 -2.2 0a1.1 1.1 0 1 0 2.2 0z"/></g></svg>"##
+        }
+        Mark::App => {
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><g fill="currentColor"><rect x="1.5" y="1.5" width="6" height="6" rx="1.5"/><rect x="8.5" y="1.5" width="6" height="6" rx="1.5"/><rect x="1.5" y="8.5" width="6" height="6" rx="1.5"/><rect x="8.5" y="8.5" width="6" height="6" rx="1.5"/></g></svg>"##
+        }
+        Mark::Link => {
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><g fill="currentColor"><g transform="translate(8 8) scale(0.36) translate(-24 -24)" fill="none" stroke="currentColor" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 27l6-6"/><path d="M25 13.5l3.5-3.5a8 8 0 0 1 11.3 11.3L36.3 24.8"/><path d="M23 34.5L19.5 38a8 8 0 0 1-11.3-11.3l3.5-3.5"/></g></g></svg>"##
+        }
+        Mark::PluginAction => {
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><g fill="currentColor"><rect x="5.25" y="1" width="1.5" height="4" rx=".75"/><rect x="9.25" y="1" width="1.5" height="4" rx=".75"/><path d="M3 4.5h10v3a5 5 0 0 1-10 0z"/><rect x="7.25" y="11.5" width="1.5" height="4" rx=".75"/></g></svg>"##
+        }
+        Mark::ClipText => {
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><defs><mask id="h" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16"><rect width="16" height="16" fill="#fff"/><g fill="#000"></g><g fill="none" stroke="#000" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5h6M5 7h6M5 9.5h6M5 12h3.5"/></g><g fill="#000" stroke="#000"></g></mask></defs><g mask="url(#h)" fill="currentColor"><rect x="2.5" y="1" width="11" height="14" rx="1.5"/></g><g fill="currentColor"></g></svg>"##
+        }
+        Mark::ClipCode => {
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><defs><mask id="h" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16"><rect width="16" height="16" fill="#fff"/><g fill="#000"></g><g fill="none" stroke="#000" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 5.25L2.75 8l2.75 2.75M10.5 5.25L13.25 8l-2.75 2.75M9 4.75l-2 6.5"/></g><g fill="#000" stroke="#000"></g></mask></defs><g mask="url(#h)" fill="currentColor"><rect x="0.75" y="2.25" width="14.5" height="11.5" rx="2"/></g><g fill="currentColor"></g></svg>"##
+        }
+        Mark::ClipImage => {
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><defs><mask id="h" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16"><rect width="16" height="16" fill="#fff"/><g fill="#000"><circle cx="10" cy="6.25" r="1.1"/></g><g fill="none" stroke="#000" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 11.25L6.75 8L9 10.25L10.25 9L12.25 11"/></g><g fill="#000" stroke="#000"></g></mask></defs><g mask="url(#h)" fill="currentColor"><rect x="1.5" y="1.5" width="13" height="13" rx="2"/></g><g fill="currentColor"></g></svg>"##
+        }
+        Mark::ClipFile => {
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><defs><mask id="h" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16"><rect width="16" height="16" fill="#fff"/><g fill="#000"></g><g fill="none" stroke="#000" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M9.25 1.25v3.5h3.5"/></g><g fill="#000" stroke="#000"></g></mask></defs><g mask="url(#h)" fill="currentColor"><path d="M3 2a1 1 0 0 1 1-1h5.5L13 4.5V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></g><g fill="currentColor"></g></svg>"##
+        }
+        Mark::ClipSecret => {
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><defs><mask id="h" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16"><rect width="16" height="16" fill="#fff"/><g fill="#000"><circle cx="8" cy="10.25" r="1.3"/><rect x="7.35" y="10.5" width="1.3" height="2.6" rx=".5"/></g><g fill="none" stroke="#000" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></g><g fill="#000" stroke="#000"></g></mask></defs><g mask="url(#h)" fill="currentColor"><rect x="2" y="7" width="12" height="8" rx="2"/></g><g fill="currentColor"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7.5V5.25a3 3 0 0 1 6 0V7.5"/></g></g></svg>"##
+        }
+        Mark::ClipColor => {
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><defs><mask id="h" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16"><rect width="16" height="16" fill="#fff"/><g fill="#000"><circle cx="4.5" cy="8.25" r="1.25"/><circle cx="5.5" cy="4.75" r="1.25"/><circle cx="9" cy="3.9" r="1.25"/><circle cx="11.9" cy="5.9" r="1.25"/></g><g fill="none" stroke="#000" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></g><g fill="#000" stroke="#000"></g></mask></defs><g mask="url(#h)" fill="currentColor"><path d="M8 1.25C4 1.25 1.25 4.2 1.25 8c0 3.85 2.85 6.75 6.35 6.75 1.3 0 2-.75 2-1.75 0-.8-.6-1.2-.6-1.9 0-.7.6-1.1 1.4-1.1H12c1.6 0 2.75-1.2 2.75-2.8 0-3.3-2.95-5.95-6.75-5.95z"/></g><g fill="currentColor"></g></svg>"##
+        }
+    }
 }
