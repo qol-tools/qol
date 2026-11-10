@@ -512,9 +512,17 @@ async fn a_removed_phone_and_a_wrong_clock_are_told_why_and_a_wrong_key_is_not()
         .command_reply(&stale, Duration::from_secs(5))
         .await
         .expect("a stale ping is answered");
+    let sealed = envelope::parse(&reply).expect("the clock rejection is sealed");
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&reply).unwrap(),
+        serde_json::from_slice::<serde_json::Value>(&sealed.open(&PHONE_KEY).unwrap()).unwrap(),
         rejected("clock", [1; 12])
+    );
+    let stale_wrong_key = envelope::seal_v3(PING, &[8; 32], PHONE, now_ms() - 31_000, [4; 12]);
+    assert_eq!(
+        harness
+            .command_reply(&stale_wrong_key, Duration::from_millis(500))
+            .await,
+        None
     );
 
     let wrong_key = envelope::seal_v3(PING, &[8; 32], PHONE, now_ms(), [2; 12]);

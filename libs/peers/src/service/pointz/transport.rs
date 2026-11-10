@@ -346,9 +346,6 @@ fn authenticate(authority: &PeerAuthority, packet: &[u8], replay: &mut ReplayWin
         return Verdict::Ignore;
     };
     let now_ms = unix_time_ms();
-    if parsed.sent_at_ms.abs_diff(now_ms) > COMMAND_CLOCK_SKEW_MS {
-        return reply(envelope::rejection(&parsed, REJECTED_CLOCK));
-    }
     let Some(device) = authority.pointz_key(&PointzDeviceId::from_bytes(parsed.device_id)) else {
         return reply(envelope::rejection(&parsed, REJECTED_UNKNOWN_DEVICE));
     };
@@ -361,6 +358,11 @@ fn authenticate(authority: &PeerAuthority, packet: &[u8], replay: &mut ReplayWin
     else {
         return Verdict::Ignore;
     };
+    if parsed.sent_at_ms.abs_diff(now_ms) > COMMAND_CLOCK_SKEW_MS {
+        return reply(sealed_nonce().and_then(|nonce| {
+            envelope::sealed_rejection(&parsed, REJECTED_CLOCK, &device.key, now_ms, nonce)
+        }));
+    }
     let expires_at_ms = parsed.sent_at_ms.saturating_add(COMMAND_CLOCK_SKEW_MS);
     if !command.is_object()
         || !replay.insert(&parsed.device_id, &parsed.nonce, expires_at_ms, now_ms)
@@ -370,11 +372,11 @@ fn authenticate(authority: &PeerAuthority, packet: &[u8], replay: &mut ReplayWin
     if command.get("type").and_then(serde_json::Value::as_str) != Some(PING) {
         return Verdict::Forward(command);
     }
-    reply(
-        crate::service::enrollment::random()
-            .ok()
-            .and_then(|nonce| envelope::pong(&parsed, &device.key, now_ms, nonce)),
-    )
+    reply(sealed_nonce().and_then(|nonce| envelope::pong(&parsed, &device.key, now_ms, nonce)))
+}
+
+fn sealed_nonce() -> Option<[u8; 12]> {
+    crate::service::enrollment::random().ok()
 }
 
 fn reply(datagram: Option<Vec<u8>>) -> Verdict {

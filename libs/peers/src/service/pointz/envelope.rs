@@ -200,6 +200,22 @@ pub(crate) fn rejection(refused: &ParsedCommand, reason: &str) -> Option<Vec<u8>
     .ok()
 }
 
+pub(crate) fn sealed_rejection(
+    refused: &ParsedCommand,
+    reason: &str,
+    key: &[u8; 32],
+    sent_at_ms: u64,
+    nonce: [u8; SEALED_NONCE_BYTES],
+) -> Option<Vec<u8>> {
+    seal(
+        &rejection(refused, reason)?,
+        key,
+        refused.device_id,
+        sent_at_ms,
+        nonce,
+    )
+}
+
 #[cfg(test)]
 pub(crate) fn seal_v3(
     payload: &[u8],
@@ -273,6 +289,20 @@ mod tests {
                 "reason": "unknown_device",
                 "nonce": URL_SAFE_NO_PAD.encode([9u8; 12]),
             })
+        );
+    }
+
+    #[test]
+    fn a_sealed_rejection_opens_only_with_the_device_key() {
+        let refused = parse(&seal_v3(PAYLOAD, &KEY, DEVICE, 5, [9; 12])).unwrap();
+
+        let sealed =
+            parse(&sealed_rejection(&refused, "clock", &KEY, 77, [4; 12]).unwrap()).unwrap();
+
+        assert!(sealed.open(&[8; 32]).is_none());
+        assert_eq!(
+            sealed.open(&KEY).unwrap(),
+            rejection(&refused, "clock").unwrap()
         );
     }
 
