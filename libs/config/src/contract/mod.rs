@@ -12,8 +12,8 @@ pub use pictures::{
     audio_device_picture, is_picture_spec, AudioDirection, CARD_DESCRIPTION_MAX, PICTURE_NAMES,
 };
 pub use row_action::{
-    interpolate_row_template, resolve_row_actions, resolve_slider_action, row_template_keys,
-    ResolvedRowAction,
+    interpolate_row_template, resolve_row_actions, resolve_row_toggle, resolve_slider_action,
+    row_template_keys, ResolvedRowAction, ResolvedRowToggle,
 };
 pub use runtime::{
     parse_runtime_spec, parse_runtime_spec_str, validate_runtime_spec, ActionSpec,
@@ -22,5 +22,6 @@ pub use runtime::{
 pub use v1::{
     parse_spec, parse_spec_str, ConfigSpec, ConfigSpecV1, DevicesSpec, FieldAlign, FieldDefault,
     FieldKind, FieldSpec, ItemSpec, ListLeadSpec, NestedListSpec, NumberConstraints, PagesSpec,
-    ParseSpecError, RowActionSpec, RowSliderSpec, SectionSpec, WindowSpec, TITLE_BAR_KEY,
+    ParseSpecError, RowActionSpec, RowSliderSpec, RowToggleSpec, SectionSpec, WindowSpec,
+    TITLE_BAR_KEY,
 };

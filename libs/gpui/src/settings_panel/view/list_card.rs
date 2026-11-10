@@ -10,9 +10,9 @@ use super::super::components::{
     SettingsFinderPick, SettingsRow, SettingsValueTone,
 };
 use super::super::rows::{
-    begin_list_item_action, filtered_list_items, list_item_actions, list_slider_value,
+    begin_list_item_action, filtered_list_items, list_item_actions, list_slider_value, member_on,
     primary_list_item_action, selected_list_item, ListActions, ListFinder, ListItem, ListSlider,
-    Row, RowControl, RowSection, SliderHold,
+    Row, RowControl, RowSection, SliderHold, ITEM_ROW_DANGER, ITEM_ROW_MEMBER,
 };
 use super::super::SettingsDestination;
 use super::{
@@ -39,7 +39,6 @@ pub(super) struct FinderBody {
     pub(super) summary: Option<(String, bool)>,
     pub(super) empty_title: String,
     pub(super) empty_detail: Option<String>,
-    pub(super) empty_mark: MarkState,
 }
 
 impl SettingsPanelView {
@@ -47,7 +46,7 @@ impl SettingsPanelView {
         if list_card_index(&self.stack).is_some() {
             self.root_mut().rows.as_mut_slice()
         } else {
-            self.level_mut().rows.as_mut_slice()
+            self.level_rows_mut()
         }
     }
 
@@ -71,6 +70,9 @@ impl SettingsPanelView {
 
     pub(super) fn sync_list_card(&mut self, query: &str, cx: &mut Context<Self>) {
         if self.stack.len() <= 1 {
+            return;
+        }
+        if self.sync_inline_item_card(query, cx) {
             return;
         }
         let front = self.stack.len() - 1;
@@ -177,7 +179,12 @@ impl SettingsPanelView {
         self.open_item_card(origin_row, &item_id, cx);
     }
 
-    fn open_item_card(&mut self, origin_row: usize, item_id: &str, cx: &mut Context<Self>) {
+    pub(super) fn open_item_card(
+        &mut self,
+        origin_row: usize,
+        item_id: &str,
+        cx: &mut Context<Self>,
+    ) {
         let (label, description) = {
             let Some(parent) = self.root().rows.get(origin_row) else {
                 return;
@@ -424,15 +431,10 @@ impl SettingsPanelView {
                 .map(|empty| (empty.title.clone(), empty.detail.clone()))
                 .unwrap_or_else(|| (finder.items_label.clone(), None))
         };
-        let empty_mark = match state {
-            MarkState::Live if filtering => MarkState::Rest,
-            state => state,
-        };
         Some(FinderBody {
             summary,
             empty_title,
             empty_detail,
-            empty_mark,
         })
     }
 
@@ -595,7 +597,15 @@ impl SettingsPanelView {
         let origin_row = card.origin_row;
         let item_id = card.item_id.clone();
         let selected = self.level().selected;
-        let Some(action_id) = self.level().rows.get(selected).map(|row| row.id.clone()) else {
+        if self
+            .level_rows()
+            .get(selected)
+            .is_some_and(|row| row.variant.as_deref() == Some(ITEM_ROW_MEMBER))
+        {
+            self.flip_item_member(None, cx);
+            return;
+        }
+        let Some(action_id) = self.level_rows().get(selected).map(|row| row.id.clone()) else {
             return;
         };
         let Some(RowControl::List { actions, items, .. }) =
@@ -616,7 +626,7 @@ impl SettingsPanelView {
         self.pop_card(cx);
     }
 
-    fn set_list_action_error(&mut self, row_index: usize, item_id: &str, error: String) {
+    pub(super) fn set_list_action_error(&mut self, row_index: usize, item_id: &str, error: String) {
         let Some(RowControl::List { items, .. }) = self
             .root_mut()
             .rows
@@ -748,7 +758,7 @@ impl SettingsPanelView {
     }
 
     pub(super) fn open_list_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
-        let (label, config_key, source, description) = match self.level().rows.get(row_index) {
+        let (label, config_key, source, description) = match self.level_rows().get(row_index) {
             Some(row) => (
                 row.label.clone(),
                 row.config_key.clone(),
@@ -763,7 +773,7 @@ impl SettingsPanelView {
         let Some(destination) = self.card_destination(&label, cx) else {
             return;
         };
-        let Some(row) = self.level().rows.get(row_index) else {
+        let Some(row) = self.level_rows().get(row_index) else {
             return;
         };
         let RowControl::List {
@@ -1180,6 +1190,7 @@ fn list_card_body(
             rows: vec![0],
             source: origin.source,
             device_kind: None,
+            page: None,
         });
     }
     let offset = rows.len();
@@ -1199,6 +1210,7 @@ fn list_card_body(
         rows: (offset..rows.len()).collect(),
         source: origin.source,
         device_kind: None,
+        page: None,
     });
     (rows, sections)
 }
@@ -1259,7 +1271,14 @@ fn list_card_level(
     }
 }
 
-fn item_card_rows(root_rows: &[Row], list_row: &Row, item: &ListItem) -> Vec<Row> {
+pub(super) fn item_member_row_id(field: &str, member: &str) -> String {
+    format!("member:{field}:{member}")
+}
+
+pub(super) fn item_card_rows(root_rows: &[Row], origin_row: usize, item: &ListItem) -> Vec<Row> {
+    let Some(list_row) = root_rows.get(origin_row) else {
+        return Vec::new();
+    };
     let RowControl::List {
         actions, item_card, ..
     } = &list_row.control
@@ -1268,21 +1287,36 @@ fn item_card_rows(root_rows: &[Row], list_row: &Row, item: &ListItem) -> Vec<Row
     };
     let mut rows = list_item_actions(actions, item)
         .into_iter()
-        .map(|action| Row {
-            id: action.action.clone(),
-            section_id: None,
-            section_label: None,
-            label: action.label,
-            description: action.description,
-            placeholder: None,
-            variant: None,
-            config_key: list_row.config_key.clone(),
-            default: qol_config::contract::FieldDefault::String(String::new()),
-            stream: None,
-            action: None,
-            visibility: None,
-            source: list_row.source,
-            control: RowControl::Text(String::new()),
+        .map(|action| {
+            let member = action.member_of.clone().zip(action.member.clone());
+            let (id, variant, control) = match member {
+                Some((field, member)) => (
+                    item_member_row_id(&field, &member),
+                    Some(ITEM_ROW_MEMBER.to_string()),
+                    RowControl::Toggle(member_on(root_rows, origin_row, &field, &member)),
+                ),
+                None => (
+                    action.action.clone(),
+                    action.danger.then(|| ITEM_ROW_DANGER.to_string()),
+                    RowControl::Text(String::new()),
+                ),
+            };
+            Row {
+                id,
+                section_id: None,
+                section_label: None,
+                label: action.label,
+                description: action.description,
+                placeholder: None,
+                variant,
+                config_key: list_row.config_key.clone(),
+                default: qol_config::contract::FieldDefault::String(String::new()),
+                stream: None,
+                action: None,
+                visibility: None,
+                source: list_row.source,
+                control,
+            }
         })
         .collect::<Vec<_>>();
     rows.extend(
@@ -1361,13 +1395,14 @@ fn list_item_card_level(
     item: &ListItem,
 ) -> Option<Level> {
     let row = root_rows.get(origin_row)?;
-    let rows = item_card_rows(root_rows, row, item);
+    let rows = item_card_rows(root_rows, origin_row, item);
     let section = RowSection {
         label: label.to_string(),
         description,
         rows: (0..rows.len()).collect(),
         source: row.source,
         device_kind: None,
+        page: None,
     };
     let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
     Some(Level {
@@ -1422,7 +1457,7 @@ fn list_card_index(stack: &[Level]) -> Option<usize> {
     (stack[front].list_item.is_some() && stack[list].list_card).then_some(list)
 }
 
-fn item_card_sync(root_rows: &[Row], level: &mut Level) -> bool {
+pub(super) fn item_card_sync(root_rows: &[Row], level: &mut Level) -> bool {
     let Some(card) = level.list_item.as_ref() else {
         return false;
     };
@@ -1438,7 +1473,7 @@ fn item_card_sync(root_rows: &[Row], level: &mut Level) -> bool {
     let Some(item) = items.iter().find(|item| item.id == item_id) else {
         return true;
     };
-    let rows = item_card_rows(root_rows, row, item);
+    let rows = item_card_rows(root_rows, origin_row, item);
     if rows.is_empty() {
         return true;
     }
@@ -1529,7 +1564,8 @@ fn list_card_sync(root_rows: &mut [Row], level: &mut Level) {
 #[cfg(test)]
 mod tests {
     use super::super::super::rows::{
-        list_slider_value, selected_list_item, Row, RowControl, SliderHold,
+        list_slider_value, member_on, selected_list_item, set_member, MemberStore, Row, RowControl,
+        SliderHold, ITEM_ROW_DANGER, ITEM_ROW_MEMBER,
     };
     use super::super::super::SettingsDestination;
     use super::super::tests::{level, list_row};
@@ -1741,6 +1777,9 @@ mod tests {
             description: description.map(str::to_string),
             key: None,
             when: when.map(str::to_string),
+            member_of: None,
+            member: None,
+            tone: None,
         }
     }
 
@@ -1918,6 +1957,86 @@ mod tests {
         assert_eq!(
             child.header,
             super::super::LevelHeader::Card(SettingsDestination::from_static("Alpha"))
+        );
+    }
+
+    fn membership_fixture() -> (Vec<Row>, Level) {
+        let mut root = level(0);
+        let mut row = listed_row(vec![super::super::super::rows::ListItem {
+            data: serde_json::json!({ "id": "a", "address": "AA:AA" }),
+            ..list_item("a", "Alpha")
+        }]);
+        let RowControl::List { actions, .. } = &mut row.control else {
+            unreachable!();
+        };
+        actions.primary = Some(action_spec("connect", "Connect", None, None));
+        actions.additional = vec![
+            RowActionSpec {
+                member_of: Some("kept".into()),
+                member: Some("{address}".into()),
+                ..action_spec("", "Keep", Some("Keeps it."), None)
+            },
+            RowActionSpec {
+                tone: Some("danger".into()),
+                ..action_spec("remove", "Forget", None, None)
+            },
+        ];
+        actions.members.insert(
+            "kept".into(),
+            MemberStore {
+                config_key: "kept".into(),
+                values: vec!["AA:AA".into()],
+            },
+        );
+        root.rows = vec![row];
+        let item = {
+            let RowControl::List { items, .. } = &root.rows[0].control else {
+                unreachable!();
+            };
+            items.iter().find(|item| item.id == "a").expect("item")
+        };
+        let child = list_item_card_level(
+            0,
+            "a",
+            "Alpha",
+            None,
+            SettingsDestination::from_static("Alpha"),
+            &root.rows,
+            item,
+        )
+        .expect("item card level");
+        (root.rows, child)
+    }
+
+    #[test]
+    fn an_item_card_draws_a_membership_action_as_a_toggle_and_marks_a_danger_action() {
+        let (_, child) = membership_fixture();
+        assert_eq!(child.rows.len(), 3);
+        assert_eq!(child.rows[0].variant, None);
+        assert_eq!(child.rows[1].label, "Keep");
+        assert_eq!(child.rows[1].description.as_deref(), Some("Keeps it."));
+        assert_eq!(child.rows[1].variant.as_deref(), Some(ITEM_ROW_MEMBER));
+        assert!(matches!(child.rows[1].control, RowControl::Toggle(true)));
+        assert_eq!(child.rows[2].label, "Forget");
+        assert_eq!(child.rows[2].variant.as_deref(), Some(ITEM_ROW_DANGER));
+        assert!(matches!(child.rows[2].control, RowControl::Text(_)));
+    }
+
+    #[test]
+    fn flipping_membership_writes_the_stored_string_and_redraws_the_toggle() {
+        let (mut rows, mut child) = membership_fixture();
+        child.selected = 1;
+        assert!(set_member(&mut rows, 0, "kept", "AA:AA", false));
+        assert!(!member_on(&rows, 0, "kept", "AA:AA"));
+        assert!(!item_card_sync(&rows, &mut child));
+        assert!(matches!(child.rows[1].control, RowControl::Toggle(false)));
+        assert_eq!(child.selected, 1);
+        assert!(set_member(&mut rows, 0, "kept", "AA:AA", true));
+        assert!(!item_card_sync(&rows, &mut child));
+        assert!(matches!(child.rows[1].control, RowControl::Toggle(true)));
+        assert_eq!(
+            super::super::super::rows::merged_config(&serde_json::json!({}), &rows)["kept"],
+            serde_json::json!(["AA:AA"])
         );
     }
 

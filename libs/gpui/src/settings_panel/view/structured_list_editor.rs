@@ -107,7 +107,7 @@ enum FormRowClick {
 
 impl SettingsPanelView {
     pub(super) fn open_object_array_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
-        let Some(row) = self.level().rows.get(row_index) else {
+        let Some(row) = self.level_rows().get(row_index) else {
             return;
         };
         let RowControl::ObjectArray(state) = &row.control else {
@@ -148,7 +148,7 @@ impl SettingsPanelView {
     }
 
     pub(super) fn open_text_list_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
-        let Some(row) = self.level().rows.get(row_index) else {
+        let Some(row) = self.level_rows().get(row_index) else {
             return;
         };
         let RowControl::TextList(values) = &row.control else {
@@ -624,6 +624,7 @@ impl SettingsPanelView {
             rows: (0..rows.len()).collect(),
             source,
             device_kind: None,
+            page: None,
         };
         let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
         let Some(destination) = self.card_destination(&crumb, cx) else {
@@ -953,6 +954,7 @@ fn entries_card_level(
         rows: (0..rows.len()).collect(),
         source,
         device_kind: None,
+        page: None,
     };
     let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
     Level {
@@ -1084,6 +1086,7 @@ pub(super) fn sync_entries_level(level: &mut Level) {
         rows: (0..rows.len()).collect(),
         source,
         device_kind: None,
+        page: None,
     };
     level.rows = rows;
     level.sections = vec![section];

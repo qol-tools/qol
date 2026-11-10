@@ -42,6 +42,7 @@ pub fn validate_spec_collect(spec: &ConfigSpec) -> Vec<ValidationError> {
     validate_sections(spec, &mut errors);
     validate_devices(spec, &mut errors);
     validate_fields(spec, &mut errors);
+    validate_page_fields(spec, &mut errors);
     errors
 }
 
@@ -165,9 +166,179 @@ fn validate_fields(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
         validate_row_slider(id, field, errors);
         validate_level_slider(id, field, errors);
         validate_show_when(id, field, spec, errors);
+        validate_page_field(id, field, errors);
+        validate_inline_list(id, field, errors);
+        validate_hidden(id, field, errors);
+        validate_hide_when_empty(id, field, errors);
         validate_platforms(&format!("field.{id}"), field.platforms.as_deref(), errors);
     }
     validate_config_key_collisions(spec, errors);
+}
+
+fn validate_page_fields(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
+    for (id, section) in &spec.sections {
+        let Some(page) = section.page.as_deref() else {
+            continue;
+        };
+        let path = format!("section.{id}.page");
+        match spec.fields.get(page).map(|field| field.kind) {
+            Some(FieldKind::Page) => {}
+            Some(_) => errors.push(ValidationError::new(
+                path,
+                format!("`{page}` must be a page field"),
+            )),
+            None => errors.push(ValidationError::new(
+                path,
+                format!("names undeclared field `{page}`"),
+            )),
+        }
+    }
+    for (id, field) in &spec.fields {
+        if field.kind != FieldKind::Page {
+            continue;
+        }
+        let named = spec
+            .sections
+            .values()
+            .any(|section| section.page.as_deref() == Some(id.as_str()));
+        if !named {
+            errors.push(ValidationError::new(
+                format!("field.{id}"),
+                "page field is not named by any section's page",
+            ));
+        }
+        if page_sits_on_itself(spec, id) {
+            errors.push(ValidationError::new(
+                format!("field.{id}.section"),
+                "a page field cannot sit in a section that is drawn on its own page",
+            ));
+        }
+    }
+}
+
+fn page_sits_on_itself(spec: &ConfigSpec, page: &str) -> bool {
+    let mut visited = std::collections::HashSet::new();
+    let mut current = page;
+    loop {
+        let host = spec
+            .fields
+            .get(current)
+            .and_then(|field| field.section.as_deref())
+            .and_then(|section| spec.sections.get(section))
+            .and_then(|section| section.page.as_deref());
+        let Some(host) = host else {
+            return false;
+        };
+        if host == page {
+            return true;
+        }
+        if !visited.insert(host) {
+            return false;
+        }
+        current = host;
+    }
+}
+
+fn validate_page_field(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    if field.kind != FieldKind::Page {
+        return;
+    }
+    for (key, set) in [
+        ("default", field.default.is_some()),
+        ("row_action", field.row_action.is_some()),
+        ("row_actions", !field.row_actions.is_empty()),
+    ] {
+        if set {
+            errors.push(ValidationError::new(
+                format!("field.{id}.{key}"),
+                format!("{key} is not supported for page fields"),
+            ));
+        }
+    }
+    let active = [
+        ("active_action", field.active_action.is_some()),
+        ("active_query", field.active_query.is_some()),
+        ("active_value_from", field.active_value_from.is_some()),
+    ];
+    if field.action.is_none() {
+        for (key, set) in active {
+            if set {
+                errors.push(ValidationError::new(
+                    format!("field.{id}.{key}"),
+                    format!("{key} needs the page field's action"),
+                ));
+            }
+        }
+        return;
+    }
+    for (key, set) in active {
+        if !set {
+            errors.push(ValidationError::new(
+                format!("field.{id}.{key}"),
+                "is required when a page field has an action",
+            ));
+        }
+    }
+}
+
+fn validate_inline_list(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    if field.inline.is_some() && field.kind != FieldKind::List {
+        errors.push(ValidationError::new(
+            format!("field.{id}.inline"),
+            "inline is only supported for list fields",
+        ));
+    }
+    let inline = field.inline == Some(true);
+    if inline && field.lead.is_some() {
+        errors.push(ValidationError::new(
+            format!("field.{id}.lead"),
+            "an inline list cannot have a lead",
+        ));
+    }
+    let Some(toggle) = field.row_toggle.as_ref() else {
+        return;
+    };
+    if !inline {
+        errors.push(ValidationError::new(
+            format!("field.{id}.row_toggle"),
+            "row_toggle requires inline = true",
+        ));
+    }
+    if toggle.active_when.trim().is_empty() {
+        errors.push(ValidationError::new(
+            format!("field.{id}.row_toggle.active_when"),
+            "cannot be empty",
+        ));
+    }
+}
+
+fn validate_hidden(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    if field.hidden.is_some() && !field.has_stored_value() {
+        errors.push(ValidationError::new(
+            format!("field.{id}.hidden"),
+            "hidden is only supported for fields that store a value",
+        ));
+    }
+}
+
+fn validate_hide_when_empty(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    if field.hide_when_empty.is_none() {
+        return;
+    }
+    let path = format!("field.{id}.hide_when_empty");
+    if field.kind != FieldKind::List {
+        errors.push(ValidationError::new(
+            path,
+            "hide_when_empty is only supported for list fields",
+        ));
+        return;
+    }
+    if field.inline == Some(true) {
+        errors.push(ValidationError::new(
+            path,
+            "hide_when_empty cannot be combined with inline",
+        ));
+    }
 }
 
 fn validate_field_id(id: &str, errors: &mut Vec<ValidationError>) {
@@ -253,6 +424,9 @@ fn config_key_prefix_collision(left: &str, right: &str) -> bool {
 }
 
 fn validate_field_default(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    if field.kind == FieldKind::Page {
+        return;
+    }
     let default = match &field.default {
         Some(default) => default,
         None => {
@@ -862,7 +1036,8 @@ fn default_matches_kind(default: &FieldDefault, kind: FieldKind) -> bool {
         | FieldKind::Status
         | FieldKind::QrCode
         | FieldKind::Gamepad
-        | FieldKind::DisplayLayout => false,
+        | FieldKind::DisplayLayout
+        | FieldKind::Page => false,
     }
 }
 
@@ -1592,6 +1767,244 @@ default = []
                         || (error.path == right_path && error.message.contains(&left_message)))
             }),
             "missing collision between {left} and {right} in {errors:?}"
+        );
+    }
+
+    const PAGE_CONTRACT: &str = r#"
+schema_version = 1
+
+[section.adapter]
+label = "Adapter"
+page = "bluetooth_page"
+
+[section.bluetooth]
+label = "Bluetooth"
+
+[field.bluetooth_page]
+type = "page"
+label = "Bluetooth"
+section = "bluetooth"
+query = "adapter_status"
+value_from = "name"
+action = "enable_adapter"
+active_action = "disable_adapter"
+active_query = "adapter_status"
+active_value_from = "powered"
+
+[field.name]
+type = "string"
+default = ""
+section = "adapter"
+"#;
+
+    #[test]
+    fn a_page_field_stores_nothing_and_its_section_opens_on_it() {
+        assert!(validate_contract(PAGE_CONTRACT).is_empty());
+        let spec = parse_spec_str(PAGE_CONTRACT).unwrap();
+        let page = spec.field("bluetooth_page").unwrap();
+        assert_eq!(page.kind, FieldKind::Page);
+        assert!(!page.has_stored_value());
+        assert!(!page.requires_declared_default());
+        assert_eq!(
+            spec.section("adapter").unwrap().page.as_deref(),
+            Some("bluetooth_page")
+        );
+    }
+
+    #[test]
+    fn a_section_page_must_name_a_page_field() {
+        for (page, message) in [
+            ("missing", "names undeclared field `missing`"),
+            ("name", "`name` must be a page field"),
+        ] {
+            let errors = validate_contract(&PAGE_CONTRACT.replace(
+                "\"bluetooth_page\"\n\n[section.bluetooth]",
+                &format!("\"{page}\"\n\n[section.bluetooth]"),
+            ));
+            assert_has_error(&errors, "section.adapter.page", message);
+        }
+    }
+
+    #[test]
+    fn a_page_field_must_be_named_by_a_section() {
+        let errors = validate_contract(&PAGE_CONTRACT.replace("page = \"bluetooth_page\"\n", ""));
+        assert_has_error(&errors, "field.bluetooth_page", "not named by any section");
+    }
+
+    #[test]
+    fn a_page_field_cannot_sit_on_its_own_page() {
+        let direct = validate_contract(
+            &PAGE_CONTRACT.replace("section = \"bluetooth\"", "section = \"adapter\""),
+        );
+        assert_has_error(&direct, "field.bluetooth_page.section", "its own page");
+
+        let chain = validate_contract(
+            r#"
+schema_version = 1
+
+[section.one]
+page = "second"
+
+[section.two]
+page = "first"
+
+[field.first]
+type = "page"
+section = "one"
+
+[field.second]
+type = "page"
+section = "two"
+"#,
+        );
+        assert_has_error(&chain, "field.first.section", "its own page");
+        assert_has_error(&chain, "field.second.section", "its own page");
+    }
+
+    #[test]
+    fn a_page_field_with_an_action_needs_its_active_state() {
+        for key in ["active_query", "active_action", "active_value_from"] {
+            let without = PAGE_CONTRACT
+                .lines()
+                .filter(|line| !line.starts_with(key))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let errors = validate_contract(&without);
+            assert_has_error(
+                &errors,
+                &format!("field.bluetooth_page.{key}"),
+                "is required",
+            );
+        }
+        let stray = PAGE_CONTRACT
+            .lines()
+            .filter(|line| !line.starts_with("action"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_has_error(
+            &validate_contract(&stray),
+            "field.bluetooth_page.active_query",
+            "needs the page field's action",
+        );
+    }
+
+    #[test]
+    fn a_page_field_refuses_stored_and_list_keys() {
+        for (extra, path, message) in [
+            (
+                "default = \"x\"",
+                "field.bluetooth_page.default",
+                "not supported",
+            ),
+            (
+                "options = [\"a\"]",
+                "field.bluetooth_page.options",
+                "options only supported",
+            ),
+            ("min = 1", "field.bluetooth_page", "min, max, and step"),
+            ("max = 1", "field.bluetooth_page", "min, max, and step"),
+            ("step = 1", "field.bluetooth_page", "min, max, and step"),
+            (
+                "row_actions = [{ action = \"x\" }]",
+                "field.bluetooth_page.row_actions",
+                "not supported",
+            ),
+            (
+                "row_action = { action = \"x\" }",
+                "field.bluetooth_page.row_action",
+                "not supported",
+            ),
+        ] {
+            let errors = validate_contract(
+                &PAGE_CONTRACT.replace("type = \"page\"\n", &format!("type = \"page\"\n{extra}\n")),
+            );
+            assert_has_error(&errors, path, message);
+        }
+    }
+
+    #[test]
+    fn inline_belongs_to_lists_without_a_lead() {
+        let inline = |body: &str| {
+            validate_contract(&format!(
+                "schema_version = 1\n\n[field.devices]\ntype = \"list\"\nquery = \"devices\"\n{body}\n"
+            ))
+        };
+        assert!(inline("inline = true").is_empty());
+        assert_has_error(
+            &inline("inline = true\nlead = { label = \"Search\" }"),
+            "field.devices.lead",
+            "inline list cannot have a lead",
+        );
+        let not_a_list = validate_contract(
+            "schema_version = 1\n\n[field.name]\ntype = \"string\"\ndefault = \"\"\ninline = true\n",
+        );
+        assert_has_error(&not_a_list, "field.name.inline", "only supported for list");
+    }
+
+    #[test]
+    fn a_row_toggle_needs_an_inline_list() {
+        let toggle =
+            "row_toggle = { action = \"on\", active_action = \"off\", active_when = \"enabled\" }";
+        let with = |inline: &str| {
+            validate_contract(&format!(
+                "schema_version = 1\n\n[field.devices]\ntype = \"list\"\nquery = \"devices\"\n{inline}\n{toggle}\n"
+            ))
+        };
+        assert!(with("inline = true").is_empty());
+        assert_has_error(
+            &with(""),
+            "field.devices.row_toggle",
+            "requires inline = true",
+        );
+        assert_has_error(
+            &with("inline = false"),
+            "field.devices.row_toggle",
+            "requires inline = true",
+        );
+        let blank = validate_contract(
+            "schema_version = 1\n\n[field.devices]\ntype = \"list\"\nquery = \"devices\"\ninline = true\nrow_toggle = { action = \"on\", active_action = \"off\", active_when = \" \" }\n",
+        );
+        assert_has_error(
+            &blank,
+            "field.devices.row_toggle.active_when",
+            "cannot be empty",
+        );
+    }
+
+    #[test]
+    fn hidden_belongs_to_fields_that_store_a_value() {
+        let hidden = |kind: &str, extra: &str| {
+            validate_contract(&format!(
+                "schema_version = 1\n\n[field.item]\ntype = \"{kind}\"\nhidden = true\n{extra}\n"
+            ))
+        };
+        assert!(hidden("string_array", "default = []").is_empty());
+        assert!(hidden("boolean", "default = true").is_empty());
+        for kind in ["list", "status", "action", "page"] {
+            assert_has_error(&hidden(kind, ""), "field.item.hidden", "store a value");
+        }
+    }
+
+    #[test]
+    fn hide_when_empty_belongs_to_non_inline_lists() {
+        let list = |extra: &str| {
+            validate_contract(&format!(
+                "schema_version = 1\n\n[field.devices]\ntype = \"list\"\nquery = \"devices\"\n{extra}\n"
+            ))
+        };
+        assert!(list("hide_when_empty = true").is_empty());
+        assert_has_error(
+            &list("hide_when_empty = true\ninline = true"),
+            "field.devices.hide_when_empty",
+            "cannot be combined with inline",
+        );
+        let not_a_list = validate_contract(
+            "schema_version = 1\n\n[field.name]\ntype = \"string\"\ndefault = \"\"\nhide_when_empty = true\n",
+        );
+        assert_has_error(
+            &not_a_list,
+            "field.name.hide_when_empty",
+            "only supported for list",
         );
     }
 }

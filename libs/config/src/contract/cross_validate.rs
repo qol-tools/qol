@@ -1,5 +1,5 @@
 use crate::contract::runtime::RuntimeSpec;
-use crate::contract::v1::{ConfigSpec, FieldKind, FieldSpec};
+use crate::contract::v1::{ConfigSpec, FieldKind, FieldSpec, RowActionSpec};
 use crate::validation::ValidationError;
 
 const STREAMABLE_KINDS: &[FieldKind] = &[FieldKind::Color, FieldKind::Number];
@@ -12,6 +12,8 @@ pub fn validate_contracts(
     for (id, field) in &config.fields {
         validate_runable_ref(id, field, runtime, &mut errors);
         validate_runtime_active_refs(id, field, runtime, &mut errors);
+        validate_page_refs(id, field, runtime, &mut errors);
+        validate_row_toggle_refs(id, field, runtime, &mut errors);
         validate_level_query_ref(id, field, runtime, &mut errors);
         validate_display_layout_refs(id, field, runtime, &mut errors);
         validate_stream_ref(id, field, runtime, &mut errors);
@@ -51,11 +53,81 @@ fn validate_runtime_active_refs(
             validate_list_active_refs(id, field, runtime, errors);
             validate_live_number_action_ref(id, field, runtime, errors);
         }
-        FieldKind::DisplayLayout => {}
+        FieldKind::DisplayLayout | FieldKind::Page => {}
         _ => errors.push(ValidationError::new(
             format!("field.{id}"),
             "runtime active state is only valid for action, list, select, and number fields",
         )),
+    }
+}
+
+fn validate_page_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.kind != FieldKind::Page {
+        return;
+    }
+    let actions = [
+        ("action", field.action.as_deref()),
+        ("active_action", field.active_action.as_deref()),
+    ];
+    let queries = [("active_query", field.active_query.as_deref())];
+    let Some(runtime) = runtime else {
+        if actions.iter().any(|(_, name)| name.is_some()) || field.active_query.is_some() {
+            errors.push(ValidationError::new(
+                format!("field.{id}"),
+                "page actions and active state require qol-runtime.toml",
+            ));
+        }
+        return;
+    };
+    for (key, name) in actions {
+        if let Some(name) = name.filter(|name| !runtime.actions.contains_key(*name)) {
+            errors.push(ValidationError::new(
+                format!("field.{id}.{key}"),
+                format!("references undeclared action: {name}"),
+            ));
+        }
+    }
+    for (key, name) in queries {
+        if let Some(name) = name.filter(|name| !runtime.queries.contains_key(*name)) {
+            errors.push(ValidationError::new(
+                format!("field.{id}.{key}"),
+                format!("references undeclared query: {name}"),
+            ));
+        }
+    }
+}
+
+fn validate_row_toggle_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(toggle) = field.row_toggle.as_ref() else {
+        return;
+    };
+    let Some(runtime) = runtime else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.row_toggle"),
+            "row_toggle requires qol-runtime.toml but none is present",
+        ));
+        return;
+    };
+    for (key, name) in [
+        ("action", toggle.action.as_str()),
+        ("active_action", toggle.active_action.as_str()),
+    ] {
+        if !runtime.actions.contains_key(name) {
+            errors.push(ValidationError::new(
+                format!("field.{id}.row_toggle.{key}"),
+                format!("references undeclared action: {name}"),
+            ));
+        }
     }
 }
 
@@ -304,6 +376,7 @@ fn validate_runable_ref(
         | FieldKind::Gamepad
         | FieldKind::Select
         | FieldKind::StringArray
+        | FieldKind::Page
             if !rt.queries.contains_key(ref_name) =>
         {
             errors.push(ValidationError::new(
@@ -368,7 +441,10 @@ fn validate_row_action_ref(
         return;
     };
     for (index, action) in actions.into_iter().enumerate() {
-        if action.open.is_some() || rt.actions.contains_key(action.action.as_str()) {
+        if action.open.is_some()
+            || action.member_of.is_some()
+            || rt.actions.contains_key(action.action.as_str())
+        {
             continue;
         }
         let path = if index == 0 && field.row_action.is_some() {
@@ -400,17 +476,30 @@ fn validate_row_action_opens(
     let actions = field.row_action.iter().chain(field.row_actions.iter());
     for action in actions {
         let path = format!("field.{id}.row_actions");
+        validate_row_action_tone(&path, action, errors);
+        validate_row_action_member(&path, action, config, errors);
+        if action.member_of.is_some() {
+            continue;
+        }
         match (action.action.is_empty(), action.open.as_deref()) {
-            (true, None) => errors.push(ValidationError::new(
+            (true, None) if action.member.is_none() => errors.push(ValidationError::new(
                 format!("{path}.action"),
-                "needs an action or an open target",
+                "needs an action, an open target or member_of",
             )),
+            (true, None) => {}
             (false, Some(_)) => errors.push(ValidationError::new(
                 format!("{path}.open"),
                 "cannot be combined with an action",
             )),
-            (true, Some(target)) => match config.fields.get(target).map(|target| target.kind) {
-                Some(FieldKind::List) if target != id => {}
+            (true, Some(target)) => match config.fields.get(target) {
+                Some(target_field) if target_field.kind == FieldKind::List && target != id => {
+                    if target_field.inline == Some(true) {
+                        errors.push(ValidationError::new(
+                            format!("{path}.open"),
+                            format!("`{target}` is an inline list and has no card to open"),
+                        ));
+                    }
+                }
                 Some(_) => errors.push(ValidationError::new(
                     format!("{path}.open"),
                     format!("`{target}` must be another list field"),
@@ -422,6 +511,55 @@ fn validate_row_action_opens(
             },
             (false, None) => {}
         }
+    }
+}
+
+fn validate_row_action_tone(path: &str, action: &RowActionSpec, errors: &mut Vec<ValidationError>) {
+    if action.tone.as_deref().is_some_and(|tone| tone != "danger") {
+        errors.push(ValidationError::new(
+            format!("{path}.tone"),
+            "only \"danger\" is supported",
+        ));
+    }
+}
+
+fn validate_row_action_member(
+    path: &str,
+    action: &RowActionSpec,
+    config: &ConfigSpec,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(target) = action.member_of.as_deref() else {
+        if action.member.is_some() {
+            errors.push(ValidationError::new(
+                format!("{path}.member"),
+                "needs member_of",
+            ));
+        }
+        return;
+    };
+    if !action.action.is_empty() || action.open.is_some() {
+        errors.push(ValidationError::new(
+            format!("{path}.member_of"),
+            "cannot be combined with an action or open",
+        ));
+    }
+    if action.member.as_deref().is_none_or(str::is_empty) {
+        errors.push(ValidationError::new(
+            format!("{path}.member"),
+            "is required with member_of",
+        ));
+    }
+    match config.fields.get(target).map(|target| target.kind) {
+        Some(FieldKind::StringArray) => {}
+        Some(_) => errors.push(ValidationError::new(
+            format!("{path}.member_of"),
+            format!("`{target}` must be a string_array field"),
+        )),
+        None => errors.push(ValidationError::new(
+            format!("{path}.member_of"),
+            format!("names undeclared field `{target}`"),
+        )),
     }
 }
 
@@ -446,6 +584,14 @@ fn validate_lead_refs(
         ));
     }
     for action in &lead.actions {
+        validate_row_action_tone(&format!("{path}.actions"), action, errors);
+        if action.member_of.is_some() || action.member.is_some() {
+            errors.push(ValidationError::new(
+                format!("{path}.actions.member_of"),
+                "lead actions run runtime actions only",
+            ));
+            continue;
+        }
         if action.open.is_some() {
             errors.push(ValidationError::new(
                 format!("{path}.actions.open"),
@@ -555,7 +701,8 @@ fn runable_reference_for(field: &FieldSpec) -> Option<&str> {
         | FieldKind::QrCode
         | FieldKind::Gamepad
         | FieldKind::Select
-        | FieldKind::StringArray => field.query.as_deref(),
+        | FieldKind::StringArray
+        | FieldKind::Page => field.query.as_deref(),
         _ => None,
     }
 }
@@ -1659,5 +1806,297 @@ label = "Search"
             errors.iter().any(|error| error.path == "field.status.lead"),
             "{errors:?}"
         );
+    }
+
+    const PAGE_RUNTIME: &str = r#"
+schema_version = 1
+
+[query.adapter_status]
+description = "Adapter"
+poll_interval_ms = 1000
+
+[action.enable_adapter]
+description = "Enable"
+
+[action.disable_adapter]
+description = "Disable"
+"#;
+
+    fn page_config(extra: &str) -> ConfigSpec {
+        parse_spec_str(&format!(
+            r#"
+schema_version = 1
+
+[section.adapter]
+page = "bluetooth_page"
+
+[section.bluetooth]
+label = "Bluetooth"
+
+[field.bluetooth_page]
+type = "page"
+section = "bluetooth"
+query = "adapter_status"
+value_from = "name"
+action = "enable_adapter"
+active_action = "disable_adapter"
+active_query = "adapter_status"
+active_value_from = "powered"
+{extra}
+"#
+        ))
+        .expect("parse config")
+    }
+
+    #[test]
+    fn a_page_field_references_resolve_against_the_runtime() {
+        let runtime = parse_runtime_spec_str(PAGE_RUNTIME).expect("parse runtime");
+        assert!(validate_contracts(&page_config(""), Some(&runtime)).is_ok());
+
+        for (broken, path) in [
+            ("query.adapter_status", "field.bluetooth_page.query"),
+            ("action.enable_adapter", "field.bluetooth_page.action"),
+            (
+                "action.disable_adapter",
+                "field.bluetooth_page.active_action",
+            ),
+        ] {
+            let missing = PAGE_RUNTIME
+                .split("\n\n")
+                .filter(|block| !block.contains(&format!("[{broken}]")))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let runtime = parse_runtime_spec_str(&missing).expect("parse runtime");
+            let errors = validate_contracts(&page_config(""), Some(&runtime)).unwrap_err();
+            assert!(
+                errors.iter().any(|error| error.path == path),
+                "{path}: {errors:?}"
+            );
+        }
+
+        let errors = validate_contracts(&page_config(""), None).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("require qol-runtime.toml")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_page_field_refuses_a_lead() {
+        let runtime = parse_runtime_spec_str(PAGE_RUNTIME).expect("parse runtime");
+        let config = page_config("lead = { label = \"Search\" }");
+        let errors = validate_contracts(&config, Some(&runtime)).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.bluetooth_page.lead"),
+            "{errors:?}"
+        );
+    }
+
+    const MEMBER_RUNTIME: &str = r#"
+schema_version = 1
+
+[query.devices]
+description = "Devices"
+poll_interval_ms = 1000
+
+[action.remove]
+description = "Remove"
+
+[action.on]
+description = "On"
+
+[action.off]
+description = "Off"
+"#;
+
+    fn member_config(action_body: &str) -> ConfigSpec {
+        parse_spec_str(&format!(
+            r#"
+schema_version = 1
+
+[field.managed_devices]
+type = "string_array"
+default = []
+
+[field.not_an_array]
+type = "string"
+default = ""
+
+[field.devices]
+type = "list"
+query = "devices"
+
+[field.inline_devices]
+type = "list"
+query = "devices"
+inline = true
+
+[[field.devices.row_actions]]
+{action_body}
+"#
+        ))
+        .expect("parse config")
+    }
+
+    #[test]
+    fn a_membership_row_action_names_a_string_array_and_a_member() {
+        let runtime = parse_runtime_spec_str(MEMBER_RUNTIME).expect("parse runtime");
+        let valid = member_config(
+            "member_of = \"managed_devices\"\nmember = \"{address}\"\nlabel = \"Reconnect\"",
+        );
+        assert!(validate_contracts(&valid, Some(&runtime)).is_ok());
+
+        let cases = [
+            (
+                "member_of = \"managed_devices\"",
+                "field.devices.row_actions.member",
+            ),
+            (
+                "member_of = \"managed_devices\"\nmember = \"{address}\"\naction = \"remove\"",
+                "field.devices.row_actions.member_of",
+            ),
+            (
+                "member_of = \"managed_devices\"\nmember = \"{address}\"\nopen = \"devices\"",
+                "field.devices.row_actions.member_of",
+            ),
+            (
+                "member_of = \"not_an_array\"\nmember = \"{address}\"",
+                "field.devices.row_actions.member_of",
+            ),
+            (
+                "member_of = \"missing\"\nmember = \"{address}\"",
+                "field.devices.row_actions.member_of",
+            ),
+            (
+                "action = \"remove\"\nmember = \"{address}\"",
+                "field.devices.row_actions.member",
+            ),
+        ];
+        for (body, path) in cases {
+            let errors = validate_contracts(&member_config(body), Some(&runtime)).expect_err(body);
+            assert!(
+                errors.iter().any(|error| error.path == path),
+                "{body}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_row_action_tone_is_danger_or_nothing() {
+        let runtime = parse_runtime_spec_str(MEMBER_RUNTIME).expect("parse runtime");
+        let danger = member_config("action = \"remove\"\ntone = \"danger\"");
+        assert!(validate_contracts(&danger, Some(&runtime)).is_ok());
+        let loud = member_config("action = \"remove\"\ntone = \"loud\"");
+        let errors = validate_contracts(&loud, Some(&runtime)).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.devices.row_actions.tone"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_open_action_refuses_an_inline_list() {
+        let runtime = parse_runtime_spec_str(MEMBER_RUNTIME).expect("parse runtime");
+        let errors =
+            validate_contracts(&member_config("open = \"inline_devices\""), Some(&runtime))
+                .unwrap_err();
+        assert!(
+            errors.iter().any(|error| {
+                error.path == "field.devices.row_actions.open"
+                    && error.message.contains("inline list")
+            }),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_lead_action_refuses_membership_and_unknown_tones() {
+        let runtime = parse_runtime_spec_str(MEMBER_RUNTIME).expect("parse runtime");
+        for (body, path) in [
+            (
+                "member_of = \"managed_devices\"\nmember = \"x\"",
+                "field.devices.lead.actions.member_of",
+            ),
+            (
+                "action = \"remove\"\ntone = \"loud\"",
+                "field.devices.lead.actions.tone",
+            ),
+            (
+                "open = \"inline_devices\"",
+                "field.devices.lead.actions.open",
+            ),
+        ] {
+            let config = parse_spec_str(&format!(
+                r#"
+schema_version = 1
+
+[field.managed_devices]
+type = "string_array"
+default = []
+
+[field.inline_devices]
+type = "list"
+query = "devices"
+inline = true
+
+[field.devices]
+type = "list"
+query = "devices"
+
+[field.devices.lead]
+label = "Search"
+
+[[field.devices.lead.actions]]
+{body}
+"#
+            ))
+            .expect("parse config");
+            let errors = validate_contracts(&config, Some(&runtime)).expect_err(body);
+            assert!(
+                errors.iter().any(|error| error.path == path),
+                "{body}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_row_toggle_names_declared_actions() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.devices]
+type = "list"
+query = "devices"
+inline = true
+row_toggle = { action = "on", active_action = "off", active_when = "enabled" }
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(MEMBER_RUNTIME).expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+
+        for (broken, path) in [
+            ("action.on", "field.devices.row_toggle.action"),
+            ("action.off", "field.devices.row_toggle.active_action"),
+        ] {
+            let missing = MEMBER_RUNTIME
+                .split("\n\n")
+                .filter(|block| !block.contains(&format!("[{broken}]")))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let runtime = parse_runtime_spec_str(&missing).expect("parse runtime");
+            let errors = validate_contracts(&config, Some(&runtime)).unwrap_err();
+            assert!(
+                errors.iter().any(|error| error.path == path),
+                "{path}: {errors:?}"
+            );
+        }
     }
 }

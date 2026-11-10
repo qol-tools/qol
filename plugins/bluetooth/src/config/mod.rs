@@ -10,7 +10,6 @@ pub fn contract() -> &'static str {
 pub struct ReconnectConfig {
     pub adapter: String,
     pub managed_devices: Vec<String>,
-    pub auto_reconnect: bool,
     pub power_on_adapter: bool,
     pub set_default_output: bool,
     pub retry_initial_seconds: f64,
@@ -40,10 +39,17 @@ mod tests {
             qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).unwrap();
         assert!(config.adapter.is_empty());
         assert!(config.managed_devices.is_empty());
-        assert!(config.auto_reconnect);
         assert!(config.power_on_adapter);
         assert!(config.set_default_output);
         assert_eq!(config.retry_initial_seconds, 1.0);
         assert_eq!(config.retry_max_seconds, 60.0);
+    }
+
+    #[test]
+    fn a_stored_auto_reconnect_key_is_ignored() {
+        let mut stored = qol_config::defaults_json_from_contract(CONFIG_CONTRACT).unwrap();
+        stored["auto_reconnect"] = serde_json::json!(false);
+        let config: ReconnectConfig = serde_json::from_value(stored).unwrap();
+        assert!(config.managed_devices.is_empty());
     }
 }

@@ -37,7 +37,7 @@ use crate::bluetooth::{
     ReconnectFailure, ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
-use crate::hostfix::BluetoothHostFixes;
+use crate::hostfix::{problems_payload, BluetoothHostFixes};
 use crate::platform::audio;
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
@@ -255,6 +255,7 @@ enum DaemonAction {
     Reload,
     Settings,
     HostFixes,
+    HostProblems,
     ApplyHostFix,
     HandoffState,
     ReleaseForHandoff,
@@ -290,6 +291,7 @@ impl TryFrom<&str> for DaemonAction {
             "reload" => Ok(Self::Reload),
             "settings" => Ok(Self::Settings),
             "host_fixes" => Ok(Self::HostFixes),
+            "host_problems" => Ok(Self::HostProblems),
             "apply_host_fix" => Ok(Self::ApplyHostFix),
             "handoff_state" => Ok(Self::HandoffState),
             "release_for_handoff" => Ok(Self::ReleaseForHandoff),
@@ -488,6 +490,7 @@ fn adapter_status_payload(adapter: Option<&AdapterHealth>) -> Result<serde_json:
     let adapter = adapter.context("Bluetooth adapter is unavailable")?;
     Ok(serde_json::json!({
         "available": true,
+        "name": adapter.name,
         "powered": adapter.powered,
     }))
 }
@@ -1455,6 +1458,7 @@ fn dispatch_daemon_action(
         DaemonAction::HostFixes => {
             ReadResult::HandledWithData(findings_payload(&BluetoothHostFixes.detect()))
         }
+        DaemonAction::HostProblems => ReadResult::HandledWithData(problems_payload()),
         DaemonAction::ApplyHostFix => match host_fix_id(request) {
             Ok(id) => {
                 spawn_host_fix(id);
@@ -1625,9 +1629,8 @@ async fn wait_without_adapter(
                         *config = crate::config::load();
                         qol_runtime::probe!(
                             "BLUETOOTH_RELOAD",
-                            "managed={} auto_reconnect={} adapter_available=false",
-                            config.managed_devices.len(),
-                            config.auto_reconnect
+                            "managed={} adapter_available=false",
+                            config.managed_devices.len()
                         );
                     }
                     DaemonCommand::StopSearch => {
@@ -1697,7 +1700,7 @@ async fn daemon_loop(
     commands: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
     adapter: Adapter,
 ) -> Result<()> {
-    if config.auto_reconnect && !config.managed_devices.is_empty() {
+    if !config.managed_devices.is_empty() {
         if let Err(error) = ensure_powered(&adapter, config.power_on_adapter).await {
             log::warn!("Bluetooth adapter unavailable at daemon start: {error:#}");
         }
@@ -1726,16 +1729,13 @@ async fn daemon_loop(
     for address in known_addresses {
         spawn_audio_profile_ensure(address, AudioAdoption::Keep);
     }
-    if config.auto_reconnect {
-        request_all(&mut retries, Instant::now());
-    }
+    request_all(&mut retries, Instant::now());
     qol_runtime::probe!(
         "BLUETOOTH_START",
-        "adapter={} powered={} managed={} auto_reconnect={}",
+        "adapter={} powered={} managed={}",
         adapter.name(),
         adapter_powered,
-        retries.len(),
-        config.auto_reconnect
+        retries.len()
     );
 
     loop {
@@ -1762,7 +1762,7 @@ async fn daemon_loop(
                     match set_adapter_power(&adapter, powered, &mut discovery).await {
                         Ok(()) => {
                             adapter_powered = powered;
-                            if powered && config.auto_reconnect {
+                            if powered {
                                 request_all(&mut retries, Instant::now());
                             }
                             qol_runtime::probe!(
@@ -1853,14 +1853,11 @@ async fn daemon_loop(
                     for address in known_addresses {
                         spawn_audio_profile_ensure(address, AudioAdoption::Keep);
                     }
-                    if config.auto_reconnect {
-                        request_all(&mut retries, Instant::now());
-                    }
+                    request_all(&mut retries, Instant::now());
                     qol_runtime::probe!(
                         "BLUETOOTH_RELOAD",
-                        "managed={} auto_reconnect={}",
-                        retries.len(),
-                        config.auto_reconnect
+                        "managed={}",
+                        retries.len()
                     );
                     continue;
                 }
@@ -1879,7 +1876,7 @@ async fn daemon_loop(
                         if discovery.is_some() {
                             track_discovered_device(&adapter, address).await;
                         }
-                        if config.auto_reconnect && retries.contains_key(&address) {
+                        if retries.contains_key(&address) {
                             retries.entry(address).or_default().request_when_idle(Instant::now());
                         }
                         spawn_audio_profile_ensure(address, AudioAdoption::Adopt);
@@ -1892,7 +1889,7 @@ async fn daemon_loop(
                     }
                     Some(AdapterEvent::DeviceRemoved(address)) => {
                         subscribed.remove(&address);
-                        if config.auto_reconnect && retries.contains_key(&address) {
+                        if retries.contains_key(&address) {
                             retries.entry(address).or_default().request_when_idle(Instant::now());
                         }
                         qol_runtime::probe!("BLUETOOTH_DEVICE_REMOVED", "device={}", redacted(address));
@@ -1904,7 +1901,7 @@ async fn daemon_loop(
                             address: adapter.address().await?.to_string(),
                             powered,
                         }));
-                        if powered && config.auto_reconnect {
+                        if powered {
                             request_all(&mut retries, Instant::now());
                         }
                         if !powered {
@@ -1938,7 +1935,7 @@ async fn daemon_loop(
                     if connected {
                         state.connected();
                     }
-                    if !connected && config.auto_reconnect {
+                    if !connected {
                         state.request_when_idle(Instant::now());
                     }
                 }
@@ -3035,9 +3032,6 @@ fn apply_report(
             state.connected();
         }
     }
-    if !config.auto_reconnect {
-        return;
-    }
     let failed = report
         .failures
         .iter()
@@ -3140,6 +3134,8 @@ mod tests {
             ("reconnect_trusted", DaemonAction::ReconnectTrusted),
             ("reload", DaemonAction::Reload),
             ("settings", DaemonAction::Settings),
+            ("host_fixes", DaemonAction::HostFixes),
+            ("host_problems", DaemonAction::HostProblems),
         ];
         for (action, expected) in cases {
             assert_eq!(
@@ -3165,7 +3161,7 @@ mod tests {
             .unwrap();
             assert_eq!(
                 payload,
-                serde_json::json!({ "available": true, "powered": powered })
+                serde_json::json!({ "available": true, "name": "hci0", "powered": powered })
             );
         }
     }

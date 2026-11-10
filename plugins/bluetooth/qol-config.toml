@@ -2,90 +2,15 @@ schema_version = 1
 title = "Bluetooth"
 description = "Choose the Bluetooth devices qol should keep connected."
 
-[section.devices]
-label = "Devices"
-description = "Turn Bluetooth on, choose the adapter, and manage paired devices or find new ones."
-
-[field.adapter_power]
-type = "action"
+[section.bluetooth]
 label = "Bluetooth"
-active_label = "Bluetooth"
-description = "Power the default Bluetooth adapter on or off."
-section = "devices"
-action = "enable_adapter"
-active_action = "disable_adapter"
-active_query = "adapter_status"
-active_value_from = "powered"
-variant = "toggle"
-
-[field.adapter]
-type = "select"
-label = "Adapter"
-description = "Which Bluetooth adapter qol uses. Automatic follows the system default."
-section = "devices"
-platforms = ["linux"]
-default = ""
-query = "adapter_options"
-lookup_label = "adapters"
-card_description = "The Bluetooth adapter qol uses."
-
-[field.devices]
-type = "list"
-label = "Bluetooth devices"
-section = "devices"
-query = "devices"
-row_label = "{name}"
-row_subtitle = "{detail}"
-empty_message = "No paired devices. Find devices to pair one."
-card_description = "Devices paired with this computer."
-
-[[field.devices.row_actions]]
-action = "connect_device"
-label = "Connect"
-description = "Connects the device to this computer, taking it from a linked device when one has it."
-when = "can_connect"
-input = { address = "{address}" }
-
-[[field.devices.row_actions]]
-action = "reclaim_device"
-label = "Take back"
-description = "Moves the audio from the other device to this computer."
-when = "can_reclaim"
-input = { address = "{address}" }
-
-[[field.devices.row_actions]]
-action = "disconnect_device"
-label = "Disconnect"
-description = "Drops the connection on this computer only."
-when = "can_disconnect"
-input = { address = "{address}" }
-
-[[field.devices.row_actions]]
-action = "trust_device"
-label = "Trust"
-description = "Lets the device connect on its own."
-when = "can_trust"
-input = { address = "{address}" }
-
-[[field.devices.row_actions]]
-action = "untrust_device"
-label = "Untrust"
-description = "Stops the device connecting on its own."
-when = "can_untrust"
-input = { address = "{address}" }
-
-[[field.devices.row_actions]]
-action = "remove_device"
-label = "Remove"
-description = "Forgets the pairing."
-when = "can_remove"
-input = { address = "{address}" }
+description = "Devices this computer connects to."
 
 [field.find_devices]
 type = "list"
 label = "Find devices"
 description = "Search for devices nearby and pair a new one."
-section = "devices"
+section = "bluetooth"
 query = "nearby_devices"
 row_label = "{name}"
 row_subtitle = "{detail}"
@@ -138,71 +63,25 @@ label = "Pair in System Settings"
 description = "Opens the system Bluetooth settings, where this device pairs."
 when = "can_open_settings"
 
-[[field.find_devices.row_actions]]
-label = "Open"
-description = "Shows the device in Bluetooth devices."
-when = "paired"
-open = "devices"
-
-[section.reconnection]
-label = "Reconnection"
-description = "Automatic retries run only while a managed device is disconnected."
-actions = ["reconnect", "reconnect_trusted"]
-
-[field.managed_devices]
-type = "string_array"
-label = "Managed devices"
-description = "Paired devices qol reconnects automatically when they drop."
-section = "reconnection"
-placeholder = "No devices"
-default = []
-card_description = "Devices qol reconnects on its own."
-query = "managed_device_options"
-
-[field.auto_reconnect]
-type = "boolean"
-label = "Reconnect automatically"
-description = "Keep retrying managed devices while they are disconnected."
-section = "reconnection"
-default = true
-
-[field.power_on_adapter]
-type = "boolean"
-label = "Allow automatic power-on"
-description = "Turn Bluetooth on by itself when a search or connection needs it."
-section = "reconnection"
-default = true
-
-[field.retry_initial_seconds]
-type = "number"
-label = "Initial retry delay"
-description = "Seconds before the first retry after a failed connection."
-section = "reconnection"
-default = 1
-min = 1
-max = 60
-step = 1
-
-[field.retry_max_seconds]
-type = "number"
-label = "Maximum retry delay"
-description = "Maximum seconds between retries while a managed device remains disconnected."
-section = "reconnection"
-default = 60
-min = 5
-max = 600
-step = 5
-
-[section.host]
-label = "System"
-description = "Whether Bluetooth is working properly on this computer."
-platforms = ["linux"]
+[field.bluetooth_page]
+type = "page"
+label = "Bluetooth"
+description = "Turn Bluetooth on or off, choose the adapter and set how it reconnects."
+section = "bluetooth"
+query = "adapter_status"
+value_from = "name"
+action = "enable_adapter"
+active_action = "disable_adapter"
+active_query = "adapter_status"
+active_value_from = "powered"
 
 [field.host_findings]
 type = "list"
 label = "Bluetooth health"
-section = "host"
-query = "host_fixes"
+section = "bluetooth"
+platforms = ["linux"]
+hide_when_empty = true
+query = "host_problems"
 row_label = "{title}"
 row_subtitle = "{detail}"
 card_description = "Problems found with Bluetooth."
@@ -220,14 +99,126 @@ description = "Fixes this Bluetooth problem on this computer."
 when = "actionable"
 input = { id = "{id}" }
 
-[section.audio]
-label = "Audio"
-description = "Where system audio goes when a Bluetooth audio device connects."
+[section.saved_devices]
+label = "Saved devices"
+description = "Devices paired with this computer."
+actions = ["reconnect", "reconnect_trusted"]
+
+[field.devices]
+type = "list"
+label = "Saved devices"
+section = "saved_devices"
+inline = true
+query = "devices"
+row_label = "{name}"
+row_subtitle = "{kind}"
+empty_message = "No paired devices. Find devices to pair one."
+
+[[field.devices.row_actions]]
+action = "connect_device"
+label = "Connect"
+description = "Connects the device to this computer, taking it from a linked device when one has it."
+when = "can_connect"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "reclaim_device"
+label = "Take back"
+description = "Moves the audio from the other device to this computer."
+when = "can_reclaim"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "disconnect_device"
+label = "Disconnect"
+description = "Drops the connection on this computer only."
+when = "can_disconnect"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+label = "Reconnect automatically"
+description = "Keep retrying while it is disconnected."
+member_of = "managed_devices"
+member = "{address}"
+
+[[field.devices.row_actions]]
+action = "trust_device"
+label = "Trust"
+description = "Lets the device connect on its own."
+when = "can_trust"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "untrust_device"
+label = "Untrust"
+description = "Stops the device connecting on its own."
+when = "can_untrust"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "remove_device"
+label = "Remove"
+description = "Forgets the pairing, it has to pair again to come back."
+when = "can_remove"
+tone = "danger"
+input = { address = "{address}" }
+
+[field.managed_devices]
+type = "string_array"
+label = "Managed devices"
+description = "Paired devices qol reconnects automatically when they drop."
+section = "saved_devices"
+hidden = true
+default = []
+query = "managed_device_options"
+
+[section.adapter]
+label = "Adapter"
+description = "The adapter qol uses and how it reconnects."
+page = "bluetooth_page"
+
+[field.adapter]
+type = "select"
+label = "Adapter"
+description = "Which Bluetooth adapter qol uses. Automatic follows the system default."
+section = "adapter"
+platforms = ["linux"]
+default = ""
+query = "adapter_options"
+lookup_label = "adapters"
+card_description = "The Bluetooth adapter qol uses."
+
+[field.power_on_adapter]
+type = "boolean"
+label = "Allow automatic power-on"
+description = "Turn Bluetooth on by itself when a search or connection needs it."
+section = "adapter"
+default = true
+
+[field.retry_initial_seconds]
+type = "number"
+label = "Initial retry delay"
+description = "Seconds before the first retry after a failed connection."
+section = "adapter"
+default = 1
+min = 1
+max = 60
+step = 1
+
+[field.retry_max_seconds]
+type = "number"
+label = "Maximum retry delay"
+description = "Maximum seconds between retries while a managed device remains disconnected."
+section = "adapter"
+default = 60
+min = 5
+max = 600
+step = 5
 
 [field.set_default_output]
 type = "boolean"
 label = "Set as default output on connect"
 description = "Make a connected audio device the system output, unless another output is playing."
-section = "audio"
+section = "adapter"
 platforms = ["linux"]
 default = true

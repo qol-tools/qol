@@ -1,6 +1,6 @@
 use crate::contract::{
     ConfigSpec, FieldAlign, FieldDefault, FieldKind, ItemSpec, ListLeadSpec, NestedListSpec,
-    NumberConstraints, RowActionSpec, RowSliderSpec,
+    NumberConstraints, RowActionSpec, RowSliderSpec, RowToggleSpec,
 };
 use crate::validation::{validate_spec_collect, ValidationError};
 use indexmap::IndexMap;
@@ -26,6 +26,8 @@ pub struct ResolvedSection {
     pub platforms: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -113,6 +115,14 @@ pub struct ResolvedField {
     pub hide_values: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub align: Option<FieldAlign>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub inline: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide_when_empty: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_toggle: Option<RowToggleSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -232,6 +242,10 @@ pub fn resolve_config_for(
             tone_map: field.tone_map.clone(),
             hide_values: field.hide_values.clone(),
             align: field.align,
+            inline: field.inline.unwrap_or(false),
+            hidden: field.hidden.unwrap_or(false),
+            hide_when_empty: field.hide_when_empty.unwrap_or(false),
+            row_toggle: field.row_toggle.clone(),
         };
         push_resolved_field(
             &mut root_fields,
@@ -363,6 +377,7 @@ fn build_sections(spec: &ConfigSpec, include_dev_only: bool) -> Vec<ResolvedSect
             fields: Vec::new(),
             platforms: section.platforms.clone(),
             device_kind: section.device_kind.clone(),
+            page: section.page.clone(),
         })
         .collect()
 }
@@ -823,5 +838,71 @@ active_value_from = "volume"
                 .any(|error| error.path == "field.volume.default"),
             "{errors:?}"
         );
+    }
+
+    #[test]
+    fn a_page_field_resolves_without_a_stored_value_and_a_hidden_field_with_one() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[section.adapter]
+page = "bluetooth_page"
+
+[section.bluetooth]
+
+[field.bluetooth_page]
+type = "page"
+section = "bluetooth"
+
+[field.devices]
+type = "list"
+query = "devices"
+inline = true
+section = "adapter"
+
+[field.devices.row_toggle]
+action = "enable"
+active_action = "disable"
+active_when = "enabled"
+
+[field.managed]
+type = "string_array"
+default = ["AA"]
+hidden = true
+"#,
+        )
+        .unwrap();
+        let resolved = resolve_config(&spec, &serde_json::json!({ "managed": ["BB"] })).unwrap();
+        let section = resolved
+            .sections
+            .iter()
+            .find(|section| section.id == "adapter")
+            .unwrap();
+        assert_eq!(section.page.as_deref(), Some("bluetooth_page"));
+        let find = |id: &str| {
+            resolved
+                .sections
+                .iter()
+                .flat_map(|section| &section.fields)
+                .chain(&resolved.fields)
+                .find(|field| field.id == id)
+                .unwrap()
+        };
+        let page = find("bluetooth_page");
+        assert_eq!(page.kind, FieldKind::Page);
+        assert_eq!(page.value, page.default);
+        assert!(!page.inline && !page.hidden && !page.hide_when_empty);
+        let devices = find("devices");
+        assert!(devices.inline);
+        assert_eq!(devices.row_toggle.as_ref().unwrap().action, "enable");
+        let managed = find("managed");
+        assert!(managed.hidden);
+        assert_eq!(
+            managed.value,
+            FieldDefault::StringArray(vec!["BB".to_string()])
+        );
+        let defaults = crate::defaults::defaults_json_from_spec(&spec).unwrap();
+        assert_eq!(defaults, serde_json::json!({ "managed": ["AA"] }));
     }
 }

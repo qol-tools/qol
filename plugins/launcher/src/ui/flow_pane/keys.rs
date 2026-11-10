@@ -147,6 +147,9 @@ mod tests {
             description: None,
             key: key.map(str::to_string),
             when: None,
+            member_of: None,
+            member: None,
+            tone: None,
         }
     }
 

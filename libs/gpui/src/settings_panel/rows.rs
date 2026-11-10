@@ -1,6 +1,6 @@
 use qol_config::contract::{
     interpolate_row_template, resolve_row_actions, FieldDefault, FieldKind, ListLeadSpec,
-    ResolvedRowAction, RowActionSpec, RowSliderSpec,
+    ResolvedRowAction, RowActionSpec, RowSliderSpec, RowToggleSpec,
 };
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection, ResolvedShowWhen};
 use qol_config::object_array::item_schema;
@@ -14,6 +14,8 @@ use crate::search_mark::MarkState;
 use crate::status_indicator::StatusTone;
 
 pub(super) const LIST_MAX_VISIBLE: usize = 5;
+pub(super) const ITEM_ROW_DANGER: &str = "item_danger";
+pub(super) const ITEM_ROW_MEMBER: &str = "item_member";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ListItem {
@@ -139,10 +141,43 @@ fn payload_text(value: Option<&serde_json::Value>) -> Option<String> {
         .map(str::to_string)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct MemberStore {
+    pub(super) config_key: String,
+    pub(super) values: Vec<String>,
+}
+
+#[derive(Debug, Default)]
 pub(super) struct ListActions {
     pub(super) primary: Option<RowActionSpec>,
     pub(super) additional: Vec<RowActionSpec>,
+    pub(super) members: std::collections::BTreeMap<String, MemberStore>,
+    pub(super) inline: bool,
+    pub(super) hide_when_empty: bool,
+    pub(super) row_toggle: Option<RowToggleSpec>,
+    pub(super) answered: bool,
+}
+
+#[derive(Debug)]
+pub(super) struct PageStatus {
+    pub(super) query: String,
+    pub(super) value_from: Option<String>,
+    pub(super) label_map: std::collections::BTreeMap<String, String>,
+    pub(super) tone_map: std::collections::BTreeMap<String, String>,
+    pub(super) label: Option<String>,
+    pub(super) tone: StatusTone,
+    pub(super) error: Option<String>,
+}
+
+#[derive(Debug)]
+pub(super) struct PageSwitch {
+    pub(super) action: String,
+    pub(super) active_action: Option<String>,
+    pub(super) active_query: String,
+    pub(super) active_value_from: Option<String>,
+    pub(super) active: bool,
+    pub(super) pending: bool,
+    pub(super) error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -192,6 +227,10 @@ impl SelectOption {
 #[derive(Debug)]
 pub(super) enum RowControl {
     Page,
+    Subpage {
+        status: Option<Box<PageStatus>>,
+        switch: Option<Box<PageSwitch>>,
+    },
     Toggle(bool),
     Select {
         options: Vec<SelectOption>,
@@ -328,6 +367,7 @@ pub(super) struct RowSection {
     pub(super) rows: Vec<usize>,
     pub(super) source: usize,
     pub(super) device_kind: Option<String>,
+    pub(super) page: Option<String>,
 }
 
 pub(super) fn page_row(plugin_id: &str, heading: &str, source: usize) -> Row {
@@ -352,15 +392,20 @@ pub(super) fn page_row(plugin_id: &str, heading: &str, source: usize) -> Row {
 pub(super) fn rows_from_resolved(config: &ResolvedConfig, source: usize) -> Vec<Row> {
     let config = &config.for_this_platform();
     let field_values = resolved_field_values(config);
+    let stores = hidden_member_stores(config);
+    let context = RowContext {
+        field_values: &field_values,
+        stores: &stores,
+    };
     let mut rows = Vec::new();
     for section in leads(&config.sections) {
-        push_section_rows(&mut rows, section, &field_values, source);
+        push_section_rows(&mut rows, section, &context, source);
     }
     for field in &config.fields {
-        push_row(&mut rows, None, None, field, &field_values, source);
+        push_row(&mut rows, None, None, field, &context, source);
     }
     for section in followers(&config.sections) {
-        push_section_rows(&mut rows, section, &field_values, source);
+        push_section_rows(&mut rows, section, &context, source);
     }
     rows
 }
@@ -404,6 +449,7 @@ pub(super) fn sections_from_resolved(
             rows: section_rows,
             source,
             device_kind: section.device_kind.clone(),
+            page: section.page.clone(),
         })
     };
     let root_rows = rows
@@ -418,6 +464,7 @@ pub(super) fn sections_from_resolved(
         rows: root_rows,
         source,
         device_kind: None,
+        page: None,
     });
     leads(&config.sections)
         .filter_map(section_of)
@@ -448,10 +495,36 @@ fn resolved_field_values(
         .collect()
 }
 
+fn hidden_member_stores(
+    config: &ResolvedConfig,
+) -> std::collections::BTreeMap<String, MemberStore> {
+    config
+        .fields
+        .iter()
+        .chain(config.sections.iter().flat_map(|section| &section.fields))
+        .filter(|field| field.hidden && field.kind == FieldKind::StringArray)
+        .filter_map(|field| match &field.value {
+            FieldDefault::StringArray(values) => Some((
+                field.id.clone(),
+                MemberStore {
+                    config_key: field.config_key.clone(),
+                    values: values.clone(),
+                },
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+struct RowContext<'a> {
+    field_values: &'a std::collections::BTreeMap<String, FieldDefault>,
+    stores: &'a std::collections::BTreeMap<String, MemberStore>,
+}
+
 fn push_section_rows(
     rows: &mut Vec<Row>,
     section: &ResolvedSection,
-    field_values: &std::collections::BTreeMap<String, FieldDefault>,
+    context: &RowContext,
     source: usize,
 ) {
     let mut label = Some(section.label.clone());
@@ -462,7 +535,7 @@ fn push_section_rows(
             Some(section.id.clone()),
             label.clone(),
             field,
-            field_values,
+            context,
             source,
         );
         if rows.len() > before {
@@ -476,12 +549,16 @@ fn push_row(
     section_id: Option<String>,
     section_label: Option<String>,
     field: &ResolvedField,
-    field_values: &std::collections::BTreeMap<String, FieldDefault>,
+    context: &RowContext,
     source: usize,
 ) {
-    let control = control_for(field);
+    if field.hidden {
+        return;
+    }
+    let control = control_for(field, context.stores);
     let visibility = field.show_when.clone().and_then(|show_when| {
-        field_values
+        context
+            .field_values
             .get(&show_when.field)
             .cloned()
             .map(|initial_value| RowVisibility {
@@ -527,8 +604,14 @@ pub(super) fn stream_gated(rows: &[Row]) -> bool {
 }
 
 pub(super) fn row_is_visible(rows: &[Row], index: usize) -> bool {
-    if let Some(RowControl::Status { hidden: true, .. }) = rows.get(index).map(|row| &row.control) {
-        return false;
+    match rows.get(index).map(|row| &row.control) {
+        Some(RowControl::Status { hidden: true, .. }) => return false,
+        Some(RowControl::List { actions, items, .. })
+            if actions.hide_when_empty && actions.answered && items.is_empty() =>
+        {
+            return false;
+        }
+        _ => {}
     }
     let Some(visibility) = rows.get(index).and_then(|row| row.visibility.as_ref()) else {
         return true;
@@ -548,8 +631,47 @@ pub(super) fn visible_row_indices(rows: &[Row]) -> Vec<usize> {
         .collect()
 }
 
-fn control_for(field: &ResolvedField) -> RowControl {
+fn control_for(
+    field: &ResolvedField,
+    stores: &std::collections::BTreeMap<String, MemberStore>,
+) -> RowControl {
     match field.kind {
+        FieldKind::Page => RowControl::Subpage {
+            status: field.query.as_ref().map(|query| {
+                Box::new(PageStatus {
+                    query: query.clone(),
+                    value_from: field.value_from.clone(),
+                    label_map: field
+                        .label_map
+                        .clone()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect(),
+                    tone_map: field
+                        .tone_map
+                        .clone()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect(),
+                    label: None,
+                    tone: StatusTone::Muted,
+                    error: None,
+                })
+            }),
+            switch: field.action.clone().zip(field.active_query.clone()).map(
+                |(action, active_query)| {
+                    Box::new(PageSwitch {
+                        action,
+                        active_action: field.active_action.clone(),
+                        active_query,
+                        active_value_from: field.active_value_from.clone(),
+                        active: false,
+                        pending: false,
+                        error: None,
+                    })
+                },
+            ),
+        },
         FieldKind::Boolean => match field.value {
             FieldDefault::Boolean(value) => RowControl::Toggle(value),
             _ => unsupported_mismatch(field),
@@ -694,6 +816,17 @@ fn control_for(field: &ResolvedField) -> RowControl {
                 actions: Box::new(ListActions {
                     primary: field.row_action.clone(),
                     additional: field.row_actions.clone(),
+                    members: field
+                        .row_action
+                        .iter()
+                        .chain(&field.row_actions)
+                        .filter_map(|action| action.member_of.as_ref())
+                        .filter_map(|id| stores.get(id).map(|store| (id.clone(), store.clone())))
+                        .collect(),
+                    inline: field.inline,
+                    hide_when_empty: field.hide_when_empty,
+                    row_toggle: field.row_toggle.clone(),
+                    answered: false,
                 }),
                 item_card: field.item_card_field.clone(),
                 empty_message: field.empty_message.clone(),
@@ -984,13 +1117,22 @@ pub(super) fn merged_config<'a>(
                 }
             }
         }
+        if let RowControl::List { actions, .. } = &row.control {
+            for store in actions.members.values() {
+                set_config_value(
+                    &mut config,
+                    &store.config_key,
+                    serde_json::json!(store.values),
+                );
+            }
+        }
     }
     config
 }
 
 pub(super) fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
     match control {
-        RowControl::Page => None,
+        RowControl::Page | RowControl::Subpage { .. } => None,
         RowControl::Toggle(value) => Some(serde_json::json!(value)),
         RowControl::Select {
             options,
@@ -1041,7 +1183,7 @@ fn object_array_value(state: &ObjectArrayState) -> FieldDefault {
 
 fn row_value(control: &RowControl) -> Option<FieldDefault> {
     match control {
-        RowControl::Page => None,
+        RowControl::Page | RowControl::Subpage { .. } => None,
         RowControl::Toggle(value) => Some(FieldDefault::Boolean(*value)),
         RowControl::Select { options, index, .. } => {
             Some(FieldDefault::String(options[*index].value.clone()))
@@ -1110,6 +1252,11 @@ pub(super) fn row_query_names(row: &Row) -> Vec<&str> {
                 .collect()
         }
         RowControl::QrCode { query, .. } if !query.is_empty() => vec![query.as_str()],
+        RowControl::Subpage { status, switch } => status
+            .iter()
+            .map(|status| status.query.as_str())
+            .chain(switch.iter().map(|switch| switch.active_query.as_str()))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -1266,6 +1413,7 @@ pub(super) fn apply_runtime_query(
                 active,
                 row_label,
                 row_subtitle,
+                actions,
                 items,
                 list,
                 slider,
@@ -1302,6 +1450,7 @@ pub(super) fn apply_runtime_query(
                             }
                             *items = refreshed;
                             list.sync(items.len());
+                            actions.answered = true;
                             *error = None;
                         }
                         Err(message) => *error = Some(message.clone()),
@@ -1311,6 +1460,31 @@ pub(super) fn apply_runtime_query(
                     *active = result
                         .as_ref()
                         .is_ok_and(|value| query_flag(value, active_value_from.as_deref()));
+                }
+            }
+            RowControl::Subpage { status, switch } => {
+                if let Some(status) = status.as_deref_mut().filter(|status| status.query == query) {
+                    match &result {
+                        Ok(value) => {
+                            let (label, tone) = page_status_text(status, value);
+                            status.label = label;
+                            status.tone = tone;
+                            status.error = None;
+                        }
+                        Err(message) => status.error = Some(message.clone()),
+                    }
+                }
+                if let Some(switch) = switch
+                    .as_deref_mut()
+                    .filter(|switch| switch.active_query == query)
+                {
+                    match &result {
+                        Ok(value) => {
+                            switch.active = query_flag(value, switch.active_value_from.as_deref());
+                            switch.error = None;
+                        }
+                        Err(message) => switch.error = Some(message.clone()),
+                    }
                 }
             }
             RowControl::Gamepad {
@@ -1499,6 +1673,258 @@ fn status_tone(value: &str) -> StatusTone {
         "warning" => StatusTone::Warning,
         _ => StatusTone::Muted,
     }
+}
+
+fn page_status_text(
+    status: &PageStatus,
+    value: &serde_json::Value,
+) -> (Option<String>, StatusTone) {
+    let raw = query_value(value, status.value_from.as_deref()).and_then(query_value_text);
+    let label = raw
+        .as_ref()
+        .and_then(|raw| status.label_map.get(raw))
+        .cloned()
+        .or(raw.clone());
+    let tone = raw
+        .as_ref()
+        .and_then(|raw| status.tone_map.get(raw))
+        .map(|tone| status_tone(tone))
+        .unwrap_or(StatusTone::Muted);
+    (label, tone)
+}
+
+pub(super) fn page_switch_plan<'a>(
+    switch: &'a PageSwitch,
+    ready: bool,
+    turn_on: Option<bool>,
+) -> Option<&'a str> {
+    if switch.pending || !ready {
+        return None;
+    }
+    let target = turn_on.unwrap_or(!switch.active);
+    if target == switch.active {
+        return None;
+    }
+    Some(if switch.active {
+        switch.active_action.as_deref().unwrap_or(&switch.action)
+    } else {
+        &switch.action
+    })
+}
+
+pub(super) fn page_sections_for(
+    sections: &[RowSection],
+    source: usize,
+    field: &str,
+) -> Vec<RowSection> {
+    sections
+        .iter()
+        .filter(|section| section.source == source && section.page.as_deref() == Some(field))
+        .cloned()
+        .collect()
+}
+
+pub(super) fn page_chain(rows: &[Row], sections: &[RowSection], row: usize) -> Vec<usize> {
+    let mut chain: Vec<usize> = Vec::new();
+    let mut current = row;
+    while let Some(section) = sections
+        .iter()
+        .find(|section| section.rows.contains(&current))
+    {
+        let Some(field) = section.page.as_deref() else {
+            break;
+        };
+        let Some(link) = rows
+            .iter()
+            .position(|candidate| candidate.source == section.source && candidate.id == field)
+        else {
+            break;
+        };
+        if chain.contains(&link) {
+            break;
+        }
+        chain.insert(0, link);
+        current = link;
+    }
+    chain
+}
+
+pub(super) fn is_inline_list(control: &RowControl) -> bool {
+    matches!(control, RowControl::List { actions, .. } if actions.inline)
+}
+
+fn item_matches_needle(item: &ListItem, needle: &str) -> bool {
+    item.label.to_lowercase().contains(needle)
+        || item
+            .subtitle
+            .as_deref()
+            .is_some_and(|subtitle| subtitle.to_lowercase().contains(needle))
+}
+
+pub(super) fn inline_item_indices(control: &RowControl, needle: Option<&str>) -> Vec<usize> {
+    let RowControl::List { items, .. } = control else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| needle.is_none_or(|needle| item_matches_needle(item, needle)))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+pub(super) fn inline_line_count(control: &RowControl, needle: Option<&str>) -> usize {
+    inline_item_indices(control, needle).len().max(1)
+}
+
+pub(super) fn inline_empty_text(control: &RowControl) -> String {
+    let RowControl::List {
+        actions,
+        error,
+        empty_message,
+        ..
+    } = control
+    else {
+        return String::new();
+    };
+    if error.is_some() {
+        "unavailable".to_string()
+    } else if !actions.answered {
+        "Loading".to_string()
+    } else {
+        empty_message.clone().unwrap_or_else(|| "None".to_string())
+    }
+}
+
+pub(super) fn inline_slot_item<'a>(
+    control: &'a RowControl,
+    needle: Option<&str>,
+    slot: usize,
+) -> Option<&'a ListItem> {
+    let RowControl::List { items, .. } = control else {
+        return None;
+    };
+    let index = *inline_item_indices(control, needle).get(slot)?;
+    items.get(index)
+}
+
+pub(super) fn inline_row_matches(control: &RowControl, needle: &str) -> bool {
+    !inline_item_indices(control, Some(needle)).is_empty()
+}
+
+fn change_member(values: &mut Vec<String>, member: &str, on: bool) -> bool {
+    let present = values.iter().any(|value| value == member);
+    match (on, present) {
+        (true, false) => {
+            values.push(member.to_string());
+            true
+        }
+        (false, true) => {
+            values.retain(|value| value != member);
+            true
+        }
+        _ => false,
+    }
+}
+
+pub(super) fn member_on(rows: &[Row], list_index: usize, field: &str, member: &str) -> bool {
+    let Some(list) = rows.get(list_index) else {
+        return false;
+    };
+    if let Some(row) = rows
+        .iter()
+        .find(|row| row.source == list.source && row.id == field)
+    {
+        return match &row.control {
+            RowControl::TextList(values) => values.iter().any(|value| value == member),
+            RowControl::MultiSelect {
+                options, selected, ..
+            } => options
+                .iter()
+                .zip(selected)
+                .any(|(option, on)| *on && option.value == member),
+            _ => false,
+        };
+    }
+    match &list.control {
+        RowControl::List { actions, .. } => actions
+            .members
+            .get(field)
+            .is_some_and(|store| store.values.iter().any(|value| value == member)),
+        _ => false,
+    }
+}
+
+pub(super) fn set_member(
+    rows: &mut [Row],
+    list_index: usize,
+    field: &str,
+    member: &str,
+    on: bool,
+) -> bool {
+    let Some(source) = rows.get(list_index).map(|row| row.source) else {
+        return false;
+    };
+    if let Some(row) = rows
+        .iter_mut()
+        .find(|row| row.source == source && row.id == field)
+    {
+        return match &mut row.control {
+            RowControl::TextList(values) => change_member(values, member, on),
+            RowControl::MultiSelect {
+                options, selected, ..
+            } => match options.iter().position(|option| option.value == member) {
+                Some(index) => {
+                    let Some(flag) = selected.get_mut(index) else {
+                        return false;
+                    };
+                    let changed = *flag != on;
+                    *flag = on;
+                    changed
+                }
+                None if on => {
+                    options.push(SelectOption::plain(member, member));
+                    selected.push(true);
+                    true
+                }
+                None => false,
+            },
+            _ => false,
+        };
+    }
+    let Some(RowControl::List { actions, .. }) =
+        rows.get_mut(list_index).map(|row| &mut row.control)
+    else {
+        return false;
+    };
+    actions
+        .members
+        .get_mut(field)
+        .is_some_and(|store| change_member(&mut store.values, member, on))
+}
+
+pub(super) fn refresh_member_stores(rows: &mut [Row], source: usize, fresh: &[Row]) -> bool {
+    let mut changed = false;
+    for row in rows.iter_mut().filter(|row| row.source == source) {
+        let RowControl::List { actions, .. } = &mut row.control else {
+            continue;
+        };
+        let Some(RowControl::List {
+            actions: fresh_actions,
+            ..
+        }) = fresh
+            .iter()
+            .find(|candidate| candidate.id == row.id)
+            .map(|candidate| &candidate.control)
+        else {
+            continue;
+        };
+        if actions.members != fresh_actions.members {
+            actions.members = fresh_actions.members.clone();
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn list_items(value: &serde_json::Value, label: &str, subtitle: Option<&str>) -> Vec<ListItem> {
@@ -1706,12 +2132,14 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 mod tests {
     use super::{
         absent_reason, apply_level_query, apply_runtime_query, begin_list_item_action,
-        clear_slider_hold, filtered_list_items, level_query_names, list_item_actions, list_items,
-        list_slider_value, merged_config, option_accent, options_from_value, parse_level,
-        primary_list_item_action, row_action, row_is_visible, row_streams, row_value_json,
-        rows_from_resolved, runtime_query_names, sections_from_resolved, selected_list_item,
-        set_config_value, stream_gated, visible_row_indices, FieldDefault, ListActions, ListItem,
-        ResolvedConfig, Row, RowControl, SelectOption, SliderHold,
+        clear_slider_hold, filtered_list_items, inline_empty_text, inline_item_indices,
+        inline_line_count, level_query_names, list_item_actions, list_items, list_slider_value,
+        member_on, merged_config, option_accent, options_from_value, page_chain, page_sections_for,
+        page_switch_plan, parse_level, primary_list_item_action, row_action, row_is_visible,
+        row_streams, row_value_json, rows_from_resolved, runtime_query_names,
+        sections_from_resolved, selected_list_item, set_config_value, set_member, stream_gated,
+        visible_row_indices, FieldDefault, ListActions, ListItem, ResolvedConfig, Row, RowControl,
+        RowSection, SelectOption, SliderHold,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -4097,6 +4525,9 @@ default = 5
                 description: None,
                 key: None,
                 when: Some("can_connect".into()),
+                member_of: None,
+                member: None,
+                tone: None,
             }),
             additional: vec![qol_config::contract::RowActionSpec {
                 action: "remove".into(),
@@ -4106,7 +4537,11 @@ default = 5
                 description: None,
                 key: None,
                 when: None,
+                member_of: None,
+                member: None,
+                tone: None,
             }],
+            ..ListActions::default()
         };
         let items = vec![
             filter_item("WH-1000XM4", Some("AA:BB:CC:DD:EE:FF"), true),
@@ -4134,10 +4569,7 @@ default = 5
 
     #[test]
     fn selected_list_item_resolves_the_slot_through_the_filter() {
-        let actions = ListActions {
-            primary: None,
-            additional: Vec::new(),
-        };
+        let actions = ListActions::default();
         let items = vec![
             filter_item("Keyboard", None, true),
             filter_item("Mouse", None, true),
@@ -4326,5 +4758,286 @@ active_action = "set_mode"
             .find(|display| display.id == "beta")
             .expect("beta");
         assert_eq!(state.rect_of(beta).y, 18, "a poll keeps the staged nudge");
+    }
+
+    const COLLAPSE_SPEC: &str = r#"
+schema_version = 1
+
+[section.adapter]
+label = "Adapter"
+page = "bluetooth_page"
+
+[section.bluetooth]
+label = "Bluetooth"
+
+[section.paired]
+label = "Paired"
+page = "bluetooth_page"
+
+[field.bluetooth_page]
+type = "page"
+label = "Bluetooth"
+section = "bluetooth"
+query = "adapter_status"
+value_from = "name"
+action = "enable_adapter"
+active_action = "disable_adapter"
+active_query = "adapter_status"
+active_value_from = "powered"
+
+[field.power]
+type = "boolean"
+section = "adapter"
+default = true
+
+[field.devices]
+type = "list"
+label = "Devices"
+section = "paired"
+query = "devices"
+inline = true
+row_label = "{name}"
+row_subtitle = "{address}"
+empty_message = "No devices"
+
+[field.devices.row_toggle]
+action = "connect"
+active_action = "disconnect"
+active_when = "connected"
+
+[[field.devices.row_actions]]
+label = "Reconnect automatically"
+member_of = "managed"
+member = "{address}"
+
+[[field.devices.row_actions]]
+action = "remove"
+label = "Forget"
+tone = "danger"
+
+[field.managed]
+type = "string_array"
+hidden = true
+default = ["AA:AA"]
+
+[field.recent]
+type = "list"
+section = "bluetooth"
+query = "recent"
+hide_when_empty = true
+"#;
+
+    fn collapse_rows() -> (Vec<Row>, Vec<RowSection>) {
+        let spec = qol_config::contract::parse_spec_str(COLLAPSE_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved, 0);
+        let sections = sections_from_resolved(&resolved, &rows, 0);
+        (rows, sections)
+    }
+
+    fn index_of(rows: &[Row], id: &str) -> usize {
+        rows.iter().position(|row| row.id == id).expect(id)
+    }
+
+    fn answer_devices(rows: &mut [Row]) {
+        apply_query(
+            rows,
+            "devices",
+            Ok(serde_json::json!([
+                { "address": "AA:AA", "name": "Keys", "connected": true },
+                { "address": "BB:BB", "name": "Mouse", "connected": false },
+            ])),
+        );
+    }
+
+    #[test]
+    fn page_levels_hold_the_sections_naming_their_field_and_the_root_hides_them() {
+        let (rows, sections) = collapse_rows();
+        let page = page_sections_for(&sections, 0, "bluetooth_page");
+        assert_eq!(
+            page.iter()
+                .map(|section| section.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Adapter", "Paired"]
+        );
+        let root = sections
+            .iter()
+            .filter(|section| section.page.is_none())
+            .map(|section| section.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(root, vec!["Bluetooth"]);
+        assert!(page_sections_for(&sections, 1, "bluetooth_page").is_empty());
+        let link = index_of(&rows, "bluetooth_page");
+        assert_eq!(
+            page_chain(&rows, &sections, index_of(&rows, "power")),
+            vec![link]
+        );
+        assert!(page_chain(&rows, &sections, link).is_empty());
+    }
+
+    #[test]
+    fn a_page_row_reads_its_status_and_switch_from_its_queries() {
+        let (mut rows, _) = collapse_rows();
+        let link = index_of(&rows, "bluetooth_page");
+        assert!(row_value_json(&rows[link].control).is_none());
+        apply_query(
+            &mut rows,
+            "adapter_status",
+            Ok(serde_json::json!({ "name": "hci0", "powered": true })),
+        );
+        let RowControl::Subpage {
+            status: Some(status),
+            switch: Some(switch),
+        } = &rows[link].control
+        else {
+            panic!("expected a page row with a status and a switch");
+        };
+        assert_eq!(status.label.as_deref(), Some("hci0"));
+        assert!(switch.active);
+        assert_eq!(
+            page_switch_plan(switch, true, Some(false)),
+            Some("disable_adapter")
+        );
+        assert_eq!(page_switch_plan(switch, true, Some(true)), None);
+        assert_eq!(page_switch_plan(switch, false, Some(false)), None);
+        assert_eq!(
+            runtime_query_names(&rows[link..=link]),
+            vec!["adapter_status".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_hidden_field_has_no_row_but_keeps_its_stored_value() {
+        let (rows, _) = collapse_rows();
+        assert!(rows.iter().all(|row| row.id != "managed"));
+        let merged = merged_config(&serde_json::json!({}), &rows);
+        assert_eq!(merged["managed"], serde_json::json!(["AA:AA"]));
+    }
+
+    #[test]
+    fn an_inline_list_builds_one_line_per_item_and_an_empty_line_without_any() {
+        let (mut rows, _) = collapse_rows();
+        let list = index_of(&rows, "devices");
+        assert_eq!(inline_empty_text(&rows[list].control), "Loading");
+        assert_eq!(inline_line_count(&rows[list].control, None), 1);
+        answer_devices(&mut rows);
+        assert_eq!(inline_item_indices(&rows[list].control, None), vec![0, 1]);
+        assert_eq!(inline_line_count(&rows[list].control, None), 2);
+        assert_eq!(
+            inline_item_indices(&rows[list].control, Some("mouse")),
+            vec![1]
+        );
+        apply_query(&mut rows, "devices", Ok(serde_json::json!([])));
+        assert_eq!(inline_line_count(&rows[list].control, None), 1);
+        assert_eq!(inline_empty_text(&rows[list].control), "No devices");
+    }
+
+    #[test]
+    fn the_row_toggle_is_on_for_the_items_whose_flag_is_set() {
+        let (mut rows, _) = collapse_rows();
+        answer_devices(&mut rows);
+        let list = index_of(&rows, "devices");
+        let RowControl::List { actions, items, .. } = &rows[list].control else {
+            panic!("expected a list");
+        };
+        let spec = actions.row_toggle.as_ref().expect("row toggle");
+        let states = items
+            .iter()
+            .map(|item| qol_config::contract::resolve_row_toggle(spec, &item.data))
+            .collect::<Vec<_>>();
+        assert!(states[0].on && !states[1].on);
+        assert_eq!(states[0].turn_off.action, "disconnect");
+        assert_eq!(states[1].turn_on.action, "connect");
+    }
+
+    #[test]
+    fn the_membership_toggle_adds_and_removes_the_string_and_writes_the_stored_array() {
+        let (mut rows, _) = collapse_rows();
+        let list = index_of(&rows, "devices");
+        assert!(member_on(&rows, list, "managed", "AA:AA"));
+        assert!(!member_on(&rows, list, "managed", "BB:BB"));
+        assert!(set_member(&mut rows, list, "managed", "BB:BB", true));
+        assert!(!set_member(&mut rows, list, "managed", "BB:BB", true));
+        assert_eq!(
+            merged_config(&serde_json::json!({}), &rows)["managed"],
+            serde_json::json!(["AA:AA", "BB:BB"])
+        );
+        assert!(set_member(&mut rows, list, "managed", "AA:AA", false));
+        assert!(!member_on(&rows, list, "managed", "AA:AA"));
+        assert_eq!(
+            merged_config(&serde_json::json!({}), &rows)["managed"],
+            serde_json::json!(["BB:BB"])
+        );
+    }
+
+    #[test]
+    fn the_membership_toggle_edits_a_visible_string_array_row_in_place() {
+        const SPEC: &str = r#"
+schema_version = 1
+
+[field.devices]
+type = "list"
+query = "devices"
+
+[[field.devices.row_actions]]
+label = "Keep"
+member_of = "kept"
+member = "{address}"
+
+[field.kept]
+type = "string_array"
+default = ["AA:AA"]
+"#;
+        let spec = qol_config::contract::parse_spec_str(SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let mut rows = rows_from_resolved(&resolved, 0);
+        let list = index_of(&rows, "devices");
+        assert!(set_member(&mut rows, list, "kept", "BB:BB", true));
+        let kept = index_of(&rows, "kept");
+        assert!(matches!(
+            &rows[kept].control,
+            RowControl::TextList(values) if values == &["AA:AA".to_string(), "BB:BB".to_string()]
+        ));
+        assert_eq!(
+            merged_config(&serde_json::json!({}), &rows)["kept"],
+            serde_json::json!(["AA:AA", "BB:BB"])
+        );
+    }
+
+    #[test]
+    fn a_list_that_hides_when_empty_is_drawn_until_it_answers_with_no_items() {
+        let (mut rows, _) = collapse_rows();
+        let recent = index_of(&rows, "recent");
+        assert!(row_is_visible(&rows, recent));
+        apply_query(&mut rows, "recent", Ok(serde_json::json!([])));
+        assert!(!row_is_visible(&rows, recent));
+        apply_query(
+            &mut rows,
+            "recent",
+            Ok(serde_json::json!([{ "address": "CC:CC", "name": "Pad" }])),
+        );
+        assert!(row_is_visible(&rows, recent));
+    }
+
+    #[test]
+    fn a_danger_row_action_resolves_with_its_flag() {
+        let (mut rows, _) = collapse_rows();
+        answer_devices(&mut rows);
+        let list = index_of(&rows, "devices");
+        let RowControl::List { actions, items, .. } = &rows[list].control else {
+            panic!("expected a list");
+        };
+        let resolved = list_item_actions(actions, &items[0]);
+        assert_eq!(
+            resolved
+                .iter()
+                .map(|action| action.danger)
+                .collect::<Vec<_>>(),
+            vec![false, true]
+        );
+        assert_eq!(resolved[0].member_of.as_deref(), Some("managed"));
+        assert_eq!(resolved[0].member.as_deref(), Some("AA:AA"));
     }
 }

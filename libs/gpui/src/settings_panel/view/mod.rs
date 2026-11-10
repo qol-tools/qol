@@ -6,6 +6,7 @@ mod placement_card;
 mod slider_flights;
 mod stored_values;
 mod structured_list_editor;
+mod subpages;
 
 use crate::action_mark::ActionMark;
 use crate::key::Key;
@@ -26,11 +27,12 @@ use super::components::{
 use super::components::{
     one_line, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
     rail_item_label, settings_accent_dot, settings_action_mark, settings_action_spinner,
-    settings_block_header, settings_copied_description, settings_copy_mark, settings_error_line,
-    settings_finder_empty, settings_label_group, settings_page, settings_query_spinner,
-    settings_selected_text, settings_swatch, settings_value_text, ChoiceArt, RowGround,
-    SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar,
-    SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
+    settings_block_header, settings_copied_description, settings_copy_mark,
+    settings_destroy_label_group, settings_error_line, settings_finder_empty, settings_label_group,
+    settings_page, settings_query_spinner, settings_selected_text, settings_swatch,
+    settings_value_text, ChoiceArt, RowGround, SettingsChoiceValue, SettingsFeedback,
+    SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow, SettingsToggle,
+    SettingsValueTone, SliderStyle,
 };
 use super::components::{
     settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
@@ -50,9 +52,9 @@ use super::object_array_row::ObjectArrayState;
 use super::persistence::{panel_base, save_values};
 use super::rows::{
     absent_reason, answers_absent, apply_level_query, apply_runtime_query, filtered_list_items,
-    level_query_names, merged_config, query_flag_value, retire_number_holds, row_action,
-    row_query_names, row_streams, row_value_source, stream_gated, Row, RowControl, RowQueryState,
-    RowSection, SliderHold,
+    inline_row_matches, is_inline_list, level_query_names, merged_config, query_flag_value,
+    retire_number_holds, row_action, row_query_names, row_streams, row_value_source, stream_gated,
+    Row, RowControl, RowQueryState, RowSection, SliderHold, ITEM_ROW_DANGER, ITEM_ROW_MEMBER,
 };
 use super::{
     AttentionFeed, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
@@ -390,6 +392,13 @@ struct Level {
 enum LevelHeader {
     Root,
     Card(SettingsDestination),
+    Page(SettingsDestination),
+}
+
+impl Level {
+    fn is_page(&self) -> bool {
+        matches!(self.header, LevelHeader::Page(_))
+    }
 }
 
 struct ListItemCard {
@@ -662,8 +671,37 @@ impl SettingsPanelView {
         self.stack.first_mut().expect("stack never empty")
     }
 
+    fn rows_of(&self, level: usize) -> &[Row] {
+        let index = level.min(self.stack.len() - 1);
+        let owner = if self.stack[index].is_page() {
+            0
+        } else {
+            index
+        };
+        &self.stack[owner].rows
+    }
+
+    fn rows_of_mut(&mut self, level: usize) -> &mut [Row] {
+        let index = level.min(self.stack.len() - 1);
+        let owner = if self.stack[index].is_page() {
+            0
+        } else {
+            index
+        };
+        &mut self.stack[owner].rows
+    }
+
+    fn level_rows(&self) -> &[Row] {
+        self.rows_of(self.render_level.get())
+    }
+
+    fn level_rows_mut(&mut self) -> &mut [Row] {
+        let top = self.stack.len() - 1;
+        self.rows_of_mut(top)
+    }
+
     fn source_for(&self, row: usize) -> Option<&SourceState> {
-        let source = self.level().rows.get(row)?.source;
+        let source = self.level_rows().get(row)?.source;
         self.sources.get(source)
     }
 
@@ -673,12 +711,12 @@ impl SettingsPanelView {
     }
 
     fn stream_for(&self, row: usize) -> Option<&super::stream::StreamClient> {
-        let source = self.level().rows.get(row)?.source;
+        let source = self.level_rows().get(row)?.source;
         self.streams.get(source)
     }
 
     fn send_stream_frame(&self, row: usize, frame: String) {
-        let Some(row) = self.level().rows.get(row) else {
+        let Some(row) = self.level_rows().get(row) else {
             return;
         };
         let (Some(stream), Some(source), Some(name)) = (
@@ -693,7 +731,7 @@ impl SettingsPanelView {
 
     fn current_visible_rows(&self) -> Vec<usize> {
         let visible = filtered_visible_rows(
-            &self.level().rows,
+            self.level_rows(),
             &self.level().sections,
             self.sources.len(),
             self.filter_needle().as_deref(),
@@ -731,7 +769,7 @@ impl SettingsPanelView {
         };
         visible
             .into_iter()
-            .filter(|row| row_matches(&self.level().rows[*row], &needle))
+            .filter(|row| row_matches(&self.level_rows()[*row], &needle))
             .collect()
     }
 
@@ -974,8 +1012,8 @@ impl SettingsPanelView {
             .rows
             .iter()
             .copied()
-            .filter(|row| super::rows::row_is_visible(&self.level().rows, *row))
-            .filter(|row| self.filtering() || !is_page_row(&self.level().rows, *row))
+            .filter(|row| super::rows::row_is_visible(self.level_rows(), *row))
+            .filter(|row| self.filtering() || !is_page_row(self.level_rows(), *row))
             .collect()
     }
 
@@ -1071,7 +1109,7 @@ impl SettingsPanelView {
     /// its own rows away, so the search ends on the hit's own page first:
     /// the card's rows show in full and its queries reach the hit's plugin.
     fn land_on_search_hit(&mut self, row: usize, cx: &mut Context<Self>) {
-        let Some(source) = self.level().rows.get(row).map(|row| row.source) else {
+        let Some(source) = self.level_rows().get(row).map(|row| row.source) else {
             return;
         };
         let section = self
@@ -1092,7 +1130,7 @@ impl SettingsPanelView {
     }
 
     fn land_on_page(&mut self, row: usize, cx: &mut Context<Self>) {
-        let Some(source) = self.level().rows.get(row).map(|row| row.source) else {
+        let Some(source) = self.level_rows().get(row).map(|row| row.source) else {
             return;
         };
         self.filter.clear();
@@ -1290,10 +1328,10 @@ impl SettingsPanelView {
         let Some(((row, id), value)) = self.number_slider.take_drag_start() else {
             return;
         };
-        if number_drag_effect(&self.level().rows, row) != NumberDragEffect::Preview {
+        if number_drag_effect(self.level_rows(), row) != NumberDragEffect::Preview {
             return;
         }
-        let Some(target) = self.level_mut().rows.get_mut(row) else {
+        let Some(target) = self.level_rows_mut().get_mut(row) else {
             return;
         };
         if target.id != id {
@@ -1305,7 +1343,7 @@ impl SettingsPanelView {
     }
 
     fn number_value_at(&self, row: usize, id: &str) -> Option<f64> {
-        match self.level().rows.get(row) {
+        match self.level_rows().get(row) {
             Some(row) if row.id == id => match &row.control {
                 RowControl::Number { value, .. } => Some(*value),
                 _ => None,
@@ -1332,8 +1370,7 @@ impl SettingsPanelView {
 
     pub(super) fn resume_runtime_poll(&mut self, cx: &mut Context<Self>) {
         let initial_delay = self
-            .level()
-            .rows
+            .level_rows()
             .iter()
             .any(|row| {
                 matches!(&row.control, RowControl::Action { pending: true, .. })
@@ -1618,7 +1655,7 @@ impl SettingsPanelView {
                 }
             }
         }
-        for row in &mut self.level_mut().rows {
+        for row in self.level_rows_mut() {
             if let RowControl::Gamepad { monitor, .. } = &mut row.control {
                 animating |= monitor.step_motion(dt);
             }
@@ -1738,6 +1775,9 @@ impl SettingsPanelView {
     fn section_shown(&self, section: &RowSection) -> bool {
         if self.filtering() {
             return true;
+        }
+        if section.page.is_some() && !self.level().is_page() {
+            return false;
         }
         self.sources
             .get(section.source)
@@ -2067,6 +2107,14 @@ impl SettingsPanelView {
             cx.notify();
             return;
         }
+        if !editing
+            && !self.filter_open
+            && matches!(key, "left" | "right")
+            && self.on_switch_key(key, cx)
+        {
+            cx.notify();
+            return;
+        }
         let Some(intent) = intent(key, key_char, editing) else {
             return;
         };
@@ -2142,7 +2190,7 @@ impl SettingsPanelView {
     }
 
     fn open_color_wheel(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(row) = self.level().rows.get(index) else {
+        let Some(row) = self.level_rows().get(index) else {
             return;
         };
         let RowControl::Color(value) = &row.control else {
@@ -2159,7 +2207,7 @@ impl SettingsPanelView {
         let value = value.clone();
         self.close_wheel_popup(cx);
         self.level_mut().selected = index;
-        if row_streams(&self.level().rows, index) && !stream_gated(&self.level().rows) {
+        if row_streams(self.level_rows(), index) && !stream_gated(self.level_rows()) {
             if let Some(stream) = self.stream_for(index) {
                 stream.open();
             }
@@ -2212,7 +2260,7 @@ impl SettingsPanelView {
             }
             wheel.row
         };
-        if row_streams(&self.level().rows, row) && !stream_gated(&self.level().rows) {
+        if row_streams(self.level_rows(), row) && !stream_gated(self.level_rows()) {
             if let Some(frame) = super::stream::color_frame(&value) {
                 self.send_stream_frame(row, frame);
             }
@@ -2233,9 +2281,9 @@ impl SettingsPanelView {
         }
         let row_index = wheel.row;
         self.level_mut().active_control = None;
-        let streams = row_streams(&self.level().rows, row_index);
-        let action = row_action(&self.level().rows, row_index);
-        let Some(row) = self.level_mut().rows.get_mut(row_index) else {
+        let streams = row_streams(self.level_rows(), row_index);
+        let action = row_action(self.level_rows(), row_index);
+        let Some(row) = self.level_rows_mut().get_mut(row_index) else {
             return;
         };
         let RowControl::Color(row_value) = &mut row.control else {
@@ -2261,7 +2309,7 @@ impl SettingsPanelView {
         let Some(ActiveControl::Wheel(wheel)) = self.level_mut().active_control.take() else {
             return;
         };
-        if row_streams(&self.level().rows, wheel.row) {
+        if row_streams(self.level_rows(), wheel.row) {
             if let Some(stream) = self.stream_for(wheel.row) {
                 stream.close();
             }
@@ -2287,8 +2335,7 @@ impl SettingsPanelView {
             }
             "enter" | "return" | "space" => {
                 if matches!(
-                    self.level()
-                        .rows
+                    self.level_rows()
                         .get(self.level().selected)
                         .map(|row| &row.control),
                     Some(RowControl::Gamepad { .. })
@@ -2304,7 +2351,7 @@ impl SettingsPanelView {
 
     fn toggle(&mut self) {
         let selected = self.level().selected;
-        let Some(row) = self.level_mut().rows.get_mut(selected) else {
+        let Some(row) = self.level_rows_mut().get_mut(selected) else {
             return;
         };
         if let RowControl::Toggle(value) = &mut row.control {
@@ -2345,20 +2392,27 @@ impl SettingsPanelView {
             return;
         }
         let selected = self.level().selected;
-        if self.filtering()
-            && self
-                .level()
-                .rows
-                .get(selected)
-                .is_some_and(|row| opens_a_card(&row.control))
+        if self.filtering() && self.land_on_paged_hit(selected, cx) {
+            if !self.opens_after_landing(selected) {
+                cx.notify();
+                return;
+            }
+        } else if self.filtering()
+            && self.level_rows().get(selected).is_some_and(|row| {
+                opens_a_card(&row.control) || matches!(row.control, RowControl::Subpage { .. })
+            })
         {
             self.land_on_search_hit(selected, cx);
         }
-        let Some(row) = self.level().rows.get(selected) else {
+        let Some(row) = self.level_rows().get(selected) else {
             return;
         };
         match &row.control {
             RowControl::Page => self.land_on_page(selected, cx),
+            RowControl::Subpage { .. } => {
+                self.open_page(selected, cx);
+                cx.notify();
+            }
             RowControl::Toggle(_) => self.toggle(),
             RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
                 self.open_choose_card(selected);
@@ -2374,6 +2428,10 @@ impl SettingsPanelView {
                 self.copy_status(selected, label, cx);
             }
             RowControl::Status { .. } => {}
+            RowControl::List { actions, .. } if actions.inline => {
+                self.open_inline_item(selected, cx);
+                cx.notify();
+            }
             RowControl::List { items, finder, .. } if !items.is_empty() || finder.is_some() => {
                 self.open_list_card(selected, cx);
                 cx.notify();
@@ -2415,8 +2473,7 @@ impl SettingsPanelView {
         }
         let selected = self.level().selected;
         let Some(RowControl::Gamepad { monitor, .. }) = self
-            .level_mut()
-            .rows
+            .level_rows_mut()
             .get_mut(selected)
             .map(|row| &mut row.control)
         else {
@@ -2441,14 +2498,14 @@ impl SettingsPanelView {
         };
         *place == self.copy_place(index)
             && matches!(
-                &self.level().rows[index].control,
+                &self.level_rows()[index].control,
                 RowControl::Status { label: Some(label), .. } if label == value
             )
     }
 
     fn dispatch_action(&mut self, cx: &mut Context<Self>) {
         let row_index = self.level().selected;
-        let Some(row) = self.level().rows.get(row_index) else {
+        let Some(row) = self.level_rows().get(row_index) else {
             return;
         };
         let Some(action) =
@@ -2472,8 +2529,7 @@ impl SettingsPanelView {
             error,
             ..
         }) = self
-            .level_mut()
-            .rows
+            .level_rows_mut()
             .get_mut(row_index)
             .map(|row| &mut row.control)
         else {
@@ -2567,13 +2623,14 @@ impl SettingsPanelView {
         ) {
             return;
         }
-        let Some(row) = self.level().rows.get(selected) else {
+        let Some(row) = self.level_rows().get(selected) else {
             return;
         };
         let edit = match &row.control {
             RowControl::Text(value) => NumberEdit::with_text(value.clone()),
             RowControl::Number { value, .. } => NumberEdit::begin(*value),
             RowControl::Page
+            | RowControl::Subpage { .. }
             | RowControl::Toggle(_)
             | RowControl::TextList(_)
             | RowControl::Select { .. }
@@ -2590,8 +2647,7 @@ impl SettingsPanelView {
             | RowControl::Unsupported { .. } => return,
         };
         self.level_mut().active_control = Some(ActiveControl::Edit(edit));
-        if row_streams(&self.level().rows, self.level().selected)
-            && !stream_gated(&self.level().rows)
+        if row_streams(self.level_rows(), self.level().selected) && !stream_gated(self.level_rows())
         {
             if let Some(stream) = self.stream_for(self.level().selected) {
                 stream.open();
@@ -2602,7 +2658,7 @@ impl SettingsPanelView {
     fn drop_edit(&mut self) {
         let selected = self.level().selected;
         if matches!(self.level().active_control, Some(ActiveControl::Edit(..)))
-            && row_streams(&self.level().rows, selected)
+            && row_streams(self.level_rows(), selected)
         {
             if let Some(stream) = self.stream_for(selected) {
                 stream.close();
@@ -2612,7 +2668,7 @@ impl SettingsPanelView {
     }
 
     fn selected_number_spec(&self) -> Option<NumberSpec> {
-        match &self.level().rows.get(self.level().selected)?.control {
+        match &self.level_rows().get(self.level().selected)?.control {
             RowControl::Number {
                 value,
                 min,
@@ -2655,8 +2711,7 @@ impl SettingsPanelView {
     fn glow_number_key(&mut self, cx: &mut Context<Self>) {
         let row = self.level().selected;
         let Some(id) = self
-            .level()
-            .rows
+            .level_rows()
             .get(row)
             .filter(|row| row.variant.as_deref() == Some("slider"))
             .map(|row| row.id.clone())
@@ -2671,11 +2726,11 @@ impl SettingsPanelView {
             return;
         };
         let edit = edit.into_text();
-        let streams = row_streams(&self.level().rows, self.level().selected);
-        let action = row_action(&self.level().rows, self.level().selected);
+        let streams = row_streams(self.level_rows(), self.level().selected);
+        let action = row_action(self.level_rows(), self.level().selected);
         let selected = self.level().selected;
-        let row_id = self.level().rows.get(selected).map(|row| row.id.clone());
-        let Some(row) = self.level_mut().rows.get_mut(selected) else {
+        let row_id = self.level_rows().get(selected).map(|row| row.id.clone());
+        let Some(row) = self.level_rows_mut().get_mut(selected) else {
             return;
         };
         let mut live_number = false;
@@ -2701,6 +2756,7 @@ impl SettingsPanelView {
                 }
             }
             RowControl::Page
+            | RowControl::Subpage { .. }
             | RowControl::Toggle(_)
             | RowControl::TextList(_)
             | RowControl::Select { .. }
@@ -2732,7 +2788,9 @@ impl SettingsPanelView {
 
     fn push_card(&mut self, destination: SettingsDestination, mut child: Level) {
         self.drop_slider_press();
-        child.header = LevelHeader::Card(destination);
+        if !child.is_page() {
+            child.header = LevelHeader::Card(destination);
+        }
         let mark = self
             .level()
             .row_bounds
@@ -2771,7 +2829,7 @@ impl SettingsPanelView {
     }
 
     fn open_live_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
-        let Some(row) = self.level().rows.get(row_index) else {
+        let Some(row) = self.level_rows().get(row_index) else {
             return;
         };
         let control = match &row.control {
@@ -2827,8 +2885,7 @@ impl SettingsPanelView {
             return;
         };
         let Some(RowControl::Number { min, max, step, .. }) = self
-            .level()
-            .rows
+            .level_rows()
             .get(self.level().selected)
             .map(|row| &row.control)
         else {
@@ -2842,7 +2899,7 @@ impl SettingsPanelView {
     }
 
     fn stream_level(&self, row: usize, value: f64) {
-        if !row_streams(&self.level().rows, row) || stream_gated(&self.level().rows) {
+        if !row_streams(self.level_rows(), row) || stream_gated(self.level_rows()) {
             return;
         }
         let level = value.clamp(0.0, 255.0) as u8;
@@ -2926,8 +2983,7 @@ impl SettingsPanelView {
 
     fn begin_number_slider_drag(&mut self, row: usize, cx: &mut Context<Self>) {
         let start = self
-            .level()
-            .rows
+            .level_rows()
             .get(row)
             .and_then(|row| match &row.control {
                 RowControl::Number { value, .. } => Some((row.id.clone(), *value)),
@@ -2941,12 +2997,12 @@ impl SettingsPanelView {
                 PendingEdit::Drop => self.drop_edit(),
             }
         }
-        if number_drag_effect(&self.level().rows, row) == NumberDragEffect::Preview {
+        if number_drag_effect(self.level_rows(), row) == NumberDragEffect::Preview {
             #[cfg(debug_assertions)]
             qol_runtime::probe!("SETTINGS_INPUT", "phase=number-drag-preview row={row}");
             return;
         }
-        if row_streams(&self.level().rows, row) && !stream_gated(&self.level().rows) {
+        if row_streams(self.level_rows(), row) && !stream_gated(self.level_rows()) {
             if let Some(stream) = self.stream_for(row) {
                 stream.open();
             }
@@ -2967,8 +3023,7 @@ impl SettingsPanelView {
         }
         self.set_number_slider(row, fraction, coarse, cx);
         let follow = self
-            .level()
-            .rows
+            .level_rows()
             .get(row)
             .and_then(|row| match &row.control {
                 RowControl::Number {
@@ -3004,7 +3059,7 @@ impl SettingsPanelView {
         coarse: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(target) = self.level().rows.get(row) else {
+        let Some(target) = self.level_rows().get(row) else {
             return;
         };
         let RowControl::Number {
@@ -3020,10 +3075,9 @@ impl SettingsPanelView {
         let dragged =
             self.number_slider
                 .drag_value(&(row, target.id.clone()), fraction, coarse, bounds);
-        let effect = number_drag_effect(&self.level().rows, row);
+        let effect = number_drag_effect(self.level_rows(), row);
         let Some(RowControl::Number { value, live, .. }) = self
-            .level_mut()
-            .rows
+            .level_rows_mut()
             .get_mut(row)
             .map(|row| &mut row.control)
         else {
@@ -3036,7 +3090,7 @@ impl SettingsPanelView {
         if moved && effect == NumberDragEffect::Apply {
             self.stream_level(row, dragged);
             if live {
-                if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
+                if let Some(id) = self.level_rows().get(row).map(|row| row.id.clone()) {
                     self.schedule_live_number(row, id, cx);
                 }
             }
@@ -3046,7 +3100,7 @@ impl SettingsPanelView {
 
     fn schedule_live_number(&mut self, row: usize, id: String, cx: &mut Context<Self>) {
         self.schedule_slider_dispatch(row, id, cx, |this, row, id, cx| {
-            match live_number_dispatch_plan(&this.level().rows, row) {
+            match live_number_dispatch_plan(this.level_rows(), row) {
                 LiveNumberDispatch::Fire { action, value } => {
                     this.dispatch_live_number(row, &id, &action, value, cx)
                 }
@@ -3122,7 +3176,7 @@ impl SettingsPanelView {
             stream.close();
         }
         let started = self.number_slider.take_drag_start();
-        match number_finish_plan(&self.level().rows, row) {
+        match number_finish_plan(self.level_rows(), row) {
             NumberFinishPlan::Live => {}
             NumberFinishPlan::DispatchLive => {
                 let moved = match &started {
@@ -3132,7 +3186,7 @@ impl SettingsPanelView {
                     None => true,
                 };
                 if moved {
-                    if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
+                    if let Some(id) = self.level_rows().get(row).map(|row| row.id.clone()) {
                         self.schedule_live_number(row, id, cx);
                     }
                 }
@@ -3241,7 +3295,10 @@ impl SettingsPanelView {
     /// Moves to the next visible row, or scrolls the body when the selection is
     /// already at that end, so a tall last row is readable without a mouse.
     fn step_selection(&mut self, direction: isize) {
-        let visible = self.current_visible_rows();
+        if self.step_inline_slot(direction) {
+            return;
+        }
+        let visible = self.selectable_rows();
         let selected = self.level().selected;
         let next = adjacent_visible_row(&visible, selected, direction);
         if next == selected {
@@ -3251,6 +3308,7 @@ impl SettingsPanelView {
             return;
         }
         self.level_mut().selected = next;
+        self.enter_inline_row(direction);
         self.sync_scroll();
     }
 
@@ -3263,7 +3321,11 @@ impl SettingsPanelView {
         if !header_is_redundant(title, labels) {
             return true;
         }
-        detail.is_some() && matches!(self.level().header, LevelHeader::Card(_))
+        detail.is_some()
+            && matches!(
+                self.level().header,
+                LevelHeader::Card(_) | LevelHeader::Page(_)
+            )
     }
 
     fn body_sections(&self) -> (Vec<Vec<usize>>, Vec<bool>) {
@@ -3273,7 +3335,7 @@ impl SettingsPanelView {
             .map(|(title, detail, rows)| {
                 let labels = rows
                     .iter()
-                    .map(|index| self.level().rows[*index].label.as_str())
+                    .map(|index| self.level_rows()[*index].label.as_str())
                     .collect::<Vec<_>>();
                 self.group_header_shows(title, detail.as_deref(), &labels)
             })
@@ -3296,7 +3358,9 @@ impl SettingsPanelView {
                 .position(|index| *index == row);
         }
         let (sections, headers) = self.body_sections();
-        body_child_offset(&sections, &headers, row)
+        let weight = self.row_weights();
+        body_child_offset_with(&sections, &headers, row, &weight)
+            .map(|child| child + self.selected_inline_offset(row))
     }
 
     fn body_lead_index(&self, row: usize) -> Option<usize> {
@@ -3307,7 +3371,8 @@ impl SettingsPanelView {
             return None;
         }
         let (sections, headers) = self.body_sections();
-        body_header_child_offset(&sections, &headers, row)
+        let weight = self.row_weights();
+        body_header_child_offset_with(&sections, &headers, row, &weight)
     }
 
     fn edit_selects_all(&self, index: usize) -> bool {
@@ -3326,8 +3391,8 @@ impl SettingsPanelView {
                 None => {}
             }
         }
-        match &self.level().rows[index].control {
-            RowControl::Page => String::new(),
+        match &self.level_rows()[index].control {
+            RowControl::Page | RowControl::Subpage { .. } => String::new(),
             RowControl::Toggle(value) => binary_state_label(*value).into(),
             RowControl::Select { options, index, .. } => options
                 .get(*index)
@@ -3338,11 +3403,11 @@ impl SettingsPanelView {
             } => choose_card::multi_select_word(options, selected),
             RowControl::Number { value, .. } => format_number(*value),
             RowControl::Text(value) => {
-                text_or_placeholder(value, self.level().rows[index].placeholder.as_deref())
+                text_or_placeholder(value, self.level_rows()[index].placeholder.as_deref())
             }
             RowControl::TextList(values) => text_or_placeholder(
                 &values.join(", "),
-                self.level().rows[index].placeholder.as_deref(),
+                self.level_rows()[index].placeholder.as_deref(),
             ),
             RowControl::Color(value) => color_display(value),
             RowControl::Action {
@@ -3367,7 +3432,7 @@ impl SettingsPanelView {
                 } else {
                     label
                         .clone()
-                        .or_else(|| self.level().rows[index].placeholder.clone())
+                        .or_else(|| self.level_rows()[index].placeholder.clone())
                         .unwrap_or_else(|| "\u{2013}".into())
                 }
             }
@@ -3418,7 +3483,7 @@ impl SettingsPanelView {
         {
             return SettingsValueTone::Normal;
         }
-        match &self.level().rows[index].control {
+        match &self.level_rows()[index].control {
             RowControl::Toggle(value) => binary_state_tone(*value),
             RowControl::Select { .. }
             | RowControl::MultiSelect { .. }
@@ -3457,7 +3522,7 @@ impl SettingsPanelView {
             RowControl::DisplayLayout(_) => SettingsValueTone::Normal,
             RowControl::QrCode { .. } | RowControl::Placement(_) => SettingsValueTone::Normal,
             RowControl::Unsupported { .. } => SettingsValueTone::Muted,
-            RowControl::Page => SettingsValueTone::Normal,
+            RowControl::Page | RowControl::Subpage { .. } => SettingsValueTone::Normal,
         }
     }
 
@@ -3491,7 +3556,7 @@ impl SettingsPanelView {
     /// The freshness of a row's value: unavailable wins over loading, and a row
     /// with no runtime query is always idle.
     fn row_query_state(&self, index: usize) -> RowQueryState {
-        self.query_state_of(&self.level().rows[index])
+        self.query_state_of(&self.level_rows()[index])
     }
 
     fn query_state_of(&self, row: &Row) -> RowQueryState {
@@ -3515,7 +3580,7 @@ impl SettingsPanelView {
                 .items_center()
                 .gap(px(qol_theme::SPACE_INSET))
                 .flex_none()
-                .w(px(value_cell_width(&self.level().rows[index].control)))
+                .w(px(value_cell_width(&self.level_rows()[index].control)))
                 .justify_end()
         };
         match self.row_query_state(index) {
@@ -3525,7 +3590,7 @@ impl SettingsPanelView {
                 self.kit,
             ))),
             RowQueryState::Unavailable(_) | RowQueryState::Absent
-                if !matches!(self.level().rows[index].control, RowControl::Status { .. }) =>
+                if !matches!(self.level_rows()[index].control, RowControl::Status { .. }) =>
             {
                 Some(cell().child(self.unavailable_indicator(index)))
             }
@@ -3540,7 +3605,7 @@ impl SettingsPanelView {
         if let Some(cell) = self.render_query_state_cell(index, row) {
             return cell;
         }
-        match &self.level().rows[index].control {
+        match &self.level_rows()[index].control {
             RowControl::Toggle(active) => return self.render_toggle_value(*active, row),
             RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
                 return self.render_select_value(index, row);
@@ -3561,7 +3626,7 @@ impl SettingsPanelView {
                 return self.render_number_value(index, row, number, cx);
             }
             RowControl::Action { active, .. }
-                if self.level().rows[index].variant.as_deref() == Some("toggle") =>
+                if self.level_rows()[index].variant.as_deref() == Some("toggle") =>
             {
                 return self.render_toggle_value(*active, row);
             }
@@ -3581,6 +3646,7 @@ impl SettingsPanelView {
                 );
             }
             RowControl::Page
+            | RowControl::Subpage { .. }
             | RowControl::Text(_)
             | RowControl::Color(_)
             | RowControl::Status { .. }
@@ -3597,11 +3663,11 @@ impl SettingsPanelView {
             .items_center()
             .gap(px(qol_theme::SPACE_INSET));
         if let RowControl::List { error: Some(_), .. } | RowControl::Status { error: Some(_), .. } =
-            self.level().rows[index].control
+            self.level_rows()[index].control
         {
             return cell.child(self.unavailable_indicator(index));
         }
-        if let RowControl::Status { tone, label, .. } = &self.level().rows[index].control {
+        if let RowControl::Status { tone, label, .. } = &self.level_rows()[index].control {
             let tone = *tone;
             let copies = label.is_some();
             return cell
@@ -3642,7 +3708,7 @@ impl SettingsPanelView {
             )
         };
         cell.flex_none()
-            .min_w(px(value_cell_width(&self.level().rows[index].control)))
+            .min_w(px(value_cell_width(&self.level_rows()[index].control)))
             .max_w(relative(VALUE_CELL_MAX_FRACTION))
             .justify_end()
             .child(one_line(value.flex_shrink().min_w_0()))
@@ -3665,7 +3731,7 @@ impl SettingsPanelView {
             qol_theme::runtime_theme().mode,
             qol_theme::runtime_accent_key(),
         );
-        let art = match &self.level().rows[index].control {
+        let art = match &self.level_rows()[index].control {
             RowControl::Select {
                 options,
                 index: chosen,
@@ -3692,15 +3758,15 @@ impl SettingsPanelView {
         number: NumberSpec,
         cx: &mut Context<Self>,
     ) -> Div {
-        let style = SliderStyle::from_variant(self.level().rows[index].variant.as_deref());
+        let style = SliderStyle::from_variant(self.level_rows()[index].variant.as_deref());
         let edit = match &self.level().active_control {
             Some(ActiveControl::Edit(edit)) if index == self.level().selected => Some(edit),
             _ => None,
         };
-        let id = self.level().rows[index].id.clone();
+        let id = self.level_rows()[index].id.clone();
         let key = (index, id.clone());
         let dragging = self.slider_drag.as_ref() == Some(&key);
-        let level = match &self.level().rows[index].control {
+        let level = match &self.level_rows()[index].control {
             RowControl::Number {
                 level: Some(level), ..
             } => level.value,
@@ -3756,7 +3822,7 @@ impl SettingsPanelView {
                 number,
                 edit,
                 dragging,
-                unit: number_unit(&self.level().rows[index]),
+                unit: number_unit(&self.level_rows()[index]),
                 zero: None,
             },
             FieldLook {
@@ -3773,7 +3839,7 @@ impl SettingsPanelView {
     fn render_action_value(&self, index: usize, row: RowGround) -> Div {
         settings_action_mark(
             ("settings-action-spinner", index),
-            ActionMark::for_variant(self.level().rows[index].variant.as_deref()),
+            ActionMark::for_variant(self.level_rows()[index].variant.as_deref()),
             self.action_is_busy(index),
             row,
             self.kit,
@@ -3781,11 +3847,11 @@ impl SettingsPanelView {
     }
 
     fn action_is_busy(&self, index: usize) -> bool {
-        action_shows_spinner(&self.level().rows[index])
+        action_shows_spinner(&self.level_rows()[index])
     }
 
     fn swatch_color(&self, index: usize) -> Option<u32> {
-        let RowControl::Color(value) = &self.level().rows[index].control else {
+        let RowControl::Color(value) = &self.level_rows()[index].control else {
             return None;
         };
         let text = if index == self.level().selected {
@@ -3801,7 +3867,7 @@ impl SettingsPanelView {
     }
 
     fn option_accent(&self, index: usize) -> Option<u32> {
-        let RowControl::Select { options, index, .. } = &self.level().rows[index].control else {
+        let RowControl::Select { options, index, .. } = &self.level_rows()[index].control else {
             return None;
         };
         options.get(*index)?.accent
@@ -3819,7 +3885,7 @@ impl SettingsPanelView {
     }
 
     fn render_row(&self, index: usize, cx: &mut Context<Self>) -> Div {
-        let row = &self.level().rows[index];
+        let row = &self.level_rows()[index];
         let mut container = div().flex().flex_col().gap(px(qol_theme::SPACE_TIGHT));
 
         if self.level().entries.is_some() {
@@ -3834,6 +3900,9 @@ impl SettingsPanelView {
         }
         if self.level().list_card {
             return container.child(self.render_list_card_item(index, cx));
+        }
+        if matches!(row.control, RowControl::Subpage { .. }) {
+            return container.child(self.render_page_link(index, cx));
         }
         if matches!(row.control, RowControl::List { .. }) {
             return container.child(self.render_list(index, cx));
@@ -3863,20 +3932,24 @@ impl SettingsPanelView {
         let selected = index == self.level().selected;
         let ground = RowGround::of(selected, self.body_has_focus());
         let copied = self.row_is_copied(index);
-        let label_group = settings_label_group(
-            label,
+        let in_item_card = self.level().list_item.is_some();
+        let danger = in_item_card && row.variant.as_deref() == Some(ITEM_ROW_DANGER);
+        let member = in_item_card && row.variant.as_deref() == Some(ITEM_ROW_MEMBER);
+        let description =
             row_description(row, &self.query_state_of(row), &self.applied_query_payloads)
-                .filter(|_| !copied),
-            ground,
-            self.kit,
-        )
-        .when(copied, |group| {
-            group.child(settings_copied_description(self.kit))
-        });
+                .filter(|_| !copied);
+        let label_group = if danger {
+            settings_destroy_label_group(label, description, ground, self.kit)
+        } else {
+            settings_label_group(label, description, ground, self.kit).when(copied, |group| {
+                group.child(settings_copied_description(self.kit))
+            })
+        };
         let value_cell = self.render_value_cell(index, ground, cx);
         let mut line = SettingsRow::setting(("settings-row", index), self.kit)
             .selected(selected, self.body_has_focus())
-            .opens(self.level().list_item.is_none() && row_opens(&row.control))
+            .opens(!in_item_card && row_opens(&row.control))
+            .destroys(danger)
             .child(label_group)
             .child(self.row_bounds_canvas(index));
         line = line.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
@@ -3885,8 +3958,17 @@ impl SettingsPanelView {
             }
             this.click_row(index, window, cx);
         }));
-        if self.level().list_item.is_none() {
+        if !in_item_card || member {
             line = line.child(value_cell);
+        }
+        if danger {
+            line = line.child(settings_action_mark(
+                ("settings-item-destroy", index),
+                ActionMark::Destroy,
+                false,
+                ground,
+                self.kit,
+            ));
         }
         container = container.child(line);
         let error = match &row.control {
@@ -3905,7 +3987,7 @@ impl SettingsPanelView {
     }
 
     fn render_gamepad(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
-        let row = &self.level().rows[index];
+        let row = &self.level_rows()[index];
         let RowControl::Gamepad { monitor, .. } = &row.control else {
             return div().id(("settings-gamepad-empty", index));
         };
@@ -4041,7 +4123,7 @@ impl SettingsPanelView {
     }
 
     fn render_list(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
-        let row = &self.level().rows[index];
+        let row = &self.level_rows()[index];
         let RowControl::List {
             active_label,
             active: runtime_active,
@@ -4125,7 +4207,7 @@ impl SettingsPanelView {
     }
 
     fn render_qr_code(&self, index: usize) -> Div {
-        let row = &self.level().rows[index];
+        let row = &self.level_rows()[index];
         let highlighted = index == self.level().selected && self.body_has_focus();
         let loading = matches!(self.row_query_state(index), RowQueryState::Loading);
         qr_code_display(
@@ -4140,7 +4222,7 @@ impl SettingsPanelView {
     }
 
     fn render_object_array(&self, index: usize, cx: &mut Context<Self>) -> Div {
-        let row = &self.level().rows[index];
+        let row = &self.level_rows()[index];
         let RowControl::ObjectArray(_) = &row.control else {
             return div();
         };
@@ -4373,7 +4455,7 @@ impl SettingsPanelView {
                 let finder = finder.as_ref().filter(|_| group == found && group > 0);
                 let labels: Vec<&str> = rows
                     .iter()
-                    .map(|index| self.level().rows[*index].label.as_str())
+                    .map(|index| self.level_rows()[*index].label.as_str())
                     .collect();
                 if self.group_header_shows(&title, detail.as_deref(), &labels) {
                     let here = self.body_has_focus() && rows.contains(&self.level().selected);
@@ -4386,15 +4468,17 @@ impl SettingsPanelView {
                 }
                 let empty = rows.is_empty();
                 for index in rows {
+                    if is_inline_list(&self.level_rows()[index].control) {
+                        items.extend(self.render_inline_lines(index, cx));
+                        continue;
+                    }
                     items.push(self.render_row(index, cx).into_any_element());
                 }
                 if let Some(body) = finder.filter(|_| empty) {
                     items.push(
                         settings_finder_empty(
-                            "settings-finder-empty",
                             body.empty_title.clone(),
                             body.empty_detail.clone().map(SharedString::from),
-                            body.empty_mark,
                             self.kit,
                         )
                         .into_any_element(),
@@ -4957,7 +5041,9 @@ impl SettingsPanelView {
                         .iter()
                         .skip(1)
                         .filter_map(|level| match &level.header {
-                            LevelHeader::Card(destination) => Some(destination.label().to_string()),
+                            LevelHeader::Card(destination) | LevelHeader::Page(destination) => {
+                                Some(destination.label().to_string())
+                            }
                             LevelHeader::Root => None,
                         }),
                 )
@@ -5007,9 +5093,9 @@ impl SettingsPanelView {
         if self.level().list_item.is_some() {
             return None;
         }
-        let row = self.level().rows.get(self.level().selected)?;
+        let row = self.level_rows().get(self.level().selected)?;
         match &row.control {
-            RowControl::Page => Some("open"),
+            RowControl::Page | RowControl::Subpage { .. } => Some("open"),
             RowControl::Toggle(_) => Some("flip"),
             RowControl::Action { .. } if row.variant.as_deref() == Some("toggle") => Some("flip"),
             RowControl::Action { .. } => Some("run"),
@@ -5095,6 +5181,10 @@ impl SettingsPanelView {
         let mut left = Vec::new();
         if let Some(label) = self.enter_hint() {
             left.push(SettingsHint::new(Key::ENTER, label));
+        }
+        if self.switch_hint() {
+            left.push(SettingsHint::new(Key::LEFT, "off"));
+            left.push(SettingsHint::new(Key::RIGHT, "on"));
         }
         if let Some(state) = self.level().display_layout.as_ref() {
             if let Some(label) =
@@ -5602,7 +5692,7 @@ fn list_fit_updates(
             } else {
                 0.0
             };
-            if matches!(row.control, RowControl::List { .. }) {
+            if matches!(row.control, RowControl::List { .. }) && !is_inline_list(&row.control) {
                 fixed += header + super::PANEL_LIST_PADDING_Y + list_header_height(row);
                 lists.push(*index);
             } else {
@@ -5646,7 +5736,7 @@ fn source_window_height_for(
 ) -> f32 {
     let sections = sections
         .iter()
-        .filter(|section| section.source == source)
+        .filter(|section| section.source == source && section.page.is_none())
         .cloned()
         .collect::<Vec<_>>();
     super::panel_height(rows, &sections).clamp(
@@ -5672,10 +5762,20 @@ pub(super) fn row_body_height(row: &Row, expanded: bool) -> f32 {
     super::PANEL_ROW_HEIGHT
 }
 
+#[cfg(test)]
 fn body_child_offset(
     sections: &[impl AsRef<[usize]>],
     headers: &[bool],
     row: usize,
+) -> Option<usize> {
+    body_child_offset_with(sections, headers, row, &|_| 1)
+}
+
+fn body_child_offset_with(
+    sections: &[impl AsRef<[usize]>],
+    headers: &[bool],
+    row: usize,
+    weight: &dyn Fn(usize) -> usize,
 ) -> Option<usize> {
     let mut child = 0;
     for (section_index, section) in sections.iter().enumerate() {
@@ -5687,17 +5787,35 @@ fn body_child_offset(
             child += 1;
         }
         match visible.iter().position(|index| *index == row) {
-            Some(position) => return Some(child + position),
-            None => child += visible.len(),
+            Some(position) => {
+                return Some(
+                    child
+                        + visible[..position]
+                            .iter()
+                            .map(|i| weight(*i))
+                            .sum::<usize>(),
+                )
+            }
+            None => child += visible.iter().map(|i| weight(*i)).sum::<usize>(),
         }
     }
     None
 }
 
+#[cfg(test)]
 fn body_header_child_offset(
     sections: &[impl AsRef<[usize]>],
     headers: &[bool],
     row: usize,
+) -> Option<usize> {
+    body_header_child_offset_with(sections, headers, row, &|_| 1)
+}
+
+fn body_header_child_offset_with(
+    sections: &[impl AsRef<[usize]>],
+    headers: &[bool],
+    row: usize,
+    weight: &dyn Fn(usize) -> usize,
 ) -> Option<usize> {
     let mut child = 0;
     for (section_index, section) in sections.iter().enumerate() {
@@ -5713,7 +5831,7 @@ fn body_header_child_offset(
         match visible.iter().position(|index| *index == row) {
             Some(0) if header => return Some(head),
             Some(_) => return None,
-            None => child += visible.len(),
+            None => child += visible.iter().map(|i| weight(*i)).sum::<usize>(),
         }
     }
     None
@@ -5758,6 +5876,7 @@ fn live_card_level(
         rows: vec![0],
         source,
         device_kind: None,
+        page: None,
     };
     Level {
         rows: vec![row],
@@ -5867,16 +5986,23 @@ fn card_enter_hint(level: &Level) -> Option<&'static str> {
         return Some("open");
     }
     if level.list_item.is_some() {
+        let selected = level.rows.get(level.selected);
         let on_input = matches!(
-            level.rows.get(level.selected).map(|row| &row.control),
+            selected.map(|row| &row.control),
             Some(RowControl::Gamepad { .. })
         );
+        if selected.is_some_and(|row| row.variant.as_deref() == Some(ITEM_ROW_MEMBER)) {
+            return Some("flip");
+        }
         return (!on_input).then_some("run");
     }
     None
 }
 
 fn row_matches(row: &Row, needle: &str) -> bool {
+    if is_inline_list(&row.control) {
+        return inline_row_matches(&row.control, needle);
+    }
     row.id == list_card::FINDER_LEAD_ROW
         || row.label.to_lowercase().contains(needle)
         || row
@@ -5982,7 +6108,7 @@ fn filtered_visible_rows(
 /// Whether enter on this row goes one level deeper, so the row ends in the
 /// open part.
 fn row_opens(control: &RowControl) -> bool {
-    matches!(control, RowControl::Page) || opens_a_card(control)
+    matches!(control, RowControl::Page | RowControl::Subpage { .. }) || opens_a_card(control)
 }
 
 fn opens_a_card(control: &RowControl) -> bool {
@@ -5997,6 +6123,7 @@ fn opens_a_card(control: &RowControl) -> bool {
         | RowControl::Placement(_)
         | RowControl::TextList(_) => true,
         RowControl::Page
+        | RowControl::Subpage { .. }
         | RowControl::Toggle(_)
         | RowControl::Number { .. }
         | RowControl::Text(_)
@@ -6061,6 +6188,7 @@ const VALUE_CELL_MAX_FRACTION: f32 = 0.5;
 fn value_cell_width(control: &RowControl) -> f32 {
     match control {
         RowControl::Page => 0.0,
+        RowControl::Subpage { .. } => 130.0,
         RowControl::Toggle(_) => 92.0,
         RowControl::Number { .. } => 33.0,
         RowControl::Color(_) => 76.0,
@@ -6396,6 +6524,7 @@ mod tests {
             rows,
             source,
             device_kind: None,
+            page: None,
         }
     }
 
@@ -6638,10 +6767,7 @@ mod tests {
                 active: false,
                 row_label: "{name}".into(),
                 row_subtitle: Some("{detail}".into()),
-                actions: Box::new(super::super::rows::ListActions {
-                    primary: None,
-                    additional: Vec::new(),
-                }),
+                actions: Box::new(super::super::rows::ListActions::default()),
                 item_card: None,
                 empty_message: None,
                 slider: None,
@@ -6890,6 +7016,9 @@ default = "visible"
             .expect("bluetooth config");
         for section in &mut resolved.sections {
             section.platforms = None;
+            for field in &mut section.fields {
+                field.platforms = None;
+            }
         }
         let mut rows = rows_from_resolved(&resolved, 0);
         let payload = serde_json::json!({
@@ -6898,7 +7027,7 @@ default = "visible"
             "lead": { "label": "Needs attention", "detail": "Fix each problem below." },
             "items": [],
         });
-        apply_runtime_query(&mut rows, 0, "host_fixes", Ok(payload), &|_, _| false);
+        apply_runtime_query(&mut rows, 0, "host_problems", Ok(payload), &|_, _| false);
         let row = rows
             .iter()
             .find(|row| row.id == "host_findings")
@@ -8968,6 +9097,7 @@ active_value_from = "active"
             rows: vec![0],
             source: 0,
             device_kind: None,
+            page: None,
         }];
         assert_eq!(
             list_fit_updates(&rows, &sections, 0, 720.0),
@@ -9048,6 +9178,7 @@ active_value_from = "active"
             rows: vec![0, 1],
             source: 0,
             device_kind: None,
+            page: None,
         }];
         let uncapped = source_window_height_for(&rows, &sections, 0, 720.0);
         assert_eq!(

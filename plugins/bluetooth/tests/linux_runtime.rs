@@ -101,7 +101,7 @@ fn audio_status_follows_the_live_transport_while_the_bluetooth_link_stays_connec
     }
     fixture.state.lock().unwrap().connected = false;
     let snapshot = fixture.action("devices");
-    assert_eq!(snapshot["items"][0]["badge"], "Paired");
+    assert_eq!(snapshot["items"][0]["badge"], "Not connected");
     assert_eq!(snapshot["items"][0]["can_disconnect"], false);
 }
 
