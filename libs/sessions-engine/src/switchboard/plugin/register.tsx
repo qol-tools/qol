@@ -48,7 +48,8 @@ const NEW_REPLY = '◉'
 const NO_MARK = '  '
 const SINCE_WIDTH = 6
 const MERGED_EXIT = 0
-const MODELS = ['opus', 'sonnet', 'haiku'] as const
+const MODELS = ['opus', 'sonnet', 'haiku', 'fable', 'mythos'] as const
+const MODEL_SENT: Partial<Record<(typeof MODELS)[number], string>> = { mythos: 'claude-mythos-5-1' }
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const CHOICES_KEY = 'model-choices'
 const SEEN_KEY = 'models-seen'
@@ -1847,7 +1848,7 @@ const pickSetting = async ($: EngineInterface, element: string): Promise<void> =
     const to = MODELS.find(one => one === value)
     const from = now.model
     if (to === undefined || familyOf(from) === to) return
-    await choose($, key, { model: to })
+    await choose($, key, { model: MODEL_SENT[to] ?? to })
     return
   }
   const to = EFFORTS.find(one => one === value)
