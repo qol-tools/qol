@@ -857,7 +857,7 @@ const isEntry = (entry: unknown): entry is Entry =>
 
 const cutIfWorking = ({ isRunOver, ...entry }: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking && isRunOver !== true ? { isInterrupted: true } : {}) })
 
-const CUTS_HEALED = 'cuts-healed-1'
+const CUTS_HEALED = 'cuts-healed-2'
 
 export const withoutCut = (row: unknown): unknown => {
   if (!isEntry(row) || row.isInterrupted !== true || row.isWorking) return row
