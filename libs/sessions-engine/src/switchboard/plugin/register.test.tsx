@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { forksUnder, fromUser, hasUnread, hookAnswer, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withSent } from '../hooks/register'
+import { forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -3241,7 +3241,20 @@ test('a model id reads as its family and version', () => {
   expect(modelName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
   expect(modelName('opus')).toBe('Opus')
   expect(modelName('claude-mythos-5-1')).toBe('Mythos 5.1')
+  expect(modelName('claude-saga-7')).toBe('Saga 7')
+  expect(modelName('claude-opus-4-6[1m]')).toBe('Opus 4.6')
   expect(modelName('gpt-x')).toBe('gpt-x')
+  expect(modelName('glm-5.3-flash')).toBe('glm-5.3-flash')
+})
+
+test('the fork models the engine hands over read as a list of ids, and anything else as none', () => {
+  for (const [text, models] of [
+    ['["claude-opus-5-5","haiku"]', ['claude-opus-5-5', 'haiku']],
+    ['["haiku",7,"",null]', ['haiku']],
+    ['{"haiku":true}', []],
+    ['not json', []],
+    [undefined, []],
+  ] as const) expect(forkModels(text)).toEqual(models)
 })
 
 test('a picked model keeps the full id the agent list labels, with its [1m] suffix', () => {
@@ -3393,7 +3406,8 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   const written: Record<string, string> = {}
   engine(on, [], [], [], store)
   on('clock.after', () => new Promise(() => {}))
-  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_MARKS' ? '/data/marks' : undefined }))
+  const env: Record<string, string> = { QOL_SWITCHBOARD_MARKS: '/data/marks', QOL_SWITCHBOARD_MODELS: '["claude-opus-5-5","claude-mythos-5-1","sonnet","haiku","fable"]' }
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: env[e.name] }))
   on('fs.write', (_: unknown, e: { path: string; text: string }) => {
     written[e.path] = e.text
     return { value: undefined }
@@ -3424,8 +3438,8 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   expect(await command('model', 'haiku')).toBe('the switchboard model picker')
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
   const picker = await ui.find({ type: 'Select', key: 'model-asking-fork' })
-  expect(picker).toMatchObject({ props: { value: 'opus' } })
-  expect((picker?.props as { options: { label?: string }[] }).options.map(one => one.label)).toEqual(['Opus 5.5', 'Sonnet', 'Haiku', 'Fable', 'Mythos'])
+  expect(picker).toMatchObject({ props: { value: 'claude-opus-5-5' } })
+  expect((picker?.props as { options: { label?: string }[] }).options.map(one => one.label)).toEqual(['Opus 5.5', 'Mythos 5.1', 'Sonnet', 'Haiku', 'Fable'])
   expect(await ui.find({ type: 'Select', key: 'effort-asking-fork' })).toMatchObject({ props: { value: 'medium' } })
   await ui.select({ key: 'model-asking-fork', value: 'sonnet' })
   expect(await ui.find({ type: 'Select', key: 'model-asking-fork' })).toMatchObject({ props: { value: 'sonnet' } })
@@ -3440,21 +3454,26 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   expect(await ui.find({ type: 'Text', text: /applies at its next model call/ })).toBeUndefined()
   expect(await command('model', 'haiku')).toBe('asking-fork uses Haiku from its next model call.')
   expect(await command('effort', ' MAX ')).toBe('asking-fork uses max effort from its next model call.')
-  expect(await command('model', '')).toBe('asking-fork model: Haiku at max effort. /model opus|sonnet|haiku|fable|mythos and a level, such as /model haiku max, changes it; with no fork picked, /model changes the switchboard.')
+  expect(await command('model', '')).toBe('asking-fork model: Haiku at max effort. /model opus|mythos|sonnet|haiku|fable and a level, such as /model opus max, changes it; with no fork picked, /model changes the switchboard.')
   expect(await command('effort', 'loud')).toMatch(/^asking-fork effort: max\. \/effort low\|medium\|high\|xhigh\|max changes it/)
   for (const wrong of ['haiku loud', 'haiku sonnet', 'max max', 'max haiku extra']) expect(await command('model', wrong)).toMatch(/^asking-fork model: Haiku at max effort\./)
   expect(await command('effort', 'haiku max')).toMatch(/^asking-fork effort: max\./)
   expect(await command('model', 'Sonnet LOW')).toBe('asking-fork uses Sonnet at low effort from its next model call.')
-  await ui.select({ key: 'model-asking-fork', value: 'mythos' })
-  const mythos = await ui.find({ type: 'Select', key: 'model-asking-fork' })
-  expect(mythos).toMatchObject({ props: { value: 'mythos' } })
-  expect((mythos?.props as { options: { label?: string }[] }).options.map(one => one.label)).toEqual(['Opus', 'Sonnet', 'Haiku', 'Fable', 'Mythos 5.1'])
+  await ui.select({ key: 'model-asking-fork', value: 'claude-mythos-5-1' })
+  expect(await ui.find({ type: 'Select', key: 'model-asking-fork' })).toMatchObject({ props: { value: 'claude-mythos-5-1' } })
+  await ui.select({ key: 'model-asking-fork', value: 'gpt-x' })
   await step('a8', 'claude-opus-5-5', 'medium')
   expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'claude-mythos-5-1', effort: 'low' })
+  expect(await command('model', 'claude-opus-5-5')).toBe('asking-fork uses Opus 5.5 from its next model call.')
+  await step('a8', 'claude-fable-5-2', 'medium')
+  expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'claude-opus-5-5', effort: 'low' })
   expect(await command('model', 'fable high')).toBe('asking-fork uses Fable at high effort from its next model call.')
   await step('a8', 'claude-opus-5-5', 'medium')
   expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'fable', effort: 'high' })
   expect(await command('model', 'max haiku')).toBe('asking-fork uses Haiku at max effort from its next model call.')
+  env.QOL_SWITCHBOARD_MODELS = '[]'
+  expect(await command('model', 'opus')).toBe('asking-fork model: Haiku at max effort. sessions.toml lets a fork run no model, so /model has none to set; with no fork picked, /model changes the switchboard.')
+  expect(await ui.find({ type: 'Select', key: 'model-asking-fork' })).toBeUndefined()
   await settle()
   expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}').models).toEqual({ a8: { model: 'Haiku', effort: 'max' } })
   await step('a8', 'claude-opus-5-5', 'medium')
@@ -3474,6 +3493,7 @@ test('saved model choices that fail their first load are never overwritten by on
   store.set('model-choices', { 'other-fork': { model: 'haiku', at: 1 } })
   engine(on, [], [], [], store)
   on('clock.after', () => new Promise(() => {}))
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_MODELS' ? '["opus","haiku"]' : undefined }))
   on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
     cursor: e.start + e.inputText.length,

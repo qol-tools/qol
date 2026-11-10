@@ -13,7 +13,7 @@ use crate::launch::LaunchDefaults;
 
 pub(super) const AGENT: &str = "switchboard";
 const CLAUDE: &str = "claude";
-const CLAUDE_FAMILIES: [&str; 4] = ["sonnet", "opus", "haiku", "fable"];
+const CLAUDE_FAMILIES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
 const SESSIONS_TOOLS: &str = "mcp__sessions__*";
 const AGENT_TOOL_FOR_FORKS: &str = "Agent(project-fork)";
 const PROMPT_CACHE_TTL: &str = "1h";
@@ -25,6 +25,7 @@ pub(super) const FORK_PROMPT: &str = "You are a fork: a session of your own that
 pub(super) struct ForkAgent {
     pub(super) model: Option<String>,
     pub(super) effort: Option<String>,
+    pub(super) models: Vec<String>,
 }
 
 impl ForkAgent {
@@ -34,7 +35,11 @@ impl ForkAgent {
                 && enforce_tool_model(CLAUDE, model, &policy.tool_models).is_ok()
         });
         let effort = defaults.alias(defaults.fork_effort.clone());
-        Self { model, effort }
+        Self {
+            model,
+            effort,
+            models: fork_models(defaults, policy),
+        }
     }
 
     pub(super) fn system() -> Self {
@@ -68,6 +73,25 @@ fn admit(model: &str, defaults: &LaunchDefaults, policy: &DispatchPolicy) -> any
             "`{named}` is Claude Code's name for its newest {family}* model, so it launches only where every {family}* model may; a full model id on a `Model:` line under the Project line is checked on its own"
         )
     })
+}
+
+fn fork_models(defaults: &LaunchDefaults, policy: &DispatchPolicy) -> Vec<String> {
+    let declared = policy.tool_models.get(CLAUDE).into_iter().flatten();
+    let mut models: Vec<String> = declared
+        .filter(|model| !model.contains('*') && admit(model, defaults, policy).is_ok())
+        .cloned()
+        .collect();
+    for family in CLAUDE_FAMILIES {
+        let named = defaults.alias(Some(family.to_owned())).unwrap_or_default();
+        let prefix = format!("claude-{family}-");
+        let is_listed = models
+            .iter()
+            .any(|model| *model == named || model.starts_with(&prefix));
+        if !is_listed && admit(family, defaults, policy).is_ok() {
+            models.push(named);
+        }
+    }
+    models
 }
 
 pub(super) fn admit_model(model: &str) -> anyhow::Result<()> {
@@ -246,10 +270,72 @@ mod tests {
             ForkAgent::resolve(&defaults(Some("fast"), None), &not_allowed).model,
             None
         );
-        assert_eq!(
-            ForkAgent::resolve(&defaults(None, None), &open),
-            ForkAgent::default()
-        );
+        let unset = ForkAgent::resolve(&defaults(None, None), &open);
+        assert_eq!((unset.model, unset.effort), (None, None));
+    }
+
+    #[test]
+    fn the_picker_lists_the_declared_models_then_the_admitted_families() {
+        let aliased = LaunchDefaults {
+            aliases: BTreeMap::from([("sonnet".to_owned(), "claude-sonnet-5-5".to_owned())]),
+            ..LaunchDefaults::default()
+        };
+        let unaliased = LaunchDefaults::default();
+        let cases: [(&LaunchDefaults, DispatchPolicy, &[&str]); 6] = [
+            (
+                &unaliased,
+                policy(&[], &[]),
+                &["opus", "sonnet", "haiku", "fable"],
+            ),
+            (
+                &aliased,
+                policy(
+                    &[(
+                        "claude",
+                        &["claude-opus-5-5", "claude-mythos-5-1", "claude-*"],
+                    )],
+                    &["claude-*", "glm-5.3-flash"],
+                ),
+                &[
+                    "claude-opus-5-5",
+                    "claude-mythos-5-1",
+                    "claude-sonnet-5-5",
+                    "haiku",
+                    "fable",
+                ],
+            ),
+            (
+                &aliased,
+                policy(
+                    &[("claude", &["claude-sonnet-5-5"])],
+                    &["claude-sonnet-5-5"],
+                ),
+                &["claude-sonnet-5-5"],
+            ),
+            (
+                &unaliased,
+                policy(
+                    &[("claude", &["claude-opus-5-5", "claude-fable-*"])],
+                    &["claude-fable-*"],
+                ),
+                &["fable"],
+            ),
+            (
+                &unaliased,
+                policy(&[("claude", &["claude-opus-4-6", "claude-opus-5-5"])], &[]),
+                &["claude-opus-4-6", "claude-opus-5-5"],
+            ),
+            (&unaliased, policy(&[("pi", &["claude-*"])], &[]), &[]),
+        ];
+        for (defaults, policy, listed) in cases {
+            assert_eq!(
+                ForkAgent::resolve(defaults, &policy).models,
+                listed,
+                "{:?} {:?}",
+                policy.tool_models,
+                policy.allowed_models
+            );
+        }
     }
 
     #[test]
@@ -313,6 +399,7 @@ mod tests {
         let fork = ForkAgent {
             model: Some("claude-opus-5-5".to_owned()),
             effort: Some("high".to_owned()),
+            ..ForkAgent::default()
         };
         let agents: Value = serde_json::from_str(&agents_json(&fork)).unwrap();
         let lead = &agents["switchboard"];
@@ -346,6 +433,7 @@ mod tests {
         ForkAgent {
             model: Some("claude-opus-5-5".to_owned()),
             effort: Some("high".to_owned()),
+            ..ForkAgent::default()
         }
     }
 
