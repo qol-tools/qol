@@ -19,6 +19,8 @@ pub(super) const PRE_AGENT: &str = "pre-agent";
 pub(super) const FORK_CONTEXT: &str = "fork-context";
 pub(super) const AGENT_ROWS: &str = "agent-rows";
 pub(super) const FORK_STATES: &str = "fork-states";
+pub(super) const FOLD_TRANSCRIPTS: &str = "fold-transcripts";
+pub(super) const FORK_SAID: &str = "fork-said";
 pub(super) const ROLE_REFRESH: &str = "role-refresh";
 pub(super) const ROLE_REFRESH_SLOTS: usize = 3;
 pub(super) const ROLE_REFRESH_SOURCES: &str = "resume|compact";
@@ -53,6 +55,14 @@ struct Payload {
 struct StatesQuery {
     conversation: String,
     ids: Vec<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct SaidQuery {
+    conversation: String,
+    id: String,
+    rows: usize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -231,6 +241,15 @@ fn fork_states(raw: &str) -> Result<String> {
     Ok(Value::Object(states).to_string())
 }
 
+fn fork_said(raw: &str) -> Result<String> {
+    let query: SaidQuery =
+        serde_json::from_str(raw).context("the fork said payload is not valid JSON")?;
+    let said = fork_state::transcript_of(Path::new(query.conversation.trim()), &query.id)
+        .map(|transcript| super::said::newest(&transcript, query.rows))
+        .unwrap_or_default();
+    Ok(serde_json::to_string(&said)?)
+}
+
 fn deny_json(reason: &str) -> String {
     json!({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -261,7 +280,7 @@ fn read_payload() -> Result<Payload> {
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let name = args.first().and_then(|arg| arg.to_str()).ok_or_else(|| {
         anyhow!(
-            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}|{FORK_STATES}>"
+            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}|{FORK_STATES}|{FORK_SAID}|{FOLD_TRANSCRIPTS} DIR>"
         )
     })?;
     match name {
@@ -272,6 +291,28 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
                 .read_to_string(&mut raw)
                 .context("failed to read the fork states payload")?;
             crate::cli::line(fork_states(&raw)?);
+            Ok(())
+        }
+        FORK_SAID => {
+            let mut raw = String::new();
+            std::io::stdin()
+                .read_to_string(&mut raw)
+                .context("failed to read the fork said payload")?;
+            crate::cli::line(fork_said(&raw)?);
+            Ok(())
+        }
+        FOLD_TRANSCRIPTS => {
+            let conversations = args
+                .get(1)
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("{FOLD_TRANSCRIPTS} takes the conversations folder"))?;
+            if !super::adopt::is_switchboards(&conversations, switchboard_dir().as_deref()) {
+                bail!(
+                    "{} is not the switchboard's conversations folder",
+                    conversations.display()
+                );
+            }
+            crate::cli::line(serde_json::to_string(&super::fold::fold(&conversations))?);
             Ok(())
         }
         RETIRED_POST_AGENT => Ok(()),
@@ -596,6 +637,40 @@ mod tests {
     }
 
     #[test]
+    fn fork_said_reads_the_newest_words_of_one_fork_from_its_transcript() {
+        let root = tempfile::tempdir().unwrap();
+        let subagents = root.path().join("c0").join("subagents");
+        fs::create_dir_all(&subagents).unwrap();
+        let rows = [
+            json!({"type": "user", "message": {"content": "pick one"}}),
+            json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Amber or teal?"}]}}),
+        ];
+        fs::write(
+            subagents.join("agent-a1.jsonl"),
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let conversation = root.path().join("c0.jsonl");
+        let query =
+            |id: &str| json!({"conversation": conversation, "id": id, "rows": 5}).to_string();
+
+        let said: Value = serde_json::from_str(&fork_said(&query("a1")).unwrap()).unwrap();
+
+        assert_eq!(
+            said,
+            json!([
+                {"role": "user", "text": "pick one"},
+                {"role": "assistant", "text": "Amber or teal?"},
+            ])
+        );
+        assert_eq!(fork_said(&query("missing")).unwrap(), "[]");
+        assert_eq!(fork_said(&query("../a1")).unwrap(), "[]");
+        assert!(fork_said("{").is_err());
+    }
+
+    #[test]
     fn the_usage_names_every_hook_verb() {
         let error = run(&[]).unwrap_err().to_string();
         for verb in [
@@ -604,6 +679,8 @@ mod tests {
             ROLE_REFRESH,
             AGENT_ROWS,
             FORK_STATES,
+            FORK_SAID,
+            FOLD_TRANSCRIPTS,
         ] {
             assert!(error.contains(verb), "{verb}: {error}");
         }

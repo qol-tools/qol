@@ -23,6 +23,7 @@ mod cli;
 mod close;
 mod contract;
 mod export;
+mod file_link;
 mod fork;
 pub mod fork_watch;
 mod history;

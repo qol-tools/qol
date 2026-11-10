@@ -61,12 +61,12 @@ declare module 'claude-code' {
       pulls: Pull[]
       writingTo: string
       writingSaid: { isUser: boolean; text: string }[]
-      switchboardLog: { who: string; text: string; at?: number }[]
       pullDetails: Record<string, PullDetail>
       modelChoices: Record<string, ModelChoice>
       modelsSeen: Record<string, ModelSeen>
       forkStates: Record<string, RunState>
       idleShown: boolean
+      closedShown: boolean
       focusActivity: string
       freshReply: string
       focusShown: { id: string; prevId: string; agentId: string; key: string; rows: { isUser: boolean; text: string }[] }

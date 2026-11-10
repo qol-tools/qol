@@ -189,7 +189,7 @@ impl RecordStore {
                 continue;
             }
             let destination = self.archive_path(key, part.n);
-            copy_atomically(source, &destination)?;
+            share_or_copy(source, &destination)?;
             archived.push(destination);
         }
         Ok(archived)
@@ -277,18 +277,18 @@ fn unknown_key(key: &str) -> Error {
     Error::Unknown(format!("no record for key `{key}`"))
 }
 
-fn copy_atomically(source: &Path, destination: &Path) -> Result<()> {
+fn share_or_copy(source: &Path, destination: &Path) -> Result<()> {
     let parent = destination
         .parent()
         .ok_or_else(|| anyhow!("the archive path has no parent"))?;
     fs::create_dir_all(parent).context("failed to create the archive directory")?;
     let temporary = destination.with_extension(format!("jsonl.{}.tmp", std::process::id()));
-    let copied = fs::copy(source, &temporary).and_then(|_| fs::rename(&temporary, destination));
-    if let Err(error) = copied {
-        let _ = fs::remove_file(&temporary);
-        return Err(Error::Failed(
-            anyhow::Error::from(error).context(format!("failed to archive {}", source.display())),
-        ));
-    }
-    Ok(())
+    crate::file_link::link_or_copy(source, destination, &temporary)
+        .map(drop)
+        .map_err(|error| {
+            Error::Failed(
+                anyhow::Error::from(error)
+                    .context(format!("failed to archive {}", source.display())),
+            )
+        })
 }
