@@ -20,6 +20,10 @@ def named_step(document, name, indent):
     return document[start:end] if end != -1 else document[start:]
 
 
+def push_source(registry):
+    return named_step(registry, "Push registry artifact", "      ")
+
+
 def fake_command(directory, name, body):
     command = Path(directory) / name
     command.write_text(f"#!/usr/bin/env bash\n{body}\n")
@@ -902,6 +906,25 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn('"vendor/**"', codeql)
         self.assertIn('"vendor/ravif/**"', codeql)
 
+    def test_queue_jobs_with_write_permissions_run_scripts_from_main(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        jobs = workflow.split("\njobs:\n", 1)[1]
+        sections = re.split(r"\n(?=  [a-z][a-z-]*:\n)", jobs)
+        checked = set()
+        for section in sections:
+            name = section.strip().split(":", 1)[0]
+            if "merge_group" not in section:
+                continue
+            permissions = section.split("    permissions:\n", 1)[1].split("\n    steps:", 1)[0] if "    permissions:\n" in section else ""
+            if "write" not in permissions:
+                continue
+            checked.add(name)
+            with self.subTest(job=name):
+                checkout = section.split("actions/checkout@", 1)[1].split("\n\n", 1)[0]
+                for contract in ["ref: main", "sparse-checkout: .github/scripts", "persist-credentials: false"]:
+                    self.assertIn(contract, checkout)
+        self.assertEqual(checked, {"batch-failure", "gate", "supersede", "queue-report"})
+
     def test_trusted_script_checkouts_carry_the_files_the_scripts_import(self):
         for name in ("release.yml", "qol-tray-release.yml"):
             workflow = (ROOT / ".github/workflows" / name).read_text()
@@ -1144,6 +1167,13 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             attest.index("release_candidate.py require-release-files"),
             attest.index("- name: Attest release files"),
         )
+        trusted = named_step(attest, "Checkout release scripts from main", "      ")
+        for contract in ["ref: main", "path: trusted", "sparse-checkout: |\n            .github/scripts\n            libs/conventions/src", "persist-credentials: false"]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, trusted)
+        self.assertLess(attest.index("- name: Checkout release scripts from main"), attest.index("release_candidate.py require-release-files"))
+        self.assertIn("python trusted/.github/scripts/release_candidate.py require-release-files", attest)
+        self.assertNotIn("python .github/scripts/", attest)
         registry = workflow.split("  registry:\n", 1)[1].split("  index:\n", 1)[0]
         self.assertIn("needs: attest", registry)
         self.assertLess(
@@ -1151,12 +1181,29 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             registry.index("- name: Push registry artifact"),
         )
         self.assertIn("packages: write", registry)
-        self.assertIn("ref: ${{ env.RELEASE_REF }}", registry)
+        source = named_step(registry, "Checkout the release source", "      ")
+        for contract in ["ref: ${{ env.RELEASE_REF }}", "path: source", "persist-credentials: false"]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, source)
+        self.assertEqual(registry.count("RELEASE_REF"), 1)
+        self.assertIn("working-directory: source", push_source(registry))
+        self.assertNotIn("working-directory: source", named_step(registry, "Build registry tool", "      "))
+        checkout = named_step(registry, "Checkout the registry tool from main", "      ")
+        for contract in ["ref: main", "path: trusted", "persist-credentials: false"]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, checkout)
+        self.assertNotIn("sparse-checkout", checkout)
+        self.assertIn("uses: ./trusted/.github/actions/rust-setup", registry)
+        self.assertIn("workspace: trusted", registry)
+        self.assertIn("working-directory: trusted", named_step(registry, "Build registry tool", "      "))
+        self.assertNotIn("uses: ./.github/actions/rust-setup", registry)
+        self.assertIn("../trusted/target/debug/qol-plugin-registry push", push_source(registry))
+        self.assertIn("--files ../release_files", push_source(registry))
         push = named_step(registry, "Push registry artifact", "      ")
         for contract in [
             "set -euo pipefail",
             '--registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins"',
-            '--tag "${RELEASE_TAG}" --files release_files',
+            '--tag "${RELEASE_TAG}" --files ../release_files',
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, push)

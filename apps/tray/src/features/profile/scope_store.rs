@@ -15,6 +15,7 @@ pub(crate) use qol_profile_sync::scope::{
 pub(crate) const HOTKEYS_FILE: &str = "hotkeys.json";
 pub(crate) const SHORTCUTS_FILE: &str = "shortcuts.json";
 pub(crate) const TASK_RUNNER_FILE: &str = "task-runner.json";
+pub(crate) const SHORTCUT_PROGRAMS_FILE: &str = "shortcut-programs.json";
 pub(crate) const SYNC_STATE_FILE: &str = "state.json";
 pub(crate) const SYNC_TOGGLES_FILE: &str = "toggles.json";
 
@@ -178,6 +179,10 @@ impl ProfileScopeStore {
 
     pub fn task_runner_path(&self) -> PathBuf {
         self.device_dir().join(TASK_RUNNER_FILE)
+    }
+
+    pub fn shortcut_programs_path(&self) -> PathBuf {
+        self.device_dir().join(SHORTCUT_PROGRAMS_FILE)
     }
 
     pub fn device_sync_dir(&self) -> PathBuf {
@@ -365,6 +370,10 @@ mod tests {
         assert_eq!(s.hotkeys_path(), active.join("os/macos/hotkeys.json"));
         assert_eq!(s.shortcuts_path(), active.join("os/macos/shortcuts.json"));
         assert_eq!(s.task_runner_path(), active.join("device/task-runner.json"));
+        assert_eq!(
+            s.shortcut_programs_path(),
+            active.join("device/shortcut-programs.json")
+        );
         assert_eq!(s.device_sync_dir(), active.join("device/sync"));
         assert_eq!(s.sync_state_path(), active.join("device/sync/state.json"));
         assert_eq!(

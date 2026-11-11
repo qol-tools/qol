@@ -6532,7 +6532,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.154.0"
+version = "0.154.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6948,7 +6948,7 @@ dependencies = [
 
 [[package]]
 name = "qol-keyremap"
-version = "1.87.0"
+version = "1.87.1"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.0",
@@ -7127,7 +7127,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.55.0"
+version = "0.55.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7608,7 +7608,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.140.0"
+version = "3.140.1"
 dependencies = [
  "anyhow",
  "axum",
