@@ -3341,15 +3341,20 @@ impl SettingsPanelView {
             )
     }
 
+    fn labelled_rows(&self, rows: &[usize]) -> Vec<&str> {
+        rows.iter()
+            .map(|index| &self.level_rows()[*index])
+            .filter(|row| !is_inline_list(&row.control))
+            .map(|row| row.label.as_str())
+            .collect()
+    }
+
     fn body_sections(&self) -> (Vec<Vec<usize>>, Vec<bool>) {
         let groups = self.body_groups();
         let headers = groups
             .iter()
             .map(|(title, detail, rows)| {
-                let labels = rows
-                    .iter()
-                    .map(|index| self.level_rows()[*index].label.as_str())
-                    .collect::<Vec<_>>();
+                let labels = self.labelled_rows(rows);
                 self.group_header_shows(title, detail.as_deref(), &labels)
             })
             .collect::<Vec<_>>();
@@ -4434,10 +4439,7 @@ impl SettingsPanelView {
             let found = groups.len().saturating_sub(1);
             for (group, (title, detail, rows)) in groups.into_iter().enumerate() {
                 let finder = finder.as_ref().filter(|_| group == found && group > 0);
-                let labels: Vec<&str> = rows
-                    .iter()
-                    .map(|index| self.level_rows()[*index].label.as_str())
-                    .collect();
+                let labels = self.labelled_rows(&rows);
                 if self.group_header_shows(&title, detail.as_deref(), &labels) {
                     let here = self.body_has_focus() && rows.contains(&self.level().selected);
                     let header = self.render_group_header(&title, detail.as_deref(), here);
