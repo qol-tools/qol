@@ -1156,10 +1156,10 @@ export const typedByUser = (text: string): string | undefined => {
   return cut === -1 ? words : words.slice(0, cut)
 }
 
-const UNSEEN_MARKS = /\p{Cf}/gu
-const NOT_WORDS = /[^\p{L}\p{N}]+/gu
-const wordsOf = (text: string): string => text.normalize('NFKC').replace(UNSEEN_MARKS, '').toLowerCase().replace(NOT_WORDS, ' ')
-const USER_WORDS = wordsOf(FROM_USER).trim()
+const UNSEEN_MARKS = /[\p{M}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
+const NOT_LETTERS = /[^\p{L}\p{N}]+/gu
+const lettersOf = (text: string): string => text.normalize('NFKD').replace(UNSEEN_MARKS, '').toLowerCase().replace(NOT_LETTERS, '')
+const USER_LETTERS = lettersOf(FROM_USER)
 const NOT_THE_USER = 'Not sent: only the qol-switchboard plugin marks a message as typed by the user. Send it as your own words, without that sentence.'
 
 const typedHere = new Map<string, number>()
@@ -1174,7 +1174,7 @@ const dropTyped = (text: string): void => {
   else typedHere.delete(text)
 }
 
-export const claimsUser = (text: unknown): boolean => typeof text === 'string' && wordsOf(text).includes(USER_WORDS)
+export const claimsUser = (text: unknown): boolean => typeof text === 'string' && lettersOf(text).includes(USER_LETTERS)
 
 export const isForgedUser = (text: unknown): boolean => claimsUser(text) && !typedHere.has(text as string)
 
