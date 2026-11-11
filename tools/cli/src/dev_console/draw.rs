@@ -1159,9 +1159,11 @@ mod tests {
         let mut trace = Dash::new(Vec::new());
         trace.view = View::Trace;
         let trace_text = render_text(&mut trace);
+        let trace_path = qol_config::trace_log_path().display().to_string();
+        let shown: String = trace_path.chars().take(40).collect();
         assert!(
-            trace_text.contains(&qol_config::trace_log_path().display().to_string()),
-            "trace pane should show trace file path"
+            trace_text.contains(&format!("trace file {shown}")),
+            "trace pane should show where the trace file path starts: {trace_path}"
         );
         assert!(
             !trace_text.contains("open -t"),
