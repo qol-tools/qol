@@ -1156,6 +1156,32 @@ export const typedByUser = (text: string): string | undefined => {
   return cut === -1 ? words : words.slice(0, cut)
 }
 
+const USER_LINE = FROM_USER.trim().toLowerCase()
+const NOT_THE_USER = 'Not sent: only the qol-switchboard plugin marks a message as typed by the user. Send it as your own words, without that first line.'
+
+const typedHere = new Map<string, number>()
+
+const holdTyped = (text: string): void => {
+  typedHere.set(text, (typedHere.get(text) ?? 0) + 1)
+}
+
+const dropTyped = (text: string): void => {
+  const left = (typedHere.get(text) ?? 1) - 1
+  if (left > 0) typedHere.set(text, left)
+  else typedHere.delete(text)
+}
+
+export const claimsUser = (text: unknown): boolean => typeof text === 'string' && text.trimStart().toLowerCase().replace(/\s+/g, ' ').startsWith(USER_LINE)
+
+type SendOrigin = { kind?: unknown; name?: unknown }
+
+export const isForgedUser = (e: { text?: unknown; agentId?: unknown; origin?: unknown }): boolean => {
+  if (!claimsUser(e.text)) return false
+  if (typedHere.has(e.text as string)) return false
+  const origin: SendOrigin = typeof e.origin === 'object' && e.origin !== null ? e.origin : {}
+  return !(e.agentId === undefined && origin.kind === 'plugin' && origin.name === NAME)
+}
+
 type SessionRecord = { key: string; friendly?: string; cwd?: string; created_ms?: number; parts?: unknown[]; done?: { at_ms?: number; reason?: string }; stopped_ms?: number }
 
 export const recordOwners = (records: readonly SessionRecord[]): Map<string, string> => {
@@ -2839,6 +2865,7 @@ export const register: Register = on => {
         void forgetSentLog($, key, note).catch(() => {})
       }
       const said = withHookContext(fromUser(at.message), hooked.context)
+      holdTyped(said)
       const sent = await sendTo($, at.entry, said, direct($)).catch(() => undefined)
       if (sent?.isDelivered !== true) {
         void tell($, at.entry, said)
@@ -2846,6 +2873,9 @@ export const register: Register = on => {
             if (!isDelivered) forget()
           })
           .catch(forget)
+          .finally(() => dropTyped(said))
+      } else {
+        dropTyped(said)
       }
       if (viewing === undefined) await refreshWriting($, at.entry.agentId)
       clearBox($, text => text === e.text)
@@ -2963,6 +2993,7 @@ export const register: Register = on => {
   }).catch(() => ({ deny: 'The session could not be brought back as a fork.' }))
 
   on('tool.call', { tool: SEND }, async ($, e, next) => {
+    if (next.origin.plugin !== NAME && claimsUser(e.message)) return { deny: NOT_THE_USER }
     if (e.agentId !== undefined || next.origin.plugin === NAME || typeof e.to !== 'string' || typeof e.message !== 'string') return next(e)
     let target = addressed(await read($, board), e.to)
     if (target === undefined) {
@@ -2992,6 +3023,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.send', async ($, e, next) => {
+    if (isForgedUser(e)) return { isDelivered: false, reason: NOT_THE_USER }
     if (e.agentId === undefined) return next(e)
     return mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }))
