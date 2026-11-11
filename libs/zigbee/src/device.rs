@@ -62,6 +62,11 @@ impl DeviceRegistry {
         &self.devices
     }
 
+    pub fn remove(&mut self, ieee: &[u8; 8]) -> Option<Device> {
+        let index = self.devices.iter().position(|d| &d.ieee_address == ieee)?;
+        Some(self.devices.remove(index))
+    }
+
     pub fn by_ieee_address(&self, ieee: &[u8; 8]) -> Option<&Device> {
         self.devices.iter().find(|d| &d.ieee_address == ieee)
     }
@@ -93,6 +98,20 @@ mod tests {
             "expected single device after update"
         );
         assert_eq!(registry.devices()[0].network_address, 0x5678);
+    }
+
+    #[test]
+    fn removing_a_device_drops_only_that_ieee() {
+        let mut registry = DeviceRegistry::new();
+        registry.register(make_device(0x1234, 1));
+        registry.register(make_device(0x5678, 2));
+
+        let removed = registry.remove(&[0, 0, 0, 0, 0, 0, 0, 1]);
+
+        assert_eq!(removed.map(|d| d.network_address), Some(0x1234));
+        assert_eq!(registry.devices().len(), 1);
+        assert_eq!(registry.devices()[0].network_address, 0x5678);
+        assert!(registry.remove(&[0, 0, 0, 0, 0, 0, 0, 1]).is_none());
     }
 
     #[test]

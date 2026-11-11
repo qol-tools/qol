@@ -10,7 +10,6 @@ pub fn contract() -> &'static str {
 pub struct ReconnectConfig {
     pub adapter: String,
     pub managed_devices: Vec<String>,
-    pub auto_reconnect: bool,
     pub power_on_adapter: bool,
     pub set_default_output: bool,
     pub retry_initial_seconds: f64,
@@ -28,9 +27,41 @@ pub fn inspect() -> Result<
     qol_config::inspect_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
 }
 
+pub(crate) fn without_managed(managed: &[String], address: &str) -> Option<Vec<String>> {
+    let kept: Vec<String> = managed
+        .iter()
+        .filter(|entry| !entry.eq_ignore_ascii_case(address))
+        .cloned()
+        .collect();
+    (kept.len() != managed.len()).then_some(kept)
+}
+
+pub(crate) fn forget_managed(config: &ReconnectConfig, address: &str) {
+    let Some(kept) = without_managed(&config.managed_devices, address) else {
+        return;
+    };
+    std::mem::drop(std::thread::spawn(move || {
+        let id = qol_config::plugin_id_from_env(crate::PLUGIN_ID);
+        let keys = serde_json::json!({ "managed_devices": kept });
+        if let Err(error) = qol_plugin_api::host_exec::save_plugin_config_keys(&id, &keys) {
+            log::warn!("Bluetooth could not drop a removed device from reconnecting: {error}");
+        }
+    }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_removed_device_leaves_the_reconnect_list_whatever_its_letter_case() {
+        let managed = vec!["AA:BB".to_string(), "CC:DD".to_string()];
+        assert_eq!(
+            without_managed(&managed, "aa:bb"),
+            Some(vec!["CC:DD".to_string()])
+        );
+        assert_eq!(without_managed(&managed, "EE:FF"), None);
+    }
 
     #[test]
     fn contract_defaults_match_runtime_type() {
@@ -40,10 +71,17 @@ mod tests {
             qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).unwrap();
         assert!(config.adapter.is_empty());
         assert!(config.managed_devices.is_empty());
-        assert!(config.auto_reconnect);
         assert!(config.power_on_adapter);
         assert!(config.set_default_output);
         assert_eq!(config.retry_initial_seconds, 1.0);
         assert_eq!(config.retry_max_seconds, 60.0);
+    }
+
+    #[test]
+    fn a_stored_auto_reconnect_key_is_ignored() {
+        let mut stored = qol_config::defaults_json_from_contract(CONFIG_CONTRACT).unwrap();
+        stored["auto_reconnect"] = serde_json::json!(false);
+        let config: ReconnectConfig = serde_json::from_value(stored).unwrap();
+        assert!(config.managed_devices.is_empty());
     }
 }

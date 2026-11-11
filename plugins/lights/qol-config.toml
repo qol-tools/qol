@@ -1,605 +1,749 @@
 schema_version = 1
 title = "Lights"
-description = "Turn lights on and off and change their color and brightness."
+description = "Pair lights with your dongle and control each one."
 
-[section.connection]
-label = "Connection"
-description = "Your light dongle and the lights paired with it."
+[section.lights]
+label = "Lights"
+description = "Zigbee lights this computer controls."
 
-[section.controls]
-label = "Controls"
-description = "What the main light does right now."
-
-[section.advanced]
-label = "Advanced"
-description = "Only change these if Scan for dongle cannot find your dongle."
-
-[field.coordinator_status]
-type = "status"
-label = "Dongle"
-section = "connection"
-query = "connection_status"
-value_from = "state"
-label_map = { ok = "Connected", offline = "Offline", no_target = "No dongle found" }
-tone_map = { ok = "success", offline = "danger", no_target = "danger" }
-hide_values = ["ok"]
-
-[field.reconnect]
-type = "action"
-label = "Scan for dongle"
-section = "connection"
-action = "reload"
-variant = "primary"
-description = "Use after plugging in your light dongle."
-
-[field.pair_device]
-type = "action"
-label = "Pair device"
-section = "connection"
-action = "pair"
-variant = "primary"
-description = "Needs a compatible light dongle plugged in."
-
-[field.known_devices]
+[field.find_lights]
 type = "list"
-label = "Devices"
-section = "connection"
-query = "list_devices"
+label = "Find lights"
+description = "Search for new lights and pair them with your dongle."
+section = "lights"
+query = "find_lights"
 row_label = "{name}"
-row_subtitle = "{address}"
-empty_message = "No lights paired yet. Press Pair device to start."
-card_description = "The lights paired with your dongle."
+row_subtitle = "{detail}"
+items_label = "paired lights"
+card_description = "lights that joined this search."
+
+[field.find_lights.lead]
+label = "search"
+description = "{description}"
+row_label = "{label}"
+row_subtitle = "{detail}"
+
+[[field.find_lights.lead.actions]]
+action = "reload"
+label = "Find dongle"
+when = "can_find"
+
+[[field.find_lights.lead.actions]]
+action = "stop_pair"
+label = "Stop"
+when = "can_stop"
+
+[[field.find_lights.lead.actions]]
+action = "pair"
+label = "Search"
+when = "can_start"
+
+[[field.find_lights.lead.actions]]
+action = "pair"
+label = "Search again"
+when = "can_search_again"
+
+[field.dongle_page]
+type = "page"
+label = "Dongle"
+description = "The USB stick that talks to your lights."
+section = "lights"
+query = "dongle"
+value_from = "status"
+tone_map = { "Not found" = "danger", "Offline" = "danger" }
+
+[section.saved_lights]
+label = "Saved lights"
+description = "Lights paired with your dongle."
+
+[field.lights]
+type = "list"
+label = "Saved lights"
+section = "saved_lights"
+inline = true
+query = "lights"
+row_label = "{name}"
+row_subtitle = "{detail}"
+row_swatch = "{color}"
+empty_message = "No lights paired. Find lights to pair one."
+
+[field.lights.row_toggle]
+action = "light_on"
+active_action = "light_off"
+active_when = "on"
+input = { ieee = "{ieee}" }
+
+[[field.lights.row_controls]]
+control = "switch"
+label = "Power"
+value_from = "on"
+action = "light_on"
+active_action = "light_off"
+input = { ieee = "{ieee}" }
+
+[[field.lights.row_controls]]
+control = "color"
+label = "Colour"
+value_from = "color"
+action = "set_light_color"
+input = { ieee = "{ieee}", value = "{value}" }
+
+[[field.lights.row_controls]]
+control = "number"
+label = "Brightness"
+value_from = "brightness"
+action = "set_light_brightness"
+min = 1
+max = 100
+step = 1
+unit = "%"
+input = { ieee = "{ieee}", value = "{value}" }
+
+[[field.lights.row_controls]]
+control = "number"
+label = "Colour temperature"
+description = "153 is cool, 500 is warm."
+value_from = "mirek"
+action = "set_light_colortemp"
+min = 153
+max = 500
+step = 1
+input = { ieee = "{ieee}", value = "{value}" }
+
+[[field.lights.row_actions]]
+label = "Presets"
+description = "Looks you switch to from the launcher or a hotkey."
+when = "has_presets"
+open = "presets"
+
+[[field.lights.row_actions]]
+action = "add_preset"
+label = "Add a preset"
+description = "Saves the light as it is now."
+input = { ieee = "{ieee}" }
+
+[[field.lights.row_actions]]
+action = "remove_light"
+label = "Remove this light"
+description = "It has to pair again to come back."
+tone = "danger"
+input = { ieee = "{ieee}" }
+
+[field.presets]
+type = "list"
+label = "Presets"
+section = "saved_lights"
+detached = true
+query = "presets"
+row_label = "{name}"
+row_subtitle = "{detail}"
+empty_message = "No presets saved."
+card_description = "looks a hotkey switches to."
+
+[[field.presets.row_controls]]
+control = "text"
+label = "Name"
+value_from = "name"
+action = "set_preset_name"
+input = { id = "{id}", value = "{value}" }
+
+[[field.presets.row_controls]]
+control = "switch"
+label = "Light on"
+description = "Off makes this preset turn the light off."
+value_from = "power_on"
+action = "preset_power_on"
+active_action = "preset_power_off"
+input = { id = "{id}" }
+
+[[field.presets.row_controls]]
+control = "color"
+label = "Colour"
+value_from = "color"
+action = "set_preset_color"
+input = { id = "{id}", value = "{value}" }
+
+[[field.presets.row_controls]]
+control = "number"
+label = "Brightness"
+value_from = "brightness"
+action = "set_preset_brightness"
+min = 0
+max = 100
+step = 1
+unit = "%"
+input = { id = "{id}", value = "{value}" }
+
+[[field.presets.row_controls]]
+control = "number"
+label = "Colour temperature"
+description = "153 is cool, 500 is warm."
+value_from = "mirek"
+action = "set_preset_colortemp"
+min = 153
+max = 500
+step = 1
+input = { id = "{id}", value = "{value}" }
+
+[[field.presets.row_actions]]
+action = "remove_preset"
+label = "Remove this preset"
+description = "Deletes this saved look."
+tone = "danger"
+input = { id = "{id}" }
 
 [field.main_target_id]
 type = "select"
 config_key = "main_target_id"
 label = "Main light"
-description = "The light that the controls below and the main light hotkeys drive. Needed once two or more lights are paired."
-section = "controls"
+description = "The light the main light hotkeys and presets drive. Needed once two or more lights are paired."
+section = "saved_lights"
+hidden = true
 default = ""
 query = "light_options"
 lookup_label = "lights"
 card_description = "The light these controls drive."
 
-[field.toggle_power]
-type = "action"
-label = "Turn main light on or off"
-description = "Switches the main light's power to the opposite of what it is now."
-section = "controls"
-action = "toggle_main"
-variant = "primary"
-
 [field.live_color_hex]
 type = "color"
 config_key = "live_color_hex"
 label = "Color"
-description = "Pick the color the main light glows."
-section = "controls"
+description = "The color a light with no stored look starts from."
+section = "saved_lights"
+hidden = true
 default = "#FFFFFF"
-stream = "live_color"
 
 [field.live_brightness]
 type = "number"
 config_key = "live_brightness"
 label = "Brightness"
-description = "Drag the knob to set how bright the main light is."
-section = "controls"
+description = "The brightness a light with no stored look starts from."
+section = "saved_lights"
+hidden = true
 default = 100
 min = 1
 max = 100
 step = 1
-variant = "slider"
-stream = "live_color"
-action = "set_brightness_main"
 
 [field.live_mirek]
 type = "number"
 config_key = "live_mirek"
 label = "Color temperature"
-description = "Drag the knob to set how warm the main light's white is. 153 is coolest and 500 is warmest."
-section = "controls"
+description = "The color temperature a light with no stored look starts from."
+section = "saved_lights"
+hidden = true
 default = 300
 min = 153
 max = 500
 step = 1
-variant = "slider"
-action = "set_colortemp_main"
+
+[section.dongle]
+label = "Dongle"
+description = "The port and radio channel your lights use."
+page = "dongle_page"
 
 [field.serial_port]
 type = "string"
 config_key = "backend.serial_port"
-label = "Dongle port"
-description = "The serial port your dongle is on. Leave it as auto to find the dongle by itself. Applies the next time the plugin connects to the dongle."
-section = "advanced"
+label = "Port"
+description = "Auto finds the dongle on any port. Applies the next time the plugin connects to the dongle."
+section = "dongle"
 default = "auto"
 
 [field.channel]
 type = "number"
 config_key = "backend.channel"
 label = "Zigbee channel"
-description = "The radio channel the lights use, from 11 to 26. Applies the next time the plugin connects to the dongle."
-section = "advanced"
+description = "The radio channel your lights use, from 11 to 26. Applies the next time the plugin connects to the dongle."
+section = "dongle"
 default = 11
 min = 11
 max = 26
 step = 1
 
-[section.preset_1]
-label = "Preset 1"
-description = "What the Preset 1 action does to the main light."
+[field.find_dongle]
+type = "action"
+label = "Find dongle"
+description = "Looks for the dongle on every port again."
+section = "dongle"
+action = "reload"
 
 [field.preset_1_enabled]
 type = "boolean"
 config_key = "presets.preset_1.enabled"
-label = "Enabled"
-description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
-section = "preset_1"
+label = "Preset 1 saved"
+description = "Part of the look preset 1 applies."
+section = "saved_lights"
+hidden = true
 default = false
 
 [field.preset_1_name]
 type = "string"
 config_key = "presets.preset_1.name"
-label = "Name"
-description = "What this preset is called in error messages."
-section = "preset_1"
+label = "Preset 1 name"
+description = "Part of the look preset 1 applies."
+section = "saved_lights"
+hidden = true
 default = "Preset 1"
 
 [field.preset_1_power_on]
 type = "boolean"
 config_key = "presets.preset_1.power_on"
-label = "Light on"
-description = "Turn the main light on when the preset runs, or off when this is unchecked."
-section = "preset_1"
+label = "Preset 1 light on"
+description = "Part of the look preset 1 applies."
+section = "saved_lights"
+hidden = true
 default = true
 
 [field.preset_1_brightness]
 type = "number"
 config_key = "presets.preset_1.brightness"
-label = "Brightness"
-description = "How bright the main light gets, from 0 to 100."
-section = "preset_1"
+label = "Preset 1 brightness"
+description = "Part of the look preset 1 applies."
+section = "saved_lights"
+hidden = true
 default = 100
 min = 0
 max = 100
 step = 1
-variant = "slider"
 
 [field.preset_1_color_hex]
 type = "color"
 config_key = "presets.preset_1.color_hex"
-label = "Color"
-description = "The color the main light glows."
-section = "preset_1"
+label = "Preset 1 color"
+description = "Part of the look preset 1 applies."
+section = "saved_lights"
+hidden = true
 default = "#FFFFFF"
 
 [field.preset_1_mirek]
 type = "number"
 config_key = "presets.preset_1.mirek"
-label = "Color temperature"
-description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
-section = "preset_1"
+label = "Preset 1 color temperature"
+description = "Part of the look preset 1 applies."
+section = "saved_lights"
+hidden = true
 default = 300
 min = 153
 max = 500
 step = 1
-variant = "slider"
-
-[section.preset_2]
-label = "Preset 2"
-description = "What the Preset 2 action does to the main light."
 
 [field.preset_2_enabled]
 type = "boolean"
 config_key = "presets.preset_2.enabled"
-label = "Enabled"
-description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
-section = "preset_2"
+label = "Preset 2 saved"
+description = "Part of the look preset 2 applies."
+section = "saved_lights"
+hidden = true
 default = false
 
 [field.preset_2_name]
 type = "string"
 config_key = "presets.preset_2.name"
-label = "Name"
-description = "What this preset is called in error messages."
-section = "preset_2"
+label = "Preset 2 name"
+description = "Part of the look preset 2 applies."
+section = "saved_lights"
+hidden = true
 default = "Preset 2"
 
 [field.preset_2_power_on]
 type = "boolean"
 config_key = "presets.preset_2.power_on"
-label = "Light on"
-description = "Turn the main light on when the preset runs, or off when this is unchecked."
-section = "preset_2"
+label = "Preset 2 light on"
+description = "Part of the look preset 2 applies."
+section = "saved_lights"
+hidden = true
 default = true
 
 [field.preset_2_brightness]
 type = "number"
 config_key = "presets.preset_2.brightness"
-label = "Brightness"
-description = "How bright the main light gets, from 0 to 100."
-section = "preset_2"
+label = "Preset 2 brightness"
+description = "Part of the look preset 2 applies."
+section = "saved_lights"
+hidden = true
 default = 100
 min = 0
 max = 100
 step = 1
-variant = "slider"
 
 [field.preset_2_color_hex]
 type = "color"
 config_key = "presets.preset_2.color_hex"
-label = "Color"
-description = "The color the main light glows."
-section = "preset_2"
+label = "Preset 2 color"
+description = "Part of the look preset 2 applies."
+section = "saved_lights"
+hidden = true
 default = "#FFFFFF"
 
 [field.preset_2_mirek]
 type = "number"
 config_key = "presets.preset_2.mirek"
-label = "Color temperature"
-description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
-section = "preset_2"
+label = "Preset 2 color temperature"
+description = "Part of the look preset 2 applies."
+section = "saved_lights"
+hidden = true
 default = 300
 min = 153
 max = 500
 step = 1
-variant = "slider"
-
-[section.preset_3]
-label = "Preset 3"
-description = "What the Preset 3 action does to the main light."
 
 [field.preset_3_enabled]
 type = "boolean"
 config_key = "presets.preset_3.enabled"
-label = "Enabled"
-description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
-section = "preset_3"
+label = "Preset 3 saved"
+description = "Part of the look preset 3 applies."
+section = "saved_lights"
+hidden = true
 default = false
 
 [field.preset_3_name]
 type = "string"
 config_key = "presets.preset_3.name"
-label = "Name"
-description = "What this preset is called in error messages."
-section = "preset_3"
+label = "Preset 3 name"
+description = "Part of the look preset 3 applies."
+section = "saved_lights"
+hidden = true
 default = "Preset 3"
 
 [field.preset_3_power_on]
 type = "boolean"
 config_key = "presets.preset_3.power_on"
-label = "Light on"
-description = "Turn the main light on when the preset runs, or off when this is unchecked."
-section = "preset_3"
+label = "Preset 3 light on"
+description = "Part of the look preset 3 applies."
+section = "saved_lights"
+hidden = true
 default = true
 
 [field.preset_3_brightness]
 type = "number"
 config_key = "presets.preset_3.brightness"
-label = "Brightness"
-description = "How bright the main light gets, from 0 to 100."
-section = "preset_3"
+label = "Preset 3 brightness"
+description = "Part of the look preset 3 applies."
+section = "saved_lights"
+hidden = true
 default = 100
 min = 0
 max = 100
 step = 1
-variant = "slider"
 
 [field.preset_3_color_hex]
 type = "color"
 config_key = "presets.preset_3.color_hex"
-label = "Color"
-description = "The color the main light glows."
-section = "preset_3"
+label = "Preset 3 color"
+description = "Part of the look preset 3 applies."
+section = "saved_lights"
+hidden = true
 default = "#FFFFFF"
 
 [field.preset_3_mirek]
 type = "number"
 config_key = "presets.preset_3.mirek"
-label = "Color temperature"
-description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
-section = "preset_3"
+label = "Preset 3 color temperature"
+description = "Part of the look preset 3 applies."
+section = "saved_lights"
+hidden = true
 default = 300
 min = 153
 max = 500
 step = 1
-variant = "slider"
-
-[section.preset_4]
-label = "Preset 4"
-description = "What the Preset 4 action does to the main light."
 
 [field.preset_4_enabled]
 type = "boolean"
 config_key = "presets.preset_4.enabled"
-label = "Enabled"
-description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
-section = "preset_4"
+label = "Preset 4 saved"
+description = "Part of the look preset 4 applies."
+section = "saved_lights"
+hidden = true
 default = false
 
 [field.preset_4_name]
 type = "string"
 config_key = "presets.preset_4.name"
-label = "Name"
-description = "What this preset is called in error messages."
-section = "preset_4"
+label = "Preset 4 name"
+description = "Part of the look preset 4 applies."
+section = "saved_lights"
+hidden = true
 default = "Preset 4"
 
 [field.preset_4_power_on]
 type = "boolean"
 config_key = "presets.preset_4.power_on"
-label = "Light on"
-description = "Turn the main light on when the preset runs, or off when this is unchecked."
-section = "preset_4"
+label = "Preset 4 light on"
+description = "Part of the look preset 4 applies."
+section = "saved_lights"
+hidden = true
 default = true
 
 [field.preset_4_brightness]
 type = "number"
 config_key = "presets.preset_4.brightness"
-label = "Brightness"
-description = "How bright the main light gets, from 0 to 100."
-section = "preset_4"
+label = "Preset 4 brightness"
+description = "Part of the look preset 4 applies."
+section = "saved_lights"
+hidden = true
 default = 100
 min = 0
 max = 100
 step = 1
-variant = "slider"
 
 [field.preset_4_color_hex]
 type = "color"
 config_key = "presets.preset_4.color_hex"
-label = "Color"
-description = "The color the main light glows."
-section = "preset_4"
+label = "Preset 4 color"
+description = "Part of the look preset 4 applies."
+section = "saved_lights"
+hidden = true
 default = "#FFFFFF"
 
 [field.preset_4_mirek]
 type = "number"
 config_key = "presets.preset_4.mirek"
-label = "Color temperature"
-description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
-section = "preset_4"
+label = "Preset 4 color temperature"
+description = "Part of the look preset 4 applies."
+section = "saved_lights"
+hidden = true
 default = 300
 min = 153
 max = 500
 step = 1
-variant = "slider"
-
-[section.preset_5]
-label = "Preset 5"
-description = "What the Preset 5 action does to the main light."
 
 [field.preset_5_enabled]
 type = "boolean"
 config_key = "presets.preset_5.enabled"
-label = "Enabled"
-description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
-section = "preset_5"
+label = "Preset 5 saved"
+description = "Part of the look preset 5 applies."
+section = "saved_lights"
+hidden = true
 default = false
 
 [field.preset_5_name]
 type = "string"
 config_key = "presets.preset_5.name"
-label = "Name"
-description = "What this preset is called in error messages."
-section = "preset_5"
+label = "Preset 5 name"
+description = "Part of the look preset 5 applies."
+section = "saved_lights"
+hidden = true
 default = "Preset 5"
 
 [field.preset_5_power_on]
 type = "boolean"
 config_key = "presets.preset_5.power_on"
-label = "Light on"
-description = "Turn the main light on when the preset runs, or off when this is unchecked."
-section = "preset_5"
+label = "Preset 5 light on"
+description = "Part of the look preset 5 applies."
+section = "saved_lights"
+hidden = true
 default = true
 
 [field.preset_5_brightness]
 type = "number"
 config_key = "presets.preset_5.brightness"
-label = "Brightness"
-description = "How bright the main light gets, from 0 to 100."
-section = "preset_5"
+label = "Preset 5 brightness"
+description = "Part of the look preset 5 applies."
+section = "saved_lights"
+hidden = true
 default = 100
 min = 0
 max = 100
 step = 1
-variant = "slider"
 
 [field.preset_5_color_hex]
 type = "color"
 config_key = "presets.preset_5.color_hex"
-label = "Color"
-description = "The color the main light glows."
-section = "preset_5"
+label = "Preset 5 color"
+description = "Part of the look preset 5 applies."
+section = "saved_lights"
+hidden = true
 default = "#FFFFFF"
 
 [field.preset_5_mirek]
 type = "number"
 config_key = "presets.preset_5.mirek"
-label = "Color temperature"
-description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
-section = "preset_5"
+label = "Preset 5 color temperature"
+description = "Part of the look preset 5 applies."
+section = "saved_lights"
+hidden = true
 default = 300
 min = 153
 max = 500
 step = 1
-variant = "slider"
-
-[section.preset_6]
-label = "Preset 6"
-description = "What the Preset 6 action does to the main light."
 
 [field.preset_6_enabled]
 type = "boolean"
 config_key = "presets.preset_6.enabled"
-label = "Enabled"
-description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
-section = "preset_6"
+label = "Preset 6 saved"
+description = "Part of the look preset 6 applies."
+section = "saved_lights"
+hidden = true
 default = false
 
 [field.preset_6_name]
 type = "string"
 config_key = "presets.preset_6.name"
-label = "Name"
-description = "What this preset is called in error messages."
-section = "preset_6"
+label = "Preset 6 name"
+description = "Part of the look preset 6 applies."
+section = "saved_lights"
+hidden = true
 default = "Preset 6"
 
 [field.preset_6_power_on]
 type = "boolean"
 config_key = "presets.preset_6.power_on"
-label = "Light on"
-description = "Turn the main light on when the preset runs, or off when this is unchecked."
-section = "preset_6"
+label = "Preset 6 light on"
+description = "Part of the look preset 6 applies."
+section = "saved_lights"
+hidden = true
 default = true
 
 [field.preset_6_brightness]
 type = "number"
 config_key = "presets.preset_6.brightness"
-label = "Brightness"
-description = "How bright the main light gets, from 0 to 100."
-section = "preset_6"
+label = "Preset 6 brightness"
+description = "Part of the look preset 6 applies."
+section = "saved_lights"
+hidden = true
 default = 100
 min = 0
 max = 100
 step = 1
-variant = "slider"
 
 [field.preset_6_color_hex]
 type = "color"
 config_key = "presets.preset_6.color_hex"
-label = "Color"
-description = "The color the main light glows."
-section = "preset_6"
+label = "Preset 6 color"
+description = "Part of the look preset 6 applies."
+section = "saved_lights"
+hidden = true
 default = "#FFFFFF"
 
 [field.preset_6_mirek]
 type = "number"
 config_key = "presets.preset_6.mirek"
-label = "Color temperature"
-description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
-section = "preset_6"
+label = "Preset 6 color temperature"
+description = "Part of the look preset 6 applies."
+section = "saved_lights"
+hidden = true
 default = 300
 min = 153
 max = 500
 step = 1
-variant = "slider"
-
-[section.preset_7]
-label = "Preset 7"
-description = "What the Preset 7 action does to the main light."
 
 [field.preset_7_enabled]
 type = "boolean"
 config_key = "presets.preset_7.enabled"
-label = "Enabled"
-description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
-section = "preset_7"
+label = "Preset 7 saved"
+description = "Part of the look preset 7 applies."
+section = "saved_lights"
+hidden = true
 default = false
 
 [field.preset_7_name]
 type = "string"
 config_key = "presets.preset_7.name"
-label = "Name"
-description = "What this preset is called in error messages."
-section = "preset_7"
+label = "Preset 7 name"
+description = "Part of the look preset 7 applies."
+section = "saved_lights"
+hidden = true
 default = "Preset 7"
 
 [field.preset_7_power_on]
 type = "boolean"
 config_key = "presets.preset_7.power_on"
-label = "Light on"
-description = "Turn the main light on when the preset runs, or off when this is unchecked."
-section = "preset_7"
+label = "Preset 7 light on"
+description = "Part of the look preset 7 applies."
+section = "saved_lights"
+hidden = true
 default = true
 
 [field.preset_7_brightness]
 type = "number"
 config_key = "presets.preset_7.brightness"
-label = "Brightness"
-description = "How bright the main light gets, from 0 to 100."
-section = "preset_7"
+label = "Preset 7 brightness"
+description = "Part of the look preset 7 applies."
+section = "saved_lights"
+hidden = true
 default = 100
 min = 0
 max = 100
 step = 1
-variant = "slider"
 
 [field.preset_7_color_hex]
 type = "color"
 config_key = "presets.preset_7.color_hex"
-label = "Color"
-description = "The color the main light glows."
-section = "preset_7"
+label = "Preset 7 color"
+description = "Part of the look preset 7 applies."
+section = "saved_lights"
+hidden = true
 default = "#FFFFFF"
 
 [field.preset_7_mirek]
 type = "number"
 config_key = "presets.preset_7.mirek"
-label = "Color temperature"
-description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
-section = "preset_7"
+label = "Preset 7 color temperature"
+description = "Part of the look preset 7 applies."
+section = "saved_lights"
+hidden = true
 default = 300
 min = 153
 max = 500
 step = 1
-variant = "slider"
-
-[section.preset_8]
-label = "Preset 8"
-description = "What the Preset 8 action does to the main light."
 
 [field.preset_8_enabled]
 type = "boolean"
 config_key = "presets.preset_8.enabled"
-label = "Enabled"
-description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
-section = "preset_8"
+label = "Preset 8 saved"
+description = "Part of the look preset 8 applies."
+section = "saved_lights"
+hidden = true
 default = false
 
 [field.preset_8_name]
 type = "string"
 config_key = "presets.preset_8.name"
-label = "Name"
-description = "What this preset is called in error messages."
-section = "preset_8"
+label = "Preset 8 name"
+description = "Part of the look preset 8 applies."
+section = "saved_lights"
+hidden = true
 default = "Preset 8"
 
 [field.preset_8_power_on]
 type = "boolean"
 config_key = "presets.preset_8.power_on"
-label = "Light on"
-description = "Turn the main light on when the preset runs, or off when this is unchecked."
-section = "preset_8"
+label = "Preset 8 light on"
+description = "Part of the look preset 8 applies."
+section = "saved_lights"
+hidden = true
 default = true
 
 [field.preset_8_brightness]
 type = "number"
 config_key = "presets.preset_8.brightness"
-label = "Brightness"
-description = "How bright the main light gets, from 0 to 100."
-section = "preset_8"
+label = "Preset 8 brightness"
+description = "Part of the look preset 8 applies."
+section = "saved_lights"
+hidden = true
 default = 100
 min = 0
 max = 100
 step = 1
-variant = "slider"
 
 [field.preset_8_color_hex]
 type = "color"
 config_key = "presets.preset_8.color_hex"
-label = "Color"
-description = "The color the main light glows."
-section = "preset_8"
+label = "Preset 8 color"
+description = "Part of the look preset 8 applies."
+section = "saved_lights"
+hidden = true
 default = "#FFFFFF"
 
 [field.preset_8_mirek]
 type = "number"
 config_key = "presets.preset_8.mirek"
-label = "Color temperature"
-description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
-section = "preset_8"
+label = "Preset 8 color temperature"
+description = "Part of the look preset 8 applies."
+section = "saved_lights"
+hidden = true
 default = 300
 min = 153
 max = 500
 step = 1
-variant = "slider"

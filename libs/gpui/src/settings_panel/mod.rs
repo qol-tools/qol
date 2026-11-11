@@ -1065,6 +1065,7 @@ fn push_page_rows(panel: &SettingsPanel, rows: &mut Vec<Row>, sections: &mut Vec
             rows: vec![index],
             source,
             device_kind: None,
+            page: None,
         });
     }
 }
@@ -1463,6 +1464,7 @@ active_query = "status"
             rows: vec![0],
             source: 0,
             device_kind: None,
+            page: None,
         }];
         let expected = super::chrome_height(&sections)
             + super::PANEL_GROUP_HEADER_HEIGHT
@@ -1484,6 +1486,7 @@ active_query = "status"
             rows,
             source: 0,
             device_kind: Some(kind.into()),
+            page: None,
         };
         let mouse = section(vec![0, 1, 2], "mouse");
         let keyboard = section(vec![3, 4], "keyboard");
@@ -1493,6 +1496,7 @@ active_query = "status"
                 &rows,
                 &[RowSection {
                     device_kind: None,
+                    page: None,
                     ..mouse
                 }]
             )
@@ -1508,6 +1512,7 @@ active_query = "status"
             rows: vec![0],
             source: 0,
             device_kind: None,
+            page: None,
         }];
         assert_eq!(
             panel_height(&rows, &sections),
@@ -1564,6 +1569,7 @@ active_query = "status"
             rows: vec![0],
             source: 0,
             device_kind: None,
+            page: None,
         }];
         assert_eq!(
             panel_height(&gamepad, &sections),
@@ -1608,6 +1614,7 @@ active_query = "status"
             rows,
             source: 0,
             device_kind: None,
+            page: None,
         };
         let sections = vec![
             plain("One", vec![0]),
@@ -1635,6 +1642,7 @@ active_query = "status"
             rows,
             source: 0,
             device_kind: None,
+            page: None,
         };
         let sections = vec![plain("One", vec![0]), plain("Empty", Vec::new())];
 
@@ -1659,6 +1667,7 @@ active_query = "status"
             rows,
             source: 0,
             device_kind: None,
+            page: None,
         };
         let sections = vec![
             plain("One", vec![0]),
@@ -1690,6 +1699,7 @@ active_query = "status"
             rows: vec![0, 1, 2],
             source: 0,
             device_kind: None,
+            page: None,
         }];
 
         assert_eq!(

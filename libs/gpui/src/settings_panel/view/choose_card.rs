@@ -183,7 +183,7 @@ impl SettingsPanelView {
         let ChooseOrigin::Row(origin_row) = self.stack.last()?.choose.as_ref()?.origin else {
             return None;
         };
-        let row = self.stack[parent].rows.get(origin_row)?;
+        let row = self.rows_of(parent).get(origin_row)?;
         row_query_names(row).into_iter().find_map(|name| {
             match self.query_states.get(&(row.source, name.to_string())) {
                 Some(RowQueryState::Unavailable(failure)) => Some(failure.clone()),
@@ -198,7 +198,7 @@ impl SettingsPanelView {
         let choose = self.stack[top].choose.as_ref()?;
         let tiles = match choose.origin {
             ChooseOrigin::Row(origin_row) => {
-                let row = self.stack[parent].rows.get(origin_row)?;
+                let row = self.rows_of(parent).get(origin_row)?;
                 let waiting = self.choose_waiting_label(row);
                 match &row.control {
                     RowControl::Select { options, index, .. } => {
@@ -236,10 +236,7 @@ impl SettingsPanelView {
             return false;
         };
         matches!(
-            self.stack[parent]
-                .rows
-                .get(origin_row)
-                .map(|row| &row.control),
+            self.rows_of(parent).get(origin_row).map(|row| &row.control),
             Some(RowControl::MultiSelect { .. })
         )
     }
@@ -259,7 +256,7 @@ impl SettingsPanelView {
         match origin {
             ChooseOrigin::DisplayModes => self.choose_display_mode(option, cx),
             ChooseOrigin::Row(origin_row) => {
-                let Some(row) = self.stack[parent].rows.get_mut(origin_row) else {
+                let Some(row) = self.rows_of_mut(parent).get_mut(origin_row) else {
                     return;
                 };
                 match &mut row.control {
@@ -307,7 +304,7 @@ impl SettingsPanelView {
     }
 
     pub(super) fn open_choose_card(&mut self, index: usize) {
-        let Some(row) = self.level().rows.get(index) else {
+        let Some(row) = self.level_rows().get(index) else {
             return;
         };
         if !matches!(
@@ -336,6 +333,7 @@ impl SettingsPanelView {
             rows: Vec::new(),
             source,
             device_kind: None,
+            page: None,
         };
         let child = Level {
             rows: Vec::new(),

@@ -222,8 +222,7 @@ impl PlacementDrag {
 impl SettingsPanelView {
     pub(super) fn placement_spot(&self) -> Option<Spot> {
         match self
-            .level()
-            .rows
+            .level_rows()
             .get(self.level().selected)
             .map(|row| &row.control)
         {
@@ -356,8 +355,7 @@ impl SettingsPanelView {
     fn place_notifications(&mut self, spot: Spot) {
         let selected = self.level().selected;
         let Some(RowControl::Placement(current)) = self
-            .level_mut()
-            .rows
+            .level_rows_mut()
             .get_mut(selected)
             .map(|row| &mut row.control)
         else {
@@ -375,7 +373,7 @@ impl SettingsPanelView {
 
     pub(super) fn render_placement(&self, index: usize, cx: &mut Context<Self>) -> Div {
         let Some(RowControl::Placement(spot)) =
-            self.level().rows.get(index).map(|row| &row.control)
+            self.level_rows().get(index).map(|row| &row.control)
         else {
             return div();
         };

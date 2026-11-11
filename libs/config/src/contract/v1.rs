@@ -120,6 +120,8 @@ pub struct SectionSpec {
     pub platforms: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -218,6 +220,20 @@ pub struct FieldSpec {
     pub hide_values: Option<Vec<String>>,
     #[serde(default)]
     pub align: Option<FieldAlign>,
+    #[serde(default)]
+    pub inline: Option<bool>,
+    #[serde(default)]
+    pub hidden: Option<bool>,
+    #[serde(default)]
+    pub hide_when_empty: Option<bool>,
+    #[serde(default)]
+    pub row_toggle: Option<RowToggleSpec>,
+    #[serde(default)]
+    pub row_controls: Vec<RowControlSpec>,
+    #[serde(default)]
+    pub row_swatch: Option<String>,
+    #[serde(default)]
+    pub detached: Option<bool>,
     #[serde(flatten)]
     pub number: NumberConstraints,
 }
@@ -277,6 +293,52 @@ pub struct RowActionSpec {
     pub key: Option<String>,
     #[serde(default)]
     pub when: Option<String>,
+    #[serde(default)]
+    pub member_of: Option<String>,
+    #[serde(default)]
+    pub member: Option<String>,
+    #[serde(default)]
+    pub tone: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct RowToggleSpec {
+    pub action: String,
+    pub active_action: String,
+    pub active_when: String,
+    #[serde(default)]
+    pub input: Option<IndexMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RowControlKind {
+    Switch,
+    Number,
+    Color,
+    Text,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct RowControlSpec {
+    pub control: RowControlKind,
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub value_from: String,
+    pub action: String,
+    #[serde(default)]
+    pub active_action: Option<String>,
+    #[serde(default)]
+    pub input: Option<IndexMap<String, String>>,
+    #[serde(default)]
+    pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
+    #[serde(default)]
+    pub step: Option<f64>,
+    #[serde(default)]
+    pub unit: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -336,6 +398,7 @@ pub enum FieldKind {
     Gamepad,
     DisplayLayout,
     Placement,
+    Page,
 }
 
 impl FieldKind {
@@ -348,6 +411,7 @@ impl FieldKind {
                 | Self::QrCode
                 | Self::Gamepad
                 | Self::DisplayLayout
+                | Self::Page
         )
     }
 
@@ -368,6 +432,7 @@ impl FieldKind {
             Self::Gamepad => "gamepad",
             Self::DisplayLayout => "display_layout",
             Self::Placement => "placement",
+            Self::Page => "page",
         }
     }
 }
@@ -1009,5 +1074,120 @@ poll = 5
         )
         .expect_err("unknown key");
         assert!(error.to_string().contains("poll"), "{error}");
+    }
+
+    #[test]
+    fn parses_a_page_field_and_the_section_that_opens_on_it() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[section.adapter]
+label = "Adapter"
+page = "bluetooth_page"
+
+[section.bluetooth]
+label = "Bluetooth"
+
+[field.bluetooth_page]
+type = "page"
+label = "Bluetooth"
+section = "bluetooth"
+query = "adapter_status"
+value_from = "name"
+action = "enable_adapter"
+active_action = "disable_adapter"
+active_query = "adapter_status"
+active_value_from = "powered"
+"#,
+        )
+        .expect("parse");
+        let field = spec.field("bluetooth_page").expect("field present");
+        assert_eq!(field.kind, FieldKind::Page);
+        assert_eq!(FieldKind::Page.name(), "page");
+        assert!(!field.has_stored_value());
+        assert!(!field.requires_declared_default());
+        assert_eq!(field.action.as_deref(), Some("enable_adapter"));
+        assert_eq!(
+            spec.section("adapter").and_then(|s| s.page.as_deref()),
+            Some("bluetooth_page")
+        );
+        assert_eq!(spec.section("bluetooth").and_then(|s| s.page.clone()), None);
+    }
+
+    #[test]
+    fn parses_an_inline_list_with_a_row_toggle_and_the_hide_keys() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.devices]
+type = "list"
+query = "devices"
+inline = true
+hide_when_empty = false
+empty_message = "No devices."
+
+[field.devices.row_toggle]
+action = "enable"
+active_action = "disable"
+active_when = "enabled"
+input = { address = "{address}" }
+
+[field.managed]
+type = "string_array"
+default = []
+hidden = true
+"#,
+        )
+        .expect("parse");
+        let devices = spec.field("devices").expect("devices");
+        assert_eq!(devices.inline, Some(true));
+        assert_eq!(devices.hide_when_empty, Some(false));
+        let toggle = devices.row_toggle.as_ref().expect("row toggle");
+        assert_eq!(toggle.action, "enable");
+        assert_eq!(toggle.active_action, "disable");
+        assert_eq!(toggle.active_when, "enabled");
+        assert_eq!(
+            toggle.input.as_ref().and_then(|input| input.get("address")),
+            Some(&"{address}".to_string())
+        );
+        let managed = spec.field("managed").expect("managed");
+        assert_eq!(managed.hidden, Some(true));
+        assert!(managed.has_stored_value());
+        assert_eq!(spec.field("managed").and_then(|f| f.inline), None);
+    }
+
+    #[test]
+    fn parses_membership_and_danger_row_actions_without_an_action() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.devices]
+type = "list"
+query = "devices"
+
+[[field.devices.row_actions]]
+label = "Reconnect automatically"
+description = "Keep retrying while it is disconnected."
+member_of = "managed_devices"
+member = "{address}"
+
+[[field.devices.row_actions]]
+action = "forget"
+label = "Forget"
+tone = "danger"
+"#,
+        )
+        .expect("parse");
+        let actions = &spec.field("devices").expect("devices").row_actions;
+        assert_eq!(actions[0].action, "");
+        assert_eq!(actions[0].member_of.as_deref(), Some("managed_devices"));
+        assert_eq!(actions[0].member.as_deref(), Some("{address}"));
+        assert_eq!(actions[0].tone, None);
+        assert_eq!(actions[1].action, "forget");
+        assert_eq!(actions[1].tone.as_deref(), Some("danger"));
+        assert_eq!(actions[1].member_of, None);
     }
 }

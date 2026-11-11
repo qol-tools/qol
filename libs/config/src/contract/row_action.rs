@@ -1,6 +1,8 @@
 use serde_json::{Map, Value};
 
-use super::{RowActionSpec, RowSliderSpec};
+use super::{RowActionSpec, RowControlSpec, RowSliderSpec, RowToggleSpec};
+
+const DANGER_TONE: &str = "danger";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedRowAction {
@@ -9,6 +11,16 @@ pub struct ResolvedRowAction {
     pub label: String,
     pub description: Option<String>,
     pub input: Value,
+    pub member_of: Option<String>,
+    pub member: Option<String>,
+    pub danger: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedRowToggle {
+    pub on: bool,
+    pub turn_on: ResolvedRowAction,
+    pub turn_off: ResolvedRowAction,
 }
 
 pub fn resolve_row_actions(
@@ -26,8 +38,60 @@ pub fn resolve_row_actions(
             label: spec.label.clone().unwrap_or_else(|| "Run".into()),
             description: spec.description.clone(),
             input: resolve_input(spec.input.as_ref(), row),
+            member_of: spec.member_of.clone(),
+            member: spec
+                .member
+                .as_deref()
+                .map(|template| interpolate_row_template(template, row)),
+            danger: spec.tone.as_deref() == Some(DANGER_TONE),
         })
         .collect()
+}
+
+pub fn resolve_row_toggle(spec: &RowToggleSpec, row: &Value) -> ResolvedRowToggle {
+    let resolve = |action: &str| ResolvedRowAction {
+        action: action.to_string(),
+        open: None,
+        label: "Run".into(),
+        description: None,
+        input: resolve_input(spec.input.as_ref(), row),
+        member_of: None,
+        member: None,
+        danger: false,
+    };
+    ResolvedRowToggle {
+        on: row.get(&spec.active_when).is_some_and(value_is_truthy),
+        turn_on: resolve(&spec.action),
+        turn_off: resolve(&spec.active_action),
+    }
+}
+
+pub fn resolve_row_control_action(
+    control: &RowControlSpec,
+    row: &Value,
+    value: Value,
+    turn_off: bool,
+) -> ResolvedRowAction {
+    let mut merged = row.clone();
+    if !merged.is_object() {
+        merged = serde_json::json!({});
+    }
+    merged["value"] = value;
+    let action = control
+        .active_action
+        .as_deref()
+        .filter(|_| turn_off)
+        .unwrap_or(&control.action);
+    ResolvedRowAction {
+        action: action.to_string(),
+        open: None,
+        label: control.label.clone(),
+        description: control.description.clone(),
+        input: resolve_input(control.input.as_ref(), &merged),
+        member_of: None,
+        member: None,
+        danger: false,
+    }
 }
 
 pub fn resolve_slider_action(slider: &RowSliderSpec, row: &Value, value: f64) -> ResolvedRowAction {
@@ -42,6 +106,9 @@ pub fn resolve_slider_action(slider: &RowSliderSpec, row: &Value, value: f64) ->
         label: "Run".into(),
         description: None,
         input: resolve_input(slider.input.as_ref(), &merged),
+        member_of: None,
+        member: None,
+        danger: false,
     }
 }
 
@@ -157,8 +224,9 @@ mod tests {
     use indexmap::IndexMap;
 
     use super::{
-        interpolate_row_template, resolve_row_actions, resolve_slider_action, row_template_keys,
-        RowActionSpec, RowSliderSpec,
+        interpolate_row_template, resolve_row_actions, resolve_row_control_action,
+        resolve_row_toggle, resolve_slider_action, row_template_keys, RowActionSpec, RowSliderSpec,
+        RowToggleSpec,
     };
 
     fn action(
@@ -178,6 +246,9 @@ mod tests {
             description: description.map(str::to_string),
             key: None,
             when: when.map(str::to_string),
+            member_of: None,
+            member: None,
+            tone: None,
         }
     }
 
@@ -391,6 +462,100 @@ mod tests {
                 expected,
                 "enabled: {enabled}"
             );
+        }
+    }
+
+    #[test]
+    fn a_membership_action_resolves_its_member_against_the_item() {
+        let membership = RowActionSpec {
+            member_of: Some("managed_devices".into()),
+            member: Some("{address}".into()),
+            ..action("", Some("Reconnect automatically"), None, None)
+        };
+        let row = serde_json::json!({ "address": "AA:BB" });
+
+        let resolved = resolve_row_actions(None, std::slice::from_ref(&membership), &row);
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].member_of.as_deref(), Some("managed_devices"));
+        assert_eq!(resolved[0].member.as_deref(), Some("AA:BB"));
+        assert!(!resolved[0].danger);
+        let gated = RowActionSpec {
+            when: Some("paired".into()),
+            ..membership
+        };
+        assert!(resolve_row_actions(None, &[gated], &row).is_empty());
+    }
+
+    #[test]
+    fn a_row_control_sends_its_value_and_picks_the_action_for_the_way_it_turns() {
+        let control: crate::contract::RowControlSpec = toml::from_str(
+            r#"
+control = "switch"
+label = "Power"
+value_from = "on"
+action = "light_on"
+active_action = "light_off"
+input = { ieee = "{ieee}", value = "{value}" }
+"#,
+        )
+        .expect("parse control");
+        let row = serde_json::json!({ "ieee": "AA:BB", "on": true });
+        let cases = [
+            (serde_json::json!(40), false, "light_on"),
+            (serde_json::json!("#FFB46B"), false, "light_on"),
+            (serde_json::json!(false), true, "light_off"),
+        ];
+        for (value, turn_off, action) in cases {
+            let resolved = resolve_row_control_action(&control, &row, value.clone(), turn_off);
+            assert_eq!(resolved.action, action, "{value}");
+            assert_eq!(
+                resolved.input,
+                serde_json::json!({ "ieee": "AA:BB", "value": value })
+            );
+            assert_eq!(resolved.label, "Power");
+        }
+    }
+
+    #[test]
+    fn a_danger_tone_resolves_to_a_danger_action() {
+        let cases = [
+            (Some("danger"), true),
+            (Some("other"), false),
+            (None, false),
+        ];
+        for (tone, expected) in cases {
+            let spec = RowActionSpec {
+                tone: tone.map(str::to_string),
+                ..action("remove", Some("Remove"), None, None)
+            };
+            let resolved = resolve_row_actions(Some(&spec), &[], &serde_json::json!({}));
+            assert_eq!(resolved[0].danger, expected, "tone {tone:?}");
+            assert_eq!(resolved[0].member_of, None);
+            assert_eq!(resolved[0].member, None);
+        }
+    }
+
+    #[test]
+    fn a_row_toggle_resolves_its_state_and_both_actions_against_the_item() {
+        let toggle = RowToggleSpec {
+            action: "enable".into(),
+            active_action: "disable".into(),
+            active_when: "enabled".into(),
+            input: Some(IndexMap::from([("id".into(), "{id}".into())])),
+        };
+        let cases = [
+            (serde_json::json!({ "id": 7, "enabled": true }), true),
+            (serde_json::json!({ "id": 7, "enabled": false }), false),
+            (serde_json::json!({ "id": 7 }), false),
+        ];
+        for (row, on) in cases {
+            let resolved = resolve_row_toggle(&toggle, &row);
+            assert_eq!(resolved.on, on, "row {row}");
+            assert_eq!(resolved.turn_on.action, "enable");
+            assert_eq!(resolved.turn_off.action, "disable");
+            assert_eq!(resolved.turn_on.input["id"], serde_json::json!(7));
+            assert_eq!(resolved.turn_off.input["id"], serde_json::json!(7));
         }
     }
 }

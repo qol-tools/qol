@@ -139,6 +139,7 @@ impl SettingsPanelView {
             rows: Vec::new(),
             source,
             device_kind: None,
+            page: None,
         };
         let child = Level {
             rows: Vec::new(),
@@ -486,7 +487,7 @@ impl SettingsPanelView {
     }
 
     pub(super) fn open_display_layout_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
-        let Some(row) = self.level().rows.get(row_index) else {
+        let Some(row) = self.level_rows().get(row_index) else {
             return;
         };
         let RowControl::DisplayLayout(state) = &row.control else {
@@ -1077,6 +1078,7 @@ fn display_layout_card_level(
         rows: display_layout_card_row_indices(has_slider),
         source,
         device_kind: None,
+        page: None,
     };
     let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
     Level {

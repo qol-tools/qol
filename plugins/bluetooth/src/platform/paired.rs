@@ -16,7 +16,7 @@ use crate::bluetooth::{
     DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
-use crate::hostfix::BluetoothHostFixes;
+use crate::hostfix::{problems_payload, BluetoothHostFixes};
 
 pub(super) trait PairedStack {
     const TRUST_REFUSAL: &'static str;
@@ -213,6 +213,7 @@ fn adapter_status_snapshot<S: PairedStack>() -> Result<serde_json::Value> {
     let adapter = S::adapter_health()?;
     Ok(serde_json::json!({
         "available": true,
+        "name": adapter.name,
         "powered": adapter.powered,
     }))
 }
@@ -315,6 +316,7 @@ fn parse_daemon_request<S: PairedStack>(request: &DaemonRequest) -> ReadResult<D
         "reload" => ReadResult::Command(DaemonCommand::Reload),
         "settings" => ReadResult::Command(DaemonCommand::Settings),
         "host_fixes" => ReadResult::HandledWithData(findings_payload(&BluetoothHostFixes.detect())),
+        "host_problems" => ReadResult::HandledWithData(problems_payload()),
         "apply_host_fix" => match host_fix_id(request) {
             Ok(id) => {
                 spawn_host_fix(id);
@@ -500,9 +502,11 @@ fn handle_daemon_command<S: PairedStack>(
         DaemonCommand::Disconnect(address) => run_device_command(&address, "disconnect", || {
             S::disconnect_device(&address).map(std::mem::drop)
         }),
-        DaemonCommand::Remove(address) => {
-            run_device_command(&address, "remove", || S::remove_device(&address))
-        }
+        DaemonCommand::Remove(address) => run_device_command(&address, "remove", || {
+            S::remove_device(&address)?;
+            crate::config::forget_managed(config, &address);
+            Ok(())
+        }),
         DaemonCommand::StartSearch => {
             if S::search_devices(config).is_err() {
                 report_daemon_failure("search", reset_discovery_state());
@@ -533,9 +537,6 @@ fn run_retry_pass<S: PairedStack>(
     retries: &mut HashMap<String, RetryState>,
     now: Instant,
 ) {
-    if !config.auto_reconnect {
-        return;
-    }
     let policy = RetryPolicy::from_seconds(config.retry_initial_seconds, config.retry_max_seconds);
     for device in reconnect_candidates::<S>(config, ReconnectSelection::Managed) {
         let state = retries.entry(device.address.clone()).or_default();
@@ -664,7 +665,6 @@ mod tests {
         ReconnectConfig {
             adapter: String::new(),
             managed_devices: managed.iter().map(|item| (*item).to_string()).collect(),
-            auto_reconnect: true,
             power_on_adapter: true,
             set_default_output: true,
             retry_initial_seconds: 1.0,

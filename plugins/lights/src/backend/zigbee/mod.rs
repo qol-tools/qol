@@ -10,6 +10,8 @@ use crate::domain::model::{LightCommand, LightTarget};
 pub struct ZigbeeBackend {
     controller: ZigbeeController,
     resolved_network_key: [u8; 16],
+    serial_port: String,
+    channel: u8,
 }
 
 impl ZigbeeBackend {
@@ -18,7 +20,7 @@ impl ZigbeeBackend {
         let network_key = resolve_network_key(&config.network_key)?;
 
         let controller_config = ControllerConfig {
-            serial_port,
+            serial_port: serial_port.clone(),
             network_key,
             channel: config.channel,
             ..ControllerConfig::default()
@@ -30,11 +32,21 @@ impl ZigbeeBackend {
         Ok(Self {
             controller,
             resolved_network_key: network_key,
+            serial_port,
+            channel: config.channel,
         })
     }
 
     pub fn network_key(&self) -> &[u8; 16] {
         &self.resolved_network_key
+    }
+
+    pub fn serial_port(&self) -> &str {
+        &self.serial_port
+    }
+
+    pub fn channel(&self) -> u8 {
+        self.channel
     }
 
     pub fn permit_join(&self, duration_secs: u8) -> Result<()> {
@@ -47,6 +59,10 @@ impl ZigbeeBackend {
 
     pub fn devices(&self) -> Vec<Device> {
         self.controller.devices()
+    }
+
+    pub fn remove_device(&self, ieee: &[u8; 8]) -> Result<()> {
+        self.controller.remove_device(ieee)
     }
 }
 

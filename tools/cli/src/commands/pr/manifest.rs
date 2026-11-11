@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::path::Path;
 
 pub(super) const FILE: &str = "manifest.json";
+pub(super) const CONTRACT_FILES: [&str; 2] = ["qol-config.toml", "qol-runtime.toml"];
 const SCHEMA: u32 = 1;
 
 #[derive(Debug, Deserialize)]
@@ -22,6 +23,8 @@ pub(super) struct PluginBuild {
     pub(super) tag: String,
     pub(super) file: String,
     pub(super) bin_name: String,
+    #[serde(default)]
+    pub(super) contract_files: Option<Vec<String>>,
 }
 
 pub(super) fn read(path: &Path) -> Result<Manifest> {
@@ -58,6 +61,11 @@ impl Manifest {
             for value in [&plugin.id, &plugin.tag, &plugin.file, &plugin.bin_name] {
                 if !super::plain_name(value) {
                     bail!("the build manifest names `{value}`, which is not a plain file name");
+                }
+            }
+            for name in plugin.contract_files.iter().flatten() {
+                if !CONTRACT_FILES.contains(&name.as_str()) {
+                    bail!("the build manifest names `{name}`, which is not a plugin settings file");
                 }
             }
         }
@@ -131,6 +139,24 @@ mod tests {
         for field in ["id", "tag", "file", "bin_name"] {
             let build = manifest(|value| value["plugins"][0][field] = "../escape".into());
             assert!(build.check(412, HEAD, LINUX).is_err(), "{field}");
+        }
+    }
+
+    #[test]
+    fn only_plugin_settings_files_are_accepted() {
+        let carried = |names: serde_json::Value| {
+            manifest(|value| value["plugins"][0]["contract_files"] = names)
+        };
+        assert_eq!(manifest(|_| {}).plugins[0].contract_files, None);
+        let build = carried(serde_json::json!(CONTRACT_FILES));
+        build.check(412, HEAD, LINUX).unwrap();
+        assert_eq!(build.plugins[0].contract_files.as_ref().unwrap().len(), 2);
+        carried(serde_json::json!([]))
+            .check(412, HEAD, LINUX)
+            .unwrap();
+        for name in ["plugin.toml", "../qol-config.toml", "qol-cli-sessions"] {
+            let build = carried(serde_json::json!([name]));
+            assert!(build.check(412, HEAD, LINUX).is_err(), "{name}");
         }
     }
 
