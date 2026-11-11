@@ -109,6 +109,7 @@ value_from = "needs"
 hide_values = ["none"]
 
 [field.takeover_needs.label_map]
+none = "No permission needed"
 full_disk_access = "Full Disk Access"
 accessibility = "Accessibility"
 full_disk_access_and_accessibility = "Full Disk Access and Accessibility"
