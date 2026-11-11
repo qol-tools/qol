@@ -172,6 +172,13 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str, input: &Value) -> 
         return DaemonOutcome::Handled;
     }
 
+    if action == crate::runtime::actions::SETTINGS {
+        return match crate::platform::open_settings() {
+            Ok(()) => DaemonOutcome::Handled,
+            Err(error) => DaemonOutcome::Error(format!("{error:#}")),
+        };
+    }
+
     if action == LIGHTS_QUERY {
         let main_target_id = store::load()
             .map(|config| config.main_target_id)
