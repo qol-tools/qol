@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use qol_conventions::{local_base_url, TRACE_LOG_PATH};
+use qol_conventions::{local_base_url, GUEST_TRACE_LOG_PATH};
 use qol_dev_guest::{
     CommandSpec, GuestControlClient, ProcessOutcome, ProcessState, RequestAction, ResponseResult,
 };
@@ -292,7 +292,7 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
             &[
                 "-E",
                 "SHOT_(CAPTURE|CAPTURE_STATUS|DAEMON_APP|FILE|FREEZE|PIN_CONTROLS|PIN_REVEAL|PIN_TICK|PREVIEW_PLACE|PREVIEW_REVEAL|RECORD_COUNTDOWN|RECORD_TOGGLE|RECV|SCREENSHOT_READY|SELECT_OVERLAY|SELECT_RESULT|SELECT_REVEAL|WINDOW_OPEN)|SHOW_WIN_STATE",
-                TRACE_LOG_PATH,
+                GUEST_TRACE_LOG_PATH,
             ],
         ),
         GUEST_COMMAND_TIMEOUT,
@@ -721,7 +721,7 @@ pub(in crate::commands::emu::workflow) fn current_trace_cursor(
 ) -> Result<TraceCursor> {
     let outcome = require_exec(
         guest,
-        command("/usr/bin/stat", &["--format=%s", TRACE_LOG_PATH]),
+        command("/usr/bin/stat", &["--format=%s", GUEST_TRACE_LOG_PATH]),
         GUEST_COMMAND_TIMEOUT,
     )?;
     let bytes = outcome
@@ -735,7 +735,7 @@ pub(in crate::commands::emu::workflow) fn current_trace_cursor(
 pub(in crate::commands::emu::workflow) fn trace_tail_command(
     cursor: TraceCursor,
 ) -> Result<CommandSpec> {
-    trace_tail_command_for(cursor, TRACE_LOG_PATH)
+    trace_tail_command_for(cursor, GUEST_TRACE_LOG_PATH)
 }
 
 fn trace_tail_command_for(cursor: TraceCursor, path: &str) -> Result<CommandSpec> {

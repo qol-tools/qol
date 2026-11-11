@@ -6,7 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use qol_conventions::{local_base_url, SETTINGS_SURFACE_DISPLAY_NAME, TRACE_LOG_PATH};
+use qol_conventions::{local_base_url, GUEST_TRACE_LOG_PATH, SETTINGS_SURFACE_DISPLAY_NAME};
 use qol_dev_guest::{GuestControlClient, ProcessState, RequestAction, ResponseResult};
 
 use crate::commands::emu::{qmp, BootedVm};
@@ -109,7 +109,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
             &[
                 "-E",
                 "ACTION_DISPATCH|CMD_RECV|CURSOR_APPLY|SURFACE_ACTIVATION|SHOT_(CAPTURE_DROP_QUEUED|CAPTURE_LOCK|CAPTURE_STATUS|CMD|DAEMON_APP|FILE|PIN_PLACE|PIN_TRANSITION|PREVIEW_CLOSE|PREVIEW_LAYOUT|PREVIEW_PLACE|PREVIEW_REVEAL|RECORD|SELECT|SKIP)",
-                TRACE_LOG_PATH,
+                GUEST_TRACE_LOG_PATH,
             ],
         ),
         COMMAND_TIMEOUT,

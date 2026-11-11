@@ -118,8 +118,6 @@ pub(super) fn set_trace_details(dash: &mut Dash, enabled: bool) {
     start_trace(dash);
 }
 
-pub(super) const DEFAULT_TRACE_LOG_FILE: &str = qol_conventions::TRACE_LOG_PATH;
-
 pub(super) struct LogSourceInfo {
     pub(super) kind: &'static str,
     file: Option<PathBuf>,
@@ -162,7 +160,7 @@ pub(super) fn current_log_source(dash: &Dash) -> Option<LogSourceInfo> {
 fn trace_log_file() -> PathBuf {
     std::env::var_os("QOL_TRACE_LOG_FILE")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_TRACE_LOG_FILE))
+        .unwrap_or_else(qol_config::trace_log_path)
 }
 
 pub(super) fn open_current_log_folder(dash: &mut Dash) {
@@ -539,8 +537,8 @@ mod tests {
     #[test]
     fn trace_pretty_snapshot_helpers_keep_utf8_and_strip_ansi() {
         assert_eq!(
-            pretty_trace_file(Path::new(DEFAULT_TRACE_LOG_FILE)),
-            PathBuf::from("/tmp/qol-altmon.pretty.log")
+            pretty_trace_file(Path::new("/var/run/trace-test.log")),
+            PathBuf::from("/var/run/trace-test.pretty.log")
         );
         assert_eq!(
             strip_ansi_codes("\x1b[2m[08:00]\x1b[0m ┌── \x1b[1;32mok\x1b[0m\n"),

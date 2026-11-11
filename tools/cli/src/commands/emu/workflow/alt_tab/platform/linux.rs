@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use qol_conventions::{local_base_url, TRACE_LOG_PATH};
+use qol_conventions::{local_base_url, GUEST_TRACE_LOG_PATH};
 use qol_dev_guest::GuestControlClient;
 use serde_json::{json, Value};
 
@@ -192,7 +192,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
             &[
                 "-E",
                 "ACTIVATE_WIN|CLOSE_WIN|CMD_RECV|DISMISS|FOCUS_REASSERT|KEY_RECV|NAV_GRID|PREVIEW_PLANE_(INTEGRATION|SHOW)|QUIT_APP|RENDERING_FLOW|SHOW_(CYCLE_FAST|LIST|PAINTED|RECV)",
-                TRACE_LOG_PATH,
+                GUEST_TRACE_LOG_PATH,
             ],
         ),
         COMMAND_TIMEOUT,
@@ -250,9 +250,18 @@ fn seed_legacy_extension_install(guest: &mut GuestControlClient) -> Result<Trace
         ),
         COMMAND_TIMEOUT,
     )?;
+    let trace_dir = std::path::Path::new(GUEST_TRACE_LOG_PATH)
+        .parent()
+        .and_then(std::path::Path::to_str)
+        .context("the guest trace log path has no folder")?;
     require_exec(
         guest,
-        command("/usr/bin/touch", &[TRACE_LOG_PATH]),
+        command("/usr/bin/mkdir", &["-p", "-m", "700", trace_dir]),
+        COMMAND_TIMEOUT,
+    )?;
+    require_exec(
+        guest,
+        command("/usr/bin/touch", &[GUEST_TRACE_LOG_PATH]),
         COMMAND_TIMEOUT,
     )?;
     let cursor = current_trace_cursor(guest)?;
@@ -384,7 +393,7 @@ fn wait_for_focus_title(
     };
     let trace = require_exec(
         guest,
-        command("/usr/bin/tail", &["-n", "120", TRACE_LOG_PATH]),
+        command("/usr/bin/tail", &["-n", "120", GUEST_TRACE_LOG_PATH]),
         COMMAND_TIMEOUT,
     )?;
     bail!("{error:#}; final Alt Tab trace:\n{}", trace.stdout.trim());
