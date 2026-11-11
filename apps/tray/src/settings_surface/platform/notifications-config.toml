@@ -75,6 +75,7 @@ description = "What this computer does with other apps' notifications at the mom
 section = "notifications"
 query = "takeover"
 value_from = "value"
+hide_values = ["off", "starting", "toasts", "hidden"]
 
 [field.takeover.label_map]
 off = "Shown by your system"
@@ -132,8 +133,7 @@ description = "Follows your system. While it is on, system notifications stay qu
 section = "notifications"
 query = "os_do_not_disturb"
 value_from = "value"
-hide_values = ["Off", "Unknown"]
-label_map = { On = "On", Off = "Off", Unknown = "Cannot be read on this computer" }
+hide_values = ["off", "qol", "unknown"]
 
 [field.do_not_disturb.label_map]
 on = "On"
