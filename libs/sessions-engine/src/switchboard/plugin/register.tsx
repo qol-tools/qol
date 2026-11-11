@@ -1156,6 +1156,28 @@ export const typedByUser = (text: string): string | undefined => {
   return cut === -1 ? words : words.slice(0, cut)
 }
 
+const UNSEEN_MARKS = /[\p{M}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
+const NOT_LETTERS = /[^\p{L}\p{N}]+/gu
+const lettersOf = (text: string): string => text.normalize('NFKD').replace(UNSEEN_MARKS, '').toLowerCase().replace(NOT_LETTERS, '')
+const USER_LETTERS = lettersOf(FROM_USER)
+const NOT_THE_USER = 'Not sent: only the qol-switchboard plugin marks a message as typed by the user. Send it as your own words, without that sentence.'
+
+const typedHere = new Map<string, number>()
+
+const holdTyped = (text: string): void => {
+  typedHere.set(text, (typedHere.get(text) ?? 0) + 1)
+}
+
+const dropTyped = (text: string): void => {
+  const left = (typedHere.get(text) ?? 1) - 1
+  if (left > 0) typedHere.set(text, left)
+  else typedHere.delete(text)
+}
+
+export const claimsUser = (text: unknown): boolean => typeof text === 'string' && lettersOf(text).includes(USER_LETTERS)
+
+export const isForgedUser = (text: unknown): boolean => claimsUser(text) && !typedHere.has(text as string)
+
 type SessionRecord = { key: string; friendly?: string; cwd?: string; created_ms?: number; parts?: unknown[]; done?: { at_ms?: number; reason?: string }; stopped_ms?: number }
 
 export const recordOwners = (records: readonly SessionRecord[]): Map<string, string> => {
@@ -2520,6 +2542,7 @@ export const register: Register = on => {
       if (e.parentAgentId !== undefined && !mayMessage(list, e.parentAgentId, e.resume.agentId)) return { deny: FORK_TO_FORK }
       return next(e)
     }
+    if (claimsUser(e.prompt)) return { deny: NOT_THE_USER }
     const project = PROJECT.exec(e.prompt.split('\n', 1)[0] ?? '')
     if (project === null) {
       return { deny: "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`." }
@@ -2839,6 +2862,7 @@ export const register: Register = on => {
         void forgetSentLog($, key, note).catch(() => {})
       }
       const said = withHookContext(fromUser(at.message), hooked.context)
+      holdTyped(said)
       const sent = await sendTo($, at.entry, said, direct($)).catch(() => undefined)
       if (sent?.isDelivered !== true) {
         void tell($, at.entry, said)
@@ -2846,6 +2870,9 @@ export const register: Register = on => {
             if (!isDelivered) forget()
           })
           .catch(forget)
+          .finally(() => dropTyped(said))
+      } else {
+        dropTyped(said)
       }
       if (viewing === undefined) await refreshWriting($, at.entry.agentId)
       clearBox($, text => text === e.text)
@@ -2958,11 +2985,13 @@ export const register: Register = on => {
     }
     const session = closedSession(e as unknown as Record<string, unknown>)
     if (session === undefined) return { deny: 'resume_session needs fork alone, or an absolute .jsonl transcript, an absolute cwd and a `<key-name>: <friendly description>` description.' }
+    if (claimsUser(session.message)) return { deny: NOT_THE_USER }
     const resumed = await resumeSession($, session)
     return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
   }).catch(() => ({ deny: 'The session could not be brought back as a fork.' }))
 
   on('tool.call', { tool: SEND }, async ($, e, next) => {
+    if (isForgedUser(e.message)) return { deny: NOT_THE_USER }
     if (e.agentId !== undefined || next.origin.plugin === NAME || typeof e.to !== 'string' || typeof e.message !== 'string') return next(e)
     let target = addressed(await read($, board), e.to)
     if (target === undefined) {
@@ -2992,6 +3021,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.send', async ($, e, next) => {
+    if (isForgedUser(e.text)) return { isDelivered: false, reason: NOT_THE_USER }
     if (e.agentId === undefined) return next(e)
     return mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }))
