@@ -47,6 +47,7 @@ description = "Follows your system. While it is on, system notifications stay qu
 section = "notifications"
 query = "os_do_not_disturb"
 value_from = "value"
+hide_values = ["Off", "Unknown"]
 
 [field.message_seconds]
 type = "number"

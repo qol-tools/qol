@@ -20,13 +20,12 @@ use qol_gpui::settings_panel::components::{
     SettingsTextField, SettingsToggle,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, settings_action_mark, settings_action_spinner,
+    adjacent_visible_row, escape_step, intent, settings_action_busy, settings_action_spinner,
     settings_busy_message, settings_description, settings_list, settings_value_text, CustomHints,
     CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
     EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SETTINGS_LIST_GAP,
 };
 use qol_gpui::text_edit::{self, TextField};
-use qol_gpui::ActionMark;
 
 use super::data::{self, Backup, GitHubConnect, Review, Side, Snapshot};
 use super::model::{self, Action, Dot, Level, Page, Row, Value};
@@ -665,30 +664,14 @@ impl ProfilesView {
                     (row.chip_when_selected && selected)
                         .then_some(row.verb)
                         .flatten()
-                        .map(|_| {
-                            settings_action_mark(
-                                ("profiles-action", index),
-                                ActionMark::Run,
-                                busy,
-                                ground,
-                                kit,
-                            )
-                        }),
+                        .map(|_| settings_action_busy(("profiles-action", index), busy, kit)),
                 ),
             Value::Toggle(on) => values.child(SettingsToggle::new(*on, ground, kit)),
             Value::Chip => values.children(
                 (!row.chip_when_selected || selected)
                     .then_some(row.verb)
                     .flatten()
-                    .map(|_| {
-                        settings_action_mark(
-                            ("profiles-action", index),
-                            ActionMark::Run,
-                            busy,
-                            ground,
-                            kit,
-                        )
-                    }),
+                    .map(|_| settings_action_busy(("profiles-action", index), busy, kit)),
             ),
             Value::Name => values.child(SettingsTextField::live(self.field.clone(), ground, kit)),
         }
