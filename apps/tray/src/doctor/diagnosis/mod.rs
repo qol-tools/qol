@@ -1,5 +1,5 @@
+mod other_apps;
 mod platform;
-mod takeover;
 
 use super::de_bindings::filter_shadowed;
 use super::install_id::write_install_id_file;

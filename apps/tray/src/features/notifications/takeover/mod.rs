@@ -46,14 +46,11 @@ pub fn holds_banner_switch() -> bool {
 
 fn run() {
     let mut quiet = quiet::Quiet::default();
-    let mut applied = None;
     loop {
         let changes = *lock(&CHANGES);
-        let enforce = applied != Some(changes);
-        applied = Some(changes);
         let wanted = super::takeover_wanted();
         let mut mechanisms = super::mirror::apply(wanted);
-        mechanisms.extend(quiet.apply(wanted, enforce));
+        mechanisms.extend(quiet.apply(wanted));
         let next = TakeoverState::new(wanted, super::enabled(), mechanisms);
         let recheck = recheck_after(next.value);
         publish(next);

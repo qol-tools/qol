@@ -26,36 +26,40 @@ fn current_state() -> Result<TakeoverState, String> {
 }
 
 fn report(state: &TakeoverState) -> CheckReport {
-    let healthy = |summary: &str| CheckReport::ok(summary);
-    let broken = |summary: &str| {
-        CheckReport::warn(
-            format!("{summary}{}", remedy(state)),
-            NATIVE_NOTIFICATIONS_ID,
-            Vec::new(),
-        )
-    };
     match state.value {
-        Outcome::Off => healthy("other apps' notifications are left to the system"),
-        Outcome::Starting => healthy("qol is starting to take over other apps' notifications"),
-        Outcome::Toasts => healthy("other apps' notifications are shown as qol toasts"),
-        Outcome::Hidden => healthy(
+        Outcome::Off => CheckReport::ok("other apps' notifications are left to the system"),
+        Outcome::Starting => {
+            CheckReport::ok("qol is starting to take over other apps' notifications")
+        }
+        Outcome::Toasts => CheckReport::ok("other apps' notifications are shown as qol toasts"),
+        Outcome::Hidden => CheckReport::ok(
             "other apps' notifications are hidden; qol cannot show them as toasts on this system",
         ),
         Outcome::Muted => {
-            healthy("notifications are off, so other apps' notifications are hidden too")
+            CheckReport::ok("notifications are off, so other apps' notifications are hidden too")
         }
-        Outcome::Unsupported => healthy(
+        Outcome::Unsupported => CheckReport::ok(
             "qol cannot take over other apps' notifications on this system; the system shows them",
         ),
-        Outcome::ToastsPartly => {
-            broken("other apps' notifications are shown as qol toasts, but some are missed")
-        }
-        Outcome::ToastsAndBanners => {
-            broken("other apps' notifications show twice, as qol toasts and as system banners")
-        }
-        Outcome::Blocked => broken("the system still shows other apps' notifications"),
-        Outcome::Failed => broken("qol could not take over other apps' notifications"),
+        Outcome::ToastsPartly => broken(
+            state,
+            "other apps' notifications are shown as qol toasts, but some are missed",
+        ),
+        Outcome::ToastsAndBanners => broken(
+            state,
+            "other apps' notifications show twice, as qol toasts and as system banners",
+        ),
+        Outcome::Blocked => broken(state, "the system still shows other apps' notifications"),
+        Outcome::Failed => broken(state, "qol could not take over other apps' notifications"),
     }
+}
+
+fn broken(state: &TakeoverState, summary: &str) -> CheckReport {
+    CheckReport::warn(
+        format!("{summary}{}", remedy(state)),
+        NATIVE_NOTIFICATIONS_ID,
+        Vec::new(),
+    )
 }
 
 fn remedy(state: &TakeoverState) -> String {

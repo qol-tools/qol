@@ -75,9 +75,9 @@ pub(super) fn health() -> Health {
 
 fn watch_health(state: u8, hide_failed: bool, trusted: bool) -> Health {
     match state {
+        _ if !trusted => Health::NeedsPermission(Permission::Accessibility),
         WATCHING if hide_failed => Health::Failed(CANNOT_HIDE_REASON.to_string()),
         WATCHING => Health::Active,
-        _ if !trusted => Health::NeedsPermission(Permission::Accessibility),
         CANNOT_WATCH => Health::Failed(CANNOT_WATCH_REASON.to_string()),
         NO_NOTIFICATION_CENTER => Health::Failed(NO_NOTIFICATION_CENTER_REASON.to_string()),
         _ => Health::Starting,
@@ -273,6 +273,12 @@ mod tests {
     fn the_watch_says_what_stops_it_from_hiding_banners() {
         let cases = [
             (WATCHING, false, true, Health::Active),
+            (
+                WATCHING,
+                false,
+                false,
+                Health::NeedsPermission(Permission::Accessibility),
+            ),
             (
                 WATCHING,
                 true,

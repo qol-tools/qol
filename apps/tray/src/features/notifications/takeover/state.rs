@@ -159,10 +159,11 @@ fn outcome(wanted: bool, notifications_on: bool, mechanisms: &[Mechanism]) -> Ou
 fn permissions(mechanisms: &[Mechanism]) -> Vec<Permission> {
     let mut found = Vec::new();
     for mechanism in mechanisms {
-        if let Health::NeedsPermission(permission) = mechanism.health {
-            if !found.contains(&permission) {
-                found.push(permission);
-            }
+        let Health::NeedsPermission(permission) = mechanism.health else {
+            continue;
+        };
+        if !found.contains(&permission) {
+            found.push(permission);
         }
     }
     found

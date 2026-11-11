@@ -44,7 +44,7 @@ impl AppKeyWriter for Platform {
 
 pub(crate) fn native_notifications_diagnosis() -> CheckReport {
     if crate::features::notifications::native_handler() == NativeHandler::Qol {
-        return super::super::takeover::diagnosis();
+        return super::super::other_apps::diagnosis();
     }
     CheckReport::warn(
         "qol system notifications are attributed to Script Editor - disable them in System Settings > Notifications if unwanted",
