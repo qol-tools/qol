@@ -6,28 +6,26 @@ use std::time::Instant;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, App, AsyncApp, ClipboardItem, Context, Div, FocusHandle, Focusable,
-    KeyDownEvent, Render, Subscription, Task, WeakEntity, Window,
+    div, px, AnyElement, App, AsyncApp, Context, Div, FocusHandle, Focusable, KeyDownEvent, Render,
+    Subscription, Task, WeakEntity, Window,
 };
 use qol_config::contract::PagesSpec;
 use qol_config::pages::{
     Control, Enter, Go, Notice, Page, Pages, Press, PressReply, Row, Stack, Tone,
 };
 
-use crate::action_mark::ActionMark;
 use crate::deck;
 use crate::key::Key;
 use crate::kit::{kit, Chip};
 use crate::scrollbar::{ScrollSource, OVERFLOW_FADE_HEIGHT};
 
 use super::components::{
-    qr_block, qr_heights, settings_busy_message, settings_copied_description, settings_copy_mark,
-    settings_destroy_label_group, settings_label_group, settings_message, settings_page,
-    settings_value_group, HintTone, QrBlock, RowGround, SettingsFeature, SettingsFeedback,
-    SettingsHint, SettingsTick, SettingsToggle,
+    qr_block, qr_heights, settings_busy_message, settings_destroy_label_group,
+    settings_label_group, settings_message, settings_page, settings_value_group, HintTone, QrBlock,
+    RowGround, SettingsFeature, SettingsFeedback, SettingsHint, SettingsTick, SettingsToggle,
 };
 use super::{
-    escape_step, intent, settings_action_mark, settings_action_spinner, settings_value_text,
+    escape_step, intent, settings_action_busy, settings_action_spinner, settings_value_text,
     CustomHints, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
     CustomPanelNoticeTone, CustomPanelNotifier, CustomPanelView, CustomSettingsBreadcrumbs,
     EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsRuntime,
@@ -88,7 +86,6 @@ pub(super) struct PagesView {
     visiting: bool,
     pressing: Option<(String, String)>,
     asking: Option<(String, String)>,
-    copied: Option<(String, String)>,
     codes: HashMap<String, Result<Vec<bool>, String>>,
     poller: Option<Task<()>>,
     subscriptions: Vec<Subscription>,
@@ -135,7 +132,6 @@ impl PagesView {
             visiting: false,
             pressing: None,
             asking: None,
-            copied: None,
             codes: HashMap::new(),
             poller: None,
             subscriptions: Vec::new(),
@@ -398,7 +394,6 @@ impl PagesView {
 
     fn back_to(&mut self, level: usize, cx: &mut Context<Self>) {
         self.asking = None;
-        self.copied = None;
         let stop = self.stop_on_leaving(level);
         self.sequence = self.sequence.wrapping_add(1);
         let depth = self.stack.len().saturating_sub(1);
@@ -472,9 +467,6 @@ impl PagesView {
         };
         let items = model::items(page);
         if let Some(row) = model::row_at(page, &items, index) {
-            if place.selected.as_ref() != Some(&row.id) {
-                self.copied = None;
-            }
             place.index = index;
             place.selected = Some(row.id.clone());
             place.scroll.follow(
@@ -512,11 +504,6 @@ impl PagesView {
             }
         }
         self.asking = None;
-        if let Some(text) = row.copies() {
-            cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
-            self.copied = Some((page, row.id));
-            return;
-        }
         match row.enter {
             Some(Enter::Open(target)) => self.navigate(&Go::Open(target), cx),
             Some(Enter::Replace(target)) => self.navigate(&Go::Replace(target), cx),
@@ -582,9 +569,6 @@ impl PagesView {
             return;
         }
         let wanted = intent(key, event.keystroke.key_char.as_deref(), false);
-        if !matches!(wanted, Some(Intent::Activate)) {
-            self.copied = None;
-        }
         if !matches!(wanted, Some(Intent::Activate | Intent::Close)) && self.asking.take().is_some()
         {
             cx.notify();
@@ -630,10 +614,8 @@ impl PagesView {
                 .is_some_and(|(pressed_page, pressed_row)| {
                     *pressed_page == place.page && *pressed_row == row.id
                 });
-        let copied = front && self.copied == Some((place.page.clone(), row.id.clone()));
         let mut values = settings_value_group();
         if busy
-            && row.copies().is_none()
             && !matches!(
                 row.control,
                 Some(Control::Button(_) | Control::Destroy { .. })
@@ -654,38 +636,25 @@ impl PagesView {
         }
         values = match &row.control {
             Some(Control::Toggle(on)) => values.child(SettingsToggle::new(*on, ground, kit)),
-            Some(Control::Button(_)) => values.child(settings_action_mark(
-                (action_id, index),
-                ActionMark::Run,
-                busy,
-                ground,
-                kit,
-            )),
+            Some(Control::Button(_)) => {
+                values.child(settings_action_busy((action_id, index), busy, kit))
+            }
             Some(Control::Check) => values.child(SettingsTick::new(ground, kit)),
             Some(Control::Feature { on, count }) => {
                 values.child(SettingsFeature::new(*on, count.clone(), ground, kit))
             }
-            Some(Control::Destroy { .. }) => values.child(settings_action_mark(
-                (action_id, index),
-                ActionMark::Destroy,
-                busy,
-                ground,
-                kit,
-            )),
-            None if row.copies().is_some() => {
-                values.child(settings_copy_mark((action_id, index), copied, ground, kit))
+            Some(Control::Destroy { .. }) => {
+                values.child(settings_action_busy((action_id, index), busy, kit))
             }
             Some(Control::Qr(_)) | None => values,
         };
         let feature = matches!(row.control, Some(Control::Feature { .. }));
         let destroys = matches!(row.control, Some(Control::Destroy { .. }));
-        let detail = row.detail.clone().map(Into::into).filter(|_| !copied);
+        let detail = row.detail.clone().map(Into::into);
         let label = if destroys {
             settings_destroy_label_group(row.label.clone(), detail, ground, kit)
         } else {
-            settings_label_group(row.label.clone(), detail, ground, kit).when(copied, |group| {
-                group.child(settings_copied_description(kit))
-            })
+            settings_label_group(row.label.clone(), detail, ground, kit)
         };
         let mut element = SettingsRow::setting((row_id, index), kit)
             .selected(selected, focused)

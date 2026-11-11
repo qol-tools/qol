@@ -357,6 +357,7 @@ def clear_stale_state():
         Path("/tmp/qol-shot.sock"),
         Path("/tmp/qol-tray-state.sock"),
         Path("/tmp/qol-altmon.log"),
+        QOL_HOME / ".local/share/qol-tray/probe/qol-altmon.log",
         Path("/tmp/qol-tray"),
     ]:
         remove_path(path)

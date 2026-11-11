@@ -54,7 +54,7 @@ pub(super) fn resolve(page: &Page, wanted: &[&str], previous: usize) -> Option<u
     let acting: Vec<usize> = selectable
         .iter()
         .copied()
-        .filter(|index| row_at(page, &items, *index).is_some_and(|row| row.copies().is_none()))
+        .filter(|index| row_at(page, &items, *index).is_some_and(Row::acts))
         .collect();
     let candidates = if acting.is_empty() {
         &selectable
@@ -86,9 +86,6 @@ pub(super) fn step(page: &Page, current: usize, direction: isize) -> Option<usiz
 }
 
 pub(super) fn enter_verb(row: &Row) -> Option<String> {
-    if row.copies().is_some() {
-        return Some("copy".into());
-    }
     match (&row.control, &row.enter) {
         (_, None) => None,
         (Some(Control::Toggle(_)), _) => Some("flip".into()),
@@ -232,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn a_page_without_focus_opens_on_a_row_that_acts_before_one_that_copies() {
+    fn a_page_without_focus_opens_on_a_row_that_acts_before_one_that_only_shows() {
         let notes = Page::new("ask").group(
             Group::new("ask", "the computer restarts.")
                 .row(Row::new("in-use", "Speakers stop playing"))
@@ -283,7 +280,7 @@ mod tests {
             [
                 Some("open".to_string()),
                 Some("flip".to_string()),
-                Some("copy".to_string()),
+                None,
                 Some("restart".to_string()),
             ]
         );

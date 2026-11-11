@@ -289,11 +289,8 @@ impl Row {
         }
     }
 
-    pub fn copies(&self) -> Option<&str> {
-        match (&self.control, &self.enter) {
-            (None, None) => Some(self.value.as_deref().unwrap_or(&self.label)),
-            _ => None,
-        }
+    pub fn acts(&self) -> bool {
+        self.control.is_some() || self.enter.is_some()
     }
 
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
@@ -653,24 +650,18 @@ mod tests {
     }
 
     #[test]
-    fn a_row_that_neither_reacts_nor_carries_a_control_copies_what_it_shows() {
-        assert_eq!(
-            Row::new("ip", "IP address").value("10.0.0.2").copies(),
-            Some("10.0.0.2")
-        );
-        assert_eq!(
-            Row::new("qol", "qol stops with it").detail("why").copies(),
-            Some("qol stops with it")
-        );
-        assert_eq!(Row::new("open", "Open").open("x").copies(), None);
-        assert_eq!(Row::new("on", "On").toggle(true).press().copies(), None);
-        assert_eq!(Row::new("qr", "App").qr("https://x").copies(), None);
+    fn a_row_that_neither_reacts_nor_carries_a_control_only_shows_its_value() {
+        assert!(!Row::new("ip", "IP address").value("10.0.0.2").acts());
+        assert!(!Row::new("qol", "qol stops with it").detail("why").acts());
+        assert!(Row::new("open", "Open").open("x").acts());
+        assert!(Row::new("on", "On").toggle(true).press().acts());
+        assert!(Row::new("qr", "App").qr("https://x").acts());
         let old: Row = serde_json::from_value(json!({
             "id": "kernel",
             "label": "Linux kernel",
             "info": true
         }))
         .expect("an older plugin's row still reads");
-        assert_eq!(old.copies(), Some("Linux kernel"));
+        assert!(!old.acts());
     }
 }

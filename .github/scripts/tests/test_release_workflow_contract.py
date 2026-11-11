@@ -843,8 +843,23 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
         prepare = workflow.split("  prepare:\n", 1)[1].split("\n  plugin_candidate:", 1)[0]
         self.assertIn("    environment: versioning\n", prepare.split("    steps:", 1)[0])
-        self.assertIn("ssh-key: ${{ secrets.VERSIONING_DEPLOY_KEY }}", prepare)
-        self.assertEqual(workflow.count("secrets.VERSIONING_DEPLOY_KEY"), 1)
+        mint = named_step(prepare, "Mint the versioning app token", "      ")
+        for contract in [
+            "uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "client-id: ${{ vars.VERSIONING_APP_CLIENT_ID }}",
+            "private-key: ${{ secrets.VERSIONING_APP_PRIVATE_KEY }}",
+            "permission-contents: write",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, mint)
+        self.assertEqual([line.strip() for line in mint.splitlines() if "permission-" in line], ["permission-contents: write"])
+        checkout = named_step(prepare, "Checkout successful source commit", "      ")
+        self.assertIn("token: ${{ steps.app.outputs.token }}", checkout)
+        self.assertLess(prepare.index("Mint the versioning app token"), prepare.index("Checkout successful source commit"))
+        self.assertEqual(workflow.count("secrets.VERSIONING_APP_PRIVATE_KEY"), 1)
+        self.assertEqual(workflow.count("steps.app.outputs.token"), 1)
+        self.assertNotIn("VERSIONING_DEPLOY_KEY", workflow)
+        self.assertNotIn("ssh-key:", workflow)
 
     def test_ci_runs_release_profile_builds(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()

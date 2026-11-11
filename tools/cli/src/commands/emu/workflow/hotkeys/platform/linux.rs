@@ -2,7 +2,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use qol_conventions::{local_base_url, DEFAULT_PORT, TRACE_LOG_PATH};
+use qol_conventions::{local_base_url, DEFAULT_PORT, GUEST_TRACE_LOG_PATH};
 use qol_dev_guest::{GuestControlClient, ProcessOutcome};
 
 use crate::commands::emu::{qmp, BootedVm};
@@ -106,7 +106,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
         .with_context(|| format!("failed to write {}", final_path.display()))?;
     let trace = require_exec(
         &mut guest,
-        command("/usr/bin/grep", &["HOTKEY_", TRACE_LOG_PATH]),
+        command("/usr/bin/grep", &["HOTKEY_", GUEST_TRACE_LOG_PATH]),
         COMMAND_TIMEOUT,
     )?;
     let trace_path = artifacts_dir.join("hotkeys-trace.log");
@@ -570,7 +570,7 @@ fn require_no_registration_errors(guest: &mut GuestControlClient, auth: &str) ->
 fn hotkey_backend(guest: &mut GuestControlClient) -> Result<String> {
     let outcome = wait_for_command(
         guest,
-        command("/usr/bin/grep", &["HOTKEY_BACKEND", TRACE_LOG_PATH]),
+        command("/usr/bin/grep", &["HOTKEY_BACKEND", GUEST_TRACE_LOG_PATH]),
         ACTION_TIMEOUT,
         |outcome| {
             outcome
@@ -614,7 +614,7 @@ fn dispatch_count(guest: &mut GuestControlClient, required: &str) -> Result<usiz
             &[
                 "-c",
                 PROBE_COUNT_SCRIPT,
-                TRACE_LOG_PATH,
+                GUEST_TRACE_LOG_PATH,
                 "HOTKEY_DISPATCH",
                 required,
             ],
@@ -636,7 +636,7 @@ fn wait_for_dispatch_count(
             &[
                 "-c",
                 PROBE_COUNT_SCRIPT,
-                TRACE_LOG_PATH,
+                GUEST_TRACE_LOG_PATH,
                 "HOTKEY_DISPATCH",
                 required,
             ],

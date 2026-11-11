@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use qol_conventions::{local_base_url, TRACE_LOG_PATH};
+use qol_conventions::{local_base_url, GUEST_TRACE_LOG_PATH};
 use qol_dev_guest::{GuestControlClient, ProcessOutcome};
 
 use crate::commands::emu::{qmp, BootedVm};
@@ -85,7 +85,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
             &[
                 "-E",
                 "BLUETOOTH_(ACTION|ADAPTER|ADAPTER_POWER|DEVICE|RELOAD|SEARCH|SNAPSHOT|START)|SURFACE_ACTIVATION",
-                TRACE_LOG_PATH,
+                GUEST_TRACE_LOG_PATH,
             ],
         ),
         COMMAND_TIMEOUT,
@@ -432,7 +432,7 @@ fn wait_for_discovered_devices(
             let script = format!(
                 "/usr/bin/bluetoothctl --timeout 1 devices; \
                  /usr/bin/busctl tree org.bluez; \
-                 /usr/bin/grep -E 'BLUETOOTH_(ADAPTER|DEVICE|SEARCH|START)' {TRACE_LOG_PATH} | \
+                 /usr/bin/grep -E 'BLUETOOTH_(ADAPTER|DEVICE|SEARCH|START)' {GUEST_TRACE_LOG_PATH} | \
                  /usr/bin/tail -n 120"
             );
             let diagnostics = require_exec(
@@ -513,7 +513,7 @@ fn test_settings(
         );
         wait_for_command(
             guest,
-            command("/usr/bin/grep", &["-F", &evidence, TRACE_LOG_PATH]),
+            command("/usr/bin/grep", &["-F", &evidence, GUEST_TRACE_LOG_PATH]),
             ACTION_TIMEOUT,
             |outcome| outcome.exit_code == Some(0),
             &format!("native Bluetooth Settings query {query} to authenticate"),

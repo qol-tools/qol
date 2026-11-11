@@ -8,7 +8,6 @@ mod stored_values;
 mod structured_list_editor;
 mod subpages;
 
-use crate::action_mark::ActionMark;
 use crate::key::Key;
 use crate::kit::Chip;
 use list_card::{SLIDER_DISPATCH_INTERVAL, SLIDER_HOLD_DURATION};
@@ -26,13 +25,12 @@ use super::components::{
 };
 use super::components::{
     one_line, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
-    rail_item_label, settings_accent_dot, settings_action_mark, settings_action_spinner,
-    settings_block_header, settings_copied_description, settings_copy_mark,
-    settings_destroy_label_group, settings_error_line, settings_finder_empty, settings_label_group,
-    settings_page, settings_query_spinner, settings_selected_text, settings_swatch,
-    settings_value_text, ChoiceArt, RowGround, SettingsChoiceValue, SettingsFeedback,
-    SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow, SettingsToggle,
-    SettingsValueTone, SliderStyle,
+    rail_item_label, settings_accent_dot, settings_action_busy, settings_action_spinner,
+    settings_block_header, settings_destroy_label_group, settings_error_line,
+    settings_finder_empty, settings_label_group, settings_page, settings_query_spinner,
+    settings_selected_text, settings_swatch, settings_value_text, ChoiceArt, RowGround,
+    SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar,
+    SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
 };
 use super::components::{
     settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
@@ -281,7 +279,6 @@ pub(super) struct SettingsPanelView {
     panel: SettingsPanel,
     parent_link: ParentLink,
     stack: Vec<Level>,
-    copied: Option<((usize, usize, usize), String)>,
     runtime: SettingsRuntime,
     runtime_queries: Vec<String>,
     sources: Vec<SourceState>,
@@ -546,7 +543,6 @@ impl SettingsPanelView {
             filter: String::new(),
             filter_open: false,
             stack: vec![root],
-            copied: None,
             wheel_generation: 0,
             runtime_poll_generation: 0,
             slider_dispatch_generation: std::collections::HashMap::new(),
@@ -2428,14 +2424,6 @@ impl SettingsPanelView {
             }
             RowControl::Color(_) => self.open_color_wheel(selected, window, cx),
             RowControl::Action { .. } => self.dispatch_action(cx),
-            RowControl::Status {
-                error: None,
-                label: Some(label),
-                ..
-            } => {
-                let label = label.clone();
-                self.copy_status(selected, label, cx);
-            }
             RowControl::Status { .. } => {}
             RowControl::List { actions, .. } if actions.inline => {
                 self.open_inline_item(selected, cx);
@@ -2489,27 +2477,6 @@ impl SettingsPanelView {
             return;
         };
         monitor.select_next();
-    }
-
-    fn copy_status(&mut self, index: usize, value: String, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(value.clone()));
-        self.copied = Some((self.copy_place(index), value));
-        cx.notify();
-    }
-
-    fn copy_place(&self, index: usize) -> (usize, usize, usize) {
-        (self.materialized_source, self.stack.len(), index)
-    }
-
-    fn row_is_copied(&self, index: usize) -> bool {
-        let Some((place, value)) = &self.copied else {
-            return false;
-        };
-        *place == self.copy_place(index)
-            && matches!(
-                &self.level_rows()[index].control,
-                RowControl::Status { label: Some(label), .. } if label == value
-            )
     }
 
     fn dispatch_action(&mut self, cx: &mut Context<Self>) {
@@ -3676,7 +3643,7 @@ impl SettingsPanelView {
             {
                 return self.render_toggle_value(*active, row);
             }
-            RowControl::Action { .. } => return self.render_action_value(index, row),
+            RowControl::Action { .. } => return self.render_action_value(index),
             RowControl::TextList(values) => {
                 return self.kit.chip(
                     Chip::Count(values.len(), plural(values.len(), "item").into()),
@@ -3713,23 +3680,13 @@ impl SettingsPanelView {
         {
             return cell.child(self.unavailable_indicator(index));
         }
-        if let RowControl::Status { tone, label, .. } = &self.level_rows()[index].control {
+        if let RowControl::Status { tone, .. } = &self.level_rows()[index].control {
             let tone = *tone;
-            let copies = label.is_some();
-            return cell
-                .child(StatusIndicator::new(
-                    ("settings-status", index),
-                    self.display_value(index),
-                    rgb(status_tone_color(self.kit, tone)),
-                ))
-                .when(copies, |cell| {
-                    cell.child(settings_copy_mark(
-                        ("settings-status-copy", index),
-                        self.row_is_copied(index),
-                        row,
-                        self.kit,
-                    ))
-                });
+            return cell.child(StatusIndicator::new(
+                ("settings-status", index),
+                self.display_value(index),
+                rgb(status_tone_color(self.kit, tone)),
+            ));
         }
         if self.action_is_busy(index) {
             cell = cell.child(settings_action_spinner(
@@ -3882,12 +3839,10 @@ impl SettingsPanelView {
         )
     }
 
-    fn render_action_value(&self, index: usize, row: RowGround) -> Div {
-        settings_action_mark(
+    fn render_action_value(&self, index: usize) -> Div {
+        settings_action_busy(
             ("settings-action-spinner", index),
-            ActionMark::for_variant(self.level_rows()[index].variant.as_deref()),
             self.action_is_busy(index),
-            row,
             self.kit,
         )
     }
@@ -3977,20 +3932,16 @@ impl SettingsPanelView {
         };
         let selected = index == self.level().selected;
         let ground = RowGround::of(selected, self.body_has_focus());
-        let copied = self.row_is_copied(index);
         let in_item_card = self.level().list_item.is_some();
         let danger = in_item_card && row.variant.as_deref() == Some(ITEM_ROW_DANGER);
         let member = in_item_card && row.variant.as_deref() == Some(ITEM_ROW_MEMBER);
         let control = in_item_card && item_control_index(row).is_some();
         let description =
-            row_description(row, &self.query_state_of(row), &self.applied_query_payloads)
-                .filter(|_| !copied);
+            row_description(row, &self.query_state_of(row), &self.applied_query_payloads);
         let label_group = if danger {
             settings_destroy_label_group(label, description, ground, self.kit)
         } else {
-            settings_label_group(label, description, ground, self.kit).when(copied, |group| {
-                group.child(settings_copied_description(self.kit))
-            })
+            settings_label_group(label, description, ground, self.kit)
         };
         let value_cell = self.render_value_cell(index, ground, cx);
         let mut line = SettingsRow::setting(("settings-row", index), self.kit)
@@ -4007,15 +3958,6 @@ impl SettingsPanelView {
         }));
         if !in_item_card || member || control {
             line = line.child(value_cell);
-        }
-        if danger {
-            line = line.child(settings_action_mark(
-                ("settings-item-destroy", index),
-                ActionMark::Destroy,
-                false,
-                ground,
-                self.kit,
-            ));
         }
         container = container.child(line);
         let error = match &row.control {
@@ -4350,14 +4292,6 @@ impl Render for SettingsPanelView {
         #[cfg(debug_assertions)]
         let build_started = std::time::Instant::now();
         self.kit = crate::kit::kit();
-        let here = self.copy_place(self.level().selected);
-        if self
-            .copied
-            .as_ref()
-            .is_some_and(|(place, _)| *place != here)
-        {
-            self.copied = None;
-        }
         self.poll_visible.store(
             window.is_window_active(),
             std::sync::atomic::Ordering::Relaxed,
@@ -5157,11 +5091,6 @@ impl SettingsPanelView {
                 Some("edit")
             }
             RowControl::Gamepad { .. } => Some("next"),
-            RowControl::Status {
-                error: None,
-                label: Some(_),
-                ..
-            } => Some("copy"),
             RowControl::List { .. }
             | RowControl::Status { .. }
             | RowControl::QrCode { .. }
