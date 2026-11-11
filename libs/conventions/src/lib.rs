@@ -33,7 +33,6 @@ pub const CODESIGN_IDENTITY_ENV: &str = "QOL_CODESIGN_IDENTITY";
 pub const HOST_WORKSPACE_BUILD_FILE: &str = "host-workspace-build";
 pub const HTTP_AUTH_HEADER: &str = "x-qol-token";
 pub const HTTP_AGENT_HOME_HEADER: &str = "x-qol-agent-home";
-pub const HTTP_AUTH_FRAGMENT_KEY: &str = "qol_token";
 pub const HTTP_AUTH_PROOF_PATH: &str = "/auth/proof";
 
 pub const ENV_STATE_SOCKET: &str = "QOL_TRAY_STATE_SOCKET";
