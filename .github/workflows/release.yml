@@ -8,10 +8,6 @@ on:
         description: Plugin release tag, for example qol-alt-tab-v0.14.0
         required: true
         type: string
-  push:
-    tags:
-      - '*-v*.*.*'
-      - '!qol-tray-v*.*.*'
 
 permissions:
   contents: read
