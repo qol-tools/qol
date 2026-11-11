@@ -4,7 +4,7 @@ mod tree;
 
 use std::collections::VecDeque;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -15,6 +15,7 @@ use core_foundation::string::CFStringRef;
 
 use super::retained::{self, AppRef, Entry};
 use super::toast::{self, Mirrored};
+use crate::features::notifications::takeover::{Health, Permission};
 
 pub(super) use claims::claimed;
 
@@ -42,6 +43,16 @@ const RECHECK: Duration = Duration::from_secs(5);
 const OFFSCREEN: f64 = -30_000.0;
 const SEEN_CAPACITY: usize = 32;
 
+const NOT_LOOKED: u8 = 0;
+const WATCHING: u8 = 1;
+const CANNOT_WATCH: u8 = 2;
+const NO_NOTIFICATION_CENTER: u8 = 3;
+const CANNOT_WATCH_REASON: &str = "Notification Center cannot be watched";
+const NO_NOTIFICATION_CENTER_REASON: &str = "Notification Center is not running";
+const CANNOT_HIDE_REASON: &str = "a macOS banner could not be moved off screen";
+
+static WATCH_STATE: AtomicU8 = AtomicU8::new(NOT_LOOKED);
+static HIDE_FAILED: AtomicBool = AtomicBool::new(false);
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
 
@@ -52,9 +63,38 @@ struct Watch {
     run_loop: Option<CFRunLoop>,
 }
 
+pub(super) fn health() -> Health {
+    let trusted =
+        qol_platform::permission_status(qol_platform::Permission::InputCapture).is_allowed();
+    watch_health(
+        WATCH_STATE.load(Ordering::Relaxed),
+        HIDE_FAILED.load(Ordering::Relaxed),
+        trusted,
+    )
+}
+
+fn watch_health(state: u8, hide_failed: bool, trusted: bool) -> Health {
+    match state {
+        WATCHING if hide_failed => Health::Failed(CANNOT_HIDE_REASON.to_string()),
+        WATCHING => Health::Active,
+        _ if !trusted => Health::NeedsPermission(Permission::Accessibility),
+        CANNOT_WATCH => Health::Failed(CANNOT_WATCH_REASON.to_string()),
+        NO_NOTIFICATION_CENTER => Health::Failed(NO_NOTIFICATION_CENTER_REASON.to_string()),
+        _ => Health::Starting,
+    }
+}
+
+fn note_watch(generation: u64, state: u8) {
+    if is_current(generation) {
+        WATCH_STATE.store(state, Ordering::Relaxed);
+    }
+}
+
 pub(super) fn sync(enabled: bool) {
     let mut watch = lock();
     if !enabled {
+        WATCH_STATE.store(NOT_LOOKED, Ordering::Relaxed);
+        HIDE_FAILED.store(false, Ordering::Relaxed);
         if let Some(stopped) = watch.take() {
             if let Some(run_loop) = stopped.run_loop {
                 run_loop.stop();
@@ -112,6 +152,9 @@ fn run(generation: u64) {
     let mut failed_pid = None;
     while is_current(generation) {
         let pid = notification_center_pid();
+        if pid.is_none() {
+            note_watch(generation, NO_NOTIFICATION_CENTER);
+        }
         if observer.as_ref().map(|observer| observer.pid) != pid {
             observer = None;
             if let Some(pid) = pid {
@@ -122,6 +165,7 @@ fn run(generation: u64) {
                         );
                         failed_pid = None;
                         observer = Some(attached);
+                        note_watch(generation, WATCHING);
                     }
                     Err(error) => {
                         if failed_pid != Some(pid) {
@@ -130,6 +174,7 @@ fn run(generation: u64) {
                             );
                         }
                         failed_pid = Some(pid);
+                        note_watch(generation, CANNOT_WATCH);
                     }
                 }
             }
@@ -171,7 +216,9 @@ extern "C" fn on_created(
     }
     match element.window() {
         Some(window) => {
-            if let Err(error) = window.move_to(OFFSCREEN, OFFSCREEN) {
+            let moved = window.move_to(OFFSCREEN, OFFSCREEN);
+            HIDE_FAILED.store(moved.is_err(), Ordering::Relaxed);
+            if let Err(error) = moved {
                 log::warn!("notification banners: cannot hide a macOS banner: {error:#}");
             }
         }
@@ -216,4 +263,50 @@ fn first_sighting(id: &str) -> bool {
     }
     seen.push_back(id.to_string());
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_watch_says_what_stops_it_from_hiding_banners() {
+        let cases = [
+            (WATCHING, false, true, Health::Active),
+            (
+                WATCHING,
+                true,
+                true,
+                Health::Failed(CANNOT_HIDE_REASON.to_string()),
+            ),
+            (NOT_LOOKED, false, true, Health::Starting),
+            (
+                NOT_LOOKED,
+                false,
+                false,
+                Health::NeedsPermission(Permission::Accessibility),
+            ),
+            (
+                CANNOT_WATCH,
+                false,
+                false,
+                Health::NeedsPermission(Permission::Accessibility),
+            ),
+            (
+                CANNOT_WATCH,
+                false,
+                true,
+                Health::Failed(CANNOT_WATCH_REASON.to_string()),
+            ),
+            (
+                NO_NOTIFICATION_CENTER,
+                false,
+                true,
+                Health::Failed(NO_NOTIFICATION_CENTER_REASON.to_string()),
+            ),
+        ];
+        for (state, hide_failed, trusted, health) in cases {
+            assert_eq!(watch_health(state, hide_failed, trusted), health, "{state}");
+        }
+    }
 }

@@ -24,6 +24,10 @@ impl NotificationPlatform for Platform {
         legacy_dnd_active()
     }
 
+    fn os_banners_showing(&self) -> Option<bool> {
+        None
+    }
+
     fn set_os_banners(&self, _showing: bool) {}
 
     fn acquire_inhibit(&self) -> Option<NotificationInhibit> {

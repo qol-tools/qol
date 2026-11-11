@@ -15,8 +15,8 @@ default = true
 
 [field.handler]
 type = "select"
-label = "Show notifications in"
-description = "Pick where qol messages pop up."
+label = "Show qol messages in"
+description = "Pick where qol's own messages pop up."
 section = "notifications"
 default = "qol"
 card_description = "Where qol notifications appear."
@@ -31,6 +31,91 @@ both = "Both"
 qol = "qol-toasts"
 os = "system-bubbles"
 both = "both-notices"
+
+[field.other_apps_shown]
+type = "select"
+label = "Other apps' notifications"
+description = "Let macOS show them, or have qol show them as its own toasts."
+section = "notifications"
+platforms = ["macos"]
+default = "qol"
+card_description = "Who shows other apps' notifications."
+options = ["os", "qol"]
+
+[field.other_apps_shown.option_labels]
+os = "System notifications"
+qol = "qol toasts"
+
+[field.other_apps_shown.show_when]
+field = "handler"
+equals = "qol"
+
+[field.other_apps_hidden]
+type = "select"
+label = "Other apps' notifications"
+description = "Let your desktop show them, or hide them. qol cannot show them as its own toasts on Linux."
+section = "notifications"
+platforms = ["linux"]
+default = "qol"
+card_description = "Whether other apps' notifications show."
+options = ["os", "qol"]
+
+[field.other_apps_hidden.option_labels]
+os = "System notifications"
+qol = "Hidden"
+
+[field.other_apps_hidden.show_when]
+field = "handler"
+equals = "qol"
+
+[field.takeover]
+type = "status"
+label = "Other apps right now"
+description = "What this computer does with other apps' notifications at the moment."
+section = "notifications"
+query = "takeover"
+value_from = "value"
+
+[field.takeover.label_map]
+off = "Shown by your system"
+starting = "Starting"
+toasts = "Shown as qol toasts"
+toasts_partly = "Shown as qol toasts, some are missed"
+toasts_and_banners = "Shown twice, by qol and your system"
+hidden = "Hidden, not shown as qol toasts"
+muted = "Hidden while notifications are off"
+blocked = "Still shown by your system"
+unsupported = "Shown by your system, qol cannot take over here"
+failed = "qol could not take over"
+
+[field.takeover.tone_map]
+toasts = "success"
+toasts_partly = "warning"
+toasts_and_banners = "warning"
+hidden = "warning"
+muted = "warning"
+blocked = "danger"
+failed = "danger"
+
+[field.takeover_needs]
+type = "status"
+label = "Needs your permission"
+description = "Allow it for qol-tray in System Settings, under Privacy & Security."
+section = "notifications"
+platforms = ["macos"]
+query = "takeover"
+value_from = "needs"
+hide_values = ["none"]
+
+[field.takeover_needs.label_map]
+full_disk_access = "Full Disk Access"
+accessibility = "Accessibility"
+full_disk_access_and_accessibility = "Full Disk Access and Accessibility"
+
+[field.takeover_needs.tone_map]
+full_disk_access = "warning"
+accessibility = "warning"
+full_disk_access_and_accessibility = "warning"
 
 [field.placement]
 type = "placement"
@@ -47,6 +132,12 @@ description = "Follows your system. While it is on, system notifications stay qu
 section = "notifications"
 query = "os_do_not_disturb"
 value_from = "value"
+
+[field.do_not_disturb.label_map]
+on = "On"
+off = "Off"
+qol = "Banners are hidden by qol"
+unknown = "Cannot be read on this computer"
 
 [field.message_seconds]
 type = "number"

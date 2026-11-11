@@ -4,7 +4,7 @@ use qol_plugin_daemon::notification::gate::NativeHandler;
 
 pub(crate) fn native_notifications_diagnosis() -> CheckReport {
     if crate::features::notifications::native_handler() == NativeHandler::Qol {
-        return CheckReport::ok("native notifications are disabled; qol toasts are used");
+        return super::super::takeover::diagnosis();
     }
     match qol_plugin_daemon::notification::platform::os_do_not_disturb() {
         Some(true) => CheckReport::warn(

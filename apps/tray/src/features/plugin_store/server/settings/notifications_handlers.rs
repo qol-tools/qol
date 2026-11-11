@@ -38,14 +38,12 @@ pub(in super::super) async fn set_notifications(body: axum::body::Bytes) -> impl
 
 fn set_notifications_inner(body: axum::body::Bytes) -> HttpResult<Response> {
     let request: NotificationsRequest = http_json::parse_json_body(body, MAX_CONFIG_SIZE)?;
-    let previous = crate::features::notifications::native_handler();
     let result = match request.handler {
         Some(handler) => crate::features::notifications::set_native_handler(handler),
         None => crate::features::notifications::set_use_system_notifications(
             request.use_system_notifications,
         ),
     };
-    crate::features::notifications::apply_native_handler(previous);
     result.map_err(|error| Box::new(bad_request(&error.to_string())))?;
     notifications_response()
 }
