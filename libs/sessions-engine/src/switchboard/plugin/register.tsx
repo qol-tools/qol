@@ -3124,7 +3124,7 @@ export const register: Register = on => {
     const now = await $.clock.now()
     const viewed = e.props.view?.agentId
     viewedFork = viewed
-    const target = viewed === undefined ? list.find(entry => entry.agentId === writing) : undefined
+    const target = list.find(entry => entry.agentId === (viewed ?? writing))
     const stateOfPull = (pull: Pull) => (pull.mergeCommit !== undefined ? 'merged' : (details[pull.pullRequest]?.state ?? 'open'))
     const isOpen = (pull: Pull) => ['open', 'draft'].includes(stateOfPull(pull))
     refreshDetails($, ledger.filter(pull => isOpen(pull) || pull.agentId === target?.agentId), details, now)

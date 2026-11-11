@@ -628,17 +628,22 @@ test('a sent line the engine puts back leaves the box at once, and only that lin
   expect(fills).toEqual([''])
 })
 
-test('/board shows the whole board in an agent view too', async ($, on) => {
+test("in a fork's view the board frames that fork, and the whole board shows in the view of an agent it does not list", async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: asks')
   await deliver($, notification('a8', 'asking-fork: asks', 'Which colour?\nI recommend amber.'))
   await runBoard($)
-  const props = { ...PANE.props, isFocused: false, placement: 'inline', view: { agentId: 'a8' } } as const
-  const inline = await $.ui.mount({ ...PANE, surface: 'terminal', props })
-  expect(await inline.find({ type: 'Text', text: /NEEDS YOU/ })).toBeDefined()
-  expect(await inline.find({ type: 'Text', text: /Recommend: amber/ })).toBeDefined()
-  await inline.unmount()
+  const propsIn = (agentId: string) => ({ ...PANE.props, isFocused: false, placement: 'inline', view: { agentId } }) as const
+  const inFork = await $.ui.mount({ ...PANE, surface: 'terminal', props: propsIn('a8') })
+  expect(await inFork.find({ type: 'Text', text: 'FORKS' })).toBeDefined()
+  expect(await inFork.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
+  expect(await inFork.findAll({ type: 'Text', text: /NEEDS YOU/ })).toEqual([])
+  await inFork.unmount()
+  const inOther = await $.ui.mount({ ...PANE, surface: 'terminal', props: propsIn('not-a-fork') })
+  expect(await inOther.find({ type: 'Text', text: /NEEDS YOU/ })).toBeDefined()
+  expect(await inOther.find({ type: 'Text', text: /Recommend: amber/ })).toBeDefined()
+  await inOther.unmount()
 })
 
 test('a board the user closed opens again at the next start', async ($, on) => {
