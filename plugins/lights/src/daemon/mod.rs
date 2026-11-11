@@ -234,7 +234,7 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str, input: &Value) -> 
 
 fn light_rows(runtime: &DaemonRuntime) -> Vec<LightRow> {
     let DaemonRuntime::Ready(state) = runtime else {
-        return Vec::new();
+        return stored_light_rows(&store::load().unwrap_or_default());
     };
     let guard = state.shared_service();
     let Ok(lock) = guard.lock() else {
@@ -267,6 +267,20 @@ fn light_rows(runtime: &DaemonRuntime) -> Vec<LightRow> {
                 name,
                 network_address: device.network_address,
             }
+        })
+        .collect()
+}
+
+fn stored_light_rows(config: &crate::config::model::PluginConfig) -> Vec<LightRow> {
+    let stored_looks = looks::LightLooks::new(config);
+    config
+        .devices
+        .values()
+        .map(|entry| LightRow {
+            look: stored_looks.look(&entry.ieee_address),
+            ieee: entry.ieee_address.clone(),
+            name: entry.name.clone(),
+            network_address: entry.network_address.unwrap_or_default(),
         })
         .collect()
 }
@@ -467,6 +481,36 @@ mod tests {
         };
         assert_eq!(find["lead"]["can_find"], true);
         assert_eq!(find["lead"]["can_start"], false);
+    }
+
+    #[test]
+    fn saved_lights_are_listed_from_the_config_without_a_dongle() {
+        let mut config = crate::config::model::PluginConfig::default();
+        config.devices.insert(
+            "00:11:22:33:44:55:66:77".into(),
+            DeviceEntry {
+                ieee_address: "00:11:22:33:44:55:66:77".into(),
+                name: "Desk".into(),
+                endpoints: Vec::new(),
+                online: false,
+                network_address: Some(0x1A2B),
+                look: Some(crate::config::model::LightLook {
+                    on: false,
+                    color_hex: "#FFAA00".into(),
+                    brightness: 35,
+                    mirek: 410,
+                }),
+            },
+        );
+
+        let rows = stored_light_rows(&config);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "Desk");
+        assert_eq!(rows[0].ieee, "00:11:22:33:44:55:66:77");
+        assert_eq!(rows[0].network_address, 0x1A2B);
+        assert_eq!(rows[0].look.brightness, 35);
+        assert!(!rows[0].look.on);
     }
 
     #[test]
