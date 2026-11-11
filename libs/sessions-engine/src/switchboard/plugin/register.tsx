@@ -1157,7 +1157,9 @@ export const typedByUser = (text: string): string | undefined => {
 }
 
 const USER_LINE = FROM_USER.trim().toLowerCase()
-const NOT_THE_USER = 'Not sent: only the qol-switchboard plugin marks a message as typed by the user. Send it as your own words, without that first line.'
+const NOT_THE_USER = 'Not sent: only the qol-switchboard plugin marks a message as typed by the user. Send it as your own words, without that line.'
+const UNSEEN_MARKS = /[­​-‍⁠﻿]/g
+const LINE_LEAD = /^[\s>*_#`"'~|:-]+/
 
 const typedHere = new Map<string, number>()
 
@@ -1171,16 +1173,11 @@ const dropTyped = (text: string): void => {
   else typedHere.delete(text)
 }
 
-export const claimsUser = (text: unknown): boolean => typeof text === 'string' && text.trimStart().toLowerCase().replace(/\s+/g, ' ').startsWith(USER_LINE)
+const saysUser = (line: string): boolean => line.normalize('NFKC').replace(UNSEEN_MARKS, '').toLowerCase().replace(LINE_LEAD, '').replace(/\s+/g, ' ').startsWith(USER_LINE)
 
-type SendOrigin = { kind?: unknown; name?: unknown }
+export const claimsUser = (text: unknown): boolean => typeof text === 'string' && text.split('\n').some(saysUser)
 
-export const isForgedUser = (e: { text?: unknown; agentId?: unknown; origin?: unknown }): boolean => {
-  if (!claimsUser(e.text)) return false
-  if (typedHere.has(e.text as string)) return false
-  const origin: SendOrigin = typeof e.origin === 'object' && e.origin !== null ? e.origin : {}
-  return !(e.agentId === undefined && origin.kind === 'plugin' && origin.name === NAME)
-}
+export const isForgedUser = (text: unknown): boolean => claimsUser(text) && !typedHere.has(text as string)
 
 type SessionRecord = { key: string; friendly?: string; cwd?: string; created_ms?: number; parts?: unknown[]; done?: { at_ms?: number; reason?: string }; stopped_ms?: number }
 
@@ -2546,6 +2543,7 @@ export const register: Register = on => {
       if (e.parentAgentId !== undefined && !mayMessage(list, e.parentAgentId, e.resume.agentId)) return { deny: FORK_TO_FORK }
       return next(e)
     }
+    if (claimsUser(e.prompt)) return { deny: NOT_THE_USER }
     const project = PROJECT.exec(e.prompt.split('\n', 1)[0] ?? '')
     if (project === null) {
       return { deny: "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`." }
@@ -2988,12 +2986,13 @@ export const register: Register = on => {
     }
     const session = closedSession(e as unknown as Record<string, unknown>)
     if (session === undefined) return { deny: 'resume_session needs fork alone, or an absolute .jsonl transcript, an absolute cwd and a `<key-name>: <friendly description>` description.' }
+    if (claimsUser(session.message)) return { deny: NOT_THE_USER }
     const resumed = await resumeSession($, session)
     return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
   }).catch(() => ({ deny: 'The session could not be brought back as a fork.' }))
 
   on('tool.call', { tool: SEND }, async ($, e, next) => {
-    if (next.origin.plugin !== NAME && claimsUser(e.message)) return { deny: NOT_THE_USER }
+    if (isForgedUser(e.message)) return { deny: NOT_THE_USER }
     if (e.agentId !== undefined || next.origin.plugin === NAME || typeof e.to !== 'string' || typeof e.message !== 'string') return next(e)
     let target = addressed(await read($, board), e.to)
     if (target === undefined) {
@@ -3023,7 +3022,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.send', async ($, e, next) => {
-    if (isForgedUser(e)) return { isDelivered: false, reason: NOT_THE_USER }
+    if (isForgedUser(e.text)) return { isDelivered: false, reason: NOT_THE_USER }
     if (e.agentId === undefined) return next(e)
     return mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }))
