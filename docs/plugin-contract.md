@@ -777,7 +777,7 @@ The host pipes plugin stderr (and stdout in dev). In prod, lines matching `ERROR
 deliberately aggressive) are forwarded into the host's structured error capture
 tagged `plugin.{id}.daemon_stderr` (`apps/tray/src/logging/relay.rs`), so plugin
 errors surface in the host. `RUST_LOG` is injected per profile. `qol_runtime::probe!` is a
-debug-only per-process trace to `/tmp/qol-altmon.log` (not collected by the host);
+debug-only per-process trace to `qol-altmon.log` in the per-user qol-tray runtime dir (not collected by the host);
 see `qol-project:qol-trace`.
 
 ### 8.3 Plugin-to-tray notification and status push (plugin to host)

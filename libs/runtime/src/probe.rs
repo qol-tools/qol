@@ -1,7 +1,4 @@
 #[cfg(debug_assertions)]
-const LOG_FILE: &str = qol_conventions::TRACE_LOG_PATH;
-
-#[cfg(debug_assertions)]
 const MAX_LOG_BYTES: u64 = 16 * 1024 * 1024;
 
 pub fn probe(tag: &str, msg: &str) {
@@ -31,20 +28,56 @@ fn sink() -> &'static crate::event_tap_trace::TraceSink {
     SINK.get_or_init(|| {
         let mut file: Option<std::fs::File> = None;
         let mut bytes: u64 = 0;
+        let log_file = log_path().map(|path| path.to_string_lossy().into_owned());
         crate::event_tap_trace::TraceSink::spawn(
             "qol-probe-log",
             crate::event_tap_trace::QUEUE_DEPTH,
             move |batch| {
+                let Some(log_file) = &log_file else {
+                    return;
+                };
                 write_batch(
                     &mut file,
                     &mut bytes,
-                    LOG_FILE,
+                    log_file,
                     MAX_LOG_BYTES,
                     &batch.join(""),
                 )
             },
         )
     })
+}
+
+#[cfg(debug_assertions)]
+fn log_path() -> Option<std::path::PathBuf> {
+    let path = qol_config::trace_log_path();
+    match qol_config::runtime_dir() {
+        Some(dir) => private_dir_ready(&dir).then_some(path),
+        None => Some(path),
+    }
+}
+
+#[cfg(all(debug_assertions, unix))]
+fn private_dir_ready(dir: &std::path::Path) -> bool {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
+    if std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .is_err()
+    {
+        return false;
+    }
+    let Ok(metadata) = std::fs::symlink_metadata(dir) else {
+        return false;
+    };
+    metadata.is_dir() && metadata.uid() == unsafe { libc::geteuid() }
+}
+
+#[cfg(all(debug_assertions, not(unix)))]
+fn private_dir_ready(dir: &std::path::Path) -> bool {
+    std::fs::create_dir_all(dir).is_ok()
 }
 
 #[cfg(debug_assertions)]
@@ -308,6 +341,38 @@ mod tests {
 
         let _ = std::fs::remove_file(&fresh);
         let _ = std::fs::remove_file(&wide);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_probe_log_dir_is_created_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("qol-probe-dir-{}", std::process::id()));
+        let dir = root.join("runtime");
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(super::private_dir_ready(&dir));
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+        assert!(super::private_dir_ready(&dir));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_probe_log_dir_is_refused() {
+        let root = std::env::temp_dir().join(format!("qol-probe-dir-link-{}", std::process::id()));
+        let real = root.join("real");
+        let link = root.join("link");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert!(!super::private_dir_ready(&link));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
