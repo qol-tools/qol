@@ -7,7 +7,6 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from datetime import datetime
 
 from cancel_superseded_queue_runs import cancel
 from queue_verdict import gh_json
@@ -47,40 +46,36 @@ def run_of(repo: str, run_id: str) -> dict:
     return gh_json([f"repos/{repo}/actions/runs/{run_id}"])
 
 
-def moment(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def posted_by_override_run(comment: dict, run: dict) -> bool:
+def is_owner_override_run(run: dict) -> bool:
     if run.get("path") != OVERRIDE_WORKFLOW_PATH or run.get("event") != OVERRIDE_EVENT:
         return False
-    if (run.get("triggering_actor") or {}).get("login") != OWNER:
-        return False
-    created, started = moment(comment.get("created_at")), moment(run.get("run_started_at"))
-    if created is None or started is None or created < started:
-        return False
-    if run.get("status") == "completed":
-        ended = moment(run.get("updated_at"))
-        return ended is not None and created <= ended
-    return True
+    return (run.get("triggering_actor") or {}).get("login") == OWNER
+
+
+def asked_by_owner(earlier: list[dict], head_sha: str) -> bool:
+    for comment in earlier:
+        if (comment.get("user") or {}).get("login") != OWNER:
+            continue
+        named = COMMAND.fullmatch(((comment.get("body") or "").strip().splitlines() or [""])[0].strip())
+        if named and named.group(1) == head_sha:
+            return True
+    return False
 
 
 def override_for(entries: list[dict], head_sha: str, repo: str, lookup: Callable[[str, str], dict] | None = None) -> dict | None:
     lookup = lookup or run_of
-    for comment in reversed(entries):
+    for index in range(len(entries) - 1, -1, -1):
+        comment = entries[index]
         match = RECORD.match(comment.get("body") or "")
-        if comment.get("user", {}).get("login") != REVIEW_BOT or not match or match.group(1) != head_sha:
+        if (comment.get("user") or {}).get("login") != REVIEW_BOT or not match or match.group(1) != head_sha:
+            continue
+        if not asked_by_owner(entries[:index], head_sha):
             continue
         try:
             run = lookup(repo, match.group(3))
         except RuntimeError:
             continue
-        if posted_by_override_run(comment, run):
+        if is_owner_override_run(run):
             return {"actor": match.group(2), "url": comment.get("html_url", "")}
     return None
 

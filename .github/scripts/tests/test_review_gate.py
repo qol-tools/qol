@@ -19,13 +19,15 @@ OTHER = "0719d4cc4" + "0" * 31
 FULL_SHA_REASON = "name the full 40-character head commit the override is for: `/review-override <sha>`."
 BOT = {"login": "github-actions[bot]"}
 RUN_ID = "9001"
-STARTED = "2026-11-09T10:00:00Z"
-POSTED = "2026-11-09T10:01:00Z"
-ENDED = "2026-11-09T10:05:00Z"
+OWNER = {"login": "KMRH47"}
 
 
-def comment(body: str, user: dict = BOT, url: str = "https://github.com/o/r/pull/7#issuecomment-1", created_at: str = POSTED) -> dict:
-    return {"user": user, "body": body, "html_url": url, "created_at": created_at}
+def comment(body: str, user: dict = BOT, url: str = "https://github.com/o/r/pull/7#issuecomment-1") -> dict:
+    return {"user": user, "body": body, "html_url": url}
+
+
+def command(sha: str = SHA, user: dict = OWNER, note: str = "") -> dict:
+    return comment(f"/review-override {sha}{note}", user=user)
 
 
 def override_run(**changes) -> dict:
@@ -34,9 +36,7 @@ def override_run(**changes) -> dict:
         "path": ".github/workflows/review-override.yml",
         "event": "issue_comment",
         "triggering_actor": {"login": "KMRH47"},
-        "run_started_at": STARTED,
         "status": "in_progress",
-        "updated_at": ENDED,
     }
     return {**honest, **changes}
 
@@ -59,6 +59,7 @@ def run(run_id: int, status: str = "completed", conclusion: str | None = "failur
 class OverrideRecordTests(unittest.TestCase):
     def test_only_the_bots_record_for_this_head_counts(self):
         entries = [
+            command(),
             comment(gate.record(OTHER, "KMRH47", RUN_ID)),
             comment(gate.record(SHA, "KMRH47", RUN_ID), user={"login": "KMRH47"}),
             comment(f"<!-- qol-code-review -->\n\n{gate.record(SHA, 'KMRH47', RUN_ID)}"),
@@ -76,28 +77,40 @@ class OverrideRecordTests(unittest.TestCase):
 
     def test_a_record_without_a_run_id_is_refused(self):
         old = f"<!-- qol-review-override {SHA} KMRH47 -->\n\n> [!NOTE]\n"
-        self.assertIsNone(gate.override_for([comment(old)], SHA, "o/r", lookup_of(override_run())))
+        self.assertIsNone(gate.override_for([command(), comment(old)], SHA, "o/r", lookup_of(override_run())))
 
-    def test_a_record_naming_a_run_that_did_not_post_it_is_refused(self):
-        for label, run_changes, created_at in [
-            ("another workflow", {"path": ".github/workflows/evil.yml"}, POSTED),
-            ("another event", {"event": "pull_request"}, POSTED),
-            ("another actor", {"triggering_actor": {"login": "someone"}}, POSTED),
-            ("no actor", {"triggering_actor": None}, POSTED),
-            ("comment before the run started", {}, "2026-11-09T09:59:59Z"),
-            ("run completed before the comment", {"status": "completed", "updated_at": "2026-11-09T10:00:30Z"}, POSTED),
+    def test_a_record_naming_a_run_that_is_not_the_owners_override_is_refused(self):
+        for label, run_changes in [
+            ("another workflow", {"path": ".github/workflows/evil.yml"}),
+            ("another event", {"event": "pull_request"}),
+            ("another actor", {"triggering_actor": {"login": "someone"}}),
+            ("no actor", {"triggering_actor": None}),
         ]:
             with self.subTest(label):
-                entries = [comment(gate.record(SHA, "KMRH47", RUN_ID), created_at=created_at)]
+                entries = [command(), comment(gate.record(SHA, "KMRH47", RUN_ID))]
                 self.assertIsNone(gate.override_for(entries, SHA, "o/r", lookup_of(override_run(**run_changes))))
 
+    def test_a_record_the_owner_did_not_ask_for_on_this_pull_request_is_refused(self):
+        posted = comment(gate.record(SHA, "KMRH47", RUN_ID))
+        for label, entries in [
+            ("no command", [posted]),
+            ("a command for another commit", [command(OTHER), posted]),
+            ("a command from someone else", [command(user={"login": "someone"}), posted]),
+            ("a command the bot wrote", [command(user=BOT), posted]),
+            ("a command after the record", [posted, command()]),
+            ("a command with words after the commit", [command(note=" please"), posted]),
+            ("a command below other words", [comment(f"see\n/review-override {SHA}", user=OWNER), posted]),
+        ]:
+            with self.subTest(label):
+                self.assertIsNone(gate.override_for(entries, SHA, "o/r", lookup_of(override_run())))
+
     def test_a_record_naming_a_run_that_does_not_exist_is_refused(self):
-        entries = [comment(gate.record(SHA, "KMRH47", "424242"))]
+        entries = [command(), comment(gate.record(SHA, "KMRH47", "424242"))]
         self.assertIsNone(gate.override_for(entries, SHA, "o/r", lookup_of(override_run())))
 
-    def test_the_honest_record_is_accepted_in_progress_and_completed(self):
-        entries = [comment(gate.record(SHA, "KMRH47", RUN_ID), url="https://c/4")]
-        for changes in [{}, {"status": "completed", "updated_at": ENDED}]:
+    def test_the_honest_record_is_accepted_in_progress_completed_and_rerun(self):
+        entries = [command(note="\nRound 130 picked the squeezed rows."), comment(gate.record(SHA, "KMRH47", RUN_ID), url="https://c/4")]
+        for changes in [{}, {"status": "completed"}, {"status": "completed", "run_attempt": 2}]:
             with self.subTest(changes=changes):
                 found = gate.override_for(entries, SHA, "o/r", lookup_of(override_run(**changes)))
                 self.assertEqual(found, {"actor": "KMRH47", "url": "https://c/4"})
@@ -106,10 +119,10 @@ class OverrideRecordTests(unittest.TestCase):
         forged = comment(gate.record(SHA, "KMRH47", "7777"), url="https://c/forged")
         honest = comment(gate.record(SHA, "KMRH47", RUN_ID), url="https://c/honest")
         lookup = lookup_of(override_run(), override_run(id=7777, path=".github/workflows/evil.yml"))
-        self.assertEqual(gate.override_for([honest, forged], SHA, "o/r", lookup), {"actor": "KMRH47", "url": "https://c/honest"})
+        self.assertEqual(gate.override_for([command(), honest, forged], SHA, "o/r", lookup), {"actor": "KMRH47", "url": "https://c/honest"})
 
     def test_the_default_lookup_reads_the_run_from_the_actions_api(self):
-        entries = [comment(gate.record(SHA, "KMRH47", RUN_ID), url="https://c/5")]
+        entries = [command(), comment(gate.record(SHA, "KMRH47", RUN_ID), url="https://c/5")]
         with mock.patch.object(gate, "gh_json", return_value=override_run()) as gh_json:
             found = gate.override_for(entries, SHA, "o/r")
         gh_json.assert_called_once_with([f"repos/o/r/actions/runs/{RUN_ID}"])
@@ -149,7 +162,7 @@ class VerdictTests(unittest.TestCase):
     def test_a_review_of_a_base_the_pull_request_left_fails_even_with_an_override(self):
         for review in ["pass", "conditional"]:
             with self.subTest(review=review):
-                code, out, summary = self.verdict(review, [comment(gate.record(SHA, "KMRH47", RUN_ID))], BASE="fix/stacked-base")
+                code, out, summary = self.verdict(review, [command(), comment(gate.record(SHA, "KMRH47", RUN_ID))], BASE="fix/stacked-base")
                 self.assertEqual(code, 1)
                 self.assertIn(
                     "::error::1f8c4b7 was reviewed against fix/stacked-base, and the base is now main. "
@@ -160,13 +173,19 @@ class VerdictTests(unittest.TestCase):
 
     def test_a_bot_comment_with_the_old_record_shape_does_not_override(self):
         old = f"<!-- qol-review-override {SHA} KMRH47 -->\n\n> [!NOTE]\n"
-        code, out, summary = self.verdict("conditional", [comment(old)])
+        code, out, summary = self.verdict("conditional", [command(), comment(old)])
+        self.assertEqual(code, 1)
+        self.assertIn("the review verdict is conditional", out)
+        self.assertEqual(summary, "")
+
+    def test_a_record_without_the_owners_command_does_not_override(self):
+        code, out, summary = self.verdict("conditional", [comment(gate.record(SHA, "KMRH47", RUN_ID))])
         self.assertEqual(code, 1)
         self.assertIn("the review verdict is conditional", out)
         self.assertEqual(summary, "")
 
     def test_a_record_naming_a_run_of_another_workflow_does_not_override(self):
-        entries = [comment(gate.record(SHA, "KMRH47", RUN_ID))]
+        entries = [command(), comment(gate.record(SHA, "KMRH47", RUN_ID))]
         with mock.patch.object(gate, "run_of", lambda repo, run_id: override_run(path=".github/workflows/evil.yml")):
             fetch = mock.Mock(return_value=entries)
             with mock.patch.object(gate, "comments", fetch), mock.patch.object(gate, "gh_json", return_value={"base": {"ref": "main"}}):
@@ -176,7 +195,7 @@ class VerdictTests(unittest.TestCase):
     def test_a_blocking_verdict_without_an_override_fails(self):
         for review in ["conditional", "block", ""]:
             with self.subTest(review=review):
-                code, out, summary = self.verdict(review, [comment(gate.record(OTHER, "KMRH47", RUN_ID))])
+                code, out, summary = self.verdict(review, [command(OTHER), comment(gate.record(OTHER, "KMRH47", RUN_ID))])
                 self.assertEqual(code, 1)
                 self.assertIn(f"the review verdict is {review or 'missing'}", out)
                 self.assertEqual(summary, "")
@@ -189,7 +208,7 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(self.verdict("quota", REVIEW_RESULT="failure")[0], 1)
 
     def test_an_owner_override_of_this_head_passes_and_is_recorded_in_the_check(self):
-        code, out, summary = self.verdict("conditional", [comment(gate.record(SHA, "KMRH47", RUN_ID), url="https://c/3")])
+        code, out, summary = self.verdict("conditional", [command(), comment(gate.record(SHA, "KMRH47", RUN_ID), url="https://c/3")])
         self.assertEqual(code, 0)
         note = "@KMRH47 overrode the conditional review verdict of 1f8c4b7: https://c/3"
         self.assertIn(f"::notice title=Review override::{note}", out)
@@ -286,7 +305,7 @@ class ApplyOverrideTests(unittest.TestCase):
     def test_a_second_override_does_not_record_twice(self):
         api = FakeApi(review=[run(6)], jobs={6: [{"id": 62, "name": "claude review"}]})
         api.statuses[6] = ["queued"]
-        code, _, _ = self.apply(api, [comment(gate.record(SHA, "KMRH47", RUN_ID))], f"/review-override {SHA}")
+        code, _, _ = self.apply(api, [command(), comment(gate.record(SHA, "KMRH47", RUN_ID))], f"/review-override {SHA}")
         self.assertEqual(code, 0)
         self.assertEqual(api.calls, [["--method", "POST", "repos/o/r/actions/jobs/62/rerun"]])
 
