@@ -240,8 +240,19 @@ pub(super) fn write_core_settings(bundle: &ProfileImportBundle) -> Result<()> {
             crate::paths::shortcuts_path()?,
             &serde_json::json!({ "shortcuts": shortcuts }),
         )?;
+        record_imported_shortcut_programs(shortcuts)?;
     }
     Ok(())
+}
+
+fn record_imported_shortcut_programs(shortcuts: &[Value]) -> Result<()> {
+    let config = crate::shortcuts::model::ShortcutsConfig {
+        shortcuts: shortcuts
+            .iter()
+            .filter_map(|value| serde_json::from_value(value.clone()).ok())
+            .collect(),
+    };
+    crate::shortcuts::device_programs::record(&config)
 }
 
 fn read_wrapped_json_array(path: Result<PathBuf>, field_name: &str) -> Vec<Value> {
