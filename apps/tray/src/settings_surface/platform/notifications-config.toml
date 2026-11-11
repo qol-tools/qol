@@ -57,7 +57,7 @@ description = "Let your desktop show them, or hide them. qol cannot show them as
 section = "notifications"
 platforms = ["linux"]
 default = "qol"
-card_description = "Whether other apps' notifications show."
+card_description = "Show or hide other apps' banners."
 options = ["os", "qol"]
 
 [field.other_apps_hidden.option_labels]
