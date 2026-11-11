@@ -60,6 +60,10 @@ impl ZigbeeBackend {
     pub fn devices(&self) -> Vec<Device> {
         self.controller.devices()
     }
+
+    pub fn remove_device(&self, ieee: &[u8; 8]) -> Result<()> {
+        self.controller.remove_device(ieee)
+    }
 }
 
 impl LightBackend for ZigbeeBackend {
