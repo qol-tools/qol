@@ -1,6 +1,6 @@
 use qol_config::contract::{
     interpolate_row_template, resolve_row_actions, FieldDefault, FieldKind, ListLeadSpec,
-    ResolvedRowAction, RowActionSpec, RowSliderSpec, RowToggleSpec,
+    ResolvedRowAction, RowActionSpec, RowControlKind, RowControlSpec, RowSliderSpec, RowToggleSpec,
 };
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection, ResolvedShowWhen};
 use qol_config::object_array::item_schema;
@@ -16,6 +16,8 @@ use crate::status_indicator::StatusTone;
 pub(super) const LIST_MAX_VISIBLE: usize = 5;
 pub(super) const ITEM_ROW_DANGER: &str = "item_danger";
 pub(super) const ITEM_ROW_MEMBER: &str = "item_member";
+pub(super) const ITEM_ROW_CONTROL: &str = "item_control";
+const ITEM_CONTROL_ID: &str = "control:";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ListItem {
@@ -155,6 +157,9 @@ pub(super) struct ListActions {
     pub(super) inline: bool,
     pub(super) hide_when_empty: bool,
     pub(super) row_toggle: Option<RowToggleSpec>,
+    pub(super) controls: Vec<RowControlSpec>,
+    pub(super) swatch: Option<String>,
+    pub(super) detached: bool,
     pub(super) answered: bool,
 }
 
@@ -606,6 +611,7 @@ pub(super) fn stream_gated(rows: &[Row]) -> bool {
 pub(super) fn row_is_visible(rows: &[Row], index: usize) -> bool {
     match rows.get(index).map(|row| &row.control) {
         Some(RowControl::Status { hidden: true, .. }) => return false,
+        Some(RowControl::List { actions, .. }) if actions.detached => return false,
         Some(RowControl::List { actions, items, .. })
             if actions.hide_when_empty && actions.answered && items.is_empty() =>
         {
@@ -826,6 +832,9 @@ fn control_for(
                     inline: field.inline,
                     hide_when_empty: field.hide_when_empty,
                     row_toggle: field.row_toggle.clone(),
+                    controls: field.row_controls.clone(),
+                    swatch: field.row_swatch.clone(),
+                    detached: field.detached,
                     answered: false,
                 }),
                 item_card: field.item_card_field.clone(),
@@ -2036,6 +2045,89 @@ pub(super) fn list_slider_value(
         .unwrap_or(slider.min)
 }
 
+pub(super) fn item_control_row_id(index: usize) -> String {
+    format!("{ITEM_CONTROL_ID}{index}")
+}
+
+pub(super) fn item_control_index(row: &Row) -> Option<usize> {
+    if row.variant.as_deref() != Some(ITEM_ROW_CONTROL) {
+        return None;
+    }
+    row.id.strip_prefix(ITEM_CONTROL_ID)?.parse().ok()
+}
+
+pub(super) fn item_control(spec: &RowControlSpec, data: &serde_json::Value) -> RowControl {
+    let value = data.get(&spec.value_from);
+    let text = || {
+        value
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    match spec.control {
+        RowControlKind::Switch => {
+            RowControl::Toggle(value.and_then(serde_json::Value::as_bool).unwrap_or(false))
+        }
+        RowControlKind::Number => RowControl::Number {
+            value: value
+                .and_then(|value| {
+                    value
+                        .as_f64()
+                        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+                })
+                .unwrap_or(spec.min.unwrap_or(0.0)),
+            min: spec.min,
+            max: spec.max,
+            step: spec.step,
+            live: None,
+            level: None,
+            unit: spec.unit.clone(),
+        },
+        RowControlKind::Color => RowControl::Color(text()),
+        RowControlKind::Text => RowControl::Text(text()),
+    }
+}
+
+pub(super) fn item_control_value(control: &RowControl) -> Option<serde_json::Value> {
+    match control {
+        RowControl::Toggle(on) => Some(serde_json::json!(on)),
+        RowControl::Number { value, .. } if value.fract() == 0.0 && value.abs() < 1e15 => {
+            Some(serde_json::json!(*value as i64))
+        }
+        RowControl::Number { value, .. } => Some(serde_json::json!(value)),
+        RowControl::Color(text) | RowControl::Text(text) => Some(serde_json::json!(text)),
+        _ => None,
+    }
+}
+
+pub(super) fn item_control_rows(
+    list_row: &Row,
+    actions: &ListActions,
+    item: &ListItem,
+) -> Vec<Row> {
+    actions
+        .controls
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| Row {
+            id: item_control_row_id(index),
+            section_id: None,
+            section_label: None,
+            label: spec.label.clone(),
+            description: spec.description.clone(),
+            placeholder: None,
+            variant: Some(ITEM_ROW_CONTROL.to_string()),
+            config_key: list_row.config_key.clone(),
+            default: FieldDefault::String(String::new()),
+            stream: None,
+            action: Some(spec.action.clone()),
+            visibility: None,
+            source: list_row.source,
+            control: item_control(spec, &item.data),
+        })
+        .collect()
+}
+
 pub(super) fn primary_list_item_action(
     actions: &ListActions,
     item: &ListItem,
@@ -2173,13 +2265,15 @@ mod tests {
     use super::{
         absent_reason, apply_level_query, apply_runtime_query, begin_list_item_action,
         clear_slider_hold, filtered_list_items, inline_empty_text, inline_item_indices,
-        inline_line_count, inline_selected_ids, level_query_names, list_item_actions, list_items,
+        inline_line_count, inline_selected_ids, item_control, item_control_index,
+        item_control_rows, item_control_value, level_query_names, list_item_actions, list_items,
         list_slider_value, member_on, merged_config, option_accent, options_from_value, page_chain,
         page_sections_for, page_switch_plan, parse_level, primary_list_item_action,
         restore_inline_selected, row_action, row_is_visible, row_streams, row_value_json,
         rows_from_resolved, runtime_query_names, sections_from_resolved, selected_list_item,
         set_config_value, set_member, stream_gated, visible_row_indices, FieldDefault, ListActions,
         ListItem, ResolvedConfig, Row, RowControl, RowSection, SelectOption, SliderHold,
+        ITEM_ROW_CONTROL,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -4999,6 +5093,140 @@ hide_when_empty = true
             panic!("expected a list");
         };
         assert_eq!(state.selected, 0);
+    }
+
+    const CONTROLS_SPEC: &str = r#"
+schema_version = 1
+
+[field.lights]
+type = "list"
+label = "Lights"
+query = "lights"
+inline = true
+row_swatch = "{color}"
+
+[[field.lights.row_controls]]
+control = "switch"
+label = "Power"
+value_from = "on"
+action = "light_on"
+active_action = "light_off"
+
+[[field.lights.row_controls]]
+control = "color"
+label = "Colour"
+value_from = "color"
+action = "set_color"
+
+[[field.lights.row_controls]]
+control = "number"
+label = "Brightness"
+value_from = "brightness"
+action = "set_brightness"
+min = 1
+max = 100
+unit = "%"
+
+[[field.lights.row_controls]]
+control = "text"
+label = "Name"
+value_from = "name"
+action = "set_name"
+
+[[field.lights.row_actions]]
+label = "Presets"
+open = "presets"
+
+[field.presets]
+type = "list"
+label = "Presets"
+query = "presets"
+detached = true
+"#;
+
+    fn controls_rows() -> Vec<Row> {
+        let spec = qol_config::contract::parse_spec_str(CONTROLS_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        rows_from_resolved(&resolved, 0)
+    }
+
+    #[test]
+    fn an_item_page_leads_with_one_row_per_control_holding_the_item_value() {
+        let rows = controls_rows();
+        let list = index_of(&rows, "lights");
+        let RowControl::List { actions, .. } = &rows[list].control else {
+            panic!("expected a list");
+        };
+        assert_eq!(actions.swatch.as_deref(), Some("{color}"));
+        let item = ListItem {
+            id: "AA".into(),
+            label: "Strip".into(),
+            subtitle: None,
+            accent: None,
+            badge: None,
+            badge_tone: None,
+            data: serde_json::json!({
+                "on": true, "color": "#FFB46B", "brightness": "40", "name": "Strip"
+            }),
+            pending: false,
+            error: None,
+        };
+        let mut page = item_control_rows(&rows[list], actions, &item);
+        assert_eq!(page.len(), 4);
+        for (index, row) in page.iter().enumerate() {
+            assert_eq!(item_control_index(row), Some(index));
+            assert_eq!(row.variant.as_deref(), Some(ITEM_ROW_CONTROL));
+        }
+        let values = page
+            .iter()
+            .map(|row| item_control_value(&row.control))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            vec![
+                Some(serde_json::json!(true)),
+                Some(serde_json::json!("#FFB46B")),
+                Some(serde_json::json!(40)),
+                Some(serde_json::json!("Strip")),
+            ]
+        );
+        assert_eq!(page[2].action.as_deref(), Some("set_brightness"));
+        page[0].variant = None;
+        assert_eq!(item_control_index(&page[0]), None);
+    }
+
+    #[test]
+    fn a_control_reads_a_missing_or_fractional_value_without_guessing() {
+        let rows = controls_rows();
+        let RowControl::List { actions, .. } = &rows[index_of(&rows, "lights")].control else {
+            panic!("expected a list");
+        };
+        let empty = serde_json::json!({});
+        let cases = [
+            (0, &empty, serde_json::json!(false)),
+            (1, &empty, serde_json::json!("")),
+            (2, &empty, serde_json::json!(1)),
+            (3, &empty, serde_json::json!("")),
+        ];
+        for (index, data, expected) in cases {
+            let control = item_control(&actions.controls[index], data);
+            assert_eq!(item_control_value(&control), Some(expected), "{index}");
+        }
+        let half = item_control(
+            &actions.controls[2],
+            &serde_json::json!({ "brightness": 12.5 }),
+        );
+        assert_eq!(item_control_value(&half), Some(serde_json::json!(12.5)));
+        assert_eq!(item_control_value(&RowControl::Page), None);
+    }
+
+    #[test]
+    fn a_detached_list_keeps_its_row_but_never_shows_it() {
+        let rows = controls_rows();
+        let presets = index_of(&rows, "presets");
+        assert!(!row_is_visible(&rows, presets));
+        assert!(row_is_visible(&rows, index_of(&rows, "lights")));
     }
 
     #[test]

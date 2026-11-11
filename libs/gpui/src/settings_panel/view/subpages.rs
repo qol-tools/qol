@@ -2,21 +2,23 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::*;
-use qol_config::contract::resolve_row_toggle;
+use qol_config::contract::{interpolate_row_template, resolve_row_toggle};
 
 use super::super::components::{
     settings_action_spinner, settings_description, settings_label_group, settings_query_spinner,
-    settings_value_text, RowGround, SettingsFeature, SettingsRow, SettingsValueTone,
+    settings_swatch, settings_value_text, RowGround, SettingsFeature, SettingsRow,
+    SettingsValueTone,
 };
 use super::super::rows::{
     begin_list_item_action, inline_empty_text, inline_item_indices, inline_line_count,
-    inline_slot_item, is_inline_list, list_item_actions, member_on, page_chain, page_sections_for,
-    page_switch_plan, set_member, Row, RowControl, RowQueryState, RowSection, ITEM_ROW_MEMBER,
+    inline_slot_item, is_inline_list, item_control_index, list_item_actions, member_on, page_chain,
+    page_sections_for, page_switch_plan, set_member, Row, RowControl, RowQueryState, RowSection,
+    ITEM_ROW_MEMBER,
 };
 use super::super::SettingsDestination;
 use super::list_card::{item_card_rows, item_card_sync, value_tone};
 use super::{
-    action_refresh_payload, horizontal_step_direction, opens_a_card, row_description,
+    action_refresh_payload, horizontal_step_direction, opens_a_card, parsed_color, row_description,
     status_tone_color, Level, LevelHeader, SettingsPanelView,
 };
 use crate::phantom_nav::NavAxis;
@@ -28,6 +30,7 @@ pub(super) enum SwitchTarget {
     Page(usize),
     Inline { row: usize, item_id: String },
     Member,
+    Control,
 }
 
 pub(super) fn page_level(
@@ -435,6 +438,9 @@ impl SettingsPanelView {
                 } else {
                     value_tone(item.effective_badge_tone())
                 };
+                let swatch = actions.swatch.as_deref().and_then(|template| {
+                    parsed_color(&interpolate_row_template(template, &item.data))
+                });
                 let key = index * INLINE_ID_STRIDE + slot;
                 let label_group = settings_label_group(
                     item.label.clone(),
@@ -452,12 +458,20 @@ impl SettingsPanelView {
                         self.kit,
                     ));
                 }
-                line = match toggle {
-                    Some(toggle) => {
-                        line.child(SettingsFeature::new(toggle.on, value, ground, self.kit))
+                line = match (toggle, swatch) {
+                    (Some(toggle), swatch) => line.child(
+                        SettingsFeature::new(toggle.on, value, ground, self.kit).swatch(swatch),
+                    ),
+                    (None, swatch) => {
+                        let mut line = line;
+                        if !value.is_empty() {
+                            line = line.child(settings_value_text(value, tone, ground, self.kit));
+                        }
+                        if let Some(color) = swatch {
+                            line = line.child(settings_swatch(color));
+                        }
+                        line
                     }
-                    None if value.is_empty() => line,
-                    None => line.child(settings_value_text(value, tone, ground, self.kit)),
                 };
                 line.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                     if !event.standard_click() {
@@ -533,8 +547,12 @@ impl SettingsPanelView {
         let level = self.level();
         if level.list_item.is_some() {
             let row = level.rows.get(level.selected)?;
-            return (row.variant.as_deref() == Some(ITEM_ROW_MEMBER))
-                .then_some(SwitchTarget::Member);
+            if row.variant.as_deref() == Some(ITEM_ROW_MEMBER) {
+                return Some(SwitchTarget::Member);
+            }
+            return (item_control_index(row).is_some()
+                && matches!(row.control, RowControl::Toggle(_)))
+            .then_some(SwitchTarget::Control);
         }
         if level.list_card
             || level.live_card
@@ -583,7 +601,38 @@ impl SettingsPanelView {
             SwitchTarget::Member => {
                 self.flip_item_member(Some(turn_on), cx);
             }
+            SwitchTarget::Control => {
+                self.flip_item_control(Some(turn_on), cx);
+            }
         }
+        true
+    }
+
+    pub(super) fn flip_item_control(
+        &mut self,
+        turn_on: Option<bool>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let selected = self.level().selected;
+        let Some(row) = self.level_rows_mut().get_mut(selected) else {
+            return false;
+        };
+        if item_control_index(row).is_none() {
+            return false;
+        }
+        let RowControl::Toggle(on) = &mut row.control else {
+            return false;
+        };
+        let target = turn_on.unwrap_or(!*on);
+        if target == *on {
+            return true;
+        }
+        *on = target;
+        let Some(action) = row.action.clone() else {
+            return true;
+        };
+        self.dispatch_row_action(selected, &action, serde_json::Value::Null, cx);
+        cx.notify();
         true
     }
 

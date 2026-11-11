@@ -52,10 +52,11 @@ use super::object_array_row::ObjectArrayState;
 use super::persistence::{panel_base, save_values};
 use super::rows::{
     absent_reason, answers_absent, apply_level_query, apply_runtime_query, filtered_list_items,
-    inline_row_matches, inline_selected_ids, is_inline_list, level_query_names, merged_config,
-    query_flag_value, restore_inline_selected, retire_number_holds, row_action, row_query_names,
-    row_streams, row_value_source, stream_gated, Row, RowControl, RowQueryState, RowSection,
-    SliderHold, ITEM_ROW_DANGER, ITEM_ROW_MEMBER,
+    inline_row_matches, inline_selected_ids, is_inline_list, item_control_index,
+    item_control_value, level_query_names, merged_config, query_flag_value,
+    restore_inline_selected, retire_number_holds, row_action, row_query_names, row_streams,
+    row_value_source, stream_gated, Row, RowControl, RowQueryState, RowSection, SliderHold,
+    ITEM_ROW_DANGER, ITEM_ROW_MEMBER,
 };
 use super::{
     AttentionFeed, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
@@ -2388,7 +2389,11 @@ impl SettingsPanelView {
             return;
         }
         if self.level().list_item.is_some() {
-            self.run_item_card_action(cx);
+            if self.item_control_action(self.level().selected).is_some() {
+                self.activate_item_control(window, cx);
+            } else {
+                self.run_item_card_action(cx);
+            }
             return;
         }
         if self.level().list_card {
@@ -3214,7 +3219,10 @@ impl SettingsPanelView {
         let Some(runtime) = self.source_for(row).map(|source| source.runtime.clone()) else {
             return;
         };
-        let action = action.to_string();
+        let (action, input) = match self.item_control_action(row) {
+            Some(resolved) => (resolved.action, resolved.input),
+            None => (action.to_string(), input),
+        };
         cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let async_cx = cx.clone();
             async move {
@@ -3224,6 +3232,40 @@ impl SettingsPanelView {
             }
         })
         .detach();
+    }
+
+    fn item_control_action(
+        &self,
+        row_index: usize,
+    ) -> Option<qol_config::contract::ResolvedRowAction> {
+        let level = self.level();
+        let card = level.list_item.as_ref()?;
+        let row = level.rows.get(row_index)?;
+        let index = item_control_index(row)?;
+        let value = item_control_value(&row.control)?;
+        let RowControl::List { actions, items, .. } =
+            &self.root().rows.get(card.origin_row)?.control
+        else {
+            return None;
+        };
+        let spec = actions.controls.get(index)?;
+        let item = items.iter().find(|item| item.id == card.item_id)?;
+        let turn_off = matches!(row.control, RowControl::Toggle(false));
+        Some(qol_config::contract::resolve_row_control_action(
+            spec, &item.data, value, turn_off,
+        ))
+    }
+
+    fn activate_item_control(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let selected = self.level().selected;
+        match self.level_rows().get(selected).map(|row| &row.control) {
+            Some(RowControl::Toggle(_)) => {
+                self.flip_item_control(None, cx);
+            }
+            Some(RowControl::Color(_)) => self.open_color_wheel(selected, window, cx),
+            Some(RowControl::Number { .. } | RowControl::Text(_)) => self.begin_edit(),
+            _ => {}
+        }
     }
 
     fn persist(&mut self) {
@@ -3939,6 +3981,7 @@ impl SettingsPanelView {
         let in_item_card = self.level().list_item.is_some();
         let danger = in_item_card && row.variant.as_deref() == Some(ITEM_ROW_DANGER);
         let member = in_item_card && row.variant.as_deref() == Some(ITEM_ROW_MEMBER);
+        let control = in_item_card && item_control_index(row).is_some();
         let description =
             row_description(row, &self.query_state_of(row), &self.applied_query_payloads)
                 .filter(|_| !copied);
@@ -3962,7 +4005,7 @@ impl SettingsPanelView {
             }
             this.click_row(index, window, cx);
         }));
-        if !in_item_card || member {
+        if !in_item_card || member || control {
             line = line.child(value_cell);
         }
         if danger {
@@ -5997,6 +6040,13 @@ fn card_enter_hint(level: &Level) -> Option<&'static str> {
         );
         if selected.is_some_and(|row| row.variant.as_deref() == Some(ITEM_ROW_MEMBER)) {
             return Some("flip");
+        }
+        if let Some(row) = selected.filter(|row| item_control_index(row).is_some()) {
+            return Some(match row.control {
+                RowControl::Toggle(_) => "flip",
+                RowControl::Color(_) => "pick",
+                _ => "edit",
+            });
         }
         return (!on_input).then_some("run");
     }

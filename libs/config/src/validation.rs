@@ -1,6 +1,6 @@
 use crate::contract::{
     is_picture_spec, row_template_keys, ConfigSpec, FieldDefault, FieldKind, FieldSpec,
-    CARD_DESCRIPTION_MAX,
+    RowControlKind, RowControlSpec, CARD_DESCRIPTION_MAX,
 };
 use crate::platform::validate_platforms;
 use std::fmt;
@@ -170,6 +170,9 @@ fn validate_fields(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
         validate_inline_list(id, field, errors);
         validate_hidden(id, field, errors);
         validate_hide_when_empty(id, field, errors);
+        validate_detached(id, field, errors);
+        validate_row_swatch(id, field, errors);
+        validate_row_controls(id, field, errors);
         validate_platforms(&format!("field.{id}"), field.platforms.as_deref(), errors);
     }
     validate_config_key_collisions(spec, errors);
@@ -337,6 +340,107 @@ fn validate_hide_when_empty(id: &str, field: &FieldSpec, errors: &mut Vec<Valida
         errors.push(ValidationError::new(
             path,
             "hide_when_empty cannot be combined with inline",
+        ));
+    }
+}
+
+fn validate_detached(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    if field.detached.is_none() {
+        return;
+    }
+    let path = format!("field.{id}.detached");
+    if field.kind != FieldKind::List {
+        errors.push(ValidationError::new(
+            path,
+            "detached is only supported for list fields",
+        ));
+        return;
+    }
+    if field.inline == Some(true) || field.hide_when_empty.is_some() {
+        errors.push(ValidationError::new(
+            path,
+            "detached cannot be combined with inline or hide_when_empty",
+        ));
+    }
+}
+
+fn validate_row_swatch(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    let Some(swatch) = field.row_swatch.as_deref() else {
+        return;
+    };
+    let path = format!("field.{id}.row_swatch");
+    if field.kind != FieldKind::List || field.inline != Some(true) {
+        errors.push(ValidationError::new(
+            path,
+            "row_swatch requires a list with inline = true",
+        ));
+        return;
+    }
+    if swatch.trim().is_empty() {
+        errors.push(ValidationError::new(path, "cannot be empty"));
+    }
+}
+
+fn validate_row_controls(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    if field.row_controls.is_empty() {
+        return;
+    }
+    let path = format!("field.{id}.row_controls");
+    if field.kind != FieldKind::List {
+        errors.push(ValidationError::new(
+            path,
+            "row_controls is only supported for list fields",
+        ));
+        return;
+    }
+    for control in &field.row_controls {
+        validate_row_control(&path, control, errors);
+    }
+}
+
+fn validate_row_control(path: &str, control: &RowControlSpec, errors: &mut Vec<ValidationError>) {
+    for (key, value) in [
+        ("label", &control.label),
+        ("value_from", &control.value_from),
+        ("action", &control.action),
+    ] {
+        if value.trim().is_empty() {
+            errors.push(ValidationError::new(
+                format!("{path}.{key}"),
+                "cannot be empty",
+            ));
+        }
+    }
+    let switch = control.control == RowControlKind::Switch;
+    if switch != control.active_action.is_some() {
+        errors.push(ValidationError::new(
+            format!("{path}.active_action"),
+            "is required for a switch and refused for every other control",
+        ));
+    }
+    let number = control.control == RowControlKind::Number;
+    let bounded = control.min.is_some()
+        || control.max.is_some()
+        || control.step.is_some()
+        || control.unit.is_some();
+    if !number && bounded {
+        errors.push(ValidationError::new(
+            format!("{path}.min"),
+            "min, max, step and unit are only valid for a number control",
+        ));
+    }
+    if let (Some(min), Some(max)) = (control.min, control.max) {
+        if min >= max {
+            errors.push(ValidationError::new(
+                format!("{path}.min"),
+                "min cannot be greater than or equal to max",
+            ));
+        }
+    }
+    if control.step.is_some_and(|step| step <= 0.0) {
+        errors.push(ValidationError::new(
+            format!("{path}.step"),
+            "step must be greater than 0",
         ));
     }
 }
@@ -1982,6 +2086,92 @@ section = "two"
         assert!(hidden("boolean", "default = true").is_empty());
         for kind in ["list", "status", "action", "page"] {
             assert_has_error(&hidden(kind, ""), "field.item.hidden", "store a value");
+        }
+    }
+
+    #[test]
+    fn detached_and_row_swatch_belong_to_the_right_kind_of_list() {
+        let list = |extra: &str| {
+            validate_contract(&format!(
+                "schema_version = 1\n\n[field.devices]\ntype = \"list\"\nquery = \"devices\"\n{extra}\n"
+            ))
+        };
+        assert!(list("detached = true").is_empty());
+        assert!(list("inline = true\nrow_swatch = \"{color}\"").is_empty());
+        let cases = [
+            (
+                "detached = true\ninline = true",
+                "field.devices.detached",
+                "cannot be combined",
+            ),
+            (
+                "detached = true\nhide_when_empty = true",
+                "field.devices.detached",
+                "cannot be combined",
+            ),
+            (
+                "row_swatch = \"{color}\"",
+                "field.devices.row_swatch",
+                "inline = true",
+            ),
+            (
+                "inline = true\nrow_swatch = \" \"",
+                "field.devices.row_swatch",
+                "cannot be empty",
+            ),
+        ];
+        for (extra, path, message) in cases {
+            assert_has_error(&list(extra), path, message);
+        }
+        let not_a_list = validate_contract(
+            "schema_version = 1\n\n[field.name]\ntype = \"string\"\ndefault = \"\"\ndetached = true\n",
+        );
+        assert_has_error(
+            &not_a_list,
+            "field.name.detached",
+            "only supported for list",
+        );
+    }
+
+    #[test]
+    fn a_row_control_is_checked_for_its_kind() {
+        let list = |control: &str| {
+            validate_contract(&format!(
+                "schema_version = 1\n\n[field.devices]\ntype = \"list\"\nquery = \"devices\"\ninline = true\n\n[[field.devices.row_controls]]\nlabel = \"Level\"\nvalue_from = \"level\"\naction = \"set\"\n{control}\n"
+            ))
+        };
+        assert!(
+            list("control = \"number\"\nmin = 1\nmax = 100\nstep = 1\nunit = \"%\"").is_empty()
+        );
+        assert!(list("control = \"switch\"\nactive_action = \"unset\"").is_empty());
+        assert!(list("control = \"color\"").is_empty());
+        assert!(list("control = \"text\"").is_empty());
+        let path = "field.devices.row_controls";
+        let cases = [
+            (
+                "control = \"switch\"",
+                "active_action",
+                "required for a switch",
+            ),
+            (
+                "control = \"color\"\nactive_action = \"unset\"",
+                "active_action",
+                "required for a switch",
+            ),
+            (
+                "control = \"text\"\nmin = 1",
+                "min",
+                "only valid for a number",
+            ),
+            (
+                "control = \"number\"\nmin = 5\nmax = 5",
+                "min",
+                "greater than or equal",
+            ),
+            ("control = \"number\"\nstep = 0", "step", "greater than 0"),
+        ];
+        for (control, key, message) in cases {
+            assert_has_error(&list(control), &format!("{path}.{key}"), message);
         }
     }
 

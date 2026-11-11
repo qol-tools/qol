@@ -4,12 +4,13 @@ use gpui::{div, px, rgba, App, RenderOnce, SharedString, Window};
 use crate::kit::Kit;
 
 use super::choice_value::SettingsChevron;
-use super::{ground_text, RowGround, SettingsToggle};
+use super::{ground_text, settings_swatch, RowGround, SettingsToggle};
 
 #[derive(IntoElement)]
 pub struct SettingsFeature {
     on: bool,
     count: SharedString,
+    swatch: Option<u32>,
     row: RowGround,
     kit: Kit,
 }
@@ -19,9 +20,15 @@ impl SettingsFeature {
         Self {
             on,
             count: count.into(),
+            swatch: None,
             row,
             kit,
         }
+    }
+
+    pub fn swatch(mut self, color: Option<u32>) -> Self {
+        self.swatch = color;
+        self
     }
 }
 
@@ -59,11 +66,16 @@ impl RenderOnce for SettingsFeature {
                     .flex_row()
                     .items_center()
                     .gap(px(qol_theme::SPACE_INSET))
-                    .child(ground_text(
-                        self.kit.value(self.count),
-                        gpui::rgb(word),
-                        word_hover.map(gpui::rgb),
-                    ))
+                    .when(self.swatch.is_none() || !self.count.is_empty(), |door| {
+                        door.child(ground_text(
+                            self.kit.value(self.count),
+                            gpui::rgb(word),
+                            word_hover.map(gpui::rgb),
+                        ))
+                    })
+                    .when_some(self.swatch, |door, color| {
+                        door.child(settings_swatch(color))
+                    })
                     .child(SettingsChevron::new(self.row, self.kit)),
             )
     }

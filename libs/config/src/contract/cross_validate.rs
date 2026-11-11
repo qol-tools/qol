@@ -14,6 +14,7 @@ pub fn validate_contracts(
         validate_runtime_active_refs(id, field, runtime, &mut errors);
         validate_page_refs(id, field, runtime, &mut errors);
         validate_row_toggle_refs(id, field, runtime, &mut errors);
+        validate_row_control_refs(id, field, runtime, &mut errors);
         validate_level_query_ref(id, field, runtime, &mut errors);
         validate_display_layout_refs(id, field, runtime, &mut errors);
         validate_stream_ref(id, field, runtime, &mut errors);
@@ -98,6 +99,38 @@ fn validate_page_refs(
                 format!("field.{id}.{key}"),
                 format!("references undeclared query: {name}"),
             ));
+        }
+    }
+}
+
+fn validate_row_control_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.row_controls.is_empty() {
+        return;
+    }
+    let Some(runtime) = runtime else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.row_controls"),
+            "row_controls requires qol-runtime.toml but none is present",
+        ));
+        return;
+    };
+    for control in &field.row_controls {
+        let names = [
+            ("action", Some(control.action.as_str())),
+            ("active_action", control.active_action.as_deref()),
+        ];
+        for (key, name) in names {
+            if let Some(name) = name.filter(|name| !runtime.actions.contains_key(*name)) {
+                errors.push(ValidationError::new(
+                    format!("field.{id}.row_controls.{key}"),
+                    format!("references undeclared action: {name}"),
+                ));
+            }
         }
     }
 }
@@ -2061,6 +2094,48 @@ label = "Search"
             assert!(
                 errors.iter().any(|error| error.path == path),
                 "{body}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_row_control_names_declared_actions() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.devices]
+type = "list"
+query = "devices"
+inline = true
+
+[[field.devices.row_controls]]
+control = "switch"
+label = "Power"
+value_from = "enabled"
+action = "on"
+active_action = "off"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(MEMBER_RUNTIME).expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+        assert!(validate_contracts(&config, None).is_err());
+
+        for (broken, path) in [
+            ("action.on", "field.devices.row_controls.action"),
+            ("action.off", "field.devices.row_controls.active_action"),
+        ] {
+            let missing = MEMBER_RUNTIME
+                .split("\n\n")
+                .filter(|block| !block.contains(&format!("[{broken}]")))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let runtime = parse_runtime_spec_str(&missing).expect("parse runtime");
+            let errors = validate_contracts(&config, Some(&runtime)).unwrap_err();
+            assert!(
+                errors.iter().any(|error| error.path == path),
+                "{path}: {errors:?}"
             );
         }
     }

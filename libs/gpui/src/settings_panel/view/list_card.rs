@@ -10,9 +10,10 @@ use super::super::components::{
     SettingsFinderPick, SettingsRow, SettingsValueTone,
 };
 use super::super::rows::{
-    begin_list_item_action, filtered_list_items, list_item_actions, list_slider_value, member_on,
-    primary_list_item_action, selected_list_item, ListActions, ListFinder, ListItem, ListSlider,
-    Row, RowControl, RowSection, SliderHold, ITEM_ROW_DANGER, ITEM_ROW_MEMBER,
+    begin_list_item_action, filtered_list_items, item_control_rows, list_item_actions,
+    list_slider_value, member_on, primary_list_item_action, selected_list_item, ListActions,
+    ListFinder, ListItem, ListSlider, Row, RowControl, RowSection, SliderHold, ITEM_ROW_DANGER,
+    ITEM_ROW_MEMBER,
 };
 use super::super::SettingsDestination;
 use super::{
@@ -344,13 +345,19 @@ impl SettingsPanelView {
                 .unwrap_or(0),
             _ => return,
         };
+        let detached = matches!(
+            &self.root().rows[target].control,
+            RowControl::List { actions, .. } if actions.detached
+        );
         self.drop_slider_press();
         self.closing = false;
-        self.stack.truncate(1);
-        self.card_marks.clear();
-        self.filter_open = false;
-        self.filter.clear();
-        self.root_mut().selected = target;
+        if !detached {
+            self.stack.truncate(1);
+            self.card_marks.clear();
+            self.filter_open = false;
+            self.filter.clear();
+            self.root_mut().selected = target;
+        }
         if let RowControl::List { list, .. } = &mut self.root_mut().rows[target].control {
             list.selected = slot;
         }
@@ -618,10 +625,14 @@ impl SettingsPanelView {
         };
         let Some(action) = list_item_actions(actions, item)
             .into_iter()
-            .find(|action| action.action == action_id)
+            .find(|action| item_action_row_id(action) == action_id)
         else {
             return;
         };
+        if let Some(field) = action.open.clone() {
+            self.open_list_target(origin_row, &field, &item_id, cx);
+            return;
+        }
         self.dispatch_resolved_list_action(origin_row, &item_id, action, cx);
         self.pop_card(cx);
     }
@@ -758,7 +769,7 @@ impl SettingsPanelView {
     }
 
     pub(super) fn open_list_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
-        let (label, config_key, source, description) = match self.level_rows().get(row_index) {
+        let (label, config_key, source, description) = match self.root().rows.get(row_index) {
             Some(row) => (
                 row.label.clone(),
                 row.config_key.clone(),
@@ -773,7 +784,7 @@ impl SettingsPanelView {
         let Some(destination) = self.card_destination(&label, cx) else {
             return;
         };
-        let Some(row) = self.level_rows().get(row_index) else {
+        let Some(row) = self.root().rows.get(row_index) else {
             return;
         };
         let RowControl::List {
@@ -1271,6 +1282,13 @@ fn list_card_level(
     }
 }
 
+fn item_action_row_id(action: &ResolvedRowAction) -> String {
+    match action.open.as_deref() {
+        Some(field) => format!("open:{field}"),
+        None => action.action.clone(),
+    }
+}
+
 pub(super) fn item_member_row_id(field: &str, member: &str) -> String {
     format!("member:{field}:{member}")
 }
@@ -1285,7 +1303,8 @@ pub(super) fn item_card_rows(root_rows: &[Row], origin_row: usize, item: &ListIt
     else {
         return Vec::new();
     };
-    let mut rows = list_item_actions(actions, item)
+    let mut rows = item_control_rows(list_row, actions, item);
+    let action_rows = list_item_actions(actions, item)
         .into_iter()
         .map(|action| {
             let member = action.member_of.clone().zip(action.member.clone());
@@ -1296,7 +1315,7 @@ pub(super) fn item_card_rows(root_rows: &[Row], origin_row: usize, item: &ListIt
                     RowControl::Toggle(member_on(root_rows, origin_row, &field, &member)),
                 ),
                 None => (
-                    action.action.clone(),
+                    item_action_row_id(&action),
                     action.danger.then(|| ITEM_ROW_DANGER.to_string()),
                     RowControl::Text(String::new()),
                 ),
@@ -1319,6 +1338,7 @@ pub(super) fn item_card_rows(root_rows: &[Row], origin_row: usize, item: &ListIt
             }
         })
         .collect::<Vec<_>>();
+    rows.extend(action_rows);
     rows.extend(
         item_card
             .as_deref()

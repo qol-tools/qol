@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-use super::{RowActionSpec, RowSliderSpec, RowToggleSpec};
+use super::{RowActionSpec, RowControlSpec, RowSliderSpec, RowToggleSpec};
 
 const DANGER_TONE: &str = "danger";
 
@@ -63,6 +63,34 @@ pub fn resolve_row_toggle(spec: &RowToggleSpec, row: &Value) -> ResolvedRowToggl
         on: row.get(&spec.active_when).is_some_and(value_is_truthy),
         turn_on: resolve(&spec.action),
         turn_off: resolve(&spec.active_action),
+    }
+}
+
+pub fn resolve_row_control_action(
+    control: &RowControlSpec,
+    row: &Value,
+    value: Value,
+    turn_off: bool,
+) -> ResolvedRowAction {
+    let mut merged = row.clone();
+    if !merged.is_object() {
+        merged = serde_json::json!({});
+    }
+    merged["value"] = value;
+    let action = control
+        .active_action
+        .as_deref()
+        .filter(|_| turn_off)
+        .unwrap_or(&control.action);
+    ResolvedRowAction {
+        action: action.to_string(),
+        open: None,
+        label: control.label.clone(),
+        description: control.description.clone(),
+        input: resolve_input(control.input.as_ref(), &merged),
+        member_of: None,
+        member: None,
+        danger: false,
     }
 }
 
@@ -196,8 +224,9 @@ mod tests {
     use indexmap::IndexMap;
 
     use super::{
-        interpolate_row_template, resolve_row_actions, resolve_row_toggle, resolve_slider_action,
-        row_template_keys, RowActionSpec, RowSliderSpec, RowToggleSpec,
+        interpolate_row_template, resolve_row_actions, resolve_row_control_action,
+        resolve_row_toggle, resolve_slider_action, row_template_keys, RowActionSpec, RowSliderSpec,
+        RowToggleSpec,
     };
 
     fn action(
@@ -456,6 +485,36 @@ mod tests {
             ..membership
         };
         assert!(resolve_row_actions(None, &[gated], &row).is_empty());
+    }
+
+    #[test]
+    fn a_row_control_sends_its_value_and_picks_the_action_for_the_way_it_turns() {
+        let control: crate::contract::RowControlSpec = toml::from_str(
+            r#"
+control = "switch"
+label = "Power"
+value_from = "on"
+action = "light_on"
+active_action = "light_off"
+input = { ieee = "{ieee}", value = "{value}" }
+"#,
+        )
+        .expect("parse control");
+        let row = serde_json::json!({ "ieee": "AA:BB", "on": true });
+        let cases = [
+            (serde_json::json!(40), false, "light_on"),
+            (serde_json::json!("#FFB46B"), false, "light_on"),
+            (serde_json::json!(false), true, "light_off"),
+        ];
+        for (value, turn_off, action) in cases {
+            let resolved = resolve_row_control_action(&control, &row, value.clone(), turn_off);
+            assert_eq!(resolved.action, action, "{value}");
+            assert_eq!(
+                resolved.input,
+                serde_json::json!({ "ieee": "AA:BB", "value": value })
+            );
+            assert_eq!(resolved.label, "Power");
+        }
     }
 
     #[test]

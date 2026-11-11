@@ -228,6 +228,12 @@ pub struct FieldSpec {
     pub hide_when_empty: Option<bool>,
     #[serde(default)]
     pub row_toggle: Option<RowToggleSpec>,
+    #[serde(default)]
+    pub row_controls: Vec<RowControlSpec>,
+    #[serde(default)]
+    pub row_swatch: Option<String>,
+    #[serde(default)]
+    pub detached: Option<bool>,
     #[serde(flatten)]
     pub number: NumberConstraints,
 }
@@ -302,6 +308,37 @@ pub struct RowToggleSpec {
     pub active_when: String,
     #[serde(default)]
     pub input: Option<IndexMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RowControlKind {
+    Switch,
+    Number,
+    Color,
+    Text,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct RowControlSpec {
+    pub control: RowControlKind,
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub value_from: String,
+    pub action: String,
+    #[serde(default)]
+    pub active_action: Option<String>,
+    #[serde(default)]
+    pub input: Option<IndexMap<String, String>>,
+    #[serde(default)]
+    pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
+    #[serde(default)]
+    pub step: Option<f64>,
+    #[serde(default)]
+    pub unit: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

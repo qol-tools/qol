@@ -1,6 +1,6 @@
 use crate::contract::{
     ConfigSpec, FieldAlign, FieldDefault, FieldKind, ItemSpec, ListLeadSpec, NestedListSpec,
-    NumberConstraints, RowActionSpec, RowSliderSpec, RowToggleSpec,
+    NumberConstraints, RowActionSpec, RowControlSpec, RowSliderSpec, RowToggleSpec,
 };
 use crate::validation::{validate_spec_collect, ValidationError};
 use indexmap::IndexMap;
@@ -123,6 +123,12 @@ pub struct ResolvedField {
     pub hide_when_empty: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub row_toggle: Option<RowToggleSpec>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub row_controls: Vec<RowControlSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_swatch: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub detached: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -246,6 +252,9 @@ pub fn resolve_config_for(
             hidden: field.hidden.unwrap_or(false),
             hide_when_empty: field.hide_when_empty.unwrap_or(false),
             row_toggle: field.row_toggle.clone(),
+            row_controls: field.row_controls.clone(),
+            row_swatch: field.row_swatch.clone(),
+            detached: field.detached.unwrap_or(false),
         };
         push_resolved_field(
             &mut root_fields,
