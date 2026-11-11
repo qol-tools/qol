@@ -298,7 +298,7 @@ fn edit_presets_offline(action: &str, input: &Value) -> DaemonOutcome {
     });
     match result {
         Ok(()) => {
-            persist::submit(persist::Change::Presets(edited));
+            persist::submit(persist::Change::Presets(Box::new(edited)));
             DaemonOutcome::Handled
         }
         Err(message) => DaemonOutcome::Error(message),

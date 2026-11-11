@@ -325,7 +325,7 @@ impl DaemonState {
         match result {
             Ok(()) => {
                 self.config.presets = edited.clone();
-                persist::submit(Change::Presets(edited));
+                persist::submit(Change::Presets(Box::new(edited)));
                 DaemonOutcome::Handled
             }
             Err(message) => DaemonOutcome::Error(message),

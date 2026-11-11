@@ -22,7 +22,7 @@ pub enum Change {
         network_address: Option<u16>,
     },
     Looks(HashMap<String, LightLook>),
-    Presets(PresetConfig),
+    Presets(Box<PresetConfig>),
     Flush(Sender<()>),
 }
 
@@ -140,7 +140,7 @@ pub fn keys_for(backing: &impl Backing, changes: Vec<Change>) -> Map<String, Val
                 }
             }
             Change::Presets(presets) => {
-                keys.insert("presets".into(), to_value(&presets));
+                keys.insert("presets".into(), to_value(presets.as_ref()));
             }
             Change::Flush(_) => {}
         }
@@ -339,7 +339,7 @@ mod tests {
         let mut presets = PresetConfig::default();
         presets.slot_mut(2).unwrap().enabled = true;
 
-        drain(&fake, vec![Change::Presets(presets)]);
+        drain(&fake, vec![Change::Presets(Box::new(presets))]);
 
         let saved = fake.saved.lock().unwrap();
         assert_eq!(saved.len(), 1);
