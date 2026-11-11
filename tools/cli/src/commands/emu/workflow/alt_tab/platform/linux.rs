@@ -250,6 +250,15 @@ fn seed_legacy_extension_install(guest: &mut GuestControlClient) -> Result<Trace
         ),
         COMMAND_TIMEOUT,
     )?;
+    let trace_dir = std::path::Path::new(GUEST_TRACE_LOG_PATH)
+        .parent()
+        .and_then(std::path::Path::to_str)
+        .context("the guest trace log path has no folder")?;
+    require_exec(
+        guest,
+        command("/usr/bin/mkdir", &["-p", "-m", "700", trace_dir]),
+        COMMAND_TIMEOUT,
+    )?;
     require_exec(
         guest,
         command("/usr/bin/touch", &[GUEST_TRACE_LOG_PATH]),
