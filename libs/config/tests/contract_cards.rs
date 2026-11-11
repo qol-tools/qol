@@ -242,3 +242,26 @@ fn nested_string_lists_carry_both_copy_keys() {
         }
     }
 }
+
+#[test]
+fn a_status_row_shows_only_while_it_needs_the_user() {
+    let mut always_shown = Vec::new();
+    for (path, spec) in configs() {
+        for (id, field) in &spec.fields {
+            if field.kind != FieldKind::Status {
+                continue;
+            }
+            let hides_normal_values = field
+                .hide_values
+                .as_ref()
+                .is_some_and(|values| !values.is_empty());
+            if !hides_normal_values {
+                always_shown.push(format!("{}: field.{id}", path.display()));
+            }
+        }
+    }
+    assert!(
+        always_shown.is_empty(),
+        "a status field lists its normal values in hide_values, so its row shows only while something needs the user: {always_shown:#?}"
+    );
+}
