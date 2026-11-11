@@ -200,7 +200,7 @@ macro_rules! probe {
 
 #[cfg(test)]
 mod tests {
-    use super::{compact, emit, private_dir_ready, quoted, token, write_batch};
+    use super::{compact, emit, quoted, token, write_batch};
 
     #[test]
     fn token_keeps_safe_chars_and_replaces_the_rest() {
@@ -352,10 +352,10 @@ mod tests {
         let dir = root.join("runtime");
         let _ = std::fs::remove_dir_all(&root);
 
-        assert!(private_dir_ready(&dir));
+        assert!(super::private_dir_ready(&dir));
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700);
-        assert!(private_dir_ready(&dir));
+        assert!(super::private_dir_ready(&dir));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -370,7 +370,7 @@ mod tests {
         std::fs::create_dir_all(&real).unwrap();
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
-        assert!(!private_dir_ready(&link));
+        assert!(!super::private_dir_ready(&link));
 
         let _ = std::fs::remove_dir_all(&root);
     }
