@@ -10,7 +10,9 @@ pub const LOCAL_HOST: &str = "127.0.0.1";
 
 pub const STATE_SOCKET_FILE: &str = "qol-tray-state.sock";
 pub const STATE_SOCKET_PATH: &str = "/tmp/qol-tray-state.sock";
-pub const TRACE_LOG_PATH: &str = "/tmp/qol-altmon.log";
+pub const TRACE_LOG_FILE: &str = "qol-altmon.log";
+pub const TRACE_LOG_DIR: &str = "probe";
+pub const GUEST_TRACE_LOG_PATH: &str = "/home/qol/.local/share/qol-tray/probe/qol-altmon.log";
 pub const RUNTIME_DIR_PATH: &str = "/tmp/qol-tray";
 pub const RUNTIME_PIDS_DIR_PATH: &str = "/tmp/qol-tray/pids";
 pub const SETTINGS_SURFACE_SOCKET_FILE: &str = "settings-surface.sock";
@@ -31,7 +33,6 @@ pub const CODESIGN_IDENTITY_ENV: &str = "QOL_CODESIGN_IDENTITY";
 pub const HOST_WORKSPACE_BUILD_FILE: &str = "host-workspace-build";
 pub const HTTP_AUTH_HEADER: &str = "x-qol-token";
 pub const HTTP_AGENT_HOME_HEADER: &str = "x-qol-agent-home";
-pub const HTTP_AUTH_FRAGMENT_KEY: &str = "qol_token";
 pub const HTTP_AUTH_PROOF_PATH: &str = "/auth/proof";
 
 pub const ENV_STATE_SOCKET: &str = "QOL_TRAY_STATE_SOCKET";

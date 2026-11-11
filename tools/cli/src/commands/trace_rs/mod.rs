@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const DEFAULT_LOG_FILE: &str = qol_conventions::TRACE_LOG_PATH;
 const REPLAY_GAP_MS: u64 = 120;
 const REVERT_WINDOW_MS: u64 = 200;
 const TAIL_FLUSH_AFTER: Duration = Duration::from_millis(80);
@@ -88,7 +87,7 @@ pub(crate) fn run_as(command_name: &str, args: &[OsString]) -> Result<()> {
 pub(super) fn log_file() -> PathBuf {
     std::env::var_os("QOL_TRACE_LOG_FILE")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_LOG_FILE))
+        .unwrap_or_else(qol_config::trace_log_path)
 }
 
 pub(super) fn write_mark(path: &PathBuf, message: &str) -> Result<()> {

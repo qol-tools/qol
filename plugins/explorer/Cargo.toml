@@ -1,6 +1,6 @@
 [package]
 name = "qol-explorer"
-version = "0.28.0"
+version = "0.29.0"
 edition = "2021"
 description = "Keyboard-first file explorer for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"

@@ -132,6 +132,8 @@ description = "Follows your system. While it is on, system notifications stay qu
 section = "notifications"
 query = "os_do_not_disturb"
 value_from = "value"
+hide_values = ["Off", "Unknown"]
+label_map = { On = "On", Off = "Off", Unknown = "Cannot be read on this computer" }
 
 [field.do_not_disturb.label_map]
 on = "On"

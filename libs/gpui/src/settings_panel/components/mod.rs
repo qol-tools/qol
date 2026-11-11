@@ -3,9 +3,7 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, ElementId, Rgba, SharedString};
 use qol_theme::TextStyle;
 
-use crate::action_mark::ActionMark;
 use crate::busy::Busy;
-use crate::icon::icon;
 use crate::kit::kit;
 use crate::kit::Kit;
 use crate::theme::Ground;
@@ -310,27 +308,12 @@ pub fn settings_value_text(
 
 const ACTION_MARK_SIZE: f32 = 14.0;
 
-pub fn settings_action_mark(
-    id: impl Into<ElementId>,
-    mark: ActionMark,
-    busy: bool,
-    row: RowGround,
-    kit: Kit,
-) -> gpui::Div {
+pub fn settings_action_busy(id: impl Into<ElementId>, busy: bool, kit: Kit) -> gpui::Div {
     let frame = action_mark_frame();
-    if busy || mark == ActionMark::Busy {
+    if busy {
         return frame.child(settings_action_spinner(id, kit).size(px(12.)));
     }
-    let ground = row.rest(kit);
-    let ink = if mark.is_danger() {
-        kit.palette.danger
-    } else {
-        match row {
-            RowGround::Pane => ground.soft,
-            RowGround::Band => ground.ink,
-        }
-    };
-    frame.children(mark.icon().map(|glyph| icon(glyph, ACTION_MARK_SIZE, ink)))
+    frame
 }
 
 fn action_mark_frame() -> gpui::Div {
@@ -340,31 +323,6 @@ fn action_mark_frame() -> gpui::Div {
         .items_center()
         .justify_center()
         .size(px(ACTION_MARK_SIZE))
-}
-
-pub const COPIED_DESCRIPTION: &str = "Copied to the clipboard";
-
-pub fn settings_copy_mark(
-    id: impl Into<ElementId>,
-    copied: bool,
-    row: RowGround,
-    kit: Kit,
-) -> gpui::Div {
-    if !copied {
-        return settings_action_mark(id, ActionMark::Copy, false, row, kit);
-    }
-    action_mark_frame().children(
-        ActionMark::Copy
-            .icon()
-            .map(|glyph| icon(glyph, ACTION_MARK_SIZE, kit.palette.success)),
-    )
-}
-
-pub fn settings_copied_description(kit: Kit) -> gpui::Div {
-    div()
-        .text(TextStyle::Detail)
-        .text_color(rgb(kit.palette.success))
-        .child(COPIED_DESCRIPTION)
 }
 
 pub fn rail_caption_height() -> f32 {

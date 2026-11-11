@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use qol_conventions::{local_base_url, DEFAULT_PORT, TRACE_LOG_PATH};
+use qol_conventions::{local_base_url, DEFAULT_PORT, GUEST_TRACE_LOG_PATH};
 use qol_dev_guest::{GuestControlClient, ProcessOutcome};
 
 use crate::commands::emu::BootedVm;
@@ -154,7 +154,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
         .with_context(|| format!("failed to write {}", final_config.display()))?;
     let probes = require_exec(
         &mut guest,
-        command("/usr/bin/grep", &["SHORTCUT_", TRACE_LOG_PATH]),
+        command("/usr/bin/grep", &["SHORTCUT_", GUEST_TRACE_LOG_PATH]),
         COMMAND_TIMEOUT,
     )?;
     step_label(

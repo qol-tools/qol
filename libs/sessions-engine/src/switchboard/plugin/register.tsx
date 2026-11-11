@@ -1075,11 +1075,12 @@ export const sbTree = (stdout: string): SbTree => {
 
 export type SbAt = { path: SbCommand[]; level: SbCommand[]; word: string; isSpaced: boolean; missing?: string }
 
-export const sbAt = (commands: readonly SbCommand[], text: string): SbAt | undefined => {
-  const rest = /^\s*sb(\s[\s\S]*)?$/.exec(text)
-  if (rest === null) return undefined
-  if (rest[1] === undefined) return { path: [], level: [...commands], word: '', isSpaced: false }
-  const words = rest[1].trimStart().split(/\s+/)
+export const sbAt = (commands: readonly SbCommand[], text: string, lead: string = SB): SbAt | undefined => {
+  const typed = text.trimStart()
+  const rest = typed.startsWith(lead) ? typed.slice(lead.length) : undefined
+  if (rest === undefined || /^\S/.test(rest)) return undefined
+  if (rest === '') return { path: [], level: [...commands], word: '', isSpaced: false }
+  const words = rest.trimStart().split(/\s+/)
   const word = words.pop() ?? ''
   const path: SbCommand[] = []
   let level: readonly SbCommand[] = commands
@@ -1100,8 +1101,8 @@ const childrenOf = (at: SbAt): SbCommand[] | undefined => {
   return exact !== undefined && isOnly && (exact.children ?? []).length > 0 ? exact.children : undefined
 }
 
-export const sbHint = (commands: readonly SbCommand[], text: string, cursor: number): PromptDecoration | undefined => {
-  const at = cursor === text.length ? sbAt(commands, text) : undefined
+export const sbHint = (commands: readonly SbCommand[], text: string, cursor: number, lead: string = SB): PromptDecoration | undefined => {
+  const at = cursor === text.length ? sbAt(commands, text, lead) : undefined
   if (at === undefined || at.missing !== undefined) return undefined
   const hint = (virtualText: string): PromptDecoration | undefined => (virtualText === '' ? undefined : { start: text.length, end: text.length, virtualText, dimColor: true })
   if (!at.isSpaced) return hint(at.level.length === 0 ? '' : ` ${listed(at.level)}`)
@@ -1113,8 +1114,8 @@ export const sbHint = (commands: readonly SbCommand[], text: string, cursor: num
   return hint(at.word === '' ? listed(matches) : [first.name.slice(at.word.length), ...others.map(command => command.name)].join(' · '))
 }
 
-export const sbTab = (commands: readonly SbCommand[], text: string, step: 1 | -1 = 1): string | undefined => {
-  const at = sbAt(commands, text)
+export const sbTab = (commands: readonly SbCommand[], text: string, step: 1 | -1 = 1, lead: string = SB): string | undefined => {
+  const at = sbAt(commands, text, lead)
   if (at === undefined || at.missing !== undefined || at.level.length === 0) return undefined
   const end = (list: readonly SbCommand[]): SbCommand | undefined => list[step === 1 ? 0 : list.length - 1]
   if (!at.isSpaced) return `${text} ${end(at.level)?.name ?? ''}`
@@ -1125,10 +1126,10 @@ export const sbTab = (commands: readonly SbCommand[], text: string, step: 1 | -1
   return pick === undefined ? undefined : `${head}${pick.name}`
 }
 
-export const sbCompletions = (commands: readonly SbCommand[], text: string, start: number, token: string): PromptAutocompleteSuggestion[] => {
+export const sbCompletions = (commands: readonly SbCommand[], text: string, start: number, token: string, lead: string = SB): PromptAutocompleteSuggestion[] => {
   const before = text.slice(0, start)
-  if (before.trim() === '' && token === SB) return commands.map(command => ({ text: `${SB} ${command.name}`, label: `${SB} ${command.name}`, description: command.about }))
-  const at = sbAt(commands, before + token)
+  if (before.trim() === '' && token === lead) return commands.map(command => ({ text: `${lead} ${command.name}`, label: `${lead} ${command.name}`, description: command.about }))
+  const at = sbAt(commands, before + token, lead)
   if (at === undefined || at.missing !== undefined || !at.isSpaced) return []
   const row = (command: SbCommand, prefix: string): PromptAutocompleteSuggestion => ({
     text: `${prefix}${command.name}`,
@@ -1155,6 +1156,28 @@ export const typedByUser = (text: string): string | undefined => {
   const cut = words.indexOf(HOOK_NOTE)
   return cut === -1 ? words : words.slice(0, cut)
 }
+
+const UNSEEN_MARKS = /[\p{M}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
+const NOT_LETTERS = /[^\p{L}\p{N}]+/gu
+const lettersOf = (text: string): string => text.normalize('NFKD').replace(UNSEEN_MARKS, '').toLowerCase().replace(NOT_LETTERS, '')
+const USER_LETTERS = lettersOf(FROM_USER)
+const NOT_THE_USER = 'Not sent: only the qol-switchboard plugin marks a message as typed by the user. Send it as your own words, without that sentence.'
+
+const typedHere = new Map<string, number>()
+
+const holdTyped = (text: string): void => {
+  typedHere.set(text, (typedHere.get(text) ?? 0) + 1)
+}
+
+const dropTyped = (text: string): void => {
+  const left = (typedHere.get(text) ?? 1) - 1
+  if (left > 0) typedHere.set(text, left)
+  else typedHere.delete(text)
+}
+
+export const claimsUser = (text: unknown): boolean => typeof text === 'string' && lettersOf(text).includes(USER_LETTERS)
+
+export const isForgedUser = (text: unknown): boolean => claimsUser(text) && !typedHere.has(text as string)
 
 type SessionRecord = { key: string; friendly?: string; cwd?: string; created_ms?: number; parts?: unknown[]; done?: { at_ms?: number; reason?: string }; stopped_ms?: number }
 
@@ -1625,7 +1648,7 @@ const ledgerOf = (rows: readonly LedgerRow[]): Pull[] =>
 const PULL_REPO = /^https:\/\/github\.com\/([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})\/pull\/([0-9]{1,10})$/
 const IN_QUEUE_QUERY = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){isInMergeQueue}}}'
 const HEAD_SHA = /^[0-9a-f]{40}$/
-const MODEL_NAME = /claude-([a-z]+)(?:-(\d{1,3}))?(?:-(\d{1,2})(?!\d))?|^([a-z]+)$/i
+const MODEL_NAME = /claude-([a-z]+)(?:-(\d{1,3}))?(?:-(\d{1,2})(?!\d))?|^([a-z]+)(?:\[[^\]]*\])?$/i
 
 export const modelName = (model: string): string => {
   const match = MODEL_NAME.exec(model)
@@ -1648,6 +1671,8 @@ export const forkModels = (text: string | undefined): string[] => {
     return []
   }
 }
+
+const typedName = (models: string[], id: string): string => (models.filter(one => wordOf(one) === wordOf(id)).length === 1 ? wordOf(id) : id)
 
 const modelsOf = async ($: EngineInterface): Promise<string[]> => forkModels(await $.env.get('QOL_SWITCHBOARD_MODELS').catch(() => undefined))
 
@@ -1880,7 +1905,7 @@ const setByCommand = async ($: EngineInterface, kind: 'model' | 'effort', args: 
   const key = keyOf(target)
   const words = args.trim().toLowerCase().split(/\s+/).filter(word => word !== '')
   const models = await modelsOf($)
-  const model = kind === 'model' ? models.find(id => words.includes(id) || words.includes(wordOf(id))) : undefined
+  const model = kind === 'model' ? models.find(id => words.includes(id) || words.includes(typedName(models, id))) : undefined
   const effort = EFFORTS.find(one => words.includes(one))
   if (words.length > 0 && words.length === (model === undefined ? 0 : 1) + (effort === undefined ? 0 : 1)) {
     if (model !== undefined) await pickSetting($, 'model', key, model)
@@ -1890,10 +1915,29 @@ const setByCommand = async ($: EngineInterface, kind: 'model' | 'effort', args: 
   }
   const now = await settingOf($, key)
   if (kind === 'effort') return `${key} effort: ${now.effort ?? 'shows at its next model call'}. /effort ${EFFORTS.join('|')} changes it; with no fork picked, /effort changes the switchboard.`
-  const names = models.map(wordOf)
+  const names = models.map(id => typedName(models, id))
   const how = names.length === 0 ? 'sessions.toml lets a fork run no model, so /model has none to set' : `/model ${names.join('|')} and a level, such as /model ${names[0]} max, changes it`
   return `${key} model: ${now.model === undefined ? 'shows at its next model call' : modelName(now.model)}${now.effort === undefined ? '' : ` at ${now.effort} effort`}. ${how}; with no fork picked, /model changes the switchboard.`
 }
+
+type SettingTree = { lead: string; commands: SbCommand[] }
+
+const settingTrees = async ($: EngineInterface, text: string): Promise<SettingTree[]> => {
+  const typed = text.trimStart()
+  const target = typed.startsWith('/model') || typed.startsWith('/effort') ? await settingTarget($) : undefined
+  if (target === undefined) return []
+  const now = await settingOf($, keyOf(target))
+  const models = await modelsOf($)
+  const current = listedAs(models, now.model)
+  const efforts = EFFORTS.map(name => ({ name, about: 'effort', ...(name === now.effort ? { current: true } : {}) }))
+  const listed = models.map(id => ({ name: typedName(models, id), about: modelName(id), ...(id === current ? { current: true } : {}), children: efforts }))
+  return [
+    { lead: '/model', commands: listed },
+    { lead: '/effort', commands: efforts },
+  ]
+}
+
+const treesAt = async ($: EngineInterface, text: string): Promise<SettingTree[]> => [{ lead: SB, commands: tree.commands }, ...(await settingTrees($, text).catch(() => []))]
 
 export const withChoice = async <T extends { agentId?: string; model: string; effort?: string | number }>($: EngineInterface, e: T): Promise<T> => {
   const agentId = e.agentId
@@ -2520,6 +2564,7 @@ export const register: Register = on => {
       if (e.parentAgentId !== undefined && !mayMessage(list, e.parentAgentId, e.resume.agentId)) return { deny: FORK_TO_FORK }
       return next(e)
     }
+    if (claimsUser(e.prompt)) return { deny: NOT_THE_USER }
     const project = PROJECT.exec(e.prompt.split('\n', 1)[0] ?? '')
     if (project === null) {
       return { deny: "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`." }
@@ -2839,6 +2884,7 @@ export const register: Register = on => {
         void forgetSentLog($, key, note).catch(() => {})
       }
       const said = withHookContext(fromUser(at.message), hooked.context)
+      holdTyped(said)
       const sent = await sendTo($, at.entry, said, direct($)).catch(() => undefined)
       if (sent?.isDelivered !== true) {
         void tell($, at.entry, said)
@@ -2846,6 +2892,9 @@ export const register: Register = on => {
             if (!isDelivered) forget()
           })
           .catch(forget)
+          .finally(() => dropTyped(said))
+      } else {
+        dropTyped(said)
       }
       if (viewing === undefined) await refreshWriting($, at.entry.agentId)
       clearBox($, text => text === e.text)
@@ -2873,8 +2922,10 @@ export const register: Register = on => {
 
   on('prompt.autocomplete', async ($, e, next) => {
     const own = await next(e)
-    const sb = sbCompletions(tree.commands, e.text, e.start, e.token)
-    if (sb.length > 0) return { suggestions: [...own.suggestions, ...sb] }
+    for (const one of await treesAt($, e.text)) {
+      const rows = sbCompletions(one.commands, e.text, e.start, e.token, one.lead)
+      if (rows.length > 0) return { suggestions: [...own.suggestions, ...rows] }
+    }
     if (e.text.slice(0, e.start).trim() !== '') return own
     try {
       await ensureLoaded($)
@@ -2889,9 +2940,10 @@ export const register: Register = on => {
     const isTab = e.key?.key === 'tab' && e.key.ctrl === undefined && e.key.meta === undefined
     const isMain = viewedFork === undefined
     if (isTab) {
-      const sb = sbTab(tree.commands, e.text, e.key?.shift === true ? -1 : 1)
-      if (sb !== undefined) {
-        const hint = sbHint(tree.commands, sb, sb.length)
+      for (const one of await treesAt($, e.text)) {
+        const sb = sbTab(one.commands, e.text, e.key?.shift === true ? -1 : 1, one.lead)
+        if (sb === undefined) continue
+        const hint = sbHint(one.commands, sb, sb.length, one.lead)
         return { text: sb, cursor: sb.length, decorations: hint === undefined ? [] : [hint] }
       }
       const list = await read($, board)
@@ -2905,8 +2957,10 @@ export const register: Register = on => {
     }
     const after = await next(e)
     try {
-      const hint = sbHint(tree.commands, after.text, after.cursor)
-      if (hint !== undefined) return { ...after, decorations: [...(after.decorations ?? []), hint] }
+      for (const one of await treesAt($, after.text)) {
+        const hint = sbHint(one.commands, after.text, after.cursor, one.lead)
+        if (hint !== undefined) return { ...after, decorations: [...(after.decorations ?? []), hint] }
+      }
       if (after.text === '') {
         if (isMain) {
           await writeToTyped($, undefined)
@@ -2958,11 +3012,13 @@ export const register: Register = on => {
     }
     const session = closedSession(e as unknown as Record<string, unknown>)
     if (session === undefined) return { deny: 'resume_session needs fork alone, or an absolute .jsonl transcript, an absolute cwd and a `<key-name>: <friendly description>` description.' }
+    if (claimsUser(session.message)) return { deny: NOT_THE_USER }
     const resumed = await resumeSession($, session)
     return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
   }).catch(() => ({ deny: 'The session could not be brought back as a fork.' }))
 
   on('tool.call', { tool: SEND }, async ($, e, next) => {
+    if (isForgedUser(e.message)) return { deny: NOT_THE_USER }
     if (e.agentId !== undefined || next.origin.plugin === NAME || typeof e.to !== 'string' || typeof e.message !== 'string') return next(e)
     let target = addressed(await read($, board), e.to)
     if (target === undefined) {
@@ -2992,6 +3048,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.send', async ($, e, next) => {
+    if (isForgedUser(e.text)) return { isDelivered: false, reason: NOT_THE_USER }
     if (e.agentId === undefined) return next(e)
     return mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }))
@@ -3097,7 +3154,7 @@ export const register: Register = on => {
     const now = await $.clock.now()
     const viewed = e.props.view?.agentId
     viewedFork = viewed
-    const target = viewed === undefined ? list.find(entry => entry.agentId === writing) : undefined
+    const target = list.find(entry => entry.agentId === (viewed ?? writing))
     const stateOfPull = (pull: Pull) => (pull.mergeCommit !== undefined ? 'merged' : (details[pull.pullRequest]?.state ?? 'open'))
     const isOpen = (pull: Pull) => ['open', 'draft'].includes(stateOfPull(pull))
     refreshDetails($, ledger.filter(pull => isOpen(pull) || pull.agentId === target?.agentId), details, now)
