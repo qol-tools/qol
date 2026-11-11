@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -37,14 +37,12 @@ pub fn record_to(path: &Path, config: &ShortcutsConfig) -> Result<()> {
 }
 
 pub fn record_shortcut_to(path: &Path, config: &ShortcutsConfig, id: &str) -> Result<()> {
-    let mut programs = load_from(path).unwrap_or_else(|error| {
-        log::warn!(
-            "Shortcut programs unreadable, starting empty: path={} error={:#}",
-            path.display(),
-            error
-        );
-        DevicePrograms::new()
-    });
+    let mut programs = load_from(path).with_context(|| {
+        format!(
+            "{} could not be read, so no shortcut program was recorded; repair or delete it, then save the shortcut again",
+            path.display()
+        )
+    })?;
     match config
         .shortcuts
         .iter()
@@ -196,6 +194,24 @@ mod tests {
 
         let loaded = load_from(&path).unwrap();
         assert!(program_matches(&config.shortcuts[0], &loaded));
+    }
+
+    #[test]
+    fn an_unreadable_file_is_left_as_it_is_and_records_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shortcut-programs.json");
+        std::fs::write(&path, "not json").unwrap();
+        let config = ShortcutsConfig {
+            shortcuts: vec![launch("app", name("firefox"))],
+        };
+
+        let error = record_shortcut_to(&path, &config, "app").unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("could not be read"),
+            "{error:#}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json");
     }
 
     #[test]

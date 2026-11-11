@@ -157,6 +157,7 @@ fn mutate_at(
     let _guard = mutation_guard()?;
     let mut config = read_from(path).map_err(MutationError::Load)?;
     mutate(&mut config).map_err(MutationError::Rejected)?;
+    device_programs::load_from(device_path).map_err(MutationError::Load)?;
     save_to(path, &config).map_err(MutationError::Save)?;
     device_programs::record_shortcut_to(device_path, &config, id).map_err(MutationError::Save)?;
     retain_loadable(&mut config, path);
@@ -564,5 +565,21 @@ mod tests {
         .unwrap();
 
         assert!(device_programs::load_from(&device_path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_device_copy_stops_the_save_and_keeps_both_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("os/linux/shortcuts.json");
+        let device_path = dir.path().join("device/shortcut-programs.json");
+        create_at(&path, &device_path, launch_shortcut("editor", "gedit")).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&device_path, "not json").unwrap();
+
+        let result = create_at(&path, &device_path, launch_shortcut("term", "kitty"));
+
+        assert!(matches!(result, Err(MutationError::Load(_))));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        assert_eq!(std::fs::read_to_string(&device_path).unwrap(), "not json");
     }
 }
