@@ -8,9 +8,6 @@ on:
         description: QoL Tray release tag, for example qol-tray-v3.17.0
         required: true
         type: string
-  push:
-    tags:
-      - 'qol-tray-v[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
   contents: read

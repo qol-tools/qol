@@ -93,6 +93,24 @@ class BuildCacheSetupTests(unittest.TestCase):
                     hit != "true",
                 )
 
+    def test_a_failed_package_update_moves_to_a_mirror_outside_ubuntu_com(self):
+        install = next(step for step in self.steps if step.startswith("name: Install Linux system dependencies"))
+        update = install.split("for attempt in 1 2 3; do\n", 2)[1]
+        lines = [line.strip() for line in update.split("done", 1)[0].splitlines() if line.strip()]
+        self.assertEqual(
+            lines,
+            ["apt_get 120 update && break", 'if [ "$attempt" = 3 ]; then exit 1; fi', "use_outside_mirror"],
+        )
+        switch = install.split("use_outside_mirror() {\n", 1)[1].split("\n        }\n", 1)[0]
+        self.assertIn("local list=/etc/apt/apt-mirrors.txt", switch)
+        self.assertIn('if [ -f "$list" ]; then', switch)
+        mirror = re.search(r'echo "(https://[^"]+)" \| sudo tee "\$list"', switch)[1]
+        self.assertEqual(mirror, "https://mirrors.edge.kernel.org/ubuntu/")
+        self.assertNotIn("ubuntu.com", mirror)
+        self.assertNotIn("trusted=yes", install)
+        self.assertNotIn("allow-unauthenticated", install)
+        self.assertNotIn("AllowUnauthenticated", install)
+
 
 if __name__ == "__main__":
     unittest.main()
