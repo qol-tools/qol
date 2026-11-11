@@ -66,7 +66,7 @@ description = "What keys, clicks and scrolling turn into."
 [field.char_rules]
 type = "object_array"
 label = "Character rules"
-description = "Press a key combination, or type one character, to get a chosen character."
+description = "Press a key combination, or type one character, to get a chosen character. The result is always exactly one printable character."
 section = "rules"
 card_description = "Keys that type a character."
 item_label = "character rule"
