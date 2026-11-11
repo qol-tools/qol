@@ -51,7 +51,7 @@ fn sink() -> &'static crate::event_tap_trace::TraceSink {
 #[cfg(debug_assertions)]
 fn log_path() -> Option<std::path::PathBuf> {
     let path = qol_config::trace_log_path();
-    match qol_config::runtime_dir() {
+    match qol_config::trace_log_dir() {
         Some(dir) => private_dir_ready(&dir).then_some(path),
         None => Some(path),
     }

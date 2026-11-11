@@ -17,7 +17,7 @@ function localDataDir() {
   return process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
 }
 
-const TRACE_LOG = join(localDataDir(), "qol-tray", "runtime", TRACE_LOG_FILE);
+const TRACE_LOG = join(localDataDir(), "qol-tray", "probe", TRACE_LOG_FILE);
 const VERDICTS = new Set(["pass", "fail", "blocked"]);
 
 const MANUAL_SCENARIOS = [

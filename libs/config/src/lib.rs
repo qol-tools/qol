@@ -89,8 +89,12 @@ pub fn runtime_dir() -> Option<PathBuf> {
     data_dir().map(|path| path.join("runtime"))
 }
 
+pub fn trace_log_dir() -> Option<PathBuf> {
+    data_dir().map(|path| path.join(qol_conventions::TRACE_LOG_DIR))
+}
+
 pub fn trace_log_path() -> PathBuf {
-    runtime_dir()
+    trace_log_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join(qol_conventions::TRACE_LOG_FILE)
 }
@@ -371,14 +375,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_trace_log_lives_in_the_runtime_dir() {
+    fn the_trace_log_lives_in_its_own_dir_outside_the_runtime_dir() {
         let path = trace_log_path();
         assert_eq!(
             path.file_name().and_then(|name| name.to_str()),
             Some(qol_conventions::TRACE_LOG_FILE)
         );
-        let expected_dir = runtime_dir().unwrap_or_else(std::env::temp_dir);
+        let expected_dir = trace_log_dir().unwrap_or_else(std::env::temp_dir);
         assert_eq!(path.parent(), Some(expected_dir.as_path()));
+        if let Some(runtime) = runtime_dir() {
+            assert!(
+                !path.starts_with(&runtime),
+                "the tray empties {} at every start",
+                runtime.display()
+            );
+        }
     }
 
     #[test]
