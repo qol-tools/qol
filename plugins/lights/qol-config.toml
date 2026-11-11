@@ -138,7 +138,7 @@ query = "presets"
 row_label = "{name}"
 row_subtitle = "{detail}"
 empty_message = "No presets saved."
-card_description = "looks you switch to from the launcher or a hotkey."
+card_description = "looks a hotkey switches to."
 
 [[field.presets.row_controls]]
 control = "text"
@@ -202,6 +202,7 @@ hidden = true
 default = ""
 query = "light_options"
 lookup_label = "lights"
+card_description = "The light these controls drive."
 
 [field.live_color_hex]
 type = "color"
