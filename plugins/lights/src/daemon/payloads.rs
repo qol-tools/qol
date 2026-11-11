@@ -1,8 +1,9 @@
 use serde_json::{json, Value};
 
+use super::input::display_hex;
 use super::pairing::{PairingPhase, PAIRING_WINDOW};
+use crate::config::model::{LightLook, PresetConfig, PRESET_COUNT};
 
-const MAIN_LIGHT: &str = "Main light";
 const PAIRED: &str = "Paired";
 const NOW_IN_LIGHTS: &str = "Now in lights";
 
@@ -11,6 +12,7 @@ pub struct LightRow {
     pub ieee: String,
     pub name: String,
     pub network_address: u16,
+    pub look: LightLook,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,30 +23,65 @@ pub enum DongleStatus {
 }
 
 impl DongleStatus {
+    pub fn status(&self) -> &'static str {
+        match self {
+            Self::Ready { .. } => "Connected",
+            Self::Missing(_) => "Not found",
+            Self::Offline(_) => "Offline",
+        }
+    }
+
     pub fn ready(&self) -> bool {
         matches!(self, Self::Ready { .. })
     }
 }
 
-pub fn lights_payload(lights: &[LightRow], main_target_id: &str) -> Value {
+pub fn lights_payload(lights: &[LightRow], main_target_id: &str, has_presets: bool) -> Value {
     let sole = lights.len() == 1;
     let items = sorted(lights)
         .into_iter()
         .map(|light| {
-            let main = is_main(light, main_target_id, sole);
             json!({
-                "accent": if main { "success" } else { "accent" },
-                "badge": if main { MAIN_LIGHT } else { "" },
-                "badge_tone": if main { "success" } else { "accent" },
-                "detail": format!("{} · {}", light.ieee, network_label(light.network_address)),
+                "brightness": light.look.brightness,
+                "color": display_hex(&light.look.color_hex),
+                "detail": look_detail(light.look.on, light.look.brightness),
+                "has_presets": has_presets,
                 "id": light.ieee,
                 "ieee": light.ieee,
-                "main": main,
+                "main": is_main(light, main_target_id, sole),
+                "mirek": light.look.mirek,
                 "name": light.name,
+                "on": light.look.on,
             })
         })
         .collect::<Vec<_>>();
     json!({ "count": items.len(), "items": items })
+}
+
+pub fn presets_payload(presets: &PresetConfig) -> Value {
+    let items = (1..=PRESET_COUNT)
+        .filter_map(|number| presets.slot(number).map(|slot| (number, slot)))
+        .filter(|(_, slot)| slot.enabled)
+        .map(|(number, slot)| {
+            json!({
+                "brightness": slot.brightness,
+                "color": display_hex(&slot.color_hex),
+                "detail": look_detail(slot.power_on, slot.brightness),
+                "id": format!("preset_{number}"),
+                "mirek": slot.mirek,
+                "name": slot.name,
+                "power_on": slot.power_on,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({ "count": items.len(), "items": items })
+}
+
+fn look_detail(on: bool, brightness: u8) -> String {
+    if on {
+        return format!("On · {brightness}%");
+    }
+    "Off".to_string()
 }
 
 pub fn find_lights_payload(phase: PairingPhase, joined: &[LightRow]) -> Value {
@@ -116,6 +153,7 @@ pub fn dongle_payload(status: &DongleStatus) -> Value {
             "label": label,
             "state": state,
         },
+        "status": status.status(),
     })
 }
 
@@ -206,11 +244,17 @@ mod tests {
             ieee: ieee.into(),
             name: name.into(),
             network_address,
+            look: LightLook {
+                on: true,
+                color_hex: "#ffffff".into(),
+                brightness: 100,
+                mirek: 300,
+            },
         }
     }
 
     #[test]
-    fn lights_sort_by_name_and_badge_the_main_light() {
+    fn lights_sort_by_name_and_flag_the_main_light() {
         let lights = [
             light("00:00:00:00:00:00:00:02", "Shelf", 0x1A2B),
             light("00:00:00:00:00:00:00:01", "desk", 0x0001),
@@ -223,24 +267,115 @@ mod tests {
             ("missing", [false, false]),
         ];
         for (main_target_id, expected) in cases {
-            let payload = lights_payload(&lights, main_target_id);
+            let payload = lights_payload(&lights, main_target_id, false);
             let items = payload["items"].as_array().unwrap();
             assert_eq!(payload["count"], 2);
             assert_eq!(items[0]["name"], "desk");
-            assert_eq!(items[1]["detail"], "00:00:00:00:00:00:00:02 · 0x1A2B");
             for (item, main) in items.iter().zip(expected) {
                 assert_eq!(item["main"], main, "target {main_target_id}");
-                assert_eq!(item["badge"], if main { MAIN_LIGHT } else { "" });
-                assert_eq!(item["badge_tone"], if main { "success" } else { "accent" });
             }
         }
     }
 
     #[test]
+    fn a_light_row_carries_its_look_and_no_badge() {
+        let mut shelf = light("00:00:00:00:00:00:00:02", "Shelf", 0x1A2B);
+        shelf.look = LightLook {
+            on: false,
+            color_hex: "ffaa00".into(),
+            brightness: 35,
+            mirek: 410,
+        };
+        let desk = light("00:00:00:00:00:00:00:01", "Desk", 1);
+
+        let payload = lights_payload(&[desk, shelf], "", true);
+
+        assert_eq!(
+            payload["items"][0],
+            json!({
+                "brightness": 100,
+                "color": "#FFFFFF",
+                "detail": "On · 100%",
+                "has_presets": true,
+                "id": "00:00:00:00:00:00:00:01",
+                "ieee": "00:00:00:00:00:00:00:01",
+                "main": false,
+                "mirek": 300,
+                "name": "Desk",
+                "on": true,
+            })
+        );
+        let item = &payload["items"][1];
+        assert_eq!(item["on"], false);
+        assert_eq!(item["detail"], "Off");
+        assert_eq!(item["color"], "#FFAA00");
+        assert_eq!(item["brightness"], 35);
+        assert_eq!(item["mirek"], 410);
+        for dropped in ["accent", "badge", "badge_tone"] {
+            assert!(item.get(dropped).is_none(), "{dropped}");
+        }
+    }
+
+    #[test]
+    fn every_light_row_says_whether_any_preset_exists() {
+        for has_presets in [true, false] {
+            let payload = lights_payload(&[light("AA", "Desk", 1)], "", has_presets);
+            assert_eq!(payload["items"][0]["has_presets"], has_presets);
+        }
+    }
+
+    #[test]
     fn a_sole_light_is_the_main_light_when_none_is_chosen() {
-        let payload = lights_payload(&[light("AA", "Desk", 1)], "");
+        let payload = lights_payload(&[light("AA", "Desk", 1)], "", false);
         assert_eq!(payload["items"][0]["main"], true);
-        assert_eq!(payload["items"][0]["badge"], MAIN_LIGHT);
+    }
+
+    #[test]
+    fn presets_list_only_enabled_slots_in_slot_order() {
+        let mut presets = PresetConfig::default();
+        for number in [5, 2] {
+            let slot = presets.slot_mut(number).unwrap();
+            slot.enabled = true;
+            slot.color_hex = "#00ff00".into();
+        }
+        let slot = presets.slot_mut(5).unwrap();
+        slot.power_on = false;
+        slot.name = "Night".into();
+        presets.slot_mut(2).unwrap().brightness = 40;
+
+        let payload = presets_payload(&presets);
+
+        assert_eq!(payload["count"], 2);
+        assert!(payload.get("lead").is_none());
+        assert_eq!(
+            payload["items"],
+            json!([
+                {
+                    "brightness": 40,
+                    "color": "#00FF00",
+                    "detail": "On · 40%",
+                    "id": "preset_2",
+                    "mirek": 300,
+                    "name": "Preset 2",
+                    "power_on": true,
+                },
+                {
+                    "brightness": 100,
+                    "color": "#00FF00",
+                    "detail": "Off",
+                    "id": "preset_5",
+                    "mirek": 300,
+                    "name": "Night",
+                    "power_on": false,
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn no_enabled_preset_is_an_empty_list() {
+        let payload = presets_payload(&PresetConfig::default());
+        assert_eq!(payload, json!({ "count": 0, "items": [] }));
     }
 
     #[test]
@@ -314,6 +449,14 @@ mod tests {
         ];
         for (status, label, detail, can_find) in cases {
             let payload = dongle_payload(&status);
+            assert_eq!(
+                payload["status"],
+                match label {
+                    "Connected" => "Connected",
+                    "No dongle found" => "Not found",
+                    _ => "Offline",
+                }
+            );
             assert_eq!(payload["lead"]["label"], label);
             assert_eq!(payload["lead"]["detail"], detail);
             assert_eq!(payload["lead"]["can_find"], can_find);

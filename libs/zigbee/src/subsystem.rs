@@ -23,6 +23,8 @@ pub mod zdo {
     pub const SIMPLE_DESC_RSP: u8 = 0x84;
     pub const ACTIVE_EP_REQ: u8 = 0x05;
     pub const ACTIVE_EP_RSP: u8 = 0x85;
+    pub const MGMT_LEAVE_REQ: u8 = 0x34;
+    pub const MGMT_LEAVE_RSP: u8 = 0xB4;
     pub const MGMT_PERMIT_JOIN_REQ: u8 = 0x36;
     pub const STARTUP_FROM_APP: u8 = 0x40;
     pub const STATE_CHANGE_IND: u8 = 0xC0;

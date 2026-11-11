@@ -39,8 +39,64 @@ description = "Apply the live color temperature to the main target"
 [action.reload]
 description = "Reconnect to the Zigbee coordinator"
 
+[action.light_on]
+description = "Turn one light on"
+input = { ieee = "string" }
+
+[action.light_off]
+description = "Turn one light off"
+input = { ieee = "string" }
+
+[action.set_light_color]
+description = "Set one light's color"
+input = { ieee = "string", value = "string" }
+
+[action.set_light_brightness]
+description = "Set one light's brightness, 1 to 100"
+input = { ieee = "string", value = "number" }
+
+[action.set_light_colortemp]
+description = "Set one light's color temperature in mirek, 153 to 500"
+input = { ieee = "string", value = "number" }
+
+[action.remove_light]
+description = "Make a light leave the network and forget it"
+input = { ieee = "string" }
+
+[action.add_preset]
+description = "Save a light's current look as a preset"
+input = { ieee = "string" }
+
+[action.remove_preset]
+description = "Delete a saved preset"
+input = { id = "string" }
+
+[action.set_preset_name]
+description = "Rename a preset"
+input = { id = "string", value = "string" }
+
+[action.preset_power_on]
+description = "Make a preset turn the light on"
+input = { id = "string" }
+
+[action.preset_power_off]
+description = "Make a preset turn the light off"
+input = { id = "string" }
+
+[action.set_preset_color]
+description = "Set a preset's color"
+input = { id = "string", value = "string" }
+
+[action.set_preset_brightness]
+description = "Set a preset's brightness, 0 to 100"
+input = { id = "string", value = "number" }
+
+[action.set_preset_colortemp]
+description = "Set a preset's color temperature in mirek, 153 to 500"
+input = { id = "string", value = "number" }
+
 [query.lights]
-description = "Lights paired with the dongle, with the main light marked"
+description = "Lights paired with the dongle, each with its power, color and brightness"
 poll_interval_ms = 1000
 
 [query.find_lights]
@@ -50,6 +106,10 @@ poll_interval_ms = 500
 [query.dongle]
 description = "Whether the light dongle is connected, and on which port and channel"
 poll_interval_ms = 3000
+
+[query.presets]
+description = "Saved presets, each with the look it applies"
+poll_interval_ms = 1000
 
 [query.light_options]
 description = "Paired lights that can be the main light"

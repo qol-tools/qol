@@ -3,18 +3,24 @@ use std::time::Instant;
 
 use crate::znp::{Device, Endpoint};
 use anyhow::Result;
+use serde_json::Value;
 
 use crate::backend::zigbee::ZigbeeBackend;
 use crate::config::model::{PluginConfig, PresetSlot};
 use crate::config::store;
-use crate::domain::model::{LightCommand, LightTarget, RgbColor};
+use crate::domain::model::{DeviceId, LightCommand, LightTarget, RgbColor};
 use crate::runtime::actions;
 use crate::service::light_service::LightService;
 
+use super::input::{self, BRIGHTNESS_RANGE, MIREK_RANGE};
+use super::looks::{self, LightAddress, LightLooks, SharedLooks};
 use super::pairing::{self, SharedPairing};
+use super::persist::{self, Change};
+use super::presets;
 
 const BRIGHTNESS_STEP: u8 = 10;
 const MIREK_STEP: u16 = 25;
+const NOT_PAIRED: &str = "That light is not paired.";
 
 #[derive(Clone)]
 pub enum DaemonOutcome {
@@ -31,6 +37,7 @@ pub struct DaemonState {
     service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
     config: PluginConfig,
     main_target: SharedTarget,
+    looks: SharedLooks,
     pairing: SharedPairing,
     current_brightness: u8,
     current_mirek: u16,
@@ -45,11 +52,50 @@ pub fn current_target(target: &SharedTarget) -> LightTarget {
         .clone()
 }
 
+struct Delivery {
+    ieee: Option<String>,
+    applied: usize,
+    failure: Option<String>,
+}
+
+fn deliver(
+    svc: &mut LightService<ZigbeeBackend>,
+    target: &LightTarget,
+    commands: &[LightCommand],
+    strict: bool,
+) -> Delivery {
+    let ieee = looks::ieee_of_target(target, &looks::light_addresses(&svc.backend().devices()));
+    if strict && ieee.is_none() {
+        return Delivery {
+            ieee,
+            applied: 0,
+            failure: Some(NOT_PAIRED.into()),
+        };
+    }
+    let mut applied = 0;
+    for command in commands {
+        if let Err(error) = svc.apply_command(target, command) {
+            return Delivery {
+                ieee,
+                applied,
+                failure: Some(error.to_string()),
+            };
+        }
+        applied += 1;
+    }
+    Delivery {
+        ieee,
+        applied,
+        failure: None,
+    }
+}
+
 impl DaemonState {
     pub fn new() -> Result<Self> {
         let loaded = load_runtime_state()?;
         Ok(Self {
             service: loaded.service,
+            looks: Arc::new(Mutex::new(LightLooks::new(&loaded.config))),
             config: loaded.config,
             main_target: Arc::new(Mutex::new(loaded.main_target)),
             pairing: SharedPairing::default(),
@@ -66,8 +112,16 @@ impl DaemonState {
         self.main_target.clone()
     }
 
+    pub fn shared_looks(&self) -> SharedLooks {
+        self.looks.clone()
+    }
+
     pub fn shared_pairing(&self) -> SharedPairing {
         self.pairing.clone()
+    }
+
+    pub fn presets(&self) -> &crate::config::model::PresetConfig {
+        &self.config.presets
     }
 
     pub fn events(&self) -> crossbeam_channel::Receiver<crate::znp::ZigbeeEvent> {
@@ -82,6 +136,10 @@ impl DaemonState {
     }
 
     pub fn handle_action(&mut self, action: &str) -> DaemonOutcome {
+        self.handle_input_action(action, &Value::Null)
+    }
+
+    pub fn handle_input_action(&mut self, action: &str, input: &Value) -> DaemonOutcome {
         if action == actions::RELOAD {
             return self.reload();
         }
@@ -130,6 +188,12 @@ impl DaemonState {
         if action == actions::SET_COLORTEMP_MAIN {
             return self.apply_live_colortemp();
         }
+        if let Some(outcome) = self.handle_light_action(action, input) {
+            return outcome;
+        }
+        if presets::is_preset_action(action) {
+            return self.edit_presets(action, input);
+        }
         if let Some(preset) = self.config.preset_for_action(action) {
             return self.apply_preset(&preset);
         }
@@ -144,25 +208,170 @@ impl DaemonState {
         DaemonOutcome::Fallback
     }
 
+    fn handle_light_action(&mut self, action: &str, input: &Value) -> Option<DaemonOutcome> {
+        let outcome = match action {
+            actions::LIGHT_ON => self.light_command(input, |_| Ok(vec![LightCommand::TurnOn])),
+            actions::LIGHT_OFF => self.light_command(input, |_| Ok(vec![LightCommand::TurnOff])),
+            actions::SET_LIGHT_COLOR => self.light_command(input, |input| {
+                let color = parse_color(&input::color(input)?);
+                Ok(vec![LightCommand::SetColor { color }])
+            }),
+            actions::SET_LIGHT_BRIGHTNESS => self.light_command(input, |input| {
+                let level = input::number(input, "Brightness", BRIGHTNESS_RANGE)? as u8;
+                Ok(vec![LightCommand::SetBrightness { level }])
+            }),
+            actions::SET_LIGHT_COLORTEMP => self.light_command(input, |input| {
+                let mirek = input::number(input, "Colour temperature", MIREK_RANGE)?;
+                Ok(vec![LightCommand::SetColorTemperature { mirek }])
+            }),
+            actions::REMOVE_LIGHT => self.remove_light(input),
+            _ => return None,
+        };
+        Some(outcome)
+    }
+
+    fn light_command(
+        &self,
+        input: &Value,
+        build: impl FnOnce(&Value) -> Result<Vec<LightCommand>, String>,
+    ) -> DaemonOutcome {
+        let ieee = match input::ieee(input) {
+            Ok(ieee) => ieee,
+            Err(message) => return DaemonOutcome::Error(message),
+        };
+        let commands = match build(input) {
+            Ok(commands) => commands,
+            Err(message) => return DaemonOutcome::Error(message),
+        };
+        let target = LightTarget::Device { id: DeviceId(ieee) };
+        self.send(&target, &commands, true)
+    }
+
+    fn remove_light(&mut self, input: &Value) -> DaemonOutcome {
+        let ieee = match input::ieee(input) {
+            Ok(ieee) => ieee,
+            Err(message) => return DaemonOutcome::Error(message),
+        };
+        let Ok(address) = parse_ieee_address(&ieee) else {
+            return DaemonOutcome::Error("That is not a light address.".into());
+        };
+        let Some(network_address) = self.locate(&ieee) else {
+            return DaemonOutcome::Error(NOT_PAIRED.into());
+        };
+        if let DaemonOutcome::Error(message) =
+            self.with_service(|svc| svc.backend().remove_device(&address))
+        {
+            log::warn!(
+                "light {ieee} did not answer its leave request ({message}), forgetting it anyway"
+            );
+        }
+        self.forget_light(&ieee, network_address);
+        DaemonOutcome::Handled
+    }
+
+    fn locate(&self, ieee: &str) -> Option<Option<u16>> {
+        let paired = self
+            .addresses()
+            .into_iter()
+            .find(|(known, _)| known == ieee);
+        let configured = self
+            .config
+            .devices
+            .values()
+            .find(|entry| looks::normalize(&entry.ieee_address) == ieee);
+        match (paired, configured) {
+            (Some((_, network)), _) => Some(network),
+            (None, Some(entry)) => Some(entry.network_address),
+            (None, None) => None,
+        }
+    }
+
+    fn forget_light(&mut self, ieee: &str, network_address: Option<u16>) {
+        looks::lock(&self.looks).forget(ieee);
+        self.config
+            .devices
+            .retain(|_, entry| looks::normalize(&entry.ieee_address) != ieee);
+        let named = !self.config.main_target_id.is_empty()
+            && looks::names_light(&self.config.main_target_id, ieee, network_address);
+        if named {
+            self.config.main_target_id.clear();
+            *self
+                .main_target
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = self.config.main_target();
+        }
+        persist::submit(Change::Forget {
+            ieee: ieee.to_string(),
+            network_address,
+        });
+    }
+
+    fn addresses(&self) -> Vec<LightAddress> {
+        if let Ok(guard) = self.service.lock() {
+            if let Some(svc) = guard.as_ref() {
+                return looks::light_addresses(&svc.backend().devices());
+            }
+        }
+        looks::config_addresses(&self.config.devices)
+    }
+
+    fn edit_presets(&mut self, action: &str, input: &Value) -> DaemonOutcome {
+        let mut edited = self.config.presets.clone();
+        let target = current_target(&self.main_target);
+        let addresses = self.addresses();
+        let result = presets::apply(&mut edited, action, input, |ieee| {
+            looks::look_for(ieee, &target, &addresses, &looks::lock(&self.looks))
+        });
+        match result {
+            Ok(()) => {
+                self.config.presets = edited.clone();
+                persist::submit(Change::Presets(edited));
+                DaemonOutcome::Handled
+            }
+            Err(message) => DaemonOutcome::Error(message),
+        }
+    }
+
+    fn with_service_value<T>(
+        &self,
+        f: impl FnOnce(&mut LightService<ZigbeeBackend>) -> T,
+    ) -> Result<T, String> {
+        let Ok(mut guard) = self.service.lock() else {
+            return Err("service lock poisoned".into());
+        };
+        let Some(svc) = guard.as_mut() else {
+            return Err("service not available".into());
+        };
+        Ok(f(svc))
+    }
+
     fn with_service<F>(&self, f: F) -> DaemonOutcome
     where
         F: FnOnce(&mut LightService<ZigbeeBackend>) -> Result<()>,
     {
-        let Ok(mut guard) = self.service.lock() else {
-            return DaemonOutcome::Error("service lock poisoned".into());
-        };
-        let Some(svc) = guard.as_mut() else {
-            return DaemonOutcome::Error("service not available".into());
-        };
-        match f(svc) {
-            Ok(()) => DaemonOutcome::Handled,
-            Err(e) => DaemonOutcome::Error(e.to_string()),
+        match self.with_service_value(f) {
+            Ok(Ok(())) => DaemonOutcome::Handled,
+            Ok(Err(error)) => DaemonOutcome::Error(error.to_string()),
+            Err(message) => DaemonOutcome::Error(message),
         }
+    }
+
+    fn send(&self, target: &LightTarget, commands: &[LightCommand], strict: bool) -> DaemonOutcome {
+        let delivery = match self.with_service_value(|svc| deliver(svc, target, commands, strict)) {
+            Ok(delivery) => delivery,
+            Err(message) => return DaemonOutcome::Error(message),
+        };
+        if let Some(ieee) = &delivery.ieee {
+            looks::record(&self.looks, ieee, &commands[..delivery.applied]);
+        }
+        delivery
+            .failure
+            .map_or(DaemonOutcome::Handled, DaemonOutcome::Error)
     }
 
     fn apply(&mut self, command: LightCommand) -> DaemonOutcome {
         let target = current_target(&self.main_target);
-        self.with_service(|svc| svc.apply_command(&target, &command))
+        self.send(&target, &[command], false)
     }
 
     fn adjust_brightness(&mut self, delta: i16) -> DaemonOutcome {
@@ -172,18 +381,18 @@ impl DaemonState {
     }
 
     fn apply_live_color(&mut self) -> DaemonOutcome {
-        let config = match store::load() {
+        let config = match self.fresh_config() {
             Ok(config) => config,
-            Err(error) => return DaemonOutcome::Error(error.to_string()),
+            Err(outcome) => return outcome,
         };
         let color = parse_color(&config.live_color_hex);
         self.apply(LightCommand::SetColor { color })
     }
 
     fn apply_live_brightness(&mut self) -> DaemonOutcome {
-        let config = match store::load() {
+        let config = match self.fresh_config() {
             Ok(config) => config,
-            Err(error) => return DaemonOutcome::Error(error.to_string()),
+            Err(outcome) => return outcome,
         };
         self.current_brightness = config.live_brightness;
         let brightness_result = self.apply(LightCommand::SetBrightness {
@@ -197,14 +406,20 @@ impl DaemonState {
     }
 
     fn apply_live_colortemp(&mut self) -> DaemonOutcome {
-        let config = match store::load() {
+        let config = match self.fresh_config() {
             Ok(config) => config,
-            Err(error) => return DaemonOutcome::Error(error.to_string()),
+            Err(outcome) => return outcome,
         };
         self.current_mirek = config.live_mirek;
         self.apply(LightCommand::SetColorTemperature {
             mirek: config.live_mirek,
         })
+    }
+
+    fn fresh_config(&self) -> Result<PluginConfig, DaemonOutcome> {
+        let config = store::load().map_err(|error| DaemonOutcome::Error(error.to_string()))?;
+        looks::lock(&self.looks).set_fallback(&config);
+        Ok(config)
     }
 
     fn adjust_mirek(&mut self, delta: i32) -> DaemonOutcome {
@@ -218,21 +433,8 @@ impl DaemonState {
             return DaemonOutcome::Error(format!("preset '{}' is disabled", preset.name));
         }
 
-        let commands = preset_commands(preset);
         let target = current_target(&self.main_target);
-        let Ok(mut guard) = self.service.lock() else {
-            return DaemonOutcome::Error("service lock poisoned".into());
-        };
-        let Some(svc) = guard.as_mut() else {
-            return DaemonOutcome::Error("service not available".into());
-        };
-        for command in commands {
-            if let Err(error) = svc.apply_command(&target, &command) {
-                return DaemonOutcome::Error(error.to_string());
-            }
-        }
-
-        DaemonOutcome::Handled
+        self.send(&target, &preset_commands(preset), false)
     }
 
     // Config-only reload: re-reads config.json without re-opening the coordinator.
@@ -250,6 +452,7 @@ impl DaemonState {
             .unwrap_or_else(PoisonError::into_inner) = config.main_target();
         self.current_brightness = config.live_brightness;
         self.current_mirek = config.live_mirek;
+        looks::lock(&self.looks).adopt(&config);
         self.config = config;
         DaemonOutcome::Handled
     }
@@ -394,6 +597,7 @@ mod tests {
             }],
             online: true,
             network_address,
+            look: None,
         }
     }
 

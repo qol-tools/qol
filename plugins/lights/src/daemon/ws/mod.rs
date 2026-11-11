@@ -10,6 +10,7 @@ use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tungstenite::http::StatusCode;
 use tungstenite::Message;
 
+use super::looks::{self, SharedLooks};
 use super::state::{current_target, SharedTarget};
 use crate::backend::zigbee::ZigbeeBackend;
 use crate::domain::model::{LightCommand, LightTarget, RgbColor};
@@ -45,12 +46,13 @@ pub fn start(
     buffer: CommandBuffer,
     service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
     target: SharedTarget,
+    looks: SharedLooks,
 ) {
     let ws_port: u16 = env!("QOL_DAEMON_PORT")
         .parse()
         .expect("QOL_DAEMON_PORT must be a valid u16");
 
-    start_send_loop(buffer.clone(), service, target);
+    start_send_loop(buffer.clone(), service, target, looks);
 
     let expected: Arc<Option<Vec<u8>>> = Arc::new(
         std::env::var(qol_conventions::ENV_HTTP_TOKEN)
@@ -288,6 +290,7 @@ fn start_send_loop(
     buffer: CommandBuffer,
     service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
     target: SharedTarget,
+    looks: SharedLooks,
 ) {
     thread::Builder::new()
         .name("ws-send".into())
@@ -300,23 +303,36 @@ fn start_send_loop(
             let Ok(mut guard) = service.lock() else {
                 continue;
             };
-            if let Some(svc) = guard.as_mut() {
-                dispatch(svc, &target, cmd);
+            let Some(svc) = guard.as_mut() else {
+                continue;
+            };
+            let ieee =
+                looks::ieee_of_target(&target, &looks::light_addresses(&svc.backend().devices()));
+            let applied = dispatch(svc, &target, cmd);
+            drop(guard);
+            if let Some(ieee) = ieee {
+                looks::record(&looks, &ieee, &applied);
             }
         })
         .ok();
 }
 
-fn dispatch(svc: &mut LightService<ZigbeeBackend>, target: &LightTarget, cmd: PendingCommand) {
-    match cmd {
-        PendingCommand::Color(color) => {
-            let _ = svc.apply_command(target, &LightCommand::SetColor { color });
-        }
-        PendingCommand::Brightness(level, color) => {
-            let _ = svc.apply_command(target, &LightCommand::SetBrightness { level });
-            let _ = svc.apply_command(target, &LightCommand::SetColor { color });
-        }
-    }
+fn dispatch(
+    svc: &mut LightService<ZigbeeBackend>,
+    target: &LightTarget,
+    cmd: PendingCommand,
+) -> Vec<LightCommand> {
+    let commands = match cmd {
+        PendingCommand::Color(color) => vec![LightCommand::SetColor { color }],
+        PendingCommand::Brightness(level, color) => vec![
+            LightCommand::SetBrightness { level },
+            LightCommand::SetColor { color },
+        ],
+    };
+    commands
+        .into_iter()
+        .filter(|command| svc.apply_command(target, command).is_ok())
+        .collect()
 }
 
 fn parse_hex(hex: &str) -> Option<RgbColor> {
