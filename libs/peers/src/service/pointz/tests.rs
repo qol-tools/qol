@@ -132,6 +132,17 @@ impl Harness {
         self.phone.send_to(packet, self.commands()).await.unwrap();
     }
 
+    async fn command_reply(&self, packet: &[u8], wait: Duration) -> Option<Vec<u8>> {
+        self.send_command(packet).await;
+        let mut buffer = vec![0; 4096];
+        let (size, from) = tokio::time::timeout(wait, self.phone.recv_from(&mut buffer))
+            .await
+            .ok()?
+            .unwrap();
+        assert_eq!(from, self.commands());
+        Some(buffer[..size].to_vec())
+    }
+
     async fn next_delivery(&mut self, wait: Duration) -> Option<serde_json::Value> {
         tokio::time::timeout(wait, self.delivered.recv())
             .await
@@ -255,6 +266,7 @@ async fn discovery_answers_with_the_imported_server_id() {
             "server_id": Seed::from_bytes(SEED).server_id(),
             "authentication": "pair-spake2-v2",
             "command": "sealed-v3",
+            "status": "ping-v1",
             "pairing_open": false,
         })
     );
@@ -442,6 +454,97 @@ async fn sealed_commands_are_replay_protected_and_stale_ones_refused() {
     assert_eq!(
         harness.next_delivery(Duration::from_millis(500)).await,
         None
+    );
+}
+
+const PING: &[u8] = br#"{"type":"Ping"}"#;
+
+#[tokio::test]
+async fn a_ping_is_answered_with_a_sealed_pong_and_never_reaches_the_plugin() {
+    let authority = authority();
+    authority
+        .import_pointz(legacy(&[(PHONE, PHONE_KEY, "Pixel", 10)]))
+        .unwrap();
+    let mut harness = Harness::start(&authority).await;
+    let ping = envelope::seal_v3(PING, &PHONE_KEY, PHONE, now_ms(), [5; 12]);
+
+    let reply = harness
+        .command_reply(&ping, Duration::from_secs(5))
+        .await
+        .expect("the desktop answers a ping");
+
+    let pong = envelope::parse(&reply).unwrap();
+    assert!(pong.is_sealed());
+    assert_eq!(pong.device_id, PHONE);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&pong.open(&PHONE_KEY).unwrap()).unwrap(),
+        serde_json::json!({"type": "Pong", "nonce": URL_SAFE_NO_PAD.encode([5u8; 12])})
+    );
+    assert_eq!(
+        harness.next_delivery(Duration::from_millis(500)).await,
+        None
+    );
+    assert_eq!(
+        harness
+            .command_reply(&ping, Duration::from_millis(500))
+            .await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_removed_phone_and_a_wrong_clock_are_told_why_and_a_wrong_key_is_not() {
+    let authority = authority();
+    authority
+        .import_pointz(legacy(&[(PHONE, PHONE_KEY, "Pixel", 10)]))
+        .unwrap();
+    let harness = Harness::start(&authority).await;
+    let rejected = |reason: &str, nonce: [u8; 12]| {
+        serde_json::json!({
+            "type": "Rejected",
+            "reason": reason,
+            "nonce": URL_SAFE_NO_PAD.encode(nonce),
+        })
+    };
+
+    let stale = envelope::seal_v3(PING, &PHONE_KEY, PHONE, now_ms() - 31_000, [1; 12]);
+    let reply = harness
+        .command_reply(&stale, Duration::from_secs(5))
+        .await
+        .expect("a stale ping is answered");
+    let sealed = envelope::parse(&reply).expect("the clock rejection is sealed");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&sealed.open(&PHONE_KEY).unwrap()).unwrap(),
+        rejected("clock", [1; 12])
+    );
+    let stale_wrong_key = envelope::seal_v3(PING, &[8; 32], PHONE, now_ms() - 31_000, [4; 12]);
+    assert_eq!(
+        harness
+            .command_reply(&stale_wrong_key, Duration::from_millis(500))
+            .await,
+        None
+    );
+
+    let wrong_key = envelope::seal_v3(PING, &[8; 32], PHONE, now_ms(), [2; 12]);
+    assert_eq!(
+        harness
+            .command_reply(&wrong_key, Duration::from_millis(500))
+            .await,
+        None
+    );
+
+    let revision = authority.projection().unwrap().revision;
+    authority
+        .remove_pointz_device(revision, PointzDeviceId::from_bytes(PHONE))
+        .unwrap();
+    let removed = envelope::seal_v3(PING, &PHONE_KEY, PHONE, now_ms(), [3; 12]);
+    let reply = harness
+        .command_reply(&removed, Duration::from_secs(5))
+        .await
+        .expect("a removed phone is answered");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&reply).unwrap(),
+        rejected("unknown_device", [3; 12])
     );
 }
 

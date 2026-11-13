@@ -25,6 +25,10 @@ pub const COMMAND_PORT: u16 = 45455;
 const DISCOVER_MESSAGE: &str = "DISCOVER";
 const AUTHENTICATION: &str = "pair-spake2-v2";
 const COMMAND_PROTECTION: &str = "sealed-v3";
+const CONNECTION_STATUS: &str = "ping-v1";
+const PING: &str = "Ping";
+const REJECTED_CLOCK: &str = "clock";
+const REJECTED_UNKNOWN_DEVICE: &str = "unknown_device";
 const DATAGRAM_BYTES: usize = 4096;
 const FORWARD_QUEUE: usize = 256;
 const COMMAND_CLOCK_SKEW_MS: u64 = 30_000;
@@ -66,7 +70,14 @@ struct DiscoveryResponse<'a> {
     server_id: &'a str,
     authentication: &'static str,
     command: &'static str,
+    status: &'static str,
     pairing_open: bool,
+}
+
+enum Verdict {
+    Forward(serde_json::Value),
+    Reply(Vec<u8>),
+    Ignore,
 }
 
 impl PointzAdapter {
@@ -253,6 +264,7 @@ fn discovery_reply(
         server_id,
         authentication: AUTHENTICATION,
         command: COMMAND_PROTECTION,
+        status: CONNECTION_STATUS,
         pairing_open,
     })
     .ok()
@@ -299,20 +311,25 @@ async fn run_commands(
     let mut buffer = vec![0; DATAGRAM_BYTES];
     let mut replay = ReplayWindow::default();
     loop {
-        let size = tokio::select! {
+        let (size, from) = tokio::select! {
             _ = stop.wait_for(|stopped| *stopped) => return,
             received = socket.recv_from(&mut buffer) => match received {
-                Ok((size, _)) => size,
+                Ok(received) => received,
                 Err(_) => continue,
             },
         };
         let Some(authority) = authority.upgrade() else {
             return;
         };
-        let command = authenticate(&authority, &buffer[..size], &mut replay);
+        let verdict = authenticate(&authority, &buffer[..size], &mut replay);
         drop(authority);
-        let Some(command) = command else {
-            continue;
+        let command = match verdict {
+            Verdict::Forward(command) => command,
+            Verdict::Reply(reply) => {
+                send(&socket, &reply, from).await;
+                continue;
+            }
+            Verdict::Ignore => continue,
         };
         match queue.try_send(command) {
             Ok(()) => {}
@@ -324,29 +341,46 @@ async fn run_commands(
     }
 }
 
-fn authenticate(
-    authority: &PeerAuthority,
-    packet: &[u8],
-    replay: &mut ReplayWindow,
-) -> Option<serde_json::Value> {
-    let parsed = envelope::parse(packet)?;
+fn authenticate(authority: &PeerAuthority, packet: &[u8], replay: &mut ReplayWindow) -> Verdict {
+    let Some(parsed) = envelope::parse(packet) else {
+        return Verdict::Ignore;
+    };
     let now_ms = unix_time_ms();
-    if parsed.sent_at_ms.abs_diff(now_ms) > COMMAND_CLOCK_SKEW_MS {
-        return None;
-    }
-    let device = authority.pointz_key(&PointzDeviceId::from_bytes(parsed.device_id))?;
+    let Some(device) = authority.pointz_key(&PointzDeviceId::from_bytes(parsed.device_id)) else {
+        return reply(envelope::rejection(&parsed, REJECTED_UNKNOWN_DEVICE));
+    };
     if device.sealed_only && !parsed.is_sealed() {
-        return None;
+        return Verdict::Ignore;
     }
-    let payload = parsed.open(&device.key)?;
-    let command: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    let Some(command) = parsed
+        .open(&device.key)
+        .and_then(|payload| serde_json::from_slice::<serde_json::Value>(&payload).ok())
+    else {
+        return Verdict::Ignore;
+    };
+    if parsed.sent_at_ms.abs_diff(now_ms) > COMMAND_CLOCK_SKEW_MS {
+        return reply(sealed_nonce().and_then(|nonce| {
+            envelope::sealed_rejection(&parsed, REJECTED_CLOCK, &device.key, now_ms, nonce)
+        }));
+    }
     let expires_at_ms = parsed.sent_at_ms.saturating_add(COMMAND_CLOCK_SKEW_MS);
     if !command.is_object()
         || !replay.insert(&parsed.device_id, &parsed.nonce, expires_at_ms, now_ms)
     {
-        return None;
+        return Verdict::Ignore;
     }
-    Some(command)
+    if command.get("type").and_then(serde_json::Value::as_str) != Some(PING) {
+        return Verdict::Forward(command);
+    }
+    reply(sealed_nonce().and_then(|nonce| envelope::pong(&parsed, &device.key, now_ms, nonce)))
+}
+
+fn sealed_nonce() -> Option<[u8; 12]> {
+    crate::service::enrollment::random().ok()
+}
+
+fn reply(datagram: Option<Vec<u8>>) -> Verdict {
+    datagram.map_or(Verdict::Ignore, Verdict::Reply)
 }
 
 async fn send(socket: &UdpSocket, reply: &[u8], to: SocketAddr) {

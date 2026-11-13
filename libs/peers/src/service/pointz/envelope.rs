@@ -144,16 +144,15 @@ pub(crate) fn seal_v2(
     serde_json::to_vec(&envelope).unwrap()
 }
 
-#[cfg(test)]
-pub(crate) fn seal_v3(
+pub(crate) fn seal(
     payload: &[u8],
     key: &[u8; 32],
     device_id: [u8; 16],
     sent_at_ms: u64,
-    nonce: [u8; 12],
-) -> Vec<u8> {
+    nonce: [u8; SEALED_NONCE_BYTES],
+) -> Option<Vec<u8>> {
     let sealed = ChaCha20Poly1305::new_from_slice(key)
-        .unwrap()
+        .ok()?
         .encrypt(
             Nonce::from_slice(&nonce),
             Payload {
@@ -161,7 +160,7 @@ pub(crate) fn seal_v3(
                 aad: &sealed_aad(sent_at_ms, &device_id),
             },
         )
-        .unwrap();
+        .ok()?;
     let envelope = Envelope {
         version: SEALED_VERSION,
         device_id: URL_SAFE_NO_PAD.encode(device_id),
@@ -170,7 +169,62 @@ pub(crate) fn seal_v3(
         payload: URL_SAFE_NO_PAD.encode(sealed),
         mac: None,
     };
-    serde_json::to_vec(&envelope).unwrap()
+    serde_json::to_vec(&envelope).ok()
+}
+
+pub(crate) fn pong(
+    ping: &ParsedCommand,
+    key: &[u8; 32],
+    sent_at_ms: u64,
+    nonce: [u8; SEALED_NONCE_BYTES],
+) -> Option<Vec<u8>> {
+    let payload = serde_json::json!({
+        "type": "Pong",
+        "nonce": URL_SAFE_NO_PAD.encode(&ping.nonce),
+    });
+    seal(
+        &serde_json::to_vec(&payload).ok()?,
+        key,
+        ping.device_id,
+        sent_at_ms,
+        nonce,
+    )
+}
+
+pub(crate) fn rejection(refused: &ParsedCommand, reason: &str) -> Option<Vec<u8>> {
+    serde_json::to_vec(&serde_json::json!({
+        "type": "Rejected",
+        "reason": reason,
+        "nonce": URL_SAFE_NO_PAD.encode(&refused.nonce),
+    }))
+    .ok()
+}
+
+pub(crate) fn sealed_rejection(
+    refused: &ParsedCommand,
+    reason: &str,
+    key: &[u8; 32],
+    sent_at_ms: u64,
+    nonce: [u8; SEALED_NONCE_BYTES],
+) -> Option<Vec<u8>> {
+    seal(
+        &rejection(refused, reason)?,
+        key,
+        refused.device_id,
+        sent_at_ms,
+        nonce,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn seal_v3(
+    payload: &[u8],
+    key: &[u8; 32],
+    device_id: [u8; 16],
+    sent_at_ms: u64,
+    nonce: [u8; 12],
+) -> Vec<u8> {
+    seal(payload, key, device_id, sent_at_ms, nonce).unwrap()
 }
 
 #[cfg(test)]
@@ -205,6 +259,51 @@ mod tests {
         assert_eq!(parsed.nonce, [9; 12]);
         assert!(parsed.is_sealed());
         assert_eq!(parsed.open(&KEY).unwrap(), PAYLOAD);
+    }
+
+    #[test]
+    fn a_pong_opens_with_the_device_key_and_names_the_ping_it_answers() {
+        let ping = parse(&seal_v3(br#"{"type":"Ping"}"#, &KEY, DEVICE, 5, [9; 12])).unwrap();
+
+        let pong = parse(&pong(&ping, &KEY, 77, [4; 12]).unwrap()).unwrap();
+
+        assert_eq!(pong.device_id, DEVICE);
+        assert_eq!(pong.sent_at_ms, 77);
+        assert!(pong.open(&[8; 32]).is_none());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&pong.open(&KEY).unwrap()).unwrap(),
+            serde_json::json!({"type": "Pong", "nonce": URL_SAFE_NO_PAD.encode([9u8; 12])})
+        );
+    }
+
+    #[test]
+    fn a_rejection_names_the_reason_and_the_refused_nonce() {
+        let refused = parse(&seal_v3(PAYLOAD, &KEY, DEVICE, 5, [9; 12])).unwrap();
+
+        let rejection = rejection(&refused, "unknown_device").unwrap();
+
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&rejection).unwrap(),
+            serde_json::json!({
+                "type": "Rejected",
+                "reason": "unknown_device",
+                "nonce": URL_SAFE_NO_PAD.encode([9u8; 12]),
+            })
+        );
+    }
+
+    #[test]
+    fn a_sealed_rejection_opens_only_with_the_device_key() {
+        let refused = parse(&seal_v3(PAYLOAD, &KEY, DEVICE, 5, [9; 12])).unwrap();
+
+        let sealed =
+            parse(&sealed_rejection(&refused, "clock", &KEY, 77, [4; 12]).unwrap()).unwrap();
+
+        assert!(sealed.open(&[8; 32]).is_none());
+        assert_eq!(
+            sealed.open(&KEY).unwrap(),
+            rejection(&refused, "clock").unwrap()
+        );
     }
 
     #[test]
