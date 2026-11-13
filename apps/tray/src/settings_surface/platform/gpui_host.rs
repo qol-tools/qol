@@ -2006,6 +2006,10 @@ items = []
             .expect("notifications contract must parse");
         for (name, kind) in [
             ("handler", qol_config::contract::FieldKind::Select),
+            ("other_apps_shown", qol_config::contract::FieldKind::Select),
+            ("other_apps_hidden", qol_config::contract::FieldKind::Select),
+            ("takeover", qol_config::contract::FieldKind::Status),
+            ("takeover_needs", qol_config::contract::FieldKind::Status),
             ("placement", qol_config::contract::FieldKind::Placement),
             ("do_not_disturb", qol_config::contract::FieldKind::Status),
             ("message_seconds", qol_config::contract::FieldKind::Number),

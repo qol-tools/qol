@@ -1,3 +1,4 @@
+mod other_apps;
 mod platform;
 
 use super::de_bindings::filter_shadowed;

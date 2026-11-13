@@ -10,9 +10,13 @@ use std::io::{PipeReader, PipeWriter};
 use std::path::Path;
 use std::sync::Mutex;
 
-use super::super::{ActivateOutcome, MirrorAccess};
+use super::super::{ActivateOutcome, Mechanism};
+use crate::features::notifications::takeover::{Health, Permission};
 use signal::{Signal, Wake};
 use store::{Cursor, Session};
+
+const HISTORY: &str = "notification history";
+const BANNER_WATCH: &str = "banner watch";
 
 static MIRROR: Mutex<Option<PipeWriter>> = Mutex::new(None);
 
@@ -28,36 +32,43 @@ pub(in super::super) fn is_safe_banner_id(id: &str) -> bool {
     retained::is_safe_id(id)
 }
 
-pub(in super::super) fn sync(enabled: bool) {
+pub(in super::super) fn apply(wanted: bool) -> Vec<Mechanism> {
     let mut running = MIRROR
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    banner::sync(enabled);
-    if !enabled {
+    banner::sync(wanted);
+    if !wanted {
         if running.take().is_some() {
             log::info!("notification mirror: stopped");
         }
-        return;
+        return Vec::new();
     }
-    if running.is_some() {
-        return;
-    }
-    match start() {
-        Ok(stop) => {
-            log::info!("notification mirror: watching macOS notifications");
-            *running = Some(stop);
+    let history = if running.is_some() {
+        Health::Active
+    } else {
+        match start() {
+            Ok(stop) => {
+                log::info!("notification mirror: watching macOS notifications");
+                *running = Some(stop);
+                Health::Active
+            }
+            Err(error) => history_failure(&error),
         }
-        Err(error) => log::warn!("notification mirror: not started: {error:#}"),
-    }
+    };
+    vec![
+        Mechanism::showing(HISTORY, history),
+        Mechanism::showing_and_hiding(BANNER_WATCH, banner::health()),
+    ]
 }
 
-pub(in super::super) fn access() -> MirrorAccess {
-    let Some(db) = store::db_path() else {
-        return MirrorAccess::Unreadable("HOME is not set".to_string());
-    };
-    match store::latest(&db) {
-        Ok(_) => MirrorAccess::Readable,
-        Err(error) => MirrorAccess::Unreadable(format!("{error:#}")),
+fn history_failure(error: &anyhow::Error) -> Health {
+    let denied = store::db_path()
+        .and_then(|db| std::fs::File::open(db).err())
+        .is_some_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied);
+    if denied {
+        Health::NeedsPermission(Permission::FullDiskAccess)
+    } else {
+        Health::Failed(format!("{error:#}"))
     }
 }
 

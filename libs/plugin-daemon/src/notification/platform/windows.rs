@@ -49,6 +49,10 @@ impl NotificationPlatform for Platform {
         do_not_disturb(focus_assist_profile(), shell_notification_state())
     }
 
+    fn os_banners_showing(&self) -> Option<bool> {
+        None
+    }
+
     fn set_os_banners(&self, _showing: bool) {}
 
     fn acquire_inhibit(&self) -> Option<NotificationInhibit> {
