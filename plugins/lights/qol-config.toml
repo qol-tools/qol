@@ -74,14 +74,6 @@ active_when = "on"
 input = { ieee = "{ieee}" }
 
 [[field.lights.row_controls]]
-control = "switch"
-label = "Power"
-value_from = "on"
-action = "light_on"
-active_action = "light_off"
-input = { ieee = "{ieee}" }
-
-[[field.lights.row_controls]]
 control = "color"
 label = "Colour"
 value_from = "color"
