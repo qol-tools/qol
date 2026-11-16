@@ -152,6 +152,7 @@ default = 6
 min = 2
 max = 10
 step = 1
+variant = "slider"
 
 [field.display_transparent_background]
 type = "boolean"
@@ -250,6 +251,7 @@ default = 0.0
 min = 0.0
 max = 1.0
 step = 0.05
+variant = "slider"
 
 [field.display_ghost_debug_color]
 type = "color"
