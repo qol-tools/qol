@@ -3863,6 +3863,40 @@ test("a fork Claude Code cannot read back shows its conversation from its transc
   await ui.unmount()
 })
 
+test('a fork whose live conversation starts after a compaction shows the earlier conversation from its transcript on disk', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  on('clock.after', () => ({ value: undefined }))
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  const env: Record<string, string> = { QOL_CLI_SESSIONS: '/bin/qol-cli-sessions', QOL_SWITCHBOARD_CONVERSATIONS: '/conv' }
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: env[e.name] }))
+  const summary = { role: 'user', text: 'This session is being continued from a previous conversation that ran out of context.' }
+  const held: unknown[] = [summary, { role: 'user', text: 'Back in the agent list.' }, { role: 'assistant', text: 'Back on the fork board.' }]
+  on('session.messages', () => ({ value: [...held] }))
+  let size = 10
+  on('fs.stat', (_: unknown, e: { path: string }) => ({ value: e.path === '/conv/switchboard-session/subagents/agent-a8.jsonl' ? { size, mtimeMs: 5 } : { size: 0, mtimeMs: 0 } }))
+  const saved: unknown[] = [{ role: 'user', text: fromUser('pick one') }, { role: 'assistant', text: 'Amber or teal?' }, ...held]
+  on('process.run', (_: unknown, e: { argv: string[] }) =>
+    e.argv.slice(1).join(' ') === 'sessions switchboard hook fork-said' ? { value: { exitCode: 0, stderr: '', stdout: JSON.stringify(saved) } } : { value: NO_RECORD })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await deliver($, notification('a8', 'asking-fork: asks', 'Which colour, amber or teal?'), 'task-notification')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
+  expect(await forkChat($, panes)).toEqual(['pick one', 'Amber or teal?'])
+  const reply = { role: 'assistant', text: 'Teal it is.' }
+  held.push(reply)
+  saved.push(reply)
+  size = 20
+  await $.turn.complete({ turnId: 'held-1', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
+  await settle()
+  expect(await forkChat($, panes)).toEqual(['pick one', 'Amber or teal?', 'Teal it is.'])
+  await ui.unmount()
+})
+
 const killedHold = (taskId: string) =>
   `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>toolu_hold_1</tool-use-id>\n<status>killed</status>\n<summary>Background command "Hold this fork in the agent list" was stopped</summary>\n</task-notification>`
 
