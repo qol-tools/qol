@@ -444,12 +444,25 @@ fn head_commit(repo: &Repository) -> Result<Option<git2::Commit<'_>>> {
     }
 }
 
+const TOKEN_HOST: &str = "https://github.com/";
+
 fn bind_credentials(callbacks: &mut RemoteCallbacks<'_>, token: Option<&str>) {
     if let Some(token) = token.map(str::to_string) {
-        callbacks.credentials(move |_url, _user, _allowed| {
+        callbacks.credentials(move |url, _user, _allowed| {
+            if !takes_the_github_token(url) {
+                return Err(git2::Error::from_str(
+                    "the GitHub token is sent only to a repository on https://github.com",
+                ));
+            }
             Cred::userpass_plaintext("x-access-token", &token)
         });
     }
+}
+
+fn takes_the_github_token(url: &str) -> bool {
+    url.get(..TOKEN_HOST.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(TOKEN_HOST))
+        && url.len() > TOKEN_HOST.len()
 }
 
 fn reject_if_cancelled(cancelled: &dyn Fn() -> bool) -> Result<()> {
@@ -552,6 +565,32 @@ fn checkout_remote_into_local(repo: &Repository, remote_oid: git2::Oid) -> Resul
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn the_github_token_goes_only_to_a_repository_on_github_over_https() {
+        let cases = [
+            ("https://github.com/me/qol-tray-profiles.git", true),
+            ("https://GitHub.com/me/qol-tray-profiles", true),
+            ("https://github.com/", false),
+            ("https://github.com", false),
+            ("http://github.com/me/qol-tray-profiles.git", false),
+            ("https://github.com.evil.example/me/repo.git", false),
+            ("https://github.com@evil.example/me/repo.git", false),
+            ("https://evil.example/github.com/me/repo.git", false),
+            (
+                "https://evil.example/?next=https://github.com/me/repo",
+                false,
+            ),
+            ("https://api.github.com/me/repo.git", false),
+            ("ssh://git@github.com/me/repo.git", false),
+            ("file:///tmp/origin.git", false),
+            ("", false),
+            ("https://githüb.com/me/repo.git", false),
+        ];
+        for (url, expected) in cases {
+            assert_eq!(takes_the_github_token(url), expected, "{url}");
+        }
+    }
 
     fn init_bare_origin(dir: &Path) -> String {
         Repository::init_bare(dir).unwrap();
