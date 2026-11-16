@@ -9,13 +9,13 @@ use super::{ChoiceArt, RowGround, SettingsToggle, SettingsWell};
 #[derive(IntoElement)]
 pub struct SettingsFeature {
     on: bool,
-    art: ChoiceArt,
+    art: Option<ChoiceArt>,
     row: RowGround,
     kit: Kit,
 }
 
 impl SettingsFeature {
-    pub fn new(on: bool, art: ChoiceArt, row: RowGround, kit: Kit) -> Self {
+    pub fn new(on: bool, art: Option<ChoiceArt>, row: RowGround, kit: Kit) -> Self {
         Self { on, art, row, kit }
     }
 }
@@ -49,7 +49,10 @@ impl RenderOnce for SettingsFeature {
                     .flex_row()
                     .items_center()
                     .gap(px(qol_theme::SPACE_INSET))
-                    .child(SettingsWell::new(self.art, self.row, self.kit))
+                    .children(
+                        self.art
+                            .map(|art| SettingsWell::new(art, self.row, self.kit)),
+                    )
                     .child(SettingsChevron::new(self.row, self.kit)),
             )
     }

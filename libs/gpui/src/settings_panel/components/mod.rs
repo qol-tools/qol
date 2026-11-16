@@ -66,7 +66,6 @@ const WELL_WIDTH: f32 = 44.0;
 const WELL_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
 const WELL_PICTURE_WIDTH: f32 = 32.0;
 const WELL_PICTURE_HEIGHT: f32 = 20.0;
-const WELL_MARK_SIZE: f32 = 16.0;
 const CHOICE_PICTURE_WIDTH: f32 = 56.0;
 const CHOICE_PICTURE_HEIGHT: f32 = 35.0;
 const CHOICE_CHEVRON_WIDTH: f32 = 8.0;
@@ -405,8 +404,6 @@ pub fn settings_label_group(
         .children(description.map(|text| settings_description(text, row, kit)))
 }
 
-/// A fact about a row, drawn as a tag beside its name. The right side of a
-/// row is for what the row does, so what the row says sits here.
 pub fn settings_tag(
     text: impl Into<SharedString>,
     tone: SettingsValueTone,

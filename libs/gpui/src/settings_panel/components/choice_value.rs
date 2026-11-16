@@ -1,11 +1,10 @@
 use gpui::prelude::*;
 use gpui::{div, img, px, rgba, App, RenderOnce, Window};
-use qol_theme::Mark;
 
 use super::{
     RowGround, CHOICE_CHEVRON_HEIGHT, CHOICE_CHEVRON_HOVER_STEP, CHOICE_CHEVRON_REST_OPACITY,
     CHOICE_CHEVRON_WIDTH, CHOICE_PICTURE_HEIGHT, CHOICE_PICTURE_WIDTH, SETTINGS_ROW_GROUP,
-    WELL_HEIGHT, WELL_MARK_SIZE, WELL_PICTURE_HEIGHT, WELL_PICTURE_WIDTH, WELL_WIDTH,
+    WELL_HEIGHT, WELL_PICTURE_HEIGHT, WELL_PICTURE_WIDTH, WELL_WIDTH,
 };
 use crate::kit::Kit;
 use crate::pictures::{self, PictureContext, Tone};
@@ -14,7 +13,6 @@ use crate::pictures::{self, PictureContext, Tone};
 pub enum ChoiceArt {
     Picture(String),
     Stack { front: String, back: String },
-    Mark(Mark),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,16 +81,6 @@ impl RenderOnce for SettingsChoiceArt {
         } = self;
         let scale = window.scale_factor();
         let tones = choice_tones(row, kit);
-        if let ChoiceArt::Mark(mark) = art {
-            return div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .w(px(width))
-                .h(px(height))
-                .child(crate::icon::mark(mark, WELL_MARK_SIZE, tones.line));
-        }
         let art_image = |tone: Tone| {
             let image = match &art {
                 ChoiceArt::Picture(spec) => {
@@ -101,7 +89,6 @@ impl RenderOnce for SettingsChoiceArt {
                 ChoiceArt::Stack { front, back } => pictures::stacked_image(
                     front, back, tones.line, tone, width, height, scale, &context,
                 ),
-                ChoiceArt::Mark(_) => None,
             };
             image.map(|image| img(image).w(px(width)).h(px(height)))
         };
@@ -133,8 +120,6 @@ impl RenderOnce for SettingsChoiceArt {
     }
 }
 
-/// The picture well of a row that opens something: one size on every row,
-/// holding the picture of the picked value or the mark of the row's plugin.
 #[derive(IntoElement)]
 pub struct SettingsWell {
     art: ChoiceArt,

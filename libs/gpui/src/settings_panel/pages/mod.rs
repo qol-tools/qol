@@ -21,9 +21,9 @@ use crate::scrollbar::{ScrollSource, OVERFLOW_FADE_HEIGHT};
 
 use super::components::{
     qr_block, qr_heights, settings_busy_message, settings_destroy_label_group, settings_message,
-    settings_page, settings_tag, settings_tagged_label_group, settings_value_group, ChoiceArt,
-    HintTone, QrBlock, RowGround, SettingsFeature, SettingsFeedback, SettingsHint, SettingsTick,
-    SettingsToggle, SettingsWell,
+    settings_page, settings_tag, settings_tagged_label_group, settings_value_group, HintTone,
+    QrBlock, RowGround, SettingsFeature, SettingsFeedback, SettingsHint, SettingsTick,
+    SettingsToggle,
 };
 use super::{
     escape_step, intent, settings_action_busy, settings_action_spinner, CustomHints,
@@ -49,7 +49,6 @@ const CLOSING_IDS: [&str; 4] = [
 
 pub(super) fn factory(
     heading: String,
-    mark: qol_theme::Mark,
     spec: PagesSpec,
     runtime: SettingsRuntime,
 ) -> CustomPanelFactory {
@@ -61,7 +60,7 @@ pub(super) fn factory(
             ..
         } = context;
         let (heading, spec, runtime) = (heading.clone(), spec.clone(), runtime.clone());
-        let view = cx.new(|cx| PagesView::new(heading, mark, spec, runtime, on_back, notify, cx));
+        let view = cx.new(|cx| PagesView::new(heading, spec, runtime, on_back, notify, cx));
         CustomPanelView::new(view, on_change, cx)
     })
 }
@@ -69,7 +68,6 @@ pub(super) fn factory(
 pub(super) struct PagesView {
     focus: FocusHandle,
     heading: String,
-    mark: qol_theme::Mark,
     spec: PagesSpec,
     runtime: SettingsRuntime,
     on_back: CustomPanelCallback,
@@ -97,7 +95,6 @@ pub(super) struct PagesView {
 impl PagesView {
     fn new(
         heading: String,
-        mark: qol_theme::Mark,
         spec: PagesSpec,
         runtime: SettingsRuntime,
         on_back: CustomPanelCallback,
@@ -117,7 +114,6 @@ impl PagesView {
         Self {
             focus: cx.focus_handle(),
             heading,
-            mark,
             spec,
             runtime,
             on_back,
@@ -649,7 +645,6 @@ impl PagesView {
                 ));
             }
         }
-        let art = ChoiceArt::Mark(self.mark);
         values = match &row.control {
             Some(Control::Toggle(on)) => values.child(SettingsToggle::new(*on, ground, kit)),
             Some(Control::Button(_)) => {
@@ -657,13 +652,10 @@ impl PagesView {
             }
             Some(Control::Check) => values.child(SettingsTick::new(ground, kit)),
             Some(Control::Feature { on, .. }) => {
-                values.child(SettingsFeature::new(*on, art, ground, kit))
+                values.child(SettingsFeature::new(*on, None, ground, kit))
             }
             Some(Control::Destroy { .. }) => {
                 values.child(settings_action_busy((action_id, index), busy, kit))
-            }
-            Some(Control::Qr(_)) | None if model::opens(row) => {
-                values.child(SettingsWell::new(art, ground, kit))
             }
             Some(Control::Qr(_)) | None => values,
         };

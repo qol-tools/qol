@@ -173,7 +173,6 @@ impl SettingsPanelView {
             (!loading && !text.is_empty()).then(|| settings_tag(text, tone, ground, self.kit));
         let label_group =
             settings_tagged_label_group(row.label.clone(), tag, description, ground, self.kit);
-        let mark = self.source_mark(row.source);
         let mut line = SettingsRow::setting(("settings-page-link", index), self.kit)
             .selected(selected, focused)
             .child(label_group)
@@ -192,11 +191,9 @@ impl SettingsPanelView {
                     self.kit,
                 ));
             }
-            line = line.child(SettingsFeature::new(on, mark, ground, self.kit));
+            line = line.child(SettingsFeature::new(on, None, ground, self.kit));
         } else {
-            line = line
-                .opens(true)
-                .child(SettingsWell::new(mark, ground, self.kit));
+            line = line.opens(true);
         }
         line.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             if !event.standard_click() {
@@ -416,7 +413,6 @@ impl SettingsPanelView {
         }
         let current = self.inline_slot(index);
         let focused = self.body_has_focus();
-        let mark = self.source_mark(self.level_rows()[index].source);
         indices
             .iter()
             .enumerate()
@@ -450,7 +446,7 @@ impl SettingsPanelView {
                     ground,
                     self.kit,
                 );
-                let art = inline_item_art(item).unwrap_or_else(|| mark.clone());
+                let art = inline_item_art(item);
                 let lit = toggle.as_ref().is_none_or(|toggle| toggle.on);
                 let mut line = SettingsRow::setting(("settings-inline-item", key), self.kit)
                     .selected(selected, focused)
@@ -469,7 +465,9 @@ impl SettingsPanelView {
                     Some(toggle) => {
                         line.child(SettingsFeature::new(toggle.on, art, ground, self.kit))
                     }
-                    None => line.child(SettingsWell::new(art, ground, self.kit)),
+                    None => line.children(
+                        art.map(|art| SettingsWell::new(art, ground, self.kit).into_any_element()),
+                    ),
                 };
                 line.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                     if !event.standard_click() {

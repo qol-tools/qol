@@ -607,7 +607,6 @@ impl SettingsPanelView {
                         let spec = state.pages.clone()?;
                         Some(super::pages::factory(
                             source.heading.clone(),
-                            source.mark,
                             spec,
                             state.runtime.clone(),
                         ))
@@ -3718,15 +3717,6 @@ impl SettingsPanelView {
         div().child(SettingsToggle::new(active, row, self.kit))
     }
 
-    fn source_mark(&self, source: usize) -> ChoiceArt {
-        ChoiceArt::Mark(
-            self.panel
-                .sources
-                .get(source)
-                .map_or(qol_theme::Mark::Qol, |source| source.mark),
-        )
-    }
-
     fn row_tag(&self, index: usize, ground: RowGround) -> Option<Div> {
         let row = &self.level_rows()[index];
         let status = matches!(row.control, RowControl::Status { .. });
@@ -3966,10 +3956,6 @@ impl SettingsPanelView {
         };
         let value_cell = self.render_value_cell(index, ground, cx);
         let opens = !in_item_card && row_opens(&row.control);
-        let picks = matches!(
-            row.control,
-            RowControl::Select { .. } | RowControl::MultiSelect { .. }
-        );
         let mut line = SettingsRow::setting(("settings-row", index), self.kit)
             .selected(selected, self.body_has_focus())
             .opens(opens)
@@ -3984,13 +3970,6 @@ impl SettingsPanelView {
         }));
         if !in_item_card || member || control {
             line = line.child(value_cell);
-        }
-        if opens && !picks {
-            line = line.child(SettingsWell::new(
-                self.source_mark(row.source),
-                ground,
-                self.kit,
-            ));
         }
         container = container.child(line);
         let error = match &row.control {
@@ -4178,13 +4157,6 @@ impl SettingsPanelView {
         let value = self.display_value(index);
         let tag = (!loading && !value.is_empty())
             .then(|| settings_tag(value, self.value_tone(index), ground, self.kit));
-        if row_opens(&row.control) {
-            header_status = header_status.child(SettingsWell::new(
-                self.source_mark(row.source),
-                ground,
-                self.kit,
-            ));
-        }
         let mut container = div()
             .id(("settings-list", index))
             .relative()
@@ -4291,10 +4263,7 @@ impl SettingsPanelView {
                     ground,
                     self.kit,
                 ),
-                div()
-                    .children(row_opens(&row.control).then(|| {
-                        SettingsWell::new(self.source_mark(row.source), ground, self.kit)
-                    })),
+                div(),
                 row_opens(&row.control),
                 ground,
                 self.kit,
