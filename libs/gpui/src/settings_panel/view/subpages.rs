@@ -6,7 +6,7 @@ use qol_config::contract::{interpolate_row_template, resolve_row_toggle};
 
 use super::super::components::{
     settings_action_spinner, settings_description, settings_label_group, settings_query_spinner,
-    settings_swatch, settings_value_text, RowGround, SettingsFeature, SettingsRow,
+    settings_swatch_tile, settings_value_text, RowGround, SettingsFeature, SettingsRow,
     SettingsValueTone,
 };
 use super::super::rows::{
@@ -448,30 +448,26 @@ impl SettingsPanelView {
                     ground,
                     self.kit,
                 );
+                let lit = toggle.as_ref().is_none_or(|toggle| toggle.on);
                 let mut line = SettingsRow::setting(("settings-inline-item", key), self.kit)
                     .selected(selected, focused)
-                    .opens(toggle.is_none())
-                    .child(label_group);
+                    .opens(toggle.is_none());
+                if let Some(color) = swatch {
+                    line = line.child(settings_swatch_tile(color, lit, self.kit));
+                }
+                line = line.child(label_group);
                 if item.pending {
                     line = line.child(settings_action_spinner(
                         ("settings-inline-spinner", key),
                         self.kit,
                     ));
                 }
-                line = match (toggle, swatch) {
-                    (Some(toggle), swatch) => line.child(
-                        SettingsFeature::new(toggle.on, value, ground, self.kit).swatch(swatch),
-                    ),
-                    (None, swatch) => {
-                        let mut line = line;
-                        if !value.is_empty() {
-                            line = line.child(settings_value_text(value, tone, ground, self.kit));
-                        }
-                        if let Some(color) = swatch {
-                            line = line.child(settings_swatch(color));
-                        }
-                        line
+                line = match toggle {
+                    Some(toggle) => {
+                        line.child(SettingsFeature::new(toggle.on, value, ground, self.kit))
                     }
+                    None if value.is_empty() => line,
+                    None => line.child(settings_value_text(value, tone, ground, self.kit)),
                 };
                 line.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                     if !event.standard_click() {

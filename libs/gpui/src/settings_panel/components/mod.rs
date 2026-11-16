@@ -552,6 +552,18 @@ pub fn settings_swatch(color: u32) -> gpui::Div {
         .bg(rgb(color))
 }
 
+pub fn settings_swatch_tile(color: u32, lit: bool, kit: Kit) -> gpui::Div {
+    div()
+        .flex_none()
+        .w(px(CHOICE_PICTURE_WIDTH))
+        .h(px(CHOICE_PICTURE_HEIGHT))
+        .rounded(px(qol_theme::RADIUS_TIGHT))
+        .border_1()
+        .border_color(gpui::rgba(kit.washes.hairline_strong.packed()))
+        .bg(rgb(color))
+        .when(!lit, |tile| tile.opacity(qol_theme::OPACITY_REST))
+}
+
 pub fn settings_accent_dot(accent: u32) -> gpui::Div {
     div()
         .flex_none()
