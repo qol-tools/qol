@@ -257,7 +257,7 @@ def bullets(paths: list[str]) -> list[str]:
 
 def asking(item: Review) -> list[str]:
     return [
-        f"#{item.number} changes these files on {LIST_NAME}, which decide what the required checks run:",
+        f"#{item.number} changes these files on {LIST_NAME}, which decide the review or the gate itself:",
         "",
         *bullets(item.files),
         "",
