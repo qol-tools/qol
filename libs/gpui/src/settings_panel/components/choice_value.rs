@@ -1,12 +1,11 @@
-use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, img, px, rgb, App, RenderOnce, SharedString, Window};
-use qol_theme::TextStyle;
+use gpui::{div, img, px, rgba, App, RenderOnce, Window};
+use qol_theme::Mark;
 
 use super::{
-    ground_text, RowGround, CHOICE_CHEVRON_HEIGHT, CHOICE_CHEVRON_HOVER_STEP,
-    CHOICE_CHEVRON_REST_OPACITY, CHOICE_CHEVRON_WIDTH, CHOICE_PICTURE_HEIGHT, CHOICE_PICTURE_WIDTH,
-    CHOICE_WORD_MAX_WIDTH, SETTINGS_ROW_GROUP,
+    RowGround, CHOICE_CHEVRON_HEIGHT, CHOICE_CHEVRON_HOVER_STEP, CHOICE_CHEVRON_REST_OPACITY,
+    CHOICE_CHEVRON_WIDTH, CHOICE_PICTURE_HEIGHT, CHOICE_PICTURE_WIDTH, SETTINGS_ROW_GROUP,
+    WELL_HEIGHT, WELL_MARK_SIZE, WELL_PICTURE_HEIGHT, WELL_PICTURE_WIDTH, WELL_WIDTH,
 };
 use crate::kit::Kit;
 use crate::pictures::{self, PictureContext, Tone};
@@ -15,12 +14,11 @@ use crate::pictures::{self, PictureContext, Tone};
 pub enum ChoiceArt {
     Picture(String),
     Stack { front: String, back: String },
+    Mark(Mark),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ChoiceTones {
-    word: u32,
-    word_hover: u32,
     line: u32,
     chevron: u32,
     chevron_opacity: f32,
@@ -30,16 +28,12 @@ struct ChoiceTones {
 fn choice_tones(row: RowGround, kit: Kit) -> ChoiceTones {
     match row {
         RowGround::Pane => ChoiceTones {
-            word: kit.grounds.pane.faint,
-            word_hover: kit.grounds.pane.ink,
             line: kit.grounds.pane.soft,
             chevron: kit.grounds.pane.faint,
             chevron_opacity: CHOICE_CHEVRON_REST_OPACITY,
             wakes_on_hover: true,
         },
         RowGround::Band => ChoiceTones {
-            word: kit.grounds.band.ink,
-            word_hover: kit.grounds.band_hover.ink,
             line: kit.grounds.band.ink,
             chevron: kit.grounds.band.faint,
             chevron_opacity: 1.0,
@@ -49,85 +43,13 @@ fn choice_tones(row: RowGround, kit: Kit) -> ChoiceTones {
 }
 
 #[derive(IntoElement)]
-pub struct SettingsChoiceValue {
-    text: SharedString,
-    art: ChoiceArt,
-    row: RowGround,
-    context: PictureContext,
-    kit: Kit,
-    word_color: Option<u32>,
-}
-
-impl SettingsChoiceValue {
-    pub fn new(
-        text: impl Into<SharedString>,
-        art: ChoiceArt,
-        row: RowGround,
-        context: PictureContext,
-        kit: Kit,
-    ) -> Self {
-        Self {
-            text: text.into(),
-            art,
-            row,
-            context,
-            kit,
-            word_color: None,
-        }
-    }
-
-    pub fn word_color(mut self, color: Option<u32>) -> Self {
-        self.word_color = color;
-        self
-    }
-}
-
-impl RenderOnce for SettingsChoiceValue {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let SettingsChoiceValue {
-            text,
-            art,
-            row,
-            context,
-            kit,
-            word_color,
-        } = self;
-        let font = window.text_style().font();
-        let text = crate::text::truncate_to_width(
-            &text,
-            font.clone(),
-            qol_theme::TEXT_BODY,
-            font.weight,
-            CHOICE_WORD_MAX_WIDTH,
-            "…",
-            cx,
-        );
-        let tones = choice_tones(row, kit);
-        let word = div()
-            .flex_none()
-            .max_w(px(CHOICE_WORD_MAX_WIDTH))
-            .text(TextStyle::Value);
-        let word = match word_color {
-            Some(color) => word.text_color(rgb(color)),
-            None => ground_text(word, rgb(tones.word), Some(rgb(tones.word_hover))),
-        };
-        div()
-            .flex()
-            .flex_row()
-            .flex_none()
-            .items_center()
-            .gap(px(qol_theme::SPACE_CELL))
-            .child(word.child(text))
-            .child(SettingsChoiceArt::new(art, row, context, kit))
-    }
-}
-
-#[derive(IntoElement)]
 pub struct SettingsChoiceArt {
     art: ChoiceArt,
     row: RowGround,
     context: PictureContext,
     kit: Kit,
+    width: f32,
+    height: f32,
 }
 
 impl SettingsChoiceArt {
@@ -137,7 +59,15 @@ impl SettingsChoiceArt {
             row,
             context,
             kit,
+            width: CHOICE_PICTURE_WIDTH,
+            height: CHOICE_PICTURE_HEIGHT,
         }
+    }
+
+    fn sized(mut self, width: f32, height: f32) -> Self {
+        self.width = width;
+        self.height = height;
+        self
     }
 }
 
@@ -148,42 +78,34 @@ impl RenderOnce for SettingsChoiceArt {
             row,
             context,
             kit,
+            width,
+            height,
         } = self;
         let scale = window.scale_factor();
         let tones = choice_tones(row, kit);
+        if let ChoiceArt::Mark(mark) = art {
+            return div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(width))
+                .h(px(height))
+                .child(crate::icon::mark(mark, WELL_MARK_SIZE, tones.line));
+        }
         let art_image = |tone: Tone| {
             let image = match &art {
-                ChoiceArt::Picture(spec) => pictures::fitted_image(
-                    spec,
-                    tones.line,
-                    tone,
-                    CHOICE_PICTURE_WIDTH,
-                    CHOICE_PICTURE_HEIGHT,
-                    scale,
-                    &context,
-                ),
+                ChoiceArt::Picture(spec) => {
+                    pictures::fitted_image(spec, tones.line, tone, width, height, scale, &context)
+                }
                 ChoiceArt::Stack { front, back } => pictures::stacked_image(
-                    front,
-                    back,
-                    tones.line,
-                    tone,
-                    CHOICE_PICTURE_WIDTH,
-                    CHOICE_PICTURE_HEIGHT,
-                    scale,
-                    &context,
+                    front, back, tones.line, tone, width, height, scale, &context,
                 ),
+                ChoiceArt::Mark(_) => None,
             };
-            image.map(|image| {
-                img(image)
-                    .w(px(CHOICE_PICTURE_WIDTH))
-                    .h(px(CHOICE_PICTURE_HEIGHT))
-            })
+            image.map(|image| img(image).w(px(width)).h(px(height)))
         };
-        let art_box = div()
-            .relative()
-            .flex_none()
-            .w(px(CHOICE_PICTURE_WIDTH))
-            .h(px(CHOICE_PICTURE_HEIGHT));
+        let art_box = div().relative().flex_none().w(px(width)).h(px(height));
         if tones.wakes_on_hover {
             art_box
                 .child(
@@ -208,6 +130,43 @@ impl RenderOnce for SettingsChoiceArt {
         } else {
             art_box.children(art_image(Tone::Awake))
         }
+    }
+}
+
+/// The picture well of a row that opens something: one size on every row,
+/// holding the picture of the picked value or the mark of the row's plugin.
+#[derive(IntoElement)]
+pub struct SettingsWell {
+    art: ChoiceArt,
+    row: RowGround,
+    kit: Kit,
+}
+
+impl SettingsWell {
+    pub fn new(art: ChoiceArt, row: RowGround, kit: Kit) -> Self {
+        Self { art, row, kit }
+    }
+}
+
+impl RenderOnce for SettingsWell {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let context = PictureContext::for_accent(
+            qol_theme::runtime_theme().mode,
+            qol_theme::runtime_accent_key(),
+        );
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(WELL_WIDTH))
+            .h(px(WELL_HEIGHT))
+            .rounded(px(qol_theme::RADIUS_TIGHT))
+            .bg(rgba(self.row.rest(self.kit).well.packed()))
+            .child(
+                SettingsChoiceArt::new(self.art, self.row, context, self.kit)
+                    .sized(WELL_PICTURE_WIDTH, WELL_PICTURE_HEIGHT),
+            )
     }
 }
 
@@ -269,8 +228,6 @@ mod tests {
         assert_eq!(
             choice_tones(RowGround::Pane, kit),
             ChoiceTones {
-                word: 0x8b8880,
-                word_hover: 0xf3f2f0,
                 line: 0xb3b1ac,
                 chevron: 0x8b8880,
                 chevron_opacity: CHOICE_CHEVRON_REST_OPACITY,
@@ -280,8 +237,6 @@ mod tests {
         assert_eq!(
             choice_tones(RowGround::Band, kit),
             ChoiceTones {
-                word: 0xf3f2f0,
-                word_hover: 0xf3f2f0,
                 line: 0xf3f2f0,
                 chevron: 0xb8b9c8,
                 chevron_opacity: 1.0,

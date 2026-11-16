@@ -9,7 +9,6 @@ mod structured_list_editor;
 mod subpages;
 
 use crate::key::Key;
-use crate::kit::Chip;
 use list_card::{SLIDER_DISPATCH_INTERVAL, SLIDER_HOLD_DURATION};
 use slider_flights::SliderFlights;
 use std::cell::{Cell, RefCell};
@@ -27,10 +26,10 @@ use super::components::{
     one_line, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
     rail_item_label, settings_accent_dot, settings_action_busy, settings_action_spinner,
     settings_block_header, settings_destroy_label_group, settings_error_line,
-    settings_finder_empty, settings_label_group, settings_page, settings_query_spinner,
-    settings_selected_text, settings_swatch, settings_value_text, ChoiceArt, RowGround,
-    SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar,
-    SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
+    settings_finder_empty, settings_page, settings_query_spinner, settings_selected_text,
+    settings_swatch, settings_tag, settings_tagged_label_group, settings_value_text, ChoiceArt,
+    RowGround, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow,
+    SettingsToggle, SettingsValueTone, SettingsWell, SliderStyle,
 };
 use super::components::{
     settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
@@ -68,7 +67,7 @@ use crate::gamepad::gamepad_panel;
 use crate::kit::Kit;
 use crate::phantom_nav::{NavAxis, PhantomNavGuard};
 use crate::pictures::PictureContext;
-use crate::status_indicator::{StatusIndicator, StatusTone};
+use crate::status_indicator::StatusIndicator;
 use crate::surface::{DragGestureState, PanelDragArea, SurfaceDismisser};
 
 type QueryResult = Result<serde_json::Value, String>;
@@ -608,6 +607,7 @@ impl SettingsPanelView {
                         let spec = state.pages.clone()?;
                         Some(super::pages::factory(
                             source.heading.clone(),
+                            source.mark,
                             spec,
                             state.runtime.clone(),
                         ))
@@ -3649,12 +3649,7 @@ impl SettingsPanelView {
                 return self.render_toggle_value(*active, row);
             }
             RowControl::Action { .. } => return self.render_action_value(index),
-            RowControl::TextList(values) => {
-                return self.kit.chip(
-                    Chip::Count(values.len(), plural(values.len(), "item").into()),
-                    row.rest(self.kit),
-                );
-            }
+            RowControl::TextList(_) | RowControl::Status { .. } => return div(),
             RowControl::Unsupported { reason, .. } => {
                 return settings_value_text(
                     format!("Unsupported: {reason}"),
@@ -3667,7 +3662,6 @@ impl SettingsPanelView {
             | RowControl::Subpage { .. }
             | RowControl::Text(_)
             | RowControl::Color(_)
-            | RowControl::Status { .. }
             | RowControl::List { .. }
             | RowControl::ObjectArray(_)
             | RowControl::DisplayLayout(_)
@@ -3680,18 +3674,8 @@ impl SettingsPanelView {
             .flex_row()
             .items_center()
             .gap(px(qol_theme::SPACE_INSET));
-        if let RowControl::List { error: Some(_), .. } | RowControl::Status { error: Some(_), .. } =
-            self.level_rows()[index].control
-        {
+        if let RowControl::List { error: Some(_), .. } = self.level_rows()[index].control {
             return cell.child(self.unavailable_indicator(index));
-        }
-        if let RowControl::Status { tone, .. } = &self.level_rows()[index].control {
-            let tone = *tone;
-            return cell.child(StatusIndicator::new(
-                ("settings-status", index),
-                self.display_value(index),
-                rgb(status_tone_color(self.kit, tone)),
-            ));
         }
         if self.action_is_busy(index) {
             cell = cell.child(settings_action_spinner(
@@ -3734,11 +3718,43 @@ impl SettingsPanelView {
         div().child(SettingsToggle::new(active, row, self.kit))
     }
 
+    fn source_mark(&self, source: usize) -> ChoiceArt {
+        ChoiceArt::Mark(
+            self.panel
+                .sources
+                .get(source)
+                .map_or(qol_theme::Mark::Qol, |source| source.mark),
+        )
+    }
+
+    fn row_tag(&self, index: usize, ground: RowGround) -> Option<Div> {
+        let row = &self.level_rows()[index];
+        let status = matches!(row.control, RowControl::Status { .. });
+        match self.row_query_state(index) {
+            RowQueryState::Loading => return None,
+            RowQueryState::Unavailable(_) | RowQueryState::Absent if !status => return None,
+            _ => {}
+        }
+        let (text, tone) = match &row.control {
+            RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
+                (self.display_value(index), SettingsValueTone::Normal)
+            }
+            RowControl::Status { error: Some(_), .. } => {
+                ("unavailable".to_string(), SettingsValueTone::Muted)
+            }
+            RowControl::Status { tone, .. } => {
+                (self.display_value(index), list_card::value_tone(*tone))
+            }
+            RowControl::TextList(values) => (
+                format!("{} {}", values.len(), plural(values.len(), "item")),
+                SettingsValueTone::Normal,
+            ),
+            _ => return None,
+        };
+        (!text.is_empty()).then(|| settings_tag(text, tone, ground, self.kit))
+    }
+
     fn render_select_value(&self, index: usize, row: RowGround) -> Div {
-        let context = PictureContext::for_accent(
-            qol_theme::runtime_theme().mode,
-            qol_theme::runtime_accent_key(),
-        );
         let art = match &self.level_rows()[index].control {
             RowControl::Select {
                 options,
@@ -3750,13 +3766,7 @@ impl SettingsPanelView {
             } => choose_card::multi_select_art(options, selected),
             _ => return div(),
         };
-        div().child(SettingsChoiceValue::new(
-            self.display_value(index),
-            art,
-            row,
-            context,
-            self.kit,
-        ))
+        div().child(SettingsWell::new(art, row, self.kit))
     }
 
     fn render_number_value(
@@ -3946,12 +3956,23 @@ impl SettingsPanelView {
         let label_group = if danger {
             settings_destroy_label_group(label, description, ground, self.kit)
         } else {
-            settings_label_group(label, description, ground, self.kit)
+            settings_tagged_label_group(
+                label,
+                self.row_tag(index, ground),
+                description,
+                ground,
+                self.kit,
+            )
         };
         let value_cell = self.render_value_cell(index, ground, cx);
+        let opens = !in_item_card && row_opens(&row.control);
+        let picks = matches!(
+            row.control,
+            RowControl::Select { .. } | RowControl::MultiSelect { .. }
+        );
         let mut line = SettingsRow::setting(("settings-row", index), self.kit)
             .selected(selected, self.body_has_focus())
-            .opens(!in_item_card && row_opens(&row.control))
+            .opens(opens)
             .destroys(danger)
             .child(label_group)
             .child(self.row_bounds_canvas(index));
@@ -3963,6 +3984,13 @@ impl SettingsPanelView {
         }));
         if !in_item_card || member || control {
             line = line.child(value_cell);
+        }
+        if opens && !picks {
+            line = line.child(SettingsWell::new(
+                self.source_mark(row.source),
+                ground,
+                self.kit,
+            ));
         }
         container = container.child(line);
         let error = match &row.control {
@@ -4139,19 +4167,24 @@ impl SettingsPanelView {
                 .pulse(),
             );
         }
-        header_status = match self.row_query_state(index) {
-            RowQueryState::Loading => header_status.child(settings_query_spinner(
+        let loading = matches!(self.row_query_state(index), RowQueryState::Loading);
+        if loading {
+            header_status = header_status.child(settings_query_spinner(
                 ("settings-list-query-spinner", index),
                 ground,
                 self.kit,
-            )),
-            _ => header_status.child(settings_value_text(
-                self.display_value(index),
-                self.value_tone(index),
+            ));
+        }
+        let value = self.display_value(index);
+        let tag = (!loading && !value.is_empty())
+            .then(|| settings_tag(value, self.value_tone(index), ground, self.kit));
+        if row_opens(&row.control) {
+            header_status = header_status.child(SettingsWell::new(
+                self.source_mark(row.source),
                 ground,
                 self.kit,
-            )),
-        };
+            ));
+        }
         let mut container = div()
             .id(("settings-list", index))
             .relative()
@@ -4182,12 +4215,13 @@ impl SettingsPanelView {
         }
         container = container.child(settings_block_header(
             list_header_height(row),
-            settings_label_group(
+            settings_tagged_label_group(
                 if filter.trim().is_empty() {
                     row.label.clone()
                 } else {
                     filter.clone()
                 },
+                tag,
                 row.description.clone().map(Into::into),
                 ground,
                 self.kit,
@@ -4249,13 +4283,18 @@ impl SettingsPanelView {
         container = container.child(
             settings_block_header(
                 list_header_height(row),
-                settings_label_group(
+                settings_tagged_label_group(
                     row.label.clone(),
+                    (!value.is_empty())
+                        .then(|| settings_tag(value, self.value_tone(index), ground, self.kit)),
                     row.description.clone().map(Into::into),
                     ground,
                     self.kit,
                 ),
-                settings_value_text(value, self.value_tone(index), ground, self.kit),
+                div()
+                    .children(row_opens(&row.control).then(|| {
+                        SettingsWell::new(self.source_mark(row.source), ground, self.kit)
+                    })),
                 row_opens(&row.control),
                 ground,
                 self.kit,
@@ -5495,16 +5534,6 @@ fn binary_state_tone(active: bool) -> SettingsValueTone {
         SettingsValueTone::Success
     } else {
         SettingsValueTone::Danger
-    }
-}
-
-fn status_tone_color(kit: Kit, tone: StatusTone) -> u32 {
-    match tone {
-        StatusTone::Accent => kit.palette.accent_ink,
-        StatusTone::Success => kit.palette.success,
-        StatusTone::Danger => kit.palette.danger,
-        StatusTone::Warning => kit.palette.warning,
-        StatusTone::Muted => kit.grounds.pane.faint,
     }
 }
 

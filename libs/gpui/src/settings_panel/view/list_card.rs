@@ -5,9 +5,9 @@ use gpui::*;
 use qol_config::contract::{is_picture_spec, resolve_slider_action, ResolvedRowAction};
 
 use super::super::components::{
-    settings_action_spinner, settings_label, settings_slider_percent, settings_slider_track,
-    ChoiceArt, FinderPickEnd, RowGround, SettingsChoiceValue, SettingsFinderLead,
-    SettingsFinderPick, SettingsRow, SettingsValueTone,
+    settings_action_spinner, settings_slider_percent, settings_slider_track, settings_tag,
+    settings_tagged_label_group, ChoiceArt, FinderPickEnd, RowGround, SettingsFinderLead,
+    SettingsFinderPick, SettingsRow, SettingsValueTone, SettingsWell,
 };
 use super::super::rows::{
     begin_list_item_action, filtered_list_items, item_control_rows, list_item_actions,
@@ -17,8 +17,8 @@ use super::super::rows::{
 };
 use super::super::SettingsDestination;
 use super::{
-    horizontal_step_direction, slider_drag_track, slider_fraction, status_tone_color, Level,
-    LevelHeader, ListItemCard, SettingsPanelView,
+    horizontal_step_direction, slider_drag_track, slider_fraction, Level, LevelHeader,
+    ListItemCard, SettingsPanelView,
 };
 use crate::kit::Kit;
 use crate::phantom_nav::NavAxis;
@@ -890,29 +890,26 @@ impl SettingsPanelView {
         let row = RowGround::of(selected, self.body_has_focus());
         let visible = filtered_list_items(actions, items, filter);
         let art = list_item_art(items, &visible, index);
-        let context = PictureContext::for_accent(
-            qol_theme::runtime_theme().mode,
-            qol_theme::runtime_accent_key(),
-        );
-        let word_color = (row == RowGround::Pane).then(|| list_card_word_color(item, self.kit));
+        let word = list_item_value_text(item);
+        let tag = (!word.is_empty())
+            .then(|| settings_tag(word, list_card_word_tone(item), row, self.kit));
         let mut line = SettingsRow::rule(("settings-list-card-item", index), self.kit)
             .selected(selected, self.body_has_focus())
             .opens(true)
-            .child(
-                settings_label(item.label.clone(), self.kit)
-                    .flex_1()
-                    .min_w(px(0.)),
-            );
+            .child(settings_tagged_label_group(
+                item.label.clone(),
+                tag,
+                None,
+                row,
+                self.kit,
+            ));
         if item.pending {
             line = line.child(settings_action_spinner(
                 ("settings-list-card-spinner", index),
                 self.kit,
             ));
         }
-        line = line.child(
-            SettingsChoiceValue::new(list_item_value_text(item), art, row, context, self.kit)
-                .word_color(word_color),
-        );
+        line = line.child(SettingsWell::new(art, row, self.kit));
         if let Some((slider, value)) = slider.as_deref().and_then(|slider| {
             list_card_slider_value(slider, actions, items, filter, index)
                 .map(|value| (slider, value))
@@ -952,18 +949,14 @@ fn list_item_art(items: &[ListItem], visible: &[usize], slot: usize) -> ChoiceAr
     }
 }
 
-fn list_card_word_color(item: &ListItem, kit: Kit) -> u32 {
+fn list_card_word_tone(item: &ListItem) -> SettingsValueTone {
     if item.error.is_some() {
-        return kit.palette.danger;
+        return SettingsValueTone::Danger;
     }
     if item.badge.is_some() {
-        return status_tone_color(kit, item.effective_badge_tone());
+        return value_tone(item.effective_badge_tone());
     }
-    if list_item_value_text(item).is_empty() {
-        kit.grounds.pane.faint
-    } else {
-        kit.grounds.pane.soft
-    }
+    SettingsValueTone::Normal
 }
 
 fn finder_item_group(item: &ListItem) -> Option<String> {

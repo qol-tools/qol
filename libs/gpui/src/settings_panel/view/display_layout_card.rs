@@ -9,8 +9,9 @@ use qol_config::contract::resolve_slider_action;
 use super::super::components::{
     display_layout_ghost, display_layout_stage, display_layout_tile, settings_action_busy,
     settings_action_spinner, settings_busy_message, settings_description, settings_label,
-    settings_label_group, settings_message, settings_value_text, ChoiceArt, DisplayLayoutTile,
-    RowGround, SettingsChoiceValue, SettingsFeedback, SettingsRow, SettingsValueTone, TileArt,
+    settings_label_group, settings_message, settings_tag, settings_tagged_label_group,
+    settings_value_text, ChoiceArt, DisplayLayoutTile, RowGround, SettingsFeedback, SettingsRow,
+    SettingsValueTone, SettingsWell, TileArt,
 };
 use super::super::display_layout::{mode_label, nudge_step, Display, DisplayLayoutState, Rect};
 use super::super::form_nav::adjacent_visible_row;
@@ -23,7 +24,6 @@ use super::list_card::{
 };
 use super::{slider_fraction, Level, LevelHeader, SettingsPanelView};
 use crate::key::Key;
-use crate::pictures::PictureContext;
 
 const DISPLAY_LAYOUT_STAGE_PAD: f32 = qol_theme::SPACE_INSET;
 
@@ -697,10 +697,14 @@ impl SettingsPanelView {
                 None => (String::new(), String::new()),
             },
         };
-        let context = PictureContext::for_accent(
-            qol_theme::runtime_theme().mode,
-            qol_theme::runtime_accent_key(),
-        );
+        let mode_tag = (modes_available && !mode_word.is_empty()).then(|| {
+            settings_tag(
+                mode_word,
+                SettingsValueTone::Normal,
+                resolution_ground,
+                palette,
+            )
+        });
         let mut mode_value = div()
             .flex()
             .flex_row()
@@ -713,11 +717,9 @@ impl SettingsPanelView {
             ));
         }
         if modes_available {
-            mode_value = mode_value.child(SettingsChoiceValue::new(
-                mode_word,
+            mode_value = mode_value.child(SettingsWell::new(
                 ChoiceArt::Picture(mode_art),
                 resolution_ground,
-                context,
                 palette,
             ));
         } else {
@@ -732,8 +734,9 @@ impl SettingsPanelView {
                 display_layout_row_selected(self.level().selected, DISPLAY_LAYOUT_RESOLUTION_ROW),
                 self.body_has_focus(),
             )
-            .child(settings_label_group(
+            .child(settings_tagged_label_group(
                 RESOLUTION_LABEL,
+                mode_tag,
                 selected_connector.clone(),
                 resolution_ground,
                 palette,

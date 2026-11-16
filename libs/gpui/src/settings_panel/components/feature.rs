@@ -1,41 +1,31 @@
 use gpui::prelude::*;
-use gpui::{div, px, rgba, App, RenderOnce, SharedString, Window};
+use gpui::{div, px, rgba, App, RenderOnce, Window};
 
 use crate::kit::Kit;
 
 use super::choice_value::SettingsChevron;
-use super::{ground_text, RowGround, SettingsToggle};
+use super::{ChoiceArt, RowGround, SettingsToggle, SettingsWell};
 
 #[derive(IntoElement)]
 pub struct SettingsFeature {
     on: bool,
-    count: SharedString,
+    art: ChoiceArt,
     row: RowGround,
     kit: Kit,
 }
 
 impl SettingsFeature {
-    pub fn new(on: bool, count: impl Into<SharedString>, row: RowGround, kit: Kit) -> Self {
-        Self {
-            on,
-            count: count.into(),
-            row,
-            kit,
-        }
+    pub fn new(on: bool, art: ChoiceArt, row: RowGround, kit: Kit) -> Self {
+        Self { on, art, row, kit }
     }
 }
 
 impl RenderOnce for SettingsFeature {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let ground = self.row.rest(self.kit);
-        let hover = self.row.hover(self.kit);
-        let (line, word, word_hover) = match self.row {
-            RowGround::Pane => (self.kit.washes.hairline_strong.packed(), ground.faint, None),
-            RowGround::Band => (
-                ground.edge.packed(),
-                ground.ink,
-                hover.map(|hover| hover.ink),
-            ),
+        let line = match self.row {
+            RowGround::Pane => self.kit.washes.hairline_strong.packed(),
+            RowGround::Band => ground.edge.packed(),
         };
         div()
             .flex_none()
@@ -59,11 +49,7 @@ impl RenderOnce for SettingsFeature {
                     .flex_row()
                     .items_center()
                     .gap(px(qol_theme::SPACE_INSET))
-                    .child(ground_text(
-                        self.kit.value(self.count),
-                        gpui::rgb(word),
-                        word_hover.map(gpui::rgb),
-                    ))
+                    .child(SettingsWell::new(self.art, self.row, self.kit))
                     .child(SettingsChevron::new(self.row, self.kit)),
             )
     }

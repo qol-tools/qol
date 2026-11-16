@@ -12,10 +12,11 @@ use qol_gpui::pictures::PictureContext;
 use qol_gpui::scroll_list::{wheel_steps, ListHeight, ScrollList};
 use qol_gpui::settings_panel::components::{
     choose_hints, choose_step, settings_busy_message, settings_description, settings_label,
-    settings_label_group, settings_message, settings_page, settings_tile_rows,
-    settings_value_group, tile_arts, tile_layout, ChoiceArt, HintTone, RowGround,
-    SettingsChoiceValue, SettingsGroupHeader, SettingsHint, SettingsKeyCombination, SettingsRow,
-    SettingsTextField, SettingsTile, SettingsToggle, TileArt,
+    settings_label_group, settings_message, settings_page, settings_tag,
+    settings_tagged_label_group, settings_tile_rows, settings_value_group, tile_arts, tile_layout,
+    ChoiceArt, HintTone, RowGround, SettingsGroupHeader, SettingsHint, SettingsKeyCombination,
+    SettingsRow, SettingsTextField, SettingsTile, SettingsToggle, SettingsValueTone, SettingsWell,
+    TileArt,
 };
 use qol_gpui::settings_panel::number_slider::{
     compact_track, NumberRelease, NumberSlider, Scrub, SliderField,
@@ -1515,10 +1516,8 @@ impl NativeToolsView {
     ) -> AnyElement {
         let kit = qol_gpui::kit::kit();
         let row = RowGround::of(selected, self.body_focused);
-        let context = PictureContext::for_accent(
-            qol_theme::runtime_theme().mode,
-            qol_theme::runtime_accent_key(),
-        );
+        let tag = (!value.is_empty())
+            .then(|| settings_tag(value.to_string(), SettingsValueTone::Normal, row, kit));
         SettingsRow::rule(("native-tools-select", index), kit)
             .selected(selected, self.body_focused)
             .opens(true)
@@ -1527,16 +1526,16 @@ impl NativeToolsView {
                 this.activate_editor_field(cx);
                 cx.notify();
             }))
-            .child(field_label(
-                (choose_label(select), choose_sub_header(select)),
+            .child(settings_tagged_label_group(
+                choose_label(select),
+                tag,
+                Some(choose_sub_header(select).into()),
                 row,
                 kit,
             ))
-            .child(SettingsChoiceValue::new(
-                value.to_string(),
+            .child(SettingsWell::new(
                 ChoiceArt::Picture(self.select_art(index, value)),
                 row,
-                context,
                 kit,
             ))
             .child(deck::bounds_recorder(Rc::clone(&self.field_bounds), index))

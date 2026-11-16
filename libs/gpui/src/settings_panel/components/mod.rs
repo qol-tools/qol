@@ -5,7 +5,7 @@ use qol_theme::TextStyle;
 
 use crate::busy::Busy;
 use crate::kit::kit;
-use crate::kit::Kit;
+use crate::kit::{Chip, Kit};
 use crate::theme::Ground;
 
 mod choice_value;
@@ -28,7 +28,7 @@ mod tile;
 mod toggle;
 
 use choice_value::SettingsChevron;
-pub use choice_value::{ChoiceArt, SettingsChoiceArt, SettingsChoiceValue};
+pub use choice_value::{ChoiceArt, SettingsChoiceArt, SettingsWell};
 pub use device_entry::{
     settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
     DEVICE_KIND_HEIGHT, DEVICE_LIST_WIDTH,
@@ -62,7 +62,11 @@ pub use tile::{
 pub use toggle::SettingsToggle;
 
 pub const DIMMED_OPACITY: f32 = qol_theme::OPACITY_DISABLED;
-const CHOICE_WORD_MAX_WIDTH: f32 = 180.0;
+const WELL_WIDTH: f32 = 44.0;
+const WELL_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
+const WELL_PICTURE_WIDTH: f32 = 32.0;
+const WELL_PICTURE_HEIGHT: f32 = 20.0;
+const WELL_MARK_SIZE: f32 = 16.0;
 const CHOICE_PICTURE_WIDTH: f32 = 56.0;
 const CHOICE_PICTURE_HEIGHT: f32 = 35.0;
 const CHOICE_CHEVRON_WIDTH: f32 = 8.0;
@@ -398,6 +402,59 @@ pub fn settings_label_group(
         .flex_col()
         .gap(px(qol_theme::SPACE_STACK))
         .child(settings_label(label, kit))
+        .children(description.map(|text| settings_description(text, row, kit)))
+}
+
+/// A fact about a row, drawn as a tag beside its name. The right side of a
+/// row is for what the row does, so what the row says sits here.
+pub fn settings_tag(
+    text: impl Into<SharedString>,
+    tone: SettingsValueTone,
+    row: RowGround,
+    kit: Kit,
+) -> gpui::Div {
+    let ground = row.rest(kit);
+    let tag = one_line(
+        kit.chip(Chip::Tag(text.into()), ground)
+            .flex_shrink()
+            .min_w_0()
+            .overflow_hidden(),
+    );
+    match (tone, row) {
+        (SettingsValueTone::Attention, _) => tag.text_color(rgb(kit.palette.warning_ink)),
+        (SettingsValueTone::Danger, _) => tag.text_color(rgb(kit.palette.danger)),
+        (SettingsValueTone::Success, _) => tag.text_color(rgb(kit.palette.success)),
+        (SettingsValueTone::Normal | SettingsValueTone::Muted, RowGround::Band) => {
+            tag.text_color(rgb(ground.ink))
+        }
+        (SettingsValueTone::Normal | SettingsValueTone::Muted, RowGround::Pane) => tag,
+    }
+}
+
+pub fn settings_tagged_label_group(
+    label: impl Into<SharedString>,
+    tags: impl IntoIterator<Item = gpui::Div>,
+    description: Option<SharedString>,
+    row: RowGround,
+    kit: Kit,
+) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(qol_theme::SPACE_STACK))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .min_w_0()
+                .overflow_hidden()
+                .gap(px(qol_theme::SPACE_INSET))
+                .child(settings_label(label, kit).flex_none())
+                .children(tags),
+        )
         .children(description.map(|text| settings_description(text, row, kit)))
 }
 

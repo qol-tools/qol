@@ -5,24 +5,23 @@ use gpui::*;
 use qol_config::contract::{interpolate_row_template, resolve_row_toggle};
 
 use super::super::components::{
-    settings_action_spinner, settings_description, settings_label_group, settings_query_spinner,
-    settings_swatch_tile, settings_value_text, RowGround, SettingsFeature, SettingsRow,
-    SettingsValueTone,
+    settings_action_spinner, settings_description, settings_query_spinner, settings_swatch_tile,
+    settings_tag, settings_tagged_label_group, ChoiceArt, RowGround, SettingsFeature, SettingsRow,
+    SettingsValueTone, SettingsWell,
 };
 use super::super::rows::{
     begin_list_item_action, inline_empty_text, inline_item_indices, inline_line_count,
     inline_slot_item, is_inline_list, item_control_index, list_item_actions, member_on, page_chain,
-    page_sections_for, page_switch_plan, set_member, Row, RowControl, RowQueryState, RowSection,
-    ITEM_ROW_MEMBER,
+    page_sections_for, page_switch_plan, set_member, ListItem, Row, RowControl, RowQueryState,
+    RowSection, ITEM_ROW_MEMBER,
 };
 use super::super::SettingsDestination;
 use super::list_card::{item_card_rows, item_card_sync, value_tone};
 use super::{
     action_refresh_payload, horizontal_step_direction, opens_a_card, parsed_color, row_description,
-    status_tone_color, Level, LevelHeader, SettingsPanelView,
+    Level, LevelHeader, SettingsPanelView,
 };
 use crate::phantom_nav::NavAxis;
-use crate::status_indicator::{StatusIndicator, StatusTone};
 
 const INLINE_ID_STRIDE: usize = 1000;
 
@@ -166,12 +165,20 @@ impl SettingsPanelView {
         };
         let state = self.query_state_of(row);
         let description = row_description(row, &state, &self.applied_query_payloads);
-        let label_group = settings_label_group(row.label.clone(), description, ground, self.kit);
+        let loading = matches!(state, RowQueryState::Loading);
+        let tone = status
+            .filter(|status| status.error.is_none())
+            .map_or(SettingsValueTone::Muted, |status| value_tone(status.tone));
+        let tag =
+            (!loading && !text.is_empty()).then(|| settings_tag(text, tone, ground, self.kit));
+        let label_group =
+            settings_tagged_label_group(row.label.clone(), tag, description, ground, self.kit);
+        let mark = self.source_mark(row.source);
         let mut line = SettingsRow::setting(("settings-page-link", index), self.kit)
             .selected(selected, focused)
             .child(label_group)
             .child(self.row_bounds_canvas(index));
-        if matches!(state, RowQueryState::Loading) {
+        if loading {
             line = line.opens(true).child(settings_query_spinner(
                 ("settings-page-spinner", index),
                 ground,
@@ -185,19 +192,11 @@ impl SettingsPanelView {
                     self.kit,
                 ));
             }
-            line = line.child(SettingsFeature::new(on, text, ground, self.kit));
+            line = line.child(SettingsFeature::new(on, mark, ground, self.kit));
         } else {
-            let tone = status
-                .filter(|status| status.error.is_none())
-                .map_or(StatusTone::Muted, |status| status.tone);
-            line = line.opens(true);
-            if !text.is_empty() {
-                line = line.child(StatusIndicator::new(
-                    ("settings-page-status", index),
-                    text,
-                    rgb(status_tone_color(self.kit, tone)),
-                ));
-            }
+            line = line
+                .opens(true)
+                .child(SettingsWell::new(mark, ground, self.kit));
         }
         line.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             if !event.standard_click() {
@@ -417,6 +416,7 @@ impl SettingsPanelView {
         }
         let current = self.inline_slot(index);
         let focused = self.body_has_focus();
+        let mark = self.source_mark(self.level_rows()[index].source);
         indices
             .iter()
             .enumerate()
@@ -442,12 +442,15 @@ impl SettingsPanelView {
                     parsed_color(&interpolate_row_template(template, &item.data))
                 });
                 let key = index * INLINE_ID_STRIDE + slot;
-                let label_group = settings_label_group(
+                let tag = (!value.is_empty()).then(|| settings_tag(value, tone, ground, self.kit));
+                let label_group = settings_tagged_label_group(
                     item.label.clone(),
+                    tag,
                     item.subtitle.clone().map(SharedString::from),
                     ground,
                     self.kit,
                 );
+                let art = inline_item_art(item).unwrap_or_else(|| mark.clone());
                 let lit = toggle.as_ref().is_none_or(|toggle| toggle.on);
                 let mut line = SettingsRow::setting(("settings-inline-item", key), self.kit)
                     .selected(selected, focused)
@@ -464,10 +467,9 @@ impl SettingsPanelView {
                 }
                 line = match toggle {
                     Some(toggle) => {
-                        line.child(SettingsFeature::new(toggle.on, value, ground, self.kit))
+                        line.child(SettingsFeature::new(toggle.on, art, ground, self.kit))
                     }
-                    None if value.is_empty() => line,
-                    None => line.child(settings_value_text(value, tone, ground, self.kit)),
+                    None => line.child(SettingsWell::new(art, ground, self.kit)),
                 };
                 line.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                     if !event.standard_click() {
@@ -717,6 +719,11 @@ impl SettingsPanelView {
     pub(super) fn switch_hint(&self) -> bool {
         self.switch_target().is_some()
     }
+}
+
+fn inline_item_art(item: &ListItem) -> Option<ChoiceArt> {
+    let picture = item.data.get("picture")?.as_str()?;
+    qol_config::contract::is_picture_spec(picture).then(|| ChoiceArt::Picture(picture.to_string()))
 }
 
 #[cfg(test)]
