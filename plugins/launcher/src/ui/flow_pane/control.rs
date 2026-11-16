@@ -195,6 +195,9 @@ fn enter_action(entry: &FlowEntry, id: &str) -> RowActionSpec {
             description: None,
             key: None,
             when: None,
+            member_of: None,
+            member: None,
+            tone: None,
         })
 }
 
@@ -213,6 +216,9 @@ mod tests {
             description: None,
             key: Some("shift+enter".to_string()),
             when: None,
+            member_of: None,
+            member: None,
+            tone: None,
         };
         let entry = FlowEntry {
             plugin_id: "qol-clipboard".to_string(),
@@ -245,6 +251,9 @@ mod tests {
             description: None,
             key: None,
             when: None,
+            member_of: None,
+            member: None,
+            tone: None,
         };
         let pin = RowActionSpec {
             action: "pin".to_string(),

@@ -232,6 +232,17 @@ impl BluetoothHostFixes {
     }
 }
 
+pub fn problem_findings(findings: Vec<Finding>) -> Vec<Finding> {
+    findings
+        .into_iter()
+        .filter(|finding| finding.actionable || finding.state == Some(FixState::Pending))
+        .collect()
+}
+
+pub fn problems_payload() -> serde_json::Value {
+    qol_host_fixes::findings_payload(&problem_findings(BluetoothHostFixes.detect()))
+}
+
 impl HostFixes for BluetoothHostFixes {
     fn detect(&self) -> Vec<Finding> {
         let mut findings = vec![self.service_finding()];
@@ -662,6 +673,44 @@ pub fn orphaned_autostart_override() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn problem_findings_drop_advice_and_healthy_checks() {
+        let advice = Finding::advice("audio", "Audio server", "PipeWire");
+        let healthy = Finding::fixable("service", "Service", "healthy", FixState::Applied);
+        let fixable = Finding::fixable("wedged", "Service", "wedged", FixState::Pending);
+        let live_only = Finding::fixable("manager", "Manager", "running", FixState::LiveOnly);
+        let blocked = fixable.clone().unavailable("no pkexec");
+        let cases = [
+            (
+                "only advice and healthy",
+                vec![advice.clone(), healthy.clone()],
+                vec![],
+            ),
+            (
+                "fixable and live only",
+                vec![
+                    advice.clone(),
+                    healthy.clone(),
+                    fixable.clone(),
+                    live_only.clone(),
+                ],
+                vec!["wedged", "manager"],
+            ),
+            (
+                "blocked pending stays",
+                vec![advice, healthy, blocked],
+                vec!["wedged"],
+            ),
+        ];
+        for (label, findings, expected) in cases {
+            let ids = problem_findings(findings)
+                .into_iter()
+                .map(|finding| finding.id)
+                .collect::<Vec<_>>();
+            assert_eq!(ids, expected, "case: {label}");
+        }
+    }
 
     #[test]
     fn wedged_service_needs_repeated_busy_rejections() {

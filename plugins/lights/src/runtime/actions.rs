@@ -20,6 +20,20 @@ pub const SET_COLOR_MAIN: &str = "set_color_main";
 pub const SET_BRIGHTNESS_MAIN: &str = "set_brightness_main";
 pub const SET_COLORTEMP_MAIN: &str = "set_colortemp_main";
 pub const RELOAD: &str = "reload";
+pub const LIGHT_ON: &str = "light_on";
+pub const LIGHT_OFF: &str = "light_off";
+pub const SET_LIGHT_COLOR: &str = "set_light_color";
+pub const SET_LIGHT_BRIGHTNESS: &str = "set_light_brightness";
+pub const SET_LIGHT_COLORTEMP: &str = "set_light_colortemp";
+pub const REMOVE_LIGHT: &str = "remove_light";
+pub const ADD_PRESET: &str = "add_preset";
+pub const REMOVE_PRESET: &str = "remove_preset";
+pub const SET_PRESET_NAME: &str = "set_preset_name";
+pub const PRESET_POWER_ON: &str = "preset_power_on";
+pub const PRESET_POWER_OFF: &str = "preset_power_off";
+pub const SET_PRESET_COLOR: &str = "set_preset_color";
+pub const SET_PRESET_BRIGHTNESS: &str = "set_preset_brightness";
+pub const SET_PRESET_COLORTEMP: &str = "set_preset_colortemp";
 
 pub const RUN_ACTIONS: &[&str] = &[
     TOGGLE_MAIN,
@@ -43,6 +57,20 @@ pub const RUN_ACTIONS: &[&str] = &[
     SET_BRIGHTNESS_MAIN,
     SET_COLORTEMP_MAIN,
     RELOAD,
+    LIGHT_ON,
+    LIGHT_OFF,
+    SET_LIGHT_COLOR,
+    SET_LIGHT_BRIGHTNESS,
+    SET_LIGHT_COLORTEMP,
+    REMOVE_LIGHT,
+    ADD_PRESET,
+    REMOVE_PRESET,
+    SET_PRESET_NAME,
+    PRESET_POWER_ON,
+    PRESET_POWER_OFF,
+    SET_PRESET_COLOR,
+    SET_PRESET_BRIGHTNESS,
+    SET_PRESET_COLORTEMP,
 ];
 
 pub const ALL_ACTIONS: &[&str] = &[
@@ -68,6 +96,20 @@ pub const ALL_ACTIONS: &[&str] = &[
     SET_BRIGHTNESS_MAIN,
     SET_COLORTEMP_MAIN,
     RELOAD,
+    LIGHT_ON,
+    LIGHT_OFF,
+    SET_LIGHT_COLOR,
+    SET_LIGHT_BRIGHTNESS,
+    SET_LIGHT_COLORTEMP,
+    REMOVE_LIGHT,
+    ADD_PRESET,
+    REMOVE_PRESET,
+    SET_PRESET_NAME,
+    PRESET_POWER_ON,
+    PRESET_POWER_OFF,
+    SET_PRESET_COLOR,
+    SET_PRESET_BRIGHTNESS,
+    SET_PRESET_COLORTEMP,
 ];
 
 pub fn is_run_action(action: &str) -> bool {

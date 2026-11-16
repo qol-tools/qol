@@ -110,6 +110,62 @@ args = ["set_colortemp_main"]
 label = "Reconnect"
 args = ["reload"]
 
+[action.light_on]
+label = "Turn a Light On"
+args = ["light_on"]
+
+[action.light_off]
+label = "Turn a Light Off"
+args = ["light_off"]
+
+[action.set_light_color]
+label = "Set a Light's Color"
+args = ["set_light_color"]
+
+[action.set_light_brightness]
+label = "Set a Light's Brightness"
+args = ["set_light_brightness"]
+
+[action.set_light_colortemp]
+label = "Set a Light's Color Temperature"
+args = ["set_light_colortemp"]
+
+[action.remove_light]
+label = "Remove a Light"
+args = ["remove_light"]
+
+[action.add_preset]
+label = "Add a Preset"
+args = ["add_preset"]
+
+[action.remove_preset]
+label = "Remove a Preset"
+args = ["remove_preset"]
+
+[action.set_preset_name]
+label = "Rename a Preset"
+args = ["set_preset_name"]
+
+[action.preset_power_on]
+label = "Make a Preset Turn the Light On"
+args = ["preset_power_on"]
+
+[action.preset_power_off]
+label = "Make a Preset Turn the Light Off"
+args = ["preset_power_off"]
+
+[action.set_preset_color]
+label = "Set a Preset's Color"
+args = ["set_preset_color"]
+
+[action.set_preset_brightness]
+label = "Set a Preset's Brightness"
+args = ["set_preset_brightness"]
+
+[action.set_preset_colortemp]
+label = "Set a Preset's Color Temperature"
+args = ["set_preset_colortemp"]
+
 [capabilities]
 gpui = true
 doctor = true

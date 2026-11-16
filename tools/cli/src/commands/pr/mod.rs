@@ -1,4 +1,5 @@
 mod approve;
+mod contracts;
 mod daemon;
 mod download;
 mod install;
@@ -122,6 +123,14 @@ fn try_build(number: u64, platform: &platform::Build, places: &install::Places) 
             backup: &backup,
         };
         install::replace(&swap, &mut state, &places.state)?;
+        if let Some(carried) = &plugin.contract_files {
+            contracts::replace(&contracts::Swap {
+                build: &dir.join("plugins").join(&plugin.tag),
+                installed: folder(&target)?,
+                backups: folder(&backup)?,
+                carried,
+            })?;
+        }
         if tray_build.is_some() {
             println!(
                 "  {} {}: installed; the tray build starts it",
@@ -176,6 +185,7 @@ fn put_everything_back(
 ) -> Result<()> {
     let tray_build = state.tray.clone();
     while let Some(swapped) = state.plugins.last().cloned() {
+        contracts::restore(folder(&swapped.target)?, folder(&swapped.backup)?)?;
         let restored = install::restore(&swapped)?;
         state.plugins.pop();
         put_back.push(swapped.id.clone());
@@ -211,6 +221,11 @@ fn first_installed(binaries: &[PathBuf]) -> Option<PathBuf> {
         .find(|binary| binary.is_file())
         .or_else(|| binaries.first())
         .cloned()
+}
+
+fn folder(path: &Path) -> Result<&Path> {
+    path.parent()
+        .with_context(|| format!("{} has no folder", path.display()))
 }
 
 fn short(sha: &str) -> &str {

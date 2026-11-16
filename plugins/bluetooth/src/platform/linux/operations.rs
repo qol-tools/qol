@@ -163,9 +163,7 @@ pub(super) fn complete(
                 "Bluetooth reconnect failed for {}: {error:#}",
                 redacted(address)
             );
-            if config.auto_reconnect {
-                schedule_failed(retries, &[address], config, Instant::now());
-            }
+            schedule_failed(retries, &[address], config, Instant::now());
         }
         Completion::Reconnect(selection, Ok(report)) => {
             apply_report(retries, &report, config);
@@ -180,6 +178,7 @@ pub(super) fn complete(
                 retries.remove(&address);
                 subscribed.remove(&address);
                 watch_states.remove(&address);
+                crate::config::forget_managed(config, &address.to_string());
             }
             trace_remove_action(address, result);
         }

@@ -18,6 +18,7 @@ qol-fs.workspace = true
 qol-headless.workspace = true
 qol-host-fixes.workspace = true
 qol-platform.workspace = true
+qol-plugin-api.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 workspace-hack.workspace = true
@@ -56,7 +57,6 @@ qol-conventions.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
-qol-plugin-api.workspace = true
 
 [lints]
 workspace = true

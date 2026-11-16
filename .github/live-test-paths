@@ -1,4 +1,5 @@
 plugins/*/src/ui/**
+plugins/*/qol-config.toml
 plugins/alt-tab/src/app/**
 plugins/alt-tab/src/picker/**
 plugins/shot/src/app/**
