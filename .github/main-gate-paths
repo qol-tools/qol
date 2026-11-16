@@ -1,0 +1,17 @@
+.github/**
+.githooks/**
+verify/repository-inventory.mjs
+verify/repository-inventory.test.mjs
+.qac/**
+.cargo/**
+.config/**
+rust-toolchain
+rust-toolchain.toml
+rustfmt.toml
+.rustfmt.toml
+clippy.toml
+.clippy.toml
+.claude/**
+.mcp.json
+**/CLAUDE.md
+**/CLAUDE.local.md
