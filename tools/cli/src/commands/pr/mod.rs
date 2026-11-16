@@ -1,3 +1,4 @@
+mod approve;
 mod daemon;
 mod download;
 mod install;
@@ -11,21 +12,27 @@ use install::RecordFile;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-pub(crate) const USAGE: &str = "qol pr try <number> | qol pr off";
+pub(crate) const USAGE: &str = "qol pr try <number> | qol pr off | qol pr approve [number]";
 const REPO: &str = "qol-tools/qol";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Request {
     Try(u64),
     Off,
+    Approve(Option<u64>),
 }
 
 pub(crate) fn run(args: &[OsString]) -> Result<()> {
     let request = parse(args)?;
+    if let Request::Approve(number) = request {
+        println!("{}", approve::run(REPO, number)?);
+        return Ok(());
+    }
     let build = platform::host_build()?;
     let places = install::Places::current()?;
     match request {
         Request::Try(number) => try_build(number, build, &places),
+        Request::Approve(_) => Ok(()),
         Request::Off => turn_off(&places).map(|mut put_back| {
             if !put_back.is_empty() && !put_back.iter().any(|id| id == tray::BINARY) {
                 put_back.push(tray::BINARY.to_string());
@@ -42,13 +49,17 @@ fn parse(args: &[OsString]) -> Result<Request> {
         .collect::<Result<Vec<_>>>()?;
     match words.as_slice() {
         ["off"] | ["try", "--off"] => Ok(Request::Off),
-        ["try", number] => number
-            .trim_start_matches('#')
-            .parse()
-            .map(Request::Try)
-            .with_context(|| format!("`{number}` is not a pull request number\nusage: {USAGE}")),
+        ["try", number] => pull_number(number).map(Request::Try),
+        ["approve"] => Ok(Request::Approve(None)),
+        ["approve", number] => pull_number(number).map(|number| Request::Approve(Some(number))),
         _ => bail!("usage: {USAGE}"),
     }
+}
+
+fn pull_number(word: &str) -> Result<u64> {
+    word.trim_start_matches('#')
+        .parse()
+        .with_context(|| format!("`{word}` is not a pull request number\nusage: {USAGE}"))
 }
 
 fn try_build(number: u64, platform: &platform::Build, places: &install::Places) -> Result<()> {
@@ -227,11 +238,18 @@ mod tests {
         assert_eq!(parse(&words(&["try", "412"])).unwrap(), Request::Try(412));
         assert_eq!(parse(&words(&["try", "#412"])).unwrap(), Request::Try(412));
         assert_eq!(parse(&words(&["off"])).unwrap(), Request::Off);
+        assert_eq!(parse(&words(&["approve"])).unwrap(), Request::Approve(None));
+        assert_eq!(
+            parse(&words(&["approve", "#500"])).unwrap(),
+            Request::Approve(Some(500))
+        );
         assert_eq!(parse(&words(&["try", "--off"])).unwrap(), Request::Off);
-        let refused: [&[&str]; 6] = [
+        let refused: [&[&str]; 8] = [
             &["try"],
             &["off", "412"],
             &["try", "abc"],
+            &["approve", "abc"],
+            &["approve", "5", "6"],
             &["try", "412", "413"],
             &["get", "412"],
             &[],
