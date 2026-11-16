@@ -122,6 +122,9 @@ class PathTests(unittest.TestCase):
             ".github/workflows/main-gate.yml",
             ".github/scripts/review_gate.py",
             ".github/scripts/main_gate.py",
+            ".github/scripts/queue_verdict.py",
+            ".github/scripts/cancel_superseded_queue_runs.py",
+            ".github/scripts/live_test.py",
             ".github/main-gate-paths",
             ".claude/settings.json",
             ".mcp.json",
@@ -132,7 +135,9 @@ class PathTests(unittest.TestCase):
         free = [
             ".github/workflows/ci.yml",
             ".github/workflows/queue-batch.yml",
-            ".github/scripts/queue_verdict.py",
+            ".github/scripts/queue_report.py",
+            ".github/scripts/live_test_build.py",
+            ".github/scripts/json.py",
             ".github/scripts/tests/test_main_gate.py",
             ".github/actions/rust-setup/action.yml",
             ".github/live-test-paths",
@@ -154,6 +159,40 @@ class PathTests(unittest.TestCase):
             "plugins/shot/CLAUDE.md.bak",
         ]
         self.assertEqual(gate.protected([*guarded, *free], LISTED), guarded)
+
+    def test_the_list_holds_every_script_a_judge_loads(self):
+        judges = ["review_gate.py", "main_gate.py"]
+        seen = set()
+        while judges:
+            name = judges.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            source = (SCRIPTS / name).read_text(encoding="utf-8")
+            for module in re.findall(r"^(?:from|import) (\w+)", source, re.MULTILINE):
+                if (SCRIPTS / f"{module}.py").exists():
+                    judges.append(f"{module}.py")
+        loaded = sorted(f".github/scripts/{name}" for name in seen)
+        self.assertGreaterEqual(len(loaded), 5)
+        self.assertEqual(gate.protected(loaded, LISTED), loaded)
+
+    def test_a_judge_never_loads_a_module_from_its_own_folder_ahead_of_pythons(self):
+        runs = []
+        for name in ["claude-review.yml", "review-override.yml", "main-gate.yml"]:
+            document = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            runs += re.findall(r"python3 .*(?:review_gate|main_gate)\.py \w+", document)
+        self.assertEqual(len(runs), 5)
+        for run in runs:
+            with self.subTest(run=run):
+                self.assertRegex(run, r"^python3 -P \.github/scripts/(review_gate|main_gate)\.py \w+$")
+        for name in ["review_gate.py", "main_gate.py"]:
+            source = (SCRIPTS / name).read_text(encoding="utf-8")
+            own = source.index("sys.path.append(os.path.dirname(os.path.abspath(__file__)))")
+            siblings = [match.start() for match in re.finditer(r"^from (\w+) import", source, re.MULTILINE) if (SCRIPTS / f"{match.group(1)}.py").exists()]
+            with self.subTest(name=name):
+                self.assertTrue(siblings)
+                self.assertLess(own, min(siblings))
+                self.assertNotIn("sys.path.insert", source)
 
     def test_a_rename_counts_its_old_path(self):
         api = FakeApi([pull()])

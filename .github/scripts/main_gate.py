@@ -9,6 +9,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from live_test import paths_of, pattern_regex, patterns
 from queue_verdict import gh_json
 
