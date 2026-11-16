@@ -1,12 +1,18 @@
 pub mod menu;
 pub(crate) mod mirror;
+pub mod takeover;
 
 use anyhow::{Context, Result};
 use qol_config::placement::Spot;
 use qol_plugin_daemon::notification::gate::NativeHandler;
 use serde::{Deserialize, Serialize};
 
-pub use mirror::MirrorAccess;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OtherApps {
+    Os,
+    Qol,
+}
 
 #[derive(Clone, Debug, Serialize)]
 struct NotificationSettings {
@@ -14,6 +20,7 @@ struct NotificationSettings {
     #[serde(default)]
     use_system_notifications: bool,
     handler: NativeHandler,
+    other_apps: OtherApps,
     #[serde(skip_serializing_if = "Option::is_none")]
     message_stay_seconds: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -26,6 +33,7 @@ impl Default for NotificationSettings {
             enabled: true,
             use_system_notifications: false,
             handler: NativeHandler::Qol,
+            other_apps: OtherApps::Qol,
             message_stay_seconds: None,
             placement: None,
         }
@@ -46,6 +54,8 @@ impl<'de> Deserialize<'de> for NotificationSettings {
             #[serde(default)]
             handler: Option<NativeHandler>,
             #[serde(default)]
+            other_apps: Option<OtherApps>,
+            #[serde(default)]
             message_seconds: Option<f64>,
             #[serde(default)]
             message_stay_seconds: Option<f64>,
@@ -62,6 +72,7 @@ impl<'de> Deserialize<'de> for NotificationSettings {
             enabled: raw.enabled.unwrap_or(true),
             use_system_notifications: raw.use_system_notifications,
             handler,
+            other_apps: raw.other_apps.unwrap_or(OtherApps::Qol),
             message_stay_seconds: qol_theme::stored_message_stay(
                 raw.message_stay_seconds,
                 raw.message_seconds,
@@ -82,7 +93,9 @@ fn update_settings(update: impl FnOnce(&mut NotificationSettings)) -> Result<()>
         .context("failed to load notification settings")?;
     update(&mut settings);
     crate::file_io::write_pretty_json(&path, &settings)
-        .context("failed to save notification settings")
+        .context("failed to save notification settings")?;
+    takeover::poke();
+    Ok(())
 }
 
 pub fn enabled() -> bool {
@@ -154,39 +167,18 @@ pub fn set_placement(spot: Spot) -> Result<()> {
     update_settings(|settings| settings.placement = Some(spot.token()))
 }
 
-pub fn apply_native_handler(previous: NativeHandler) {
-    if previous == NativeHandler::Qol && native_handler() != NativeHandler::Qol {
-        qol_plugin_daemon::notification::platform::set_os_banners(true);
-    }
-    sync_notification_inhibit();
+pub fn other_apps() -> OtherApps {
+    settings()
+        .map(|settings| settings.other_apps)
+        .unwrap_or(OtherApps::Qol)
 }
 
-static NOTIFICATION_INHIBIT: std::sync::Mutex<
-    Option<qol_plugin_daemon::notification::platform::NotificationInhibit>,
-> = std::sync::Mutex::new(None);
-
-pub fn sync_notification_inhibit() {
-    let mut held = NOTIFICATION_INHIBIT
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let qol_only = native_handler() == NativeHandler::Qol;
-    mirror::sync(qol_only);
-    if qol_only {
-        qol_plugin_daemon::notification::platform::set_os_banners(false);
-        if held.is_none() {
-            *held = qol_plugin_daemon::notification::platform::acquire_inhibit();
-        }
-    } else {
-        *held = None;
-    }
+pub fn set_other_apps(other_apps: OtherApps) -> Result<()> {
+    update_settings(|settings| settings.other_apps = other_apps)
 }
 
-pub fn mirror_access() -> MirrorAccess {
-    let access = mirror::access();
-    if matches!(access, MirrorAccess::Readable) {
-        sync_notification_inhibit();
-    }
-    access
+pub fn takeover_wanted() -> bool {
+    native_handler() == NativeHandler::Qol && other_apps() == OtherApps::Qol
 }
 
 fn settings() -> Result<NotificationSettings> {
@@ -358,5 +350,41 @@ mod tests {
         assert_eq!(native_handler(), NativeHandler::Both);
         set_native_handler(NativeHandler::Qol).unwrap();
         assert!(!use_system_notifications());
+    }
+
+    #[test]
+    fn qol_takes_over_other_apps_only_while_its_own_messages_are_toasts() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        assert_eq!(other_apps(), OtherApps::Qol);
+        assert!(takeover_wanted());
+        let path = settings_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"handler": "qol"}"#).unwrap();
+        assert!(
+            takeover_wanted(),
+            "a file from before the choice existed keeps the old meaning of qol"
+        );
+
+        for handler in [NativeHandler::Os, NativeHandler::Both] {
+            set_native_handler(handler).unwrap();
+            assert_eq!(other_apps(), OtherApps::Qol, "{handler:?}");
+            assert!(!takeover_wanted(), "{handler:?}");
+        }
+        set_native_handler(NativeHandler::Qol).unwrap();
+        assert!(takeover_wanted());
+        set_other_apps(OtherApps::Os).unwrap();
+        assert!(
+            !takeover_wanted(),
+            "qol toasts no longer force the takeover"
+        );
+        set_native_handler(NativeHandler::Both).unwrap();
+        set_native_handler(NativeHandler::Qol).unwrap();
+        assert_eq!(
+            other_apps(),
+            OtherApps::Os,
+            "the choice survives a handler change"
+        );
     }
 }

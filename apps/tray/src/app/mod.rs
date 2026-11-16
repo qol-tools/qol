@@ -148,7 +148,7 @@ pub(crate) fn run() -> Result<()> {
     }
 
     if !headless {
-        std::thread::spawn(qol_tray::features::notifications::sync_notification_inhibit);
+        qol_tray::features::notifications::takeover::start();
     }
 
     log::info!("Starting QoL Tray daemon...");

@@ -8,6 +8,8 @@ use qol_plugin_daemon::notification::gate::NativeHandler;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::features::notifications::{takeover, OtherApps};
+
 use super::super::types::MAX_CONFIG_SIZE;
 use super::http_json::{self, blocking};
 
@@ -16,11 +18,15 @@ type HttpResult<T> = Result<T, Box<Response>>;
 const MESSAGE_SECONDS_MIN: f64 = qol_theme::STAY_MESSAGE_LEAST.as_secs_f64();
 const MESSAGE_SECONDS_MAX: f64 = qol_theme::STAY_MESSAGE_MOST.as_secs_f64();
 const DO_NOT_DISTURB_QUERY: &str = "os_do_not_disturb";
+const TAKEOVER_QUERY: &str = "takeover";
+const OTHER_APPS_FIELDS: [&str; 2] = ["other_apps_shown", "other_apps_hidden"];
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 struct NotificationsConfig {
     enabled: bool,
     handler: NativeHandler,
+    other_apps_shown: OtherApps,
+    other_apps_hidden: OtherApps,
     placement: String,
     message_seconds: f64,
 }
@@ -37,9 +43,12 @@ struct QueryResponse {
 }
 
 fn current_config() -> NotificationsConfig {
+    let other_apps = crate::features::notifications::other_apps();
     NotificationsConfig {
         enabled: crate::features::notifications::enabled(),
         handler: crate::features::notifications::native_handler(),
+        other_apps_shown: other_apps,
+        other_apps_hidden: other_apps,
         placement: crate::features::notifications::placement().token(),
         message_seconds: crate::features::notifications::message_seconds(),
     }
@@ -76,28 +85,43 @@ fn set_config_inner(body: axum::body::Bytes) -> HttpResult<Response> {
 }
 
 fn query_inner(query: &str) -> HttpResult<Response> {
-    if query != DO_NOT_DISTURB_QUERY {
-        return Err(Box::new(
-            (StatusCode::NOT_FOUND, format!("unknown query: {query}")).into_response(),
-        ));
-    }
-    let value = match qol_plugin_daemon::notification::platform::os_do_not_disturb() {
-        Some(true) => "On",
-        Some(false) => "Off",
-        None => "Unknown",
+    let json = match query {
+        DO_NOT_DISTURB_QUERY => http_json::encode_json(
+            &QueryResponse {
+                value: do_not_disturb(
+                    qol_plugin_daemon::notification::platform::os_do_not_disturb(),
+                    takeover::holds_banner_switch(),
+                )
+                .to_string(),
+            },
+            "Failed to serialize notifications query",
+        )?,
+        TAKEOVER_QUERY => http_json::encode_json(
+            &takeover::state(),
+            "Failed to serialize notifications query",
+        )?,
+        _ => {
+            return Err(Box::new(
+                (StatusCode::NOT_FOUND, format!("unknown query: {query}")).into_response(),
+            ))
+        }
     };
-    let json = http_json::encode_json(
-        &QueryResponse {
-            value: value.to_string(),
-        },
-        "Failed to serialize notifications query",
-    )?;
     Ok(http_json::json_response(json))
+}
+
+fn do_not_disturb(os: Option<bool>, held_by_qol: bool) -> &'static str {
+    match os {
+        Some(true) if held_by_qol => "qol",
+        Some(true) => "on",
+        Some(false) => "off",
+        None => "unknown",
+    }
 }
 
 enum Change {
     Enabled(bool),
     Handler(NativeHandler),
+    OtherApps(OtherApps),
     Placement(Spot),
     MessageSeconds(f64),
 }
@@ -107,13 +131,16 @@ impl Change {
         match self {
             Self::Enabled(enabled) => crate::features::notifications::set_enabled(enabled),
             Self::Handler(handler) => {
-                let previous = crate::features::notifications::native_handler();
-                if handler == previous {
+                if handler == crate::features::notifications::native_handler() {
                     return Ok(());
                 }
-                let result = crate::features::notifications::set_native_handler(handler);
-                crate::features::notifications::apply_native_handler(previous);
-                result
+                crate::features::notifications::set_native_handler(handler)
+            }
+            Self::OtherApps(other_apps) => {
+                if other_apps == crate::features::notifications::other_apps() {
+                    return Ok(());
+                }
+                crate::features::notifications::set_other_apps(other_apps)
             }
             Self::Placement(spot) => crate::features::notifications::set_placement(spot),
             Self::MessageSeconds(seconds) => {
@@ -136,6 +163,11 @@ fn parsed_change(field: &str, value: &serde_json::Value) -> HttpResult<Change> {
             _ => Err(Box::new(bad_request(&format!(
                 "{field} expects qol, os, or both"
             )))),
+        },
+        field if OTHER_APPS_FIELDS.contains(&field) => match value.as_str() {
+            Some("os") => Ok(Change::OtherApps(OtherApps::Os)),
+            Some("qol") => Ok(Change::OtherApps(OtherApps::Qol)),
+            _ => Err(Box::new(bad_request(&format!("{field} expects os or qol")))),
         },
         "placement" => value
             .as_str()
@@ -171,7 +203,10 @@ fn bad_request(message: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_config_inner, query_inner, set_config_inner, NotificationsConfig};
+    use super::{
+        do_not_disturb, get_config_inner, query_inner, set_config_inner, NotificationsConfig,
+    };
+    use crate::features::notifications::OtherApps;
     use qol_plugin_daemon::notification::gate::NativeHandler;
 
     async fn body_of(response: axum::response::Response) -> (u16, String) {
@@ -205,6 +240,8 @@ mod tests {
             NotificationsConfig {
                 enabled: true,
                 handler: NativeHandler::Qol,
+                other_apps_shown: OtherApps::Qol,
+                other_apps_hidden: OtherApps::Qol,
                 placement: "top-right".into(),
                 message_seconds: qol_theme::STAY_MESSAGE.as_secs_f64(),
             }
@@ -220,10 +257,17 @@ mod tests {
         )
         .await;
         assert!(!saved.enabled);
+        assert_eq!(saved.other_apps_shown, OtherApps::Qol);
+        assert_eq!(saved.other_apps_hidden, OtherApps::Qol);
         assert_eq!(saved.placement, "0.2,0.7");
         assert_eq!(saved.message_seconds, 2.5);
-        let snapped = config_of(put(serde_json::json!({ "placement": "0,1" })).unwrap()).await;
+        let snapped = config_of(
+            put(serde_json::json!({ "placement": "0,1", "other_apps_hidden": "os" })).unwrap(),
+        )
+        .await;
         assert_eq!(snapped.placement, "bottom-left");
+        assert_eq!(snapped.other_apps_shown, OtherApps::Os);
+        assert_eq!(snapped.other_apps_hidden, OtherApps::Os);
         assert_eq!(config_of(get_config_inner().unwrap()).await, snapped);
     }
 
@@ -237,6 +281,7 @@ mod tests {
             serde_json::json!({ "placement": "1.5,0" }),
             serde_json::json!({ "placement": "bottom-left", "message_seconds": 90 }),
             serde_json::json!({ "placement": "bottom-left", "handler": "pager" }),
+            serde_json::json!({ "placement": "bottom-left", "other_apps_shown": "both" }),
             serde_json::json!({ "placement": "bottom-left", "theme": "slate" }),
             serde_json::json!({ "placement": "bottom-left", "enabled": "off" }),
         ] {
@@ -247,9 +292,32 @@ mod tests {
         assert_eq!(config.placement, "top-right");
     }
 
-    #[test]
-    fn only_the_do_not_disturb_query_is_answered() {
+    #[tokio::test]
+    async fn the_page_can_ask_for_do_not_disturb_and_the_takeover() {
         assert!(query_inner("os_do_not_disturb").is_ok());
         assert!(query_inner("profiles").is_err());
+        let (status, body) = body_of(query_inner("takeover").unwrap()).await;
+        assert_eq!(status, 200, "{body}");
+        let state: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(state["value"].is_string(), "{body}");
+        assert!(state["needs"].is_string(), "{body}");
+    }
+
+    #[test]
+    fn banners_qol_hides_are_not_reported_as_the_users_do_not_disturb() {
+        let cases = [
+            (Some(true), true, "qol"),
+            (Some(true), false, "on"),
+            (Some(false), true, "off"),
+            (Some(false), false, "off"),
+            (None, true, "unknown"),
+        ];
+        for (os, held_by_qol, value) in cases {
+            assert_eq!(
+                do_not_disturb(os, held_by_qol),
+                value,
+                "{os:?} {held_by_qol}"
+            );
+        }
     }
 }

@@ -1,11 +1,6 @@
 mod platform;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MirrorAccess {
-    Unsupported,
-    Readable,
-    Unreadable(String),
-}
+use super::takeover::Mechanism;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -15,12 +10,8 @@ pub(crate) enum ActivateOutcome {
     Missing,
 }
 
-pub(super) fn sync(enabled: bool) {
-    platform::sync(enabled);
-}
-
-pub(super) fn access() -> MirrorAccess {
-    platform::access()
+pub(super) fn apply(wanted: bool) -> Vec<Mechanism> {
+    platform::apply(wanted)
 }
 
 pub(crate) fn activate(id: &str) -> anyhow::Result<ActivateOutcome> {
