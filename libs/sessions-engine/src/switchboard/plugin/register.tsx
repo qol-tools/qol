@@ -103,10 +103,11 @@ const REOPEN_DELAY_MS = 300
 const HOLD = { command: 'sleep infinity', description: 'Hold this fork in the agent list', run_in_background: true }
 const REOPENED = 'Opened from the fork board.'
 const RESUMED = 'Carry on your work from where you stopped. This answers no question you asked and approves nothing you were waiting on the user for: if you were waiting on the user, keep waiting.'
-const FORK_RESUME = 'Only the switchboard resumes, continues, opens or messages another fork or session. Tell the user in one line which fork or session it is for and that they can select it in the agent list.'
-const CROSS_SESSION = /__session_(send|reopen|fork|spawn|submit|bridge|close|remote_control|loop_close)$/
+const FORK_RESUME = 'Only the switchboard resumes, continues, opens or closes another fork or session. Tell the user in one line which fork or session it is for and that they can select it in the agent list.'
+const CROSS_SESSION = /__session_(reopen|fork|spawn|submit|bridge|close|remote_control|loop_close)$/
+const MESSAGING = /__session_(send|inbox|board)$/
 const FORK_TO_FORK =
-  'Not sent: a fork messages only the forks it started and the fork that started it. Something the user typed for another fork is for that fork: tell the user in one line to select it in the agent list.'
+  'Not sent: with SendMessage a fork messages only the forks it started and the fork that started it. Your own words reach any other fork or session with session_send to its key from sessions_list. Something the user typed for another fork is for that fork: tell the user in one line to select it in the agent list.'
 const COLOR: Record<Kind, string> = {
   ask: 'warning',
   test: 'suggestion',
@@ -1412,6 +1413,7 @@ const recordPart = async ($: EngineInterface, key: string, agentId: string): Pro
   const transcript = await subagentPath($, agentId).catch(() => undefined)
   if (transcript === undefined) return
   await recordRun($, 'part', ['--key', key, '--agent-id', agentId, '--transcript', transcript])
+  mailed = ''
 }
 
 type Claimed = { key: string; description: string }
@@ -2284,6 +2286,13 @@ export const resumeSession = async ($: EngineInterface, session: ClosedSession, 
   return { isResumed: true, text: `Resumed as ${keyName(name)}, agent id ${sent.agentId}: its view shows the conversation and it has the message.` }
 }
 
+export const asFork = <T extends { agentId?: string }>(e: T): T => {
+  const call = { ...e } as T & { as_fork?: string }
+  if (e.agentId === undefined) delete call.as_fork
+  else call.as_fork = e.agentId
+  return call
+}
+
 export const relay = async ($: EngineInterface, result: Delivery, fork: ForkRecord): Promise<void> => reach($, fork.agentId, fork.name, fork.cwd, result.message)
 
 let isDelivering = false
@@ -2322,6 +2331,12 @@ export const fileMerged = async ($: EngineInterface, result: Delivery, fork: For
   return entry
 }
 
+const listingOf = async ($: EngineInterface, folder: string): Promise<string> =>
+  (await $.fs.list(folder))
+    .map(entry => `${entry.name}:${entry.size}:${entry.mtimeMs}`)
+    .sort()
+    .join('|')
+
 const handIn = async ($: EngineInterface, program: string, result: Delivery): Promise<boolean> => {
   if (typeof result.id !== 'string' || !WATCH_ID.test(result.id) || refused.has(result.id)) return true
   const fork = typeof result.agent_id === 'string' && typeof result.conversation === 'string' ? await forkRecord($, result.conversation, result.agent_id).catch(() => undefined) : undefined
@@ -2344,10 +2359,7 @@ export const deliver = async ($: EngineInterface): Promise<void> => {
     const program = await $.env.get('QOL_CLI_SESSIONS')
     const watches = await $.env.get('QOL_SWITCHBOARD_WATCHES')
     if (program === undefined || program === '' || watches === undefined || watches === '' || !(await $.fs.exists(watches))) return
-    const listing = (await $.fs.list(watches))
-      .map(entry => `${entry.name}:${entry.size}:${entry.mtimeMs}`)
-      .sort()
-      .join('|')
+    const listing = await listingOf($, watches)
     if (listing === delivered) return
     const ran = await $.process.run([program, 'fork-watch', '--deliver'], { timeoutMs: DELIVER_TIMEOUT_MS })
     if (ran.exitCode !== 0) return
@@ -2362,6 +2374,39 @@ export const deliver = async ($: EngineInterface): Promise<void> => {
   } catch {
   } finally {
     isDelivering = false
+  }
+}
+
+type Mail = { key: string; friendly?: string; cwd?: string; agent_id: string; text: string }
+
+const isMail = (one: unknown): one is Mail => {
+  const mail = one as Partial<Mail> | null
+  return typeof mail === 'object' && mail !== null && typeof mail.key === 'string' && typeof mail.agent_id === 'string' && ID.test(mail.agent_id) && typeof mail.text === 'string'
+}
+
+let isMailing = false
+let mailed = ''
+
+const deliverMail = async ($: EngineInterface): Promise<void> => {
+  if (isMailing) return
+  isMailing = true
+  try {
+    const knocks = await $.env.get('QOL_SWITCHBOARD_KNOCKS')
+    if (knocks === undefined || knocks === '' || !(await $.fs.exists(knocks))) return
+    if ((await listingOf($, knocks)) === mailed) return
+    const taken = await recordRun($, 'mail', [])
+    if (taken === undefined) return
+    for (const one of Array.isArray(taken.mail) ? taken.mail : []) {
+      if (!isMail(one)) continue
+      const name = recordName(one)
+      await reach($, one.agent_id, name, typeof one.cwd === 'string' ? one.cwd : undefined, one.text).catch(error =>
+        undelivered($, one.agent_id, name, `delivering it failed: ${error instanceof Error ? error.message : String(error)}`, one.text).catch(() => undefined),
+      )
+    }
+    mailed = await listingOf($, knocks)
+  } catch {
+  } finally {
+    isMailing = false
   }
 }
 
@@ -2678,6 +2723,7 @@ export const register: Register = on => {
       isAutoOpenPending = e.isInteractive
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($).then(() => refreshWriting($)).catch(() => undefined).then(() => refreshStates($)))
+      $.clock.every(DELIVER_MS, () => void deliverMail($))
       if (pending.length > 0) {
         isReady = false
         await update($, starting, () => bringingBack(pending.length))
@@ -3062,7 +3108,7 @@ export const register: Register = on => {
         void noteActivity($, agentId, label).catch(() => {})
       } catch {}
     }
-    return next(e)
+    return next(MESSAGING.test(e.tool) ? asFork(e) : e)
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { deny: FORK_RESUME }))
 
   on('turn.start', async ($, e, next) => {

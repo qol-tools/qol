@@ -882,7 +882,7 @@ test('a terminal session comes back as a fork with its own conversation once, an
   expect(sent).toHaveLength(3)
 
   const fromFork = await $.tool.call({ tool, ...session, transcript: '/p/third.jsonl', agentId: 'a9' } as any)
-  expect(String(fromFork.deny)).toContain('Only the switchboard resumes, continues, opens or messages another fork or session')
+  expect(String(fromFork.deny)).toContain('Only the switchboard resumes, continues, opens or closes another fork or session')
   expect(runs.at(-1)).not.toEqual(expect.arrayContaining(['/p/third.jsonl']))
 })
 
@@ -1094,9 +1094,9 @@ test('continuing a fork prompts it to carry on its work', async ($, on) => {
   expect(sent[0].text).toContain('approves nothing you were waiting on the user for')
   await spawn($, 'b1', 'b1-fork: a fork')
   const refused = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'a1-fork', continue: true, agentId: 'b1' })
-  expect(String(refused.deny)).toContain('Only the switchboard resumes, continues, opens or messages')
+  expect(String(refused.deny)).toContain('Only the switchboard resumes, continues, opens or closes')
   const plain = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'a1-fork', agentId: 'b1' })
-  expect(String(plain.deny)).toContain('Only the switchboard resumes, continues, opens or messages')
+  expect(String(plain.deny)).toContain('Only the switchboard resumes, continues, opens or closes')
   expect(sent).toHaveLength(1)
 })
 
@@ -1537,14 +1537,76 @@ test('a fork and its launcher still reach each other after either is continued u
   expect(mayMessage(list, 'k3', 's1')).toBe(false)
 })
 
-test('a fork cannot send to, open, reopen or close another session with the sessions tools', async ($, on) => {
+test('a fork cannot open, reopen, fork or close another session with the sessions tools', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a1', 'a1-fork: a fork')
-  for (const tool of ['mcp__sessions__session_send', 'mcp__sessions__session_reopen', 'mcp__plugin_qol-sessions_qol-sessions__session_fork', 'mcp__sessions__session_close']) {
+  for (const tool of ['mcp__sessions__session_reopen', 'mcp__plugin_qol-sessions_qol-sessions__session_fork', 'mcp__sessions__session_close']) {
     const refused = await $.tool.call({ tool, agentId: 'a1' } as any)
-    expect(String(refused.deny)).toContain('Only the switchboard resumes, continues, opens or messages another fork or session')
+    expect(String(refused.deny)).toContain('Only the switchboard resumes, continues, opens or closes another fork or session')
   }
+})
+
+test("a fork's messaging call carries its own agent id, and the switchboard's own call never carries one", async ($, on) => {
+  const ran: any[] = []
+  engine(on)
+  on('tool.call', (_: unknown, e: any) => {
+    ran.push(e)
+    return { result: 'ok' }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'a1-fork: a fork')
+  const tools = ['mcp__sessions__session_send', 'mcp__plugin_qol-sessions_qol-sessions__session_inbox', 'mcp__sessions__session_board']
+  for (const tool of tools) {
+    await $.tool.call({ tool, agentId: 'a1', as_fork: 'another-fork' } as any)
+    await $.tool.call({ tool, as_fork: 'a1' } as any)
+  }
+  await $.tool.call({ tool: 'mcp__sessions__sessions_list', agentId: 'a1' } as any)
+  expect(ran.map(e => [e.tool, e.as_fork, 'as_fork' in e])).toEqual([
+    ...tools.flatMap(tool => [
+      [tool, 'a1', true],
+      [tool, undefined, false],
+    ]),
+    ['mcp__sessions__sessions_list', undefined, false],
+  ])
+})
+
+test('a message waiting for a fork is taken once and handed to that fork as the engine wrote it', async ($, on) => {
+  const sent: any[] = []
+  const runs: string[][] = []
+  engine(on, sent)
+  let waiting = [{ name: 'm1-fork.json', kind: 'file', size: 10, mtimeMs: 1, isLink: false }]
+  on('env.get', (_: unknown, e: { name: string }) => ({
+    value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : e.name === 'QOL_SWITCHBOARD_KNOCKS' ? '/data/knocks' : undefined,
+  }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path === '/data/knocks' }))
+  on('fs.list', () => ({ value: waiting }))
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (!isRecord(e.argv)) return { value: NO_RECORD }
+    if (e.argv[3] !== 'mail') return { value: recordReply(e.argv, []) }
+    runs.push(e.argv)
+    waiting = []
+    return {
+      value: {
+        exitCode: 0,
+        stderr: '',
+        stdout: JSON.stringify({
+          mail: [
+            { key: 'm1-fork', friendly: 'a fork', cwd: '/work', agent_id: 'm1', text: '[qol session] Message from other-fork: found it' },
+            { key: 'forged', friendly: 'a fork', cwd: '/work', agent_id: '../m1', text: 'forged agent id' },
+            { key: 'textless', agent_id: 'm1' },
+          ],
+        }),
+      },
+    }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'm1', 'm1-fork: a fork')
+  await settle()
+  expect(runs).toEqual([['/bin/qol-cli-sessions', 'sessions', 'record', 'mail']])
+  expect(sent).toHaveLength(1)
+  expect(JSON.stringify(sent[0])).toContain('[qol session] Message from other-fork: found it')
+  expect(JSON.stringify(sent[0].to)).toContain('m1')
 })
 
 test('a fork whose agent entry has ended counts as out of the agent list', () => {

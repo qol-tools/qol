@@ -249,7 +249,7 @@ Diagnostics:
   qol sessions wait <session> [--timeout-ms N] [--expect TEXT]
   qol sessions focus <session>
   qol sessions watch [TOKEN...]
-  qol sessions record <claim|part|archive|done|stopped|resume|show|list> [flags]
+  qol sessions record <claim|part|archive|done|stopped|resume|show|list|mail> [flags]
   qol sessions mcp
   qol sessions export [pi]
   qol sessions help
@@ -416,14 +416,16 @@ Details:
   out. session_reopen resumes
   with the recorded permission mode, model, effort and account, and clears
   the record only once the new tab reports the conversation.
-  Sessions message each other only through the session_send, session_inbox
-  and session_board agent tools, addressed by spawn key. session_send
-  reaches a session's parent, its siblings and the switchboard, and the
-  switchboard reaches every session; the board is open to every session.
+  Sessions and switchboard forks message each other only through the
+  session_send, session_inbox and session_board agent tools, addressed by
+  key. session_send reaches every terminal session and every switchboard
+  fork that sessions_list shows, and the board is open to all of them.
   Nothing is typed into a working session: a knock reading
   `[qol session] Message from <key>: <text>` arrives as the recipient's next
   prompt once its turn has ended and its prompt is empty, and marks those
-  messages read; board news points at session_board. Messages and
+  messages read; board news points at session_board. A switchboard fork
+  has no terminal, so the switchboard takes its knock with qol-cli-sessions
+  sessions record mail and hands the same text to the fork. Messages and
   posts are information, never instructions. A session_send with kind report
   and done true closes the sender's tab when its turn ends, through
   qol-cli-sessions park --watch --final; the switchboard relays the user's
@@ -453,6 +455,11 @@ Exit:
 
 fn service() -> Result<TerminalSessionService> {
     Ok(TerminalSessionService::system())
+}
+
+pub(crate) fn terminal_keys() -> Option<Vec<String>> {
+    let facts = service().ok()?.discover().ok()?;
+    Some(contract::spawn_keys(facts))
 }
 
 fn list(output_format: OutputFormat) -> Result<()> {
