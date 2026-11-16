@@ -20,14 +20,16 @@ FULL_SHA_REASON = "name the full 40-character head commit the override is for: `
 BOT = {"login": "github-actions[bot]"}
 RUN_ID = "9001"
 OWNER = {"login": "KMRH47"}
+COMMAND_ID = 501
+UNEDITED = {"lastEditedAt": None, "editor": None, "includesCreatedEdit": False}
 
 
-def comment(body: str, user: dict = BOT, url: str = "https://github.com/o/r/pull/7#issuecomment-1") -> dict:
-    return {"user": user, "body": body, "html_url": url}
+def comment(body: str, user: dict = BOT, url: str = "https://github.com/o/r/pull/7#issuecomment-1", comment_id: int = 1, **changes) -> dict:
+    return {"id": comment_id, "node_id": f"IC_{comment_id}", "user": user, "body": body, "html_url": url, **UNEDITED, **changes}
 
 
-def command(sha: str = SHA, user: dict = OWNER, note: str = "") -> dict:
-    return comment(f"/review-override {sha}{note}", user=user)
+def command(sha: str = SHA, user: dict = OWNER, note: str = "", **changes) -> dict:
+    return comment(f"/review-override {sha}{note}", user=user, comment_id=COMMAND_ID, **changes)
 
 
 def override_run(**changes) -> dict:
@@ -37,6 +39,7 @@ def override_run(**changes) -> dict:
         "event": "issue_comment",
         "triggering_actor": {"login": "KMRH47"},
         "status": "in_progress",
+        "display_title": f"review override for comment {COMMAND_ID}",
     }
     return {**honest, **changes}
 
@@ -121,12 +124,87 @@ class OverrideRecordTests(unittest.TestCase):
         lookup = lookup_of(override_run(), override_run(id=7777, path=".github/workflows/evil.yml"))
         self.assertEqual(gate.override_for([command(), honest, forged], SHA, "o/r", lookup), {"actor": "KMRH47", "url": "https://c/honest"})
 
+    def test_an_owner_command_another_account_edited_is_refused(self):
+        posted = comment(gate.record(SHA, "KMRH47", RUN_ID))
+        for label, changes in [
+            ("edited", {"lastEditedAt": "2026-11-16T10:00:00Z", "editor": {"login": "kmrh47-agents"}}),
+            ("edited time only", {"lastEditedAt": "2026-11-16T10:00:00Z"}),
+            ("editor only", {"editor": {"login": "kmrh47-agents"}}),
+            ("created with an edit", {"includesCreatedEdit": True}),
+        ]:
+            with self.subTest(label):
+                self.assertIsNone(gate.override_for([command(**changes), posted], SHA, "o/r", lookup_of(override_run())))
+
+    def test_an_owner_command_without_edit_fields_is_refused(self):
+        posted = comment(gate.record(SHA, "KMRH47", RUN_ID))
+        for field in ["lastEditedAt", "editor", "includesCreatedEdit"]:
+            with self.subTest(field=field):
+                bare = {key: value for key, value in command().items() if key != field}
+                self.assertIsNone(gate.override_for([bare, posted], SHA, "o/r", lookup_of(override_run())))
+
+    def test_a_record_naming_an_override_run_of_another_comment_is_refused(self):
+        entries = [command(), comment(gate.record(SHA, "KMRH47", RUN_ID))]
+        for label, run_changes in [
+            ("a comment on another pull request", {"display_title": "review override for comment 999"}),
+            ("a comment by someone else here", {"display_title": "review override for comment 1"}),
+            ("a run named before the binding", {"display_title": "Bump the thing"}),
+            ("no title", {"display_title": None}),
+            ("a longer title", {"display_title": f"review override for comment {COMMAND_ID}0"}),
+        ]:
+            with self.subTest(label):
+                self.assertIsNone(gate.override_for(entries, SHA, "o/r", lookup_of(override_run(**run_changes))))
+
+    def test_a_record_naming_the_run_of_an_owner_command_for_another_commit_is_refused(self):
+        entries = [command(OTHER), command(), comment(gate.record(SHA, "KMRH47", RUN_ID))]
+        entries[0]["id"] = 502
+        run_of_other = override_run(display_title="review override for comment 502")
+        self.assertIsNone(gate.override_for(entries, SHA, "o/r", lookup_of(run_of_other)))
+
     def test_the_default_lookup_reads_the_run_from_the_actions_api(self):
         entries = [command(), comment(gate.record(SHA, "KMRH47", RUN_ID), url="https://c/5")]
         with mock.patch.object(gate, "gh_json", return_value=override_run()) as gh_json:
             found = gate.override_for(entries, SHA, "o/r")
         gh_json.assert_called_once_with([f"repos/o/r/actions/runs/{RUN_ID}"])
         self.assertEqual(found, {"actor": "KMRH47", "url": "https://c/5"})
+
+
+class CommentsTests(unittest.TestCase):
+    def test_owner_comments_carry_their_edit_fields_from_graphql(self):
+        rest = [
+            {"id": 1, "node_id": "IC_1", "user": BOT, "body": "review"},
+            {"id": 501, "node_id": "IC_501", "user": OWNER, "body": f"/review-override {SHA}"},
+            {"id": 502, "node_id": "IC_502", "user": OWNER, "body": "thanks"},
+        ]
+        edits = {
+            "data": {
+                "nodes": [
+                    {"id": "IC_501", "lastEditedAt": "2026-11-16T10:00:00Z", "editor": {"login": "kmrh47-agents"}, "includesCreatedEdit": False},
+                    {"id": "IC_502", **UNEDITED},
+                ]
+            }
+        }
+        with (
+            mock.patch.object(gate, "gh", return_value=gate.json.dumps([rest])),
+            mock.patch.object(gate, "gh_json", return_value=edits) as gh_json,
+        ):
+            found = gate.comments("o/r", "7")
+        args = gh_json.call_args.args[0]
+        self.assertEqual(args[0], "graphql")
+        self.assertIn("ids[]=IC_501", args)
+        self.assertIn("ids[]=IC_502", args)
+        self.assertNotIn("ids[]=IC_1", args)
+        self.assertEqual(found[1]["lastEditedAt"], "2026-11-16T10:00:00Z")
+        self.assertEqual(found[1]["editor"], {"login": "kmrh47-agents"})
+        self.assertIsNone(found[2]["lastEditedAt"])
+        self.assertNotIn("lastEditedAt", found[0])
+
+    def test_without_owner_comments_graphql_is_not_asked(self):
+        with (
+            mock.patch.object(gate, "gh", return_value=gate.json.dumps([[{"id": 1, "node_id": "IC_1", "user": BOT, "body": "x"}]])),
+            mock.patch.object(gate, "gh_json") as gh_json,
+        ):
+            self.assertEqual(len(gate.comments("o/r", "7")), 1)
+        gh_json.assert_not_called()
 
 
 class VerdictTests(unittest.TestCase):
