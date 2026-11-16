@@ -106,7 +106,7 @@ const RESUMED = 'Carry on your work from where you stopped. This answers no ques
 const FORK_RESUME = 'Only the switchboard resumes, continues, opens or messages another fork or session. Tell the user in one line which fork or session it is for and that they can select it in the agent list.'
 const CROSS_SESSION = /__session_(send|reopen|fork|spawn|submit|bridge|close|remote_control|loop_close)$/
 const FORK_TO_FORK =
-  'Not sent: a fork messages only the forks it started and the fork that started it. Something the user typed for another fork is for that fork: tell the user in one line to select it in the agent list.'
+  'Not sent: a fork messages only the forks it started, the fork that started it, and a fork the user named to it by key-name, by that fork\'s agent id, which fork_board lists. Something the user typed for another fork is for that fork: tell the user in one line to select it in the agent list.'
 const COLOR: Record<Kind, string> = {
   ask: 'warning',
   test: 'suggestion',
@@ -942,7 +942,22 @@ export const mayMessage = (list: Entry[], from: string, to: unknown): boolean =>
   const recipient = list.some(one => one.agentId === id) ? addressed(list, id) : undefined
   if (sender === undefined || recipient === undefined || recipient.agentId === from) return false
   const current = (launcher: string | undefined) => (launcher === undefined ? undefined : addressed(list, launcher)?.agentId)
-  return current(recipient.launcher) === from || current(sender.launcher) === recipient.agentId
+  return current(recipient.launcher) === from || current(sender.launcher) === recipient.agentId || named.get(keyOf(sender))?.has(keyOf(recipient)) === true
+}
+
+const named = new Map<string, Set<string>>()
+const NOT_KEY_LETTERS = /[^a-z0-9-]+/
+
+export const namedIn = (list: Entry[], to: Entry, text: string): string[] => {
+  const words = new Set(text.toLowerCase().split(NOT_KEY_LETTERS))
+  return reachable(list)
+    .map(keyOf)
+    .filter(key => key !== keyOf(to) && words.has(key))
+}
+
+const noteNamed = async ($: EngineInterface, to: Entry, text: string): Promise<void> => {
+  const keys = namedIn(await read($, board), to, text)
+  if (keys.length > 0) named.set(keyOf(to), new Set([...(named.get(keyOf(to)) ?? []), ...keys]))
 }
 
 export const listedAgents = (agents: unknown): Set<string> =>
@@ -2605,6 +2620,7 @@ export const register: Register = on => {
     await update($, starting, () => STARTING).catch(() => undefined)
     const started = await next(e)
     isAutoOpenPending = false
+    named.clear()
     let isReady = true
     try {
       const id = await $.session.id()
@@ -2845,6 +2861,7 @@ export const register: Register = on => {
         clearBox($, typedText => typedText === e.text)
         return dropAs(printable(hooked.block))
       }
+      await noteNamed($, own, text)
       return next({ ...e, text, ...(hooked.context.length === 0 ? {} : { context: [...(e.context ?? []), ...hooked.context] }) })
     }
     if (viewing !== undefined && typed !== undefined && typed.message === '') {
@@ -2872,6 +2889,7 @@ export const register: Register = on => {
         await setCurrent($, at.entry).catch(() => undefined)
         await writeTo($, at.entry)
       }
+      await noteNamed($, at.entry, at.message)
       if ((await read($, freshReply)) === at.entry.agentId) await update($, freshReply, () => '')
       const fetched = await messagesOf($, at.entry.agentId)
       const before = recentWords(fetched ?? [], Infinity)

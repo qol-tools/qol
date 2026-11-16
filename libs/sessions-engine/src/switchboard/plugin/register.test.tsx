@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { claimsUser, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withSent } from '../hooks/register'
+import { claimsUser, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, namedIn, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1583,9 +1583,38 @@ test('a fork messages only the forks it started and the fork that started it, an
     const answer = await send(from, to)
     expect(`${from}->${JSON.stringify(to)}:${answer.isDelivered}`).toBe(`${from}->${JSON.stringify(to)}:${isDelivered}`)
     if (isDelivered) delivered += 1
-    else expect(answer.reason).toContain('a fork messages only the forks it started and the fork that started it')
+    else expect(answer.reason).toContain('a fork messages only the forks it started, the fork that started it, and a fork the user named to it by key-name')
   }
   expect(sent).toHaveLength(delivered)
+})
+
+test('a fork messages a fork the user named to it by key-name, from the switchboard or in its view, one way and until the next start', async ($, on) => {
+  const sent: unknown[] = []
+  engine(on, sent)
+  on('clock.after', () => ({ value: undefined }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'n1', 'finder-fork: finds')
+  await spawn($, 'n2', 'fixer-fork: fixes')
+  await spawn($, 'n3', 'quiet-fork: quiet')
+  const isSent = async (agentId: string, to: string) => (await $.session.send({ to, text: 'the guard drops watcher results', agentId } as any)).isDelivered
+  expect(await isSent('n1', 'n2')).toBe(false)
+  const band = promptBand(false)
+  const inMain = await $.ui.mount(band)
+  expect((await typed($, 'finder-fork Tell Fixer-Fork, not fixer-fork-2 or quiet, what you found.')).drop).toContain('→ finder-fork')
+  await inMain.unmount()
+  expect(await isSent('n1', 'n2')).toBe(true)
+  expect(await isSent('n1', 'n3')).toBe(false)
+  expect(await isSent('n2', 'n1')).toBe(false)
+  const inFork = await $.ui.mount({ ...band, props: { ...band.props, view: { agentId: 'n3' } } })
+  expect((await typed($, 'pass it on to finder-fork')).text).toBe('pass it on to finder-fork')
+  await inFork.unmount()
+  expect(await isSent('n3', 'n1')).toBe(true)
+  expect(await isSent('n3', 'n2')).toBe(false)
+  const list = [{ agentId: 'n1', name: 'finder-fork: finds', headline: '', at: 0, isWorking: false, isDismissed: false }] as any
+  expect(namedIn(list, list[0], 'finder-fork, tell finder-fork')).toEqual([])
+  await (await $.ui.mount(band)).unmount()
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(await isSent('n1', 'n2')).toBe(false)
 })
 
 test('a fork cannot claim another fork as stopped to take over its messages', async ($, on) => {
