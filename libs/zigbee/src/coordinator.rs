@@ -23,6 +23,8 @@ const COORDINATOR_STATE_STARTED: u8 = 0x09;
 const DEVICE_VERSION: u8 = 0x00;
 const LATENCY_NO_LATENCY: u8 = 0x00;
 const DATA_CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
+const LEAVE_TIMEOUT: Duration = Duration::from_secs(3);
+const LEAVE_OPTIONS_NONE: u8 = 0x00;
 
 static AF_TRANS_SEQ: AtomicU8 = AtomicU8::new(1);
 
@@ -92,6 +94,38 @@ pub fn permit_join(engine: &RequestEngine, duration_secs: u8) -> Result<()> {
         resp.data.first().copied() == Some(STATUS_SUCCESS),
         "MGMT_PERMIT_JOIN_REQ failed: status=0x{:02X}",
         resp.data.first().copied().unwrap_or(0xFF)
+    );
+    Ok(())
+}
+
+pub fn leave_request_data(network_address: u16, ieee: &[u8; 8]) -> Vec<u8> {
+    let mut data = network_address.to_le_bytes().to_vec();
+    data.extend_from_slice(ieee);
+    data.push(LEAVE_OPTIONS_NONE);
+    data
+}
+
+pub fn request_leave(engine: &RequestEngine, network_address: u16, ieee: &[u8; 8]) -> Result<()> {
+    let responses = engine.watch_areq(ZDO, zdo::MGMT_LEAVE_RSP);
+    let resp = engine.sreq(
+        ZDO,
+        zdo::MGMT_LEAVE_REQ,
+        leave_request_data(network_address, ieee),
+    )?;
+    ensure!(
+        resp.data.first().copied() == Some(STATUS_SUCCESS),
+        "MGMT_LEAVE_REQ failed: status=0x{:02X}",
+        resp.data.first().copied().unwrap_or(0xFF)
+    );
+    let wanted = network_address.to_le_bytes();
+    let rsp = responses.wait_matching(LEAVE_TIMEOUT, |rsp| {
+        rsp.data.get(0..2).is_none_or(|addr| addr == &wanted[..])
+    })?;
+    let status = rsp.data.get(2).copied().unwrap_or(0xFF);
+    ensure!(
+        status == STATUS_SUCCESS,
+        "MGMT_LEAVE_RSP failed: status=0x{:02X}",
+        status
     );
     Ok(())
 }
@@ -270,4 +304,27 @@ fn start_network(engine: &RequestEngine) -> Result<()> {
         state_frame.data.first().copied().unwrap_or(0xFF)
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_leave_request_names_the_light_and_asks_for_no_options() {
+        let ieee = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77];
+
+        let data = leave_request_data(0x4A1F, &ieee);
+
+        assert_eq!(
+            data,
+            vec![0x1F, 0x4A, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x00]
+        );
+    }
+
+    #[test]
+    fn leave_commands_sit_where_the_znp_spec_puts_them() {
+        assert_eq!(zdo::MGMT_LEAVE_REQ, 0x34);
+        assert_eq!(zdo::MGMT_LEAVE_RSP, zdo::MGMT_LEAVE_REQ | 0x80);
+    }
 }

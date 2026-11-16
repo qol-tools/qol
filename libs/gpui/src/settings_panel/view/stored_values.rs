@@ -3,7 +3,9 @@ use std::collections::{BTreeSet, HashSet};
 use gpui::*;
 
 use super::super::persistence::{panel_base, read_values};
-use super::super::rows::{merged_config, row_query_names, row_value_json, rows_from_resolved, Row};
+use super::super::rows::{
+    merged_config, refresh_member_stores, row_query_names, row_value_json, rows_from_resolved, Row,
+};
 use super::{SettingsPanelView, SourceState};
 
 fn rereads_stored_values(source: &SourceState) -> bool {
@@ -109,7 +111,8 @@ impl SettingsPanelView {
         fresh_rows: Vec<Row>,
         skip: &HashSet<String>,
     ) -> bool {
-        let mut changed = false;
+        let mut changed =
+            refresh_member_stores(self.root_mut().rows.as_mut_slice(), index, &fresh_rows);
         for fresh in fresh_rows {
             if !row_query_names(&fresh).is_empty() || skip.contains(&fresh.id) {
                 continue;

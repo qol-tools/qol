@@ -16,20 +16,20 @@ use qol_config::pages::{
 
 use crate::deck;
 use crate::key::Key;
-use crate::kit::{kit, Chip};
+use crate::kit::kit;
 use crate::scrollbar::{ScrollSource, OVERFLOW_FADE_HEIGHT};
 
 use super::components::{
-    qr_block, qr_heights, settings_busy_message, settings_destroy_label_group,
-    settings_label_group, settings_message, settings_page, settings_value_group, HintTone, QrBlock,
-    RowGround, SettingsFeature, SettingsFeedback, SettingsHint, SettingsTick, SettingsToggle,
+    qr_block, qr_heights, settings_busy_message, settings_destroy_label_group, settings_message,
+    settings_page, settings_tag, settings_tagged_label_group, settings_value_group, HintTone,
+    QrBlock, RowGround, SettingsFeature, SettingsFeedback, SettingsHint, SettingsTick,
+    SettingsToggle,
 };
 use super::{
-    escape_step, intent, settings_action_busy, settings_action_spinner, settings_value_text,
-    CustomHints, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
-    CustomPanelNoticeTone, CustomPanelNotifier, CustomPanelView, CustomSettingsBreadcrumbs,
-    EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsRuntime,
-    SettingsValueTone,
+    escape_step, intent, settings_action_busy, settings_action_spinner, CustomHints,
+    CustomPanelCallback, CustomPanelContext, CustomPanelFactory, CustomPanelNoticeTone,
+    CustomPanelNotifier, CustomPanelView, CustomSettingsBreadcrumbs, EscapeStep, Intent,
+    SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsRuntime, SettingsValueTone,
 };
 use model::{Item, Moved, Place};
 
@@ -623,16 +623,27 @@ impl PagesView {
         {
             values = values.child(settings_action_spinner((spinner_id, index), kit));
         }
+        let mut tags = Vec::new();
         if let Some(tag) = &row.tag {
-            values = values.child(kit.chip(Chip::Tag(tag.clone().into()), ground.rest(kit)));
-        }
-        if let Some(value) = &row.value {
-            values = values.child(settings_value_text(
-                value.clone(),
-                tone(row.tone),
+            tags.push(settings_tag(
+                tag.clone(),
+                SettingsValueTone::Normal,
                 ground,
                 kit,
             ));
+        }
+        if let Some(value) = &row.value {
+            tags.push(settings_tag(value.clone(), tone(row.tone), ground, kit));
+        }
+        if let Some(Control::Feature { count, .. }) = &row.control {
+            if !count.is_empty() {
+                tags.push(settings_tag(
+                    count.clone(),
+                    SettingsValueTone::Normal,
+                    ground,
+                    kit,
+                ));
+            }
         }
         values = match &row.control {
             Some(Control::Toggle(on)) => values.child(SettingsToggle::new(*on, ground, kit)),
@@ -640,8 +651,8 @@ impl PagesView {
                 values.child(settings_action_busy((action_id, index), busy, kit))
             }
             Some(Control::Check) => values.child(SettingsTick::new(ground, kit)),
-            Some(Control::Feature { on, count }) => {
-                values.child(SettingsFeature::new(*on, count.clone(), ground, kit))
+            Some(Control::Feature { on, .. }) => {
+                values.child(SettingsFeature::new(*on, None, ground, kit))
             }
             Some(Control::Destroy { .. }) => {
                 values.child(settings_action_busy((action_id, index), busy, kit))
@@ -654,7 +665,7 @@ impl PagesView {
         let label = if destroys {
             settings_destroy_label_group(row.label.clone(), detail, ground, kit)
         } else {
-            settings_label_group(row.label.clone(), detail, ground, kit)
+            settings_tagged_label_group(row.label.clone(), tags, detail, ground, kit)
         };
         let mut element = SettingsRow::setting((row_id, index), kit)
             .selected(selected, focused)

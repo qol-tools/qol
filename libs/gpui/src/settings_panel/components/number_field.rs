@@ -153,7 +153,34 @@ fn level_segment_width(track: f32) -> f32 {
     (track - gaps) / LEVEL_SEGMENTS as f32
 }
 
-fn slider_thumb(fill: f32, dragging: bool, ground: Ground, hover: Option<Ground>) -> gpui::Div {
+fn bolt_mark(ink: u32) -> gpui::AnyElement {
+    match crate::pictures::icon("settings-number-bolt", HEX, ink, BOLT as u32) {
+        Some(image) => gpui::img(image).size(px(BOLT)).into_any_element(),
+        None => div()
+            .size(px(BOLT))
+            .rounded_full()
+            .bg(rgb(ink))
+            .into_any_element(),
+    }
+}
+
+fn bolt_thumb(ground: Ground, hover: Option<Ground>) -> gpui::Div {
+    let overhang = (BOLT - WIDE_THUMB) / 2.0;
+    div()
+        .absolute()
+        .top(px(-overhang))
+        .left(px(-overhang))
+        .size(px(BOLT))
+        .child(bolt_mark(hover.unwrap_or(ground).ink))
+}
+
+fn slider_thumb(
+    fill: f32,
+    dragging: bool,
+    bolted: bool,
+    ground: Ground,
+    hover: Option<Ground>,
+) -> gpui::Div {
     let halo = div()
         .absolute()
         .top(px(-THUMB_HALO))
@@ -175,6 +202,15 @@ fn slider_thumb(fill: f32, dragging: bool, ground: Ground, hover: Option<Ground>
                 style.bg(lifted_halo).opacity(1.0)
             })
     };
+    let thumb = div()
+        .absolute()
+        .top_0()
+        .left(px(thumb_left(fill)))
+        .size(px(WIDE_THUMB))
+        .child(halo);
+    if bolted {
+        return thumb.child(bolt_thumb(ground, hover));
+    }
     let face = ground_bg(
         div()
             .absolute()
@@ -195,13 +231,7 @@ fn slider_thumb(fill: f32, dragging: bool, ground: Ground, hover: Option<Ground>
             hover.map(|hover| rgb(hover.bg)),
         ))
     };
-    div()
-        .absolute()
-        .top_0()
-        .left(px(thumb_left(fill)))
-        .size(px(WIDE_THUMB))
-        .child(halo)
-        .child(face)
+    thumb.child(face)
 }
 
 fn quarter_ticks(
@@ -386,14 +416,7 @@ fn marker_mark(
         cue.bloom,
         |halo, opacity| halo.opacity(opacity),
     );
-    let bolt = match crate::pictures::icon("settings-number-bolt", HEX, ink, BOLT as u32) {
-        Some(image) => gpui::img(image).size(px(BOLT)).into_any_element(),
-        None => div()
-            .size(px(BOLT))
-            .rounded_full()
-            .bg(rgb(ink))
-            .into_any_element(),
-    };
+    let bolt = bolt_mark(ink);
     let bolt = settling(
         div()
             .absolute()
@@ -528,6 +551,7 @@ pub(in crate::settings_panel) fn number_field(
     if let Some((fraction, style)) = track {
         let width = style.track_width();
         let fill = fraction * width;
+        let bolted = style == SliderStyle::Level;
         let with_thumb = |track: gpui::Div| {
             div()
                 .relative()
@@ -536,7 +560,7 @@ pub(in crate::settings_panel) fn number_field(
                 .w(px(width))
                 .h(px(WIDE_THUMB))
                 .child(track)
-                .child(slider_thumb(fill, cue.dragging, ground, hover))
+                .child(slider_thumb(fill, cue.dragging, bolted, ground, hover))
         };
         let bar = match style {
             SliderStyle::Compact => {

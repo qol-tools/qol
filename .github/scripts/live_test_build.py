@@ -15,6 +15,7 @@ crate, so its change counts for every crate that depends on it by name.
 import argparse
 import json
 import os
+import shutil
 import sys
 import tomllib
 from pathlib import Path
@@ -32,6 +33,7 @@ PLATFORMS = {
     "macos": {"target": "aarch64-apple-darwin", "name": "macOS"},
 }
 DEPENDENCY_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
+CONTRACT_FILES = ("qol-config.toml", "qol-runtime.toml")
 
 
 def patched_paths(root: Path) -> dict[str, str]:
@@ -91,6 +93,7 @@ def plugin_units(root: Path) -> dict[str, dict]:
             "id": meta["id"],
             "version": cargo["package"]["version"],
             "platforms": meta.get("platforms", [LINUX]),
+            "dir": manifest.parent.relative_to(root).as_posix(),
         }
     return units
 
@@ -146,6 +149,17 @@ def emit(path: str | None, result: dict) -> None:
         handle.write(f"build={'true' if result['plugins'] or result['tray'] else 'false'}\n")
 
 
+def contract_files(root: Path, unit: dict) -> list[str]:
+    return [name for name in CONTRACT_FILES if (root / unit["dir"] / name).is_file()]
+
+
+def stage_contract_files(root: Path, unit: dict, entry: dict, build_dir: Path) -> None:
+    staged = build_dir / "plugins" / entry["tag"]
+    staged.mkdir(parents=True, exist_ok=True)
+    for name in entry["contract_files"]:
+        shutil.copy(root / unit["dir"] / name, staged / name)
+
+
 def installed_files(root: Path, unit: dict, platform: str = LINUX) -> dict:
     target = PLATFORMS[platform]["target"]
     outputs = plugin_matrix.release_outputs(root, unit["id"], unit["version"])
@@ -156,6 +170,7 @@ def installed_files(root: Path, unit: dict, platform: str = LINUX) -> dict:
         "tag": f"{unit['id']}-v{unit['version']}",
         "file": f"{entry['artifact_name']}{entry['ext']}",
         "bin_name": outputs["bin_name"],
+        "contract_files": contract_files(root, unit),
     }
 
 
@@ -197,6 +212,8 @@ def plan_command(args: argparse.Namespace) -> int:
         out = Path(args.manifest)
         out.parent.mkdir(parents=True, exist_ok=True)
         entries = [installed_files(ROOT, unit, args.platform) for unit in result["units"]]
+        for unit, entry in zip(result["units"], entries):
+            stage_contract_files(ROOT, unit, entry, out.parent)
         body = manifest(
             result, os.environ["PR_NUMBER"], os.environ["HEAD_SHA"], os.environ["GITHUB_RUN_ID"], entries, args.platform
         )

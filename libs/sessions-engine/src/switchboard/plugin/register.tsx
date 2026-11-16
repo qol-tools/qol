@@ -392,7 +392,9 @@ const typedTarget = (list: Entry[], text: string): Entry | undefined => {
 
 const COORDINATOR_NOTE = /^The coordinator sent a message while you were working:\n+/
 
-const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', 'This session is being continued from a previous conversation', '[SYSTEM NOTIFICATION']
+const COMPACTED = 'This session is being continued from a previous conversation'
+
+const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', COMPACTED, '[SYSTEM NOTIFICATION']
 
 const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY].includes(text.trim())
 
@@ -507,9 +509,12 @@ const saidOnDisk = async ($: EngineInterface, agentId: string): Promise<unknown[
   return rows
 }
 
+const lacksHistory = (held: unknown[]): boolean =>
+  recentWords(held, 1).length === 0 || held.some(one => typeof one === 'object' && one !== null && String((one as { text?: unknown }).text ?? '').trimStart().startsWith(COMPACTED))
+
 const messagesOf = async ($: EngineInterface, agentId: string): Promise<unknown[] | undefined> => {
   const held: unknown = await $.session.messages({ agentId }).catch(() => undefined)
-  if (Array.isArray(held) && held.length > 0) return held
+  if (Array.isArray(held) && held.length > 0 && !lacksHistory(held)) return held
   const saved = await saidOnDisk($, agentId).catch(() => undefined)
   return saved ?? (Array.isArray(held) ? held : undefined)
 }

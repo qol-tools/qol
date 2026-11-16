@@ -10,9 +10,9 @@ use qol_config::contract::NestedListSpec;
 use qol_config::object_array::pretty_label;
 
 use super::super::components::{
-    settings_arrow, settings_label_group, settings_mono_label, settings_value_group,
-    settings_value_text, HintTone, RowGround, SettingsHint, SettingsHintBar, SettingsModifierChip,
-    SettingsRow, SettingsTextField, SettingsToggle, SettingsValueTone,
+    settings_arrow, settings_label_group, settings_mono_label, settings_tag, settings_value_group,
+    HintTone, RowGround, SettingsHint, SettingsHintBar, SettingsModifierChip, SettingsRow,
+    SettingsTextField, SettingsToggle, SettingsValueTone,
 };
 use super::super::entry_form::{count_label, EntryForm, FormOutput, FormQuestion, FormValue};
 use super::super::object_array_row::{
@@ -107,7 +107,7 @@ enum FormRowClick {
 
 impl SettingsPanelView {
     pub(super) fn open_object_array_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
-        let Some(row) = self.level().rows.get(row_index) else {
+        let Some(row) = self.level_rows().get(row_index) else {
             return;
         };
         let RowControl::ObjectArray(state) = &row.control else {
@@ -148,7 +148,7 @@ impl SettingsPanelView {
     }
 
     pub(super) fn open_text_list_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
-        let Some(row) = self.level().rows.get(row_index) else {
+        let Some(row) = self.level_rows().get(row_index) else {
             return;
         };
         let RowControl::TextList(values) = &row.control else {
@@ -367,7 +367,7 @@ impl SettingsPanelView {
             );
             if level_entries_len(level) == 0 {
                 content.push(
-                    settings_value_text("Empty", SettingsValueTone::Muted, ground, self.kit)
+                    settings_tag("Empty", SettingsValueTone::Muted, ground, self.kit)
                         .into_any_element(),
                 );
             }
@@ -401,7 +401,7 @@ impl SettingsPanelView {
             content.push(settings_label_group(label, None, ground, self.kit).into_any_element());
             if !summary.is_empty() {
                 content.push(
-                    settings_value_text(summary, SettingsValueTone::Muted, ground, self.kit)
+                    settings_tag(summary, SettingsValueTone::Muted, ground, self.kit)
                         .into_any_element(),
                 );
             }
@@ -492,7 +492,7 @@ impl SettingsPanelView {
                     .and_then(|card| card.lists.get(&field.key))
                     .and_then(|spec| spec.item_label.clone())
                     .unwrap_or_else(|| "item".to_string());
-                row = row.child(settings_value_text(
+                row = row.child(settings_tag(
                     count_label(values.len(), &noun),
                     SettingsValueTone::Muted,
                     ground,
@@ -624,6 +624,7 @@ impl SettingsPanelView {
             rows: (0..rows.len()).collect(),
             source,
             device_kind: None,
+            page: None,
         };
         let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
         let Some(destination) = self.card_destination(&crumb, cx) else {
@@ -953,6 +954,7 @@ fn entries_card_level(
         rows: (0..rows.len()).collect(),
         source,
         device_kind: None,
+        page: None,
     };
     let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
     Level {
@@ -1084,6 +1086,7 @@ pub(super) fn sync_entries_level(level: &mut Level) {
         rows: (0..rows.len()).collect(),
         source,
         device_kind: None,
+        page: None,
     };
     level.rows = rows;
     level.sections = vec![section];

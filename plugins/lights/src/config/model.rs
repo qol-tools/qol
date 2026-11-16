@@ -76,6 +76,27 @@ pub struct DeviceEntry {
     pub online: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_address: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<LightLook>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LightLook {
+    pub on: bool,
+    pub color_hex: String,
+    pub brightness: u8,
+    pub mirek: u16,
+}
+
+impl LightLook {
+    pub fn from_live(config: &PluginConfig) -> Self {
+        Self {
+            on: true,
+            color_hex: config.live_color_hex.clone(),
+            brightness: config.live_brightness,
+            mirek: config.live_mirek,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,7 +133,37 @@ impl Default for PresetConfig {
     }
 }
 
+pub const PRESET_COUNT: usize = 8;
+
 impl PresetConfig {
+    pub fn slot(&self, number: usize) -> Option<&PresetSlot> {
+        Some(match number {
+            1 => &self.preset_1,
+            2 => &self.preset_2,
+            3 => &self.preset_3,
+            4 => &self.preset_4,
+            5 => &self.preset_5,
+            6 => &self.preset_6,
+            7 => &self.preset_7,
+            8 => &self.preset_8,
+            _ => return None,
+        })
+    }
+
+    pub fn slot_mut(&mut self, number: usize) -> Option<&mut PresetSlot> {
+        Some(match number {
+            1 => &mut self.preset_1,
+            2 => &mut self.preset_2,
+            3 => &mut self.preset_3,
+            4 => &mut self.preset_4,
+            5 => &mut self.preset_5,
+            6 => &mut self.preset_6,
+            7 => &mut self.preset_7,
+            8 => &mut self.preset_8,
+            _ => return None,
+        })
+    }
+
     pub fn preset_for_action(&self, action: &str) -> Option<PresetSlot> {
         if action == actions::PRESET_1 {
             return Some(self.preset_1.clone());
