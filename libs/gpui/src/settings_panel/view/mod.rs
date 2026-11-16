@@ -3688,6 +3688,17 @@ impl SettingsPanelView {
         if let Some(accent) = self.option_accent(index) {
             cell = cell.child(settings_accent_dot(accent));
         }
+        let edits = matches!(
+            self.level_rows()[index].control,
+            RowControl::Text(_) | RowControl::Color(_)
+        );
+        if !edits {
+            let fact = self.display_value(index);
+            return cell.flex_none().children(
+                (!fact.is_empty())
+                    .then(|| settings_tag(fact, self.value_tone(index), row, self.kit)),
+            );
+        }
         let value = if self.edit_selects_all(index) {
             settings_selected_text(self.kit.value(self.display_value(index)), self.kit)
         } else {
