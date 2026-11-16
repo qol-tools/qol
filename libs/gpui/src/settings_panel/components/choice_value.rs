@@ -1,10 +1,10 @@
 use gpui::prelude::*;
-use gpui::{div, img, px, rgba, App, RenderOnce, Window};
+use gpui::{div, img, px, App, RenderOnce, Window};
 
 use super::{
     RowGround, CHOICE_CHEVRON_HEIGHT, CHOICE_CHEVRON_HOVER_STEP, CHOICE_CHEVRON_REST_OPACITY,
     CHOICE_CHEVRON_WIDTH, CHOICE_PICTURE_HEIGHT, CHOICE_PICTURE_WIDTH, SETTINGS_ROW_GROUP,
-    WELL_HEIGHT, WELL_PICTURE_HEIGHT, WELL_PICTURE_WIDTH, WELL_WIDTH,
+    WELL_HEIGHT, WELL_WIDTH,
 };
 use crate::kit::Kit;
 use crate::pictures::{self, PictureContext, Tone};
@@ -120,6 +120,11 @@ impl RenderOnce for SettingsChoiceArt {
     }
 }
 
+fn lettered(art: &ChoiceArt) -> bool {
+    let (ChoiceArt::Picture(spec) | ChoiceArt::Stack { front: spec, .. }) = art;
+    spec.starts_with("letters:")
+}
+
 #[derive(IntoElement)]
 pub struct SettingsWell {
     art: ChoiceArt,
@@ -139,19 +144,11 @@ impl RenderOnce for SettingsWell {
             qol_theme::runtime_theme().mode,
             qol_theme::runtime_accent_key(),
         );
-        div()
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .w(px(WELL_WIDTH))
-            .h(px(WELL_HEIGHT))
-            .rounded(px(qol_theme::RADIUS_TIGHT))
-            .bg(rgba(self.row.rest(self.kit).well.packed()))
-            .child(
-                SettingsChoiceArt::new(self.art, self.row, context, self.kit)
-                    .sized(WELL_PICTURE_WIDTH, WELL_PICTURE_HEIGHT),
-            )
+        let shipped = !lettered(&self.art);
+        div().flex_none().children(shipped.then(|| {
+            SettingsChoiceArt::new(self.art, self.row, context, self.kit)
+                .sized(WELL_WIDTH, WELL_HEIGHT)
+        }))
     }
 }
 
@@ -210,6 +207,12 @@ mod tests {
     #[test]
     fn choice_tones_follow_the_row_ground() {
         let kit = kit();
+        assert!(super::lettered(&super::ChoiceArt::Picture(
+            "letters:TR".to_string()
+        )));
+        assert!(!super::lettered(&super::ChoiceArt::Picture(
+            "headset".to_string()
+        )));
         assert_eq!(
             choice_tones(RowGround::Pane, kit),
             ChoiceTones {

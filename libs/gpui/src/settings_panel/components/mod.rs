@@ -64,8 +64,6 @@ pub use toggle::SettingsToggle;
 pub const DIMMED_OPACITY: f32 = qol_theme::OPACITY_DISABLED;
 const WELL_WIDTH: f32 = 44.0;
 const WELL_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
-const WELL_PICTURE_WIDTH: f32 = 32.0;
-const WELL_PICTURE_HEIGHT: f32 = 20.0;
 const CHOICE_PICTURE_WIDTH: f32 = 56.0;
 const CHOICE_PICTURE_HEIGHT: f32 = 35.0;
 const CHOICE_CHEVRON_WIDTH: f32 = 8.0;
