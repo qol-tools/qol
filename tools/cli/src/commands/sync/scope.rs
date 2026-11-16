@@ -34,10 +34,10 @@ pub(crate) fn profile_dir() -> Result<PathBuf> {
 /// overridden path root is a private store, so a live tray has no say over it.
 pub(crate) fn is_host_store() -> bool {
     #[cfg(any(test, debug_assertions))]
-    if std::env::var_os(TEST_PATH_ROOT_ENV).is_some() {
-        return false;
-    }
-    true
+    let overridden = std::env::var_os(TEST_PATH_ROOT_ENV).is_some();
+    #[cfg(not(any(test, debug_assertions)))]
+    let overridden = false;
+    !overridden
 }
 
 pub(crate) fn github_auth_path() -> Result<PathBuf> {
