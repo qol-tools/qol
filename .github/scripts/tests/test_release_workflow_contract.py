@@ -495,6 +495,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_only_the_owner_overrides_the_review_and_only_for_the_commit_named(self):
         workflow = (ROOT / ".github/workflows/review-override.yml").read_text()
         self.assertIn("  issue_comment:\n    types: [created]\n", workflow.split("jobs:\n", 1)[0])
+        self.assertIn("\nrun-name: review override for comment ${{ github.event.comment.id }}\n", workflow.split("jobs:\n", 1)[0])
         override = workflow.split("jobs:\n", 1)[1]
         for contract in [
             "github.event.issue.pull_request &&",
