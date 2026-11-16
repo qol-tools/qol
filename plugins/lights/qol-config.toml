@@ -22,6 +22,7 @@ query = "connection_status"
 value_from = "state"
 label_map = { ok = "Connected", offline = "Offline", no_target = "No dongle found" }
 tone_map = { ok = "success", offline = "danger", no_target = "danger" }
+hide_values = ["ok"]
 
 [field.reconnect]
 type = "action"

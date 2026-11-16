@@ -1,13 +1,11 @@
 use gpui::prelude::*;
-use gpui::{div, img, px, rgb, rgba, App, RenderOnce, SharedString, Window};
+use gpui::{div, px, rgb, rgba, App, RenderOnce, SharedString, Window};
 use qol_theme::TextStyle;
 
-use super::{settings_description, RowGround};
+use super::{settings_description, RowGround, SettingsChevron};
 use crate::kit::{Kit, KEY_CHIP_HEIGHT};
-use crate::pictures;
 use crate::text::TextStyled;
 
-const LAUNCH_MARK_SIZE: f32 = 14.0;
 const LAUNCH_SEPARATOR: &str = " · ";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -110,12 +108,9 @@ impl SettingsLaunch {
 }
 
 impl RenderOnce for SettingsLaunch {
-    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let ink = launch_ink(self.row, self.kit);
         let ground = self.row.rest(self.kit);
-        let size_px = (LAUNCH_MARK_SIZE * window.scale_factor()).round() as u32;
-        let mark = pictures::open_outside(ink, size_px)
-            .map(|image| img(image).w(px(LAUNCH_MARK_SIZE)).h(px(LAUNCH_MARK_SIZE)));
         div()
             .flex_none()
             .flex()
@@ -136,13 +131,7 @@ impl RenderOnce for SettingsLaunch {
                     .text_color(rgb(ink))
                     .child(tag)
             }))
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(LAUNCH_MARK_SIZE))
-                    .h(px(LAUNCH_MARK_SIZE))
-                    .children(mark),
-            )
+            .child(SettingsChevron::new(self.row, self.kit))
     }
 }
 

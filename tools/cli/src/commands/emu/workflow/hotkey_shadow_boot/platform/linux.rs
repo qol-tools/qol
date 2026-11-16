@@ -9,7 +9,7 @@ use crate::commands::emu::workflow::hotkey_shadow_boot::platform::desktop::{
 use crate::commands::emu::workflow::hotkey_shadow_boot::platform::Verdict;
 use crate::commands::emu::BootedVm;
 use crate::progress::{step_label, StepKind};
-use qol_conventions::{local_base_url, TRACE_LOG_PATH};
+use qol_conventions::{local_base_url, GUEST_TRACE_LOG_PATH};
 use qol_dev_guest::GuestControlClient;
 
 use std::thread;
@@ -1206,7 +1206,7 @@ fn boot_diagnostics(
                 "/usr/bin/bash",
                 &[
                     "-lc",
-                    &format!("grep -E 'HOTKEY_|doctor' {TRACE_LOG_PATH} 2>/dev/null | tail -20 || true"),
+                    &format!("grep -E 'HOTKEY_|doctor' {GUEST_TRACE_LOG_PATH} 2>/dev/null | tail -20 || true"),
                 ],
             ),
         ),
@@ -1240,7 +1240,7 @@ fn boot_diagnostics(
                 "/usr/bin/bash",
                 &[
                     "-lc",
-                    &format!("grep -E 'PROFILE_CONFIG_MATERIALIZE|HOTKEY_|SHORTCUTS|SHORT' {TRACE_LOG_PATH} 2>/dev/null | head -40 || true"),
+                    &format!("grep -E 'PROFILE_CONFIG_MATERIALIZE|HOTKEY_|SHORTCUTS|SHORT' {GUEST_TRACE_LOG_PATH} 2>/dev/null | head -40 || true"),
                 ],
             ),
         ),
@@ -1308,7 +1308,7 @@ fn boot_diagnostics(
             "trace-full",
             command(
                 "/usr/bin/bash",
-                &["-lc", &format!("cat {TRACE_LOG_PATH} 2>/dev/null | tail -60 || true")],
+                &["-lc", &format!("cat {GUEST_TRACE_LOG_PATH} 2>/dev/null | tail -60 || true")],
             ),
         ),
     ] {
@@ -1414,7 +1414,7 @@ fn write_artifacts(
         .with_context(|| format!("failed to write {}", dump_path.display()))?;
     let trace = require_exec(
         guest,
-        command("/usr/bin/grep", &["HOTKEY_", TRACE_LOG_PATH]),
+        command("/usr/bin/grep", &["HOTKEY_", GUEST_TRACE_LOG_PATH]),
         COMMAND_TIMEOUT,
     )?;
     let trace_path = dir.join("hotkey-shadow-boot-trace.log");

@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use qol_conventions::TRACE_LOG_PATH;
+use qol_conventions::GUEST_TRACE_LOG_PATH;
 use qol_dev_guest::GuestControlClient;
 
 use crate::commands::emu::{qmp, BootedVm};
@@ -56,7 +56,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
             &[
                 "-E",
                 "ACTION_DISPATCH|WINACT_(DAEMON|DONE|EVAL|GLIDE|RESTORE)",
-                TRACE_LOG_PATH,
+                GUEST_TRACE_LOG_PATH,
             ],
         ),
         COMMAND_TIMEOUT,
@@ -342,7 +342,7 @@ fn require_active(guest: &mut GuestControlClient, expected: &str) -> Result<()> 
     if let Err(error) = result {
         let trace = require_exec(
             guest,
-            command("/usr/bin/grep", &["WINACT_RESTORE", TRACE_LOG_PATH]),
+            command("/usr/bin/grep", &["WINACT_RESTORE", GUEST_TRACE_LOG_PATH]),
             COMMAND_TIMEOUT,
         )?;
         bail!("{error:#}; restore trace: {}", trace.stdout.trim());

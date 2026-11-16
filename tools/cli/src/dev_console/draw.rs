@@ -771,7 +771,7 @@ mod tests {
     use crate::dev_console::key_bindings::{action_for, Action};
     use crate::dev_console::log_pane::DevLogFile;
 
-    use crate::dev_console::stream_view::{current_log_source, DEFAULT_TRACE_LOG_FILE};
+    use crate::dev_console::stream_view::current_log_source;
     use crate::dev_console::worktrees_panel::worktree_panel_rows;
 
     #[test]
@@ -1159,9 +1159,11 @@ mod tests {
         let mut trace = Dash::new(Vec::new());
         trace.view = View::Trace;
         let trace_text = render_text(&mut trace);
+        let trace_path = qol_config::trace_log_path().display().to_string();
+        let shown: String = trace_path.chars().take(40).collect();
         assert!(
-            trace_text.contains(DEFAULT_TRACE_LOG_FILE),
-            "trace pane should show trace file path"
+            trace_text.contains(&format!("trace file {shown}")),
+            "trace pane should show where the trace file path starts: {trace_path}"
         );
         assert!(
             !trace_text.contains("open -t"),

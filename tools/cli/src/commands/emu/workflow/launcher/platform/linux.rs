@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use qol_conventions::TRACE_LOG_PATH;
+use qol_conventions::GUEST_TRACE_LOG_PATH;
 use qol_dev_guest::GuestControlClient;
 
 use crate::commands::emu::{qmp, BootedVm};
@@ -54,7 +54,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
             &[
                 "-E",
                 "CMD_RECV|LAUNCHER_(DISMISS|FILTER|INDEX|INPUT|RENDER|SHOW)",
-                TRACE_LOG_PATH,
+                GUEST_TRACE_LOG_PATH,
             ],
         ),
         COMMAND_TIMEOUT,

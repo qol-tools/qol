@@ -167,8 +167,10 @@ pub fn validation_issues(config: &RemapConfig) -> Vec<String> {
         }
     }
     for (index, (from, to)) in config.char_swaps.iter().enumerate() {
-        if from.trim().is_empty() || to.trim().is_empty() {
-            issues.push(format!("char_swaps[{index}] contains an empty value"));
+        if !is_single_printable(from) || !is_single_printable(to) {
+            issues.push(format!(
+                "char_swaps[{index}] must hold two printable characters"
+            ));
         }
     }
     for (index, rule) in config.char_rules.iter().enumerate() {
@@ -189,15 +191,22 @@ pub fn validation_issues(config: &RemapConfig) -> Vec<String> {
                         "char_rules[{index}].from_key {from_key:?} is unknown"
                     ));
                 }
-                if to_char.is_empty() {
-                    issues.push(format!("char_rules[{index}].to_char is empty"));
+                if !is_single_printable(to_char) {
+                    issues.push(format!(
+                        "char_rules[{index}].to_char must be one printable character"
+                    ));
                 }
             }
             CharRule::ByChar {
                 from_char, to_char, ..
             } => {
-                if from_char.trim().is_empty() || to_char.trim().is_empty() {
+                if from_char.trim().is_empty() {
                     issues.push(format!("char_rules[{index}] contains an empty character"));
+                }
+                if !is_single_printable(to_char) {
+                    issues.push(format!(
+                        "char_rules[{index}].to_char must be one printable character"
+                    ));
                 }
             }
         }
@@ -292,6 +301,11 @@ pub fn validation_issues(config: &RemapConfig) -> Vec<String> {
     issues
 }
 
+fn is_single_printable(text: &str) -> bool {
+    let mut chars = text.trim().chars();
+    matches!((chars.next(), chars.next()), (Some(first), None) if !first.is_control())
+}
+
 fn validate_modifiers(path: &str, modifiers: &[String], issues: &mut Vec<String>) {
     for modifier in modifiers {
         if !matches!(
@@ -323,8 +337,8 @@ pub fn resolve(config: &RemapConfig) -> ResolvedConfig {
     for (a, b) in &config.char_swaps {
         let a = a.trim();
         let b = b.trim();
-        if a.is_empty() || b.is_empty() {
-            log::warn!("skipping char_swap with empty value");
+        if !is_single_printable(a) || !is_single_printable(b) {
+            log::warn!("skipping char_swap that is not two printable characters");
             continue;
         }
         char_swap_rules.push(ResolvedCharSwapRule {
@@ -345,6 +359,9 @@ pub fn resolve(config: &RemapConfig) -> ResolvedConfig {
                 if let Some(resolved) = resolve_char_rule(rule) {
                     char_rules.push(resolved);
                 }
+            }
+            CharRule::ByChar { to_char, .. } if !is_single_printable(to_char) => {
+                log::warn!("skipping char rule whose to_char is not one printable character");
             }
             CharRule::ByChar {
                 from_char,
@@ -640,10 +657,14 @@ fn resolve_char_rule(rule: &CharRule) -> Option<ResolvedCharRule> {
             global,
         } => {
             let key = keycode::parse_key(from_key)?;
+            if !is_single_printable(to_char) {
+                log::warn!("skipping char rule whose to_char is not one printable character");
+                return None;
+            }
             Some(ResolvedCharRule {
                 from_mods: parse_modifiers(from_mods),
                 from_key: key,
-                to_char: to_char.clone(),
+                to_char: to_char.trim().to_string(),
                 global: *global,
             })
         }
@@ -829,6 +850,90 @@ mod tests {
     fn contract_defaults_pass_semantic_validation() {
         let raw = super::super::config::builtin_defaults();
         assert_eq!(validation_issues(&raw), Vec::<String>::new());
+    }
+
+    fn char_rule_config(to_char: &str, by_key: bool) -> RemapConfig {
+        let rule = if by_key {
+            serde_json::json!({ "from_mods": ["ralt"], "from_key": "2", "to_char": to_char })
+        } else {
+            serde_json::json!({ "from_char": "<", "to_char": to_char })
+        };
+        serde_json::from_value(serde_json::json!({ "char_rules": [rule] })).unwrap()
+    }
+
+    #[test]
+    fn char_rule_to_char_longer_than_one_character_is_rejected_and_skipped() {
+        for by_key in [true, false] {
+            let raw = char_rule_config("ab", by_key);
+            let issues = validation_issues(&raw);
+            assert!(
+                issues
+                    .iter()
+                    .any(|i| i == "char_rules[0].to_char must be one printable character"),
+                "{issues:?}"
+            );
+            let resolved = resolve(&raw);
+            assert!(resolved.char_rules.is_empty());
+            assert!(resolved.char_swap_rules.is_empty());
+        }
+    }
+
+    #[test]
+    fn char_rule_to_char_with_a_control_character_is_rejected_and_skipped() {
+        for by_key in [true, false] {
+            for text in ["\n", "\u{7}", "\t"] {
+                let raw = char_rule_config(text, by_key);
+                assert!(
+                    validation_issues(&raw)
+                        .iter()
+                        .any(|i| i.contains("must be one printable character")),
+                    "{text:?}"
+                );
+                let resolved = resolve(&raw);
+                assert!(resolved.char_rules.is_empty());
+                assert!(resolved.char_swap_rules.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn char_swap_values_longer_than_one_character_are_rejected_and_skipped() {
+        let raw: RemapConfig =
+            serde_json::from_value(serde_json::json!({ "char_swaps": [["l", "ls -la"]] })).unwrap();
+        assert!(validation_issues(&raw)
+            .iter()
+            .any(|i| i == "char_swaps[0] must hold two printable characters"));
+        assert!(resolve(&raw).char_swap_rules.is_empty());
+    }
+
+    #[test]
+    fn char_rule_to_char_of_one_character_is_accepted() {
+        for by_key in [true, false] {
+            let raw = char_rule_config("€", by_key);
+            assert_eq!(validation_issues(&raw), Vec::<String>::new());
+            let resolved = resolve(&raw);
+            let typed = if by_key {
+                resolved.char_rules[0].to_char.clone()
+            } else {
+                resolved.char_swap_rules[0].to_char.clone()
+            };
+            assert_eq!(typed, "€");
+        }
+    }
+
+    #[test]
+    fn char_rule_to_char_is_trimmed_to_one_character() {
+        for by_key in [true, false] {
+            let raw = char_rule_config("  €  ", by_key);
+            assert_eq!(validation_issues(&raw), Vec::<String>::new());
+            let resolved = resolve(&raw);
+            let typed = if by_key {
+                resolved.char_rules[0].to_char.clone()
+            } else {
+                resolved.char_swap_rules[0].to_char.clone()
+            };
+            assert_eq!(typed, "€");
+        }
     }
 
     #[test]

@@ -1,4 +1,3 @@
-use crate::action_mark::ActionMark;
 use crate::kit::Chip;
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -8,7 +7,7 @@ use gpui::*;
 use qol_config::contract::resolve_slider_action;
 
 use super::super::components::{
-    display_layout_ghost, display_layout_stage, display_layout_tile, settings_action_mark,
+    display_layout_ghost, display_layout_stage, display_layout_tile, settings_action_busy,
     settings_action_spinner, settings_busy_message, settings_description, settings_label,
     settings_label_group, settings_message, settings_value_text, ChoiceArt, DisplayLayoutTile,
     RowGround, SettingsChoiceValue, SettingsFeedback, SettingsRow, SettingsValueTone, TileArt,
@@ -763,13 +762,9 @@ impl SettingsPanelView {
                 primary_ground,
                 palette,
             ),
-            Some(false) => settings_action_mark(
-                ("settings-display-layout-primary", 0usize),
-                ActionMark::Run,
-                false,
-                primary_ground,
-                palette,
-            ),
+            Some(false) => {
+                settings_action_busy(("settings-display-layout-primary", 0usize), false, palette)
+            }
             None => settings_description("unavailable", primary_ground, palette),
         };
         let mut primary_row =

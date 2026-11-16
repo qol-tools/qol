@@ -129,17 +129,7 @@ fn host_is_allowed(headers: &HeaderMap, port: u16) -> bool {
 }
 
 fn request_is_authorized(headers: &HeaderMap, token: &str) -> bool {
-    if header_string(headers, qol_conventions::HTTP_AUTH_HEADER) == Some(token) {
-        return true;
-    }
-    header_string(headers, header::COOKIE.as_str()).is_some_and(|cookies| {
-        cookies.split(';').any(|cookie| {
-            let Some((name, value)) = cookie.trim().split_once('=') else {
-                return false;
-            };
-            name == qol_conventions::HTTP_AUTH_FRAGMENT_KEY && value == token
-        })
-    })
+    header_string(headers, qol_conventions::HTTP_AUTH_HEADER) == Some(token)
 }
 
 fn is_mutating_method(method: &Method) -> bool {
@@ -268,12 +258,12 @@ mod tests {
     }
 
     #[test]
-    fn token_header_and_cookie_are_accepted() {
+    fn only_the_token_header_is_accepted() {
         let cases = [
             (qol_conventions::HTTP_AUTH_HEADER, "secret", true),
             (qol_conventions::HTTP_AUTH_HEADER, "wrong", false),
-            (header::COOKIE.as_str(), "other=x; qol_token=secret", true),
-            (header::COOKIE.as_str(), "qol_token=wrong", false),
+            (header::COOKIE.as_str(), "other=x; qol_token=secret", false),
+            (header::COOKIE.as_str(), "qol_token=secret", false),
         ];
         for (header_name, value, expected) in cases {
             let headers = headers_with(header_name, value);

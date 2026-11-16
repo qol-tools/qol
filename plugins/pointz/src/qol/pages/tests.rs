@@ -68,7 +68,7 @@ fn the_root_holds_the_feature_row_the_app_and_this_computer() {
     let shown: Vec<(&str, Option<&str>)> = root.groups[1]
         .rows
         .iter()
-        .map(|row| (row.label.as_str(), row.copies()))
+        .map(|row| (row.label.as_str(), row.value.as_deref()))
         .collect();
     assert_eq!(
         shown,
@@ -190,7 +190,7 @@ fn the_code_shows_only_on_the_pair_card_while_pairing_is_open() {
     let code = card.row("code").unwrap();
     assert_eq!(code.value.as_deref(), Some("482 913"));
     assert_eq!(code.detail.as_deref(), Some("Runs out in 58 s"));
-    assert_eq!(code.copies(), Some("482 913"));
+    assert!(!code.acts());
     assert_eq!(card.rows().count(), 1);
     let leave = card.leave.as_ref().unwrap();
     assert_eq!(

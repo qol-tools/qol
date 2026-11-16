@@ -223,7 +223,7 @@ pub fn mark(mark: Mark, size: f32, line: u32) -> MarkView {
 impl RenderOnce for MarkView {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let name = format!("mark-{}", self.mark.name());
-        tinted(&name, &self.mark.markup(), self.size, self.line, window)
+        tinted(&name, self.mark.markup(), self.size, self.line, window)
     }
 }
 
@@ -250,12 +250,9 @@ mod tests {
     }
 
     #[test]
-    fn every_solid_mark_draws_ink_at_16_px() {
+    fn every_mark_draws_ink_at_16_px() {
         for mark in Mark::ALL {
-            let Some(markup) = mark.solid_markup() else {
-                continue;
-            };
-            let source = markup.replace("currentColor", "#9a9aa1");
+            let source = mark.markup().replace("currentColor", "#9a9aa1");
             let tree = resvg::usvg::Tree::from_str(&source, &Default::default())
                 .unwrap_or_else(|error| panic!("{}: {error}", mark.name()));
             let mut pixmap = resvg::tiny_skia::Pixmap::new(16, 16).unwrap();

@@ -1586,7 +1586,7 @@ mod tests {
     #[test]
     fn pick_events_are_deduped_until_winner_or_positions_change() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         let raw = RawLine {
             ts_ms: 1,
             pid: "1".to_string(),
@@ -1601,7 +1601,7 @@ mod tests {
     #[test]
     fn register_monitors_compacts_debug_bounds_titles() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         runner.register_monitors(
             "target=MonitorBounds { x: 0.0, y: -40.0, width: 1800.0, height: 1169.0 }",
         );
@@ -1614,7 +1614,7 @@ mod tests {
     #[test]
     fn launcher_events_get_pretty_text_and_compact_titles() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         runner.push_monitor((0, -40, 1800, 1169));
 
         let show = runner.format_launcher_event(
@@ -1638,7 +1638,7 @@ mod tests {
     #[test]
     fn settings_events_group_under_settings_and_flag_a_shown_window_behind() {
         let args = Args::parse(&[OsString::from("settings")]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         let behind = runner
             .format_event(RawLine {
                 ts_ms: 1,
@@ -1685,7 +1685,7 @@ mod tests {
     #[test]
     fn only_settings_window_tags_leave_their_process_source() {
         let args = Args::parse(&[OsString::from("settings")]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         runner
             .pid_names
             .insert("42".to_string(), "qol-launcher".to_string());
@@ -1712,7 +1712,7 @@ mod tests {
     #[test]
     fn winact_done_marks_partial_after_failed_ax() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         let failed_ax = RawLine {
             ts_ms: 1,
             pid: "42".to_string(),
@@ -1741,7 +1741,7 @@ mod tests {
     #[test]
     fn monitor_events_get_python_style_labels() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         let publish = runner
             .format_event(RawLine {
                 ts_ms: 1,
@@ -1770,7 +1770,7 @@ mod tests {
     #[test]
     fn plugin_filter_keeps_publish_events_that_mention_plugin() {
         let args = Args::parse(&["launcher".into()]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         runner.process_raw(RawLine {
             ts_ms: 1,
             pid: "1".to_string(),
@@ -1793,7 +1793,7 @@ mod tests {
     #[test]
     fn focus_events_get_pretty_labels() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         let activate = runner
             .format_event(RawLine {
                 ts_ms: 1,
@@ -1935,7 +1935,7 @@ mod tests {
     #[test]
     fn picker_status_events_are_deduped_until_state_changes() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         let ready = || RawLine {
             ts_ms: 1,
             pid: "1".to_string(),
@@ -2191,7 +2191,7 @@ mod tests {
     }
 
     fn runner_with_pid(args: Args, pid: &str, process_name: &str) -> TraceRunner {
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         runner
             .pid_names
             .insert(pid.to_string(), process_name.to_string());
@@ -2239,7 +2239,7 @@ mod tests {
     #[test]
     fn toggle_details_switches_trace_group_mode() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         assert!(!runner.args.details);
         assert!(strip_ansi(&runner.toggle_details()).contains("Trace details: expanded"));
         assert!(runner.args.details);
@@ -2250,7 +2250,7 @@ mod tests {
     #[test]
     fn gpu_driver_sync_tags_map_to_their_source() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         for tag in [
             "GPU_DRIVER_SYNC_OBSERVE",
             "GPU_DRIVER_SYNC_NOTIFY",
@@ -2270,7 +2270,7 @@ mod tests {
     #[test]
     fn gpu_driver_sync_policy_result_events_format_failures() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         let raw = RawLine {
             ts_ms: 1,
             pid: "1".to_string(),
@@ -2303,7 +2303,7 @@ mod tests {
     #[test]
     fn gpu_driver_sync_policy_request_events_format_with_source() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         let raw = RawLine {
             ts_ms: 1,
             pid: "1".to_string(),
@@ -2319,7 +2319,7 @@ mod tests {
     #[test]
     fn gpu_driver_sync_events_format_with_source() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         let raw = RawLine {
             ts_ms: 1,
             pid: "1".to_string(),
@@ -2335,7 +2335,7 @@ mod tests {
     #[test]
     fn gpu_driver_sync_policy_events_pass_the_plugin_filter() {
         let args = Args::parse(&["gpu-driver-sync".into()]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         let raw = RawLine {
             ts_ms: 1,
             pid: "1".to_string(),
@@ -2350,7 +2350,7 @@ mod tests {
     #[test]
     fn gpu_driver_sync_plugin_filter_retains_only_gpu_events() {
         let args = Args::parse(&["gpu-driver-sync".into()]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
         let gpu_raw = RawLine {
             ts_ms: 1,
             pid: "1".to_string(),

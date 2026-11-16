@@ -17,14 +17,13 @@ use qol_gpui::settings_panel::components::{
     SettingsHint, SettingsToggle,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, settings_action_mark, settings_action_spinner,
+    adjacent_visible_row, escape_step, intent, settings_action_busy, settings_action_spinner,
     settings_busy_message, settings_list, settings_value_text, CustomHints, CustomPanelCallback,
     CustomSettingsBreadcrumbs, EscapeStep, Intent, SettingsDestination, SettingsGroupHeader,
     SettingsRow, SettingsValueTone, SETTINGS_LIST_GAP,
 };
 use qol_gpui::surface::SurfaceDismisser;
 use qol_gpui::text_edit::{self, TextField};
-use qol_gpui::ActionMark;
 use qol_peers::admin::{Request, Response};
 use qol_peers::enrollment::ExportedInvitation;
 use qol_peers::PeerId;
@@ -35,7 +34,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 const MAX_VISIBLE: usize = 9;
-const DANGER_VERBS: [&str; 5] = ["unlink", "remove", "abandon", "decline", "reject"];
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1500);
 const CARD_DEPTH: usize = 1;
 const CARD_ANIMATION: &str = "linked-devices-card-slide";
@@ -628,19 +626,11 @@ impl LinkedDevicesView {
                 values.child(settings_value_text(text.clone(), *tone, ground, kit))
             }
             Control::Toggle(on) => values.child(SettingsToggle::new(*on, ground, kit)),
-            Control::Chip => values.children(row.verb.filter(|_| !row.opens).map(|verb| {
-                settings_action_mark(
-                    (action_id, index),
-                    if DANGER_VERBS.contains(&verb) {
-                        ActionMark::Destroy
-                    } else {
-                        ActionMark::Run
-                    },
-                    busy,
-                    ground,
-                    kit,
-                )
-            })),
+            Control::Chip => values.children(
+                row.verb
+                    .filter(|_| !row.opens)
+                    .map(|_| settings_action_busy((action_id, index), busy, kit)),
+            ),
             Control::None => values,
         };
         SettingsRow::setting((row_id, index), kit)

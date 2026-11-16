@@ -1,8 +1,11 @@
 use anyhow::{anyhow, Result};
 use std::fmt;
 
+use super::device_programs::{self, DevicePrograms};
 use super::model::{AppRef, Shortcut, ShortcutAction};
 use super::platform;
+
+const PROGRAM_CHANGED: &str = "this shortcut's program was changed outside this device; save it again in Settings to allow it here";
 
 #[derive(Debug)]
 pub enum ExecuteByIdError {
@@ -43,14 +46,14 @@ pub fn execute(shortcut: &Shortcut) -> Result<()> {
     log::info!("Shortcut executing: id={} action={}", shortcut.id, action);
     qol_runtime::probe!("SHORTCUT_EXEC", "id={} action={action}", shortcut.id);
 
-    let result = match &shortcut.action {
+    let result = ensure_program_trusted(shortcut).and_then(|()| match &shortcut.action {
         ShortcutAction::OpenUrl {
             url,
             browser_override,
         } => open_url(url, browser_override.as_ref()),
         ShortcutAction::LaunchApp { app } => launch_app(app),
         ShortcutAction::PluginAction { plugin_id, action } => run_plugin_action(plugin_id, action),
-    };
+    });
 
     match &result {
         Ok(()) => {
@@ -74,6 +77,28 @@ pub fn execute(shortcut: &Shortcut) -> Result<()> {
     }
 
     result
+}
+
+fn ensure_program_trusted(shortcut: &Shortcut) -> Result<()> {
+    if !device_programs::carries_program(shortcut) {
+        return Ok(());
+    }
+    let device = device_programs::load().unwrap_or_else(|error| {
+        log::warn!(
+            "Shortcut programs unreadable: id={} error={:#}",
+            shortcut.id,
+            error
+        );
+        DevicePrograms::new()
+    });
+    ensure_program_matches(shortcut, &device)
+}
+
+fn ensure_program_matches(shortcut: &Shortcut, device: &DevicePrograms) -> Result<()> {
+    if device_programs::program_matches(shortcut, device) {
+        return Ok(());
+    }
+    Err(anyhow!(PROGRAM_CHANGED))
 }
 
 fn open_url(url: &str, browser: Option<&AppRef>) -> Result<()> {
@@ -126,4 +151,100 @@ fn trace_error(error: &anyhow::Error) -> String {
         .take(160)
         .map(|c| if c.is_ascii_control() { '_' } else { c })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shortcuts::model::ShortcutsConfig;
+
+    fn launch(id: &str, app_name: &str) -> Shortcut {
+        Shortcut {
+            id: id.to_string(),
+            name: id.to_string(),
+            enabled: true,
+            export_to_launcher: false,
+            source: None,
+            action: ShortcutAction::LaunchApp {
+                app: AppRef::Name {
+                    name: app_name.to_string(),
+                },
+            },
+        }
+    }
+
+    fn open_with(id: &str, browser: Option<&str>) -> Shortcut {
+        Shortcut {
+            id: id.to_string(),
+            name: id.to_string(),
+            enabled: true,
+            export_to_launcher: false,
+            source: None,
+            action: ShortcutAction::OpenUrl {
+                url: "https://x.io".to_string(),
+                browser_override: browser.map(|name| AppRef::Name {
+                    name: name.to_string(),
+                }),
+            },
+        }
+    }
+
+    fn device_of(shortcuts: Vec<Shortcut>) -> DevicePrograms {
+        device_programs::programs_of(&ShortcutsConfig { shortcuts })
+    }
+
+    #[test]
+    fn a_program_is_refused_without_a_device_entry() {
+        let device = DevicePrograms::new();
+        let cases = [
+            launch("app", "firefox"),
+            open_with("browser", Some("firefox")),
+        ];
+
+        for shortcut in cases {
+            let error = ensure_program_matches(&shortcut, &device).unwrap_err();
+            assert_eq!(error.to_string(), PROGRAM_CHANGED, "id: {}", shortcut.id);
+        }
+    }
+
+    #[test]
+    fn a_program_is_refused_when_it_differs_from_the_device_entry() {
+        let device = device_of(vec![
+            launch("app", "firefox"),
+            open_with("browser", Some("firefox")),
+        ]);
+        let cases = [launch("app", "npx"), open_with("browser", Some("npx"))];
+
+        for shortcut in cases {
+            let error = ensure_program_matches(&shortcut, &device).unwrap_err();
+            assert_eq!(error.to_string(), PROGRAM_CHANGED, "id: {}", shortcut.id);
+        }
+    }
+
+    #[test]
+    fn an_equal_program_and_a_program_less_shortcut_are_accepted() {
+        let device = device_of(vec![
+            launch("app", "firefox"),
+            open_with("browser", Some("firefox")),
+        ]);
+        let cases = [
+            launch("app", "firefox"),
+            open_with("browser", Some("firefox")),
+            open_with("plain", None),
+        ];
+
+        for shortcut in cases {
+            ensure_program_matches(&shortcut, &device).unwrap();
+        }
+    }
+
+    #[test]
+    fn execute_launches_nothing_when_the_device_file_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::paths::push_test_path_root(dir.path());
+
+        let error = execute(&launch("app", "firefox")).unwrap_err();
+
+        assert_eq!(error.to_string(), PROGRAM_CHANGED);
+    }
 }

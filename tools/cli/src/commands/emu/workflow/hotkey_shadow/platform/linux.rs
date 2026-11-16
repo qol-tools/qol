@@ -2,7 +2,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use qol_conventions::{local_base_url, DEFAULT_PORT, TRACE_LOG_PATH};
+use qol_conventions::{local_base_url, DEFAULT_PORT, GUEST_TRACE_LOG_PATH};
 use qol_dev_guest::GuestControlClient;
 
 use crate::commands::emu::{qmp, BootedVm};
@@ -325,7 +325,7 @@ fn write_artifacts(
         .with_context(|| format!("failed to write {}", dump_path.display()))?;
     let trace = require_exec(
         guest,
-        command("/usr/bin/grep", &["HOTKEY_", TRACE_LOG_PATH]),
+        command("/usr/bin/grep", &["HOTKEY_", GUEST_TRACE_LOG_PATH]),
         COMMAND_TIMEOUT,
     )?;
     if !trace

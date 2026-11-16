@@ -208,10 +208,12 @@ pub(super) fn parse_duration(value: &str) -> Result<Duration> {
 }
 
 pub(super) fn print_help(command_name: &str) {
+    let default_log_file = qol_config::trace_log_path();
+    let default_log_file = default_log_file.display();
     println!(
         "qol {command_name} [plugin|focus] [flags]\n\
          \n\
-         Runtime trace formatter for {DEFAULT_LOG_FILE}.\n\
+         Runtime trace formatter for {default_log_file}.\n\
          \n\
          Flags:\n\
            -f, --focus-only        focus events only\n\

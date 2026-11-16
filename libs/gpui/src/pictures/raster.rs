@@ -71,15 +71,6 @@ pub fn chevron(line: u32, width_px: u32, height_px: u32) -> Option<Arc<RenderIma
     render_markup(key, &source, width_px, height_px, false)
 }
 
-pub fn open_outside(line: u32, size_px: u32) -> Option<Arc<RenderImage>> {
-    icon(
-        "open-outside",
-        super::svg::OPEN_OUTSIDE_MARKUP,
-        line,
-        size_px,
-    )
-}
-
 pub fn icon(name: &str, markup: &str, ink: u32, size_px: u32) -> Option<Arc<RenderImage>> {
     let key = CacheKey {
         spec: format!("icon:{name}"),

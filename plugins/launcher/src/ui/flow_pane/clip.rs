@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -224,9 +224,23 @@ pub fn tile(
             return well.bg(rgb(fill));
         }
         if let Some(path) = spec.thumb_path() {
+            let drawn = kind_mark(spec, entry);
+            let line = Mark::line_on(&ground);
+            let picture = img(path.clone()).with_fallback(move || {
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .size(px(size))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .children(drawn.map(|drawn| mark(drawn, glyph, line)))
+                    .into_any_element()
+            });
             return well
                 .bg(rgba(ground.well.packed()))
-                .child(covered(path, size, size));
+                .child(framed(picture, &path, size, size));
         }
     }
     let well = well.bg(rgba(ground.well.packed()));
@@ -268,8 +282,12 @@ fn mark_of_kind(kind: &str) -> Option<Mark> {
 }
 
 fn covered(path: PathBuf, width: f32, height: f32) -> Div {
-    let picture = img(path.clone()).absolute().left_0().top_0();
-    let picture = match imagesize::size(&path) {
+    framed(img(path.clone()), &path, width, height)
+}
+
+fn framed(picture: Img, path: &Path, width: f32, height: f32) -> Div {
+    let picture = picture.absolute().left_0().top_0();
+    let picture = match imagesize::size(path) {
         Ok(image) => {
             let (cover_width, cover_height) =
                 cover_size((image.width as f32, image.height as f32), width, height);

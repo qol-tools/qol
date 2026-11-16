@@ -2,7 +2,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use qol_conventions::TRACE_LOG_PATH;
+use qol_conventions::GUEST_TRACE_LOG_PATH;
 
 use crate::commands::emu::{qmp, BootedVm};
 use crate::progress::{step_label, StepKind};
@@ -101,7 +101,10 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
 
     let probes = require_exec(
         &mut guest,
-        command("/usr/bin/grep", &["-E", TRACE_PATTERN, TRACE_LOG_PATH]),
+        command(
+            "/usr/bin/grep",
+            &["-E", TRACE_PATTERN, GUEST_TRACE_LOG_PATH],
+        ),
         COMMAND_TIMEOUT,
     )?;
     let mut traces = probes

@@ -234,6 +234,10 @@ pub fn shortcuts_path() -> Result<PathBuf> {
     active_scope_store().map(|s| s.shortcuts_path())
 }
 
+pub fn shortcut_programs_path() -> Result<PathBuf> {
+    active_scope_store().map(|s| s.shortcut_programs_path())
+}
+
 pub fn task_runner_config_path() -> Result<PathBuf> {
     active_scope_store().map(|s| s.task_runner_path())
 }
@@ -397,6 +401,7 @@ mod tests {
             (profile_plugin_configs_dir(), "plugin-configs"),
             (hotkeys_path(), "hotkeys.json"),
             (shortcuts_path(), "shortcuts.json"),
+            (shortcut_programs_path(), "shortcut-programs.json"),
             (task_runner_config_path(), "task-runner.json"),
             (github_token_path(), ".github-token"),
             (github_auth_path(), ".github-auth.json"),
