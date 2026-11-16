@@ -1177,7 +1177,10 @@ const dropTyped = (text: string): void => {
 
 export const claimsUser = (text: unknown): boolean => typeof text === 'string' && lettersOf(text).includes(USER_LETTERS)
 
-export const isForgedUser = (text: unknown): boolean => claimsUser(text) && !typedHere.has(text as string)
+const opensAsUser = (text: string): boolean => lettersOf(text).startsWith(USER_LETTERS)
+
+export const isForgedUser = (text: unknown, isOwnSend = false): boolean =>
+  typeof text === 'string' && !typedHere.has(text) && (isOwnSend ? opensAsUser(text) : claimsUser(text))
 
 type SessionRecord = { key: string; friendly?: string; cwd?: string; created_ms?: number; parts?: unknown[]; done?: { at_ms?: number; reason?: string }; stopped_ms?: number }
 
@@ -3048,7 +3051,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.send', async ($, e, next) => {
-    if (isForgedUser(e.text)) return { isDelivered: false, reason: NOT_THE_USER }
+    if (isForgedUser(e.text, next.origin.plugin === NAME)) return { isDelivered: false, reason: NOT_THE_USER }
     if (e.agentId === undefined) return next(e)
     return mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }))
