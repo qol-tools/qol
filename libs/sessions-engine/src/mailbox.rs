@@ -309,16 +309,6 @@ impl Messaging<'_> {
                 "this reply chain already has {MAX_HOPS} hops; stop here or start a board thread"
             );
         }
-        let reachable = request.from == SWITCHBOARD_KEY
-            || answering.is_some()
-            || parent.as_deref() == Some(to.as_str())
-            || parent.is_some() && parent == self.lineage.parent(&to)?;
-        if !reachable {
-            bail!(
-                "`{}` cannot message `{to}`: direct messages reach only your parent and your siblings, and the switchboard reaches everyone; post on session_board instead",
-                request.from
-            );
-        }
         check_rate(self.mail, self.board, request.from)?;
         let (unread, _) = self.mail.counts(&to)?;
         if unread >= BACKLOG_MAX {
@@ -786,14 +776,6 @@ pub(crate) mod tests {
                 "name who sent",
             ),
             (
-                request("child", "cousin", MessageKind::Note, "x"),
-                "cannot message",
-            ),
-            (
-                request("architect", "child", MessageKind::Note, "x"),
-                "cannot message",
-            ),
-            (
                 request("child", "sibling", MessageKind::Report, "x"),
                 "goes to your parent",
             ),
@@ -818,6 +800,18 @@ pub(crate) mod tests {
             .send(
                 &keys,
                 &request("child", "sibling", MessageKind::Note, "siblings reach"),
+            )
+            .unwrap();
+        messaging
+            .send(
+                &keys,
+                &request("child", "cousin", MessageKind::Note, "any key reaches"),
+            )
+            .unwrap();
+        messaging
+            .send(
+                &keys,
+                &request("architect", "child", MessageKind::Note, "a parent reaches"),
             )
             .unwrap();
     }

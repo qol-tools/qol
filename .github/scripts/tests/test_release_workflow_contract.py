@@ -737,7 +737,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "needs.qol_tray_linux_candidate.result == 'success'",
             "needs.qol_tray_macos_candidate.result == 'success'",
             "needs.qol_tray_windows_candidate.result == 'success'",
-            'git push --atomic origin "${new_tags[@]}"',
+            'git push --atomic "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${new_tags[@]}"',
         ]
         for contract in required:
             self.assertIn(contract, workflow)
@@ -856,10 +856,41 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         checkout = named_step(prepare, "Checkout successful source commit", "      ")
         self.assertIn("token: ${{ steps.app.outputs.token }}", checkout)
         self.assertLess(prepare.index("Mint the versioning app token"), prepare.index("Checkout successful source commit"))
-        self.assertEqual(workflow.count("secrets.VERSIONING_APP_PRIVATE_KEY"), 1)
-        self.assertEqual(workflow.count("steps.app.outputs.token"), 1)
         self.assertNotIn("VERSIONING_DEPLOY_KEY", workflow)
         self.assertNotIn("ssh-key:", workflow)
+
+    def test_release_tags_are_pushed_by_the_versioning_app_and_start_nothing(self):
+        workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
+        job = workflow.split("  tag_and_dispatch:\n", 1)[1].split("\n  qol_tray_linux_publish:", 1)[0]
+        head = job.split("    steps:", 1)[0]
+        self.assertIn("    environment: versioning\n", head)
+        self.assertIn("      contents: read\n", head)
+        self.assertNotIn("contents: write", head)
+        checkout = job.split("    steps:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("persist-credentials: false", checkout)
+        mint = named_step(job, "Mint the versioning app token", "      ")
+        for contract in [
+            "uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "client-id: ${{ vars.VERSIONING_APP_CLIENT_ID }}",
+            "private-key: ${{ secrets.VERSIONING_APP_PRIVATE_KEY }}",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, mint)
+        self.assertEqual([line.strip() for line in mint.splitlines() if "permission-" in line], ["permission-contents: write"])
+        tags = named_step(job, "Create immutable tags", "      ")
+        self.assertIn("APP_TOKEN: ${{ steps.app.outputs.token }}", tags)
+        self.assertEqual(job.count("steps.app.outputs.token"), 1)
+        self.assertEqual(job.count("APP_TOKEN"), 2)
+        self.assertNotIn("git remote set-url", job)
+        self.assertLess(job.index("Attest exact release candidate"), job.index("Mint the versioning app token"))
+        self.assertEqual(workflow.count("secrets.VERSIONING_APP_PRIVATE_KEY"), 2)
+        self.assertEqual(workflow.count("steps.app.outputs.token"), 2)
+        for name in ["release.yml", "qol-tray-release.yml"]:
+            with self.subTest(workflow=name):
+                triggers = (ROOT / ".github/workflows" / name).read_text().split("\npermissions:", 1)[0]
+                self.assertIn("  workflow_dispatch:\n", triggers)
+                self.assertNotIn("push:", triggers)
+                self.assertNotIn("tags:", triggers)
 
     def test_ci_runs_release_profile_builds(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()

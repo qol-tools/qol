@@ -813,8 +813,9 @@ jobs:
       }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    environment: versioning
     permissions:
-      contents: write
+      contents: read
       actions: write
       statuses: write
     env:
@@ -826,6 +827,7 @@ jobs:
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -854,8 +856,18 @@ jobs:
             --build-reports "${RUNNER_TEMP}/candidate-builds" \
             --report "${RUNNER_TEMP}/release-attestation-report.json"
 
+      - name: Mint the versioning app token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.VERSIONING_APP_CLIENT_ID }}
+          private-key: ${{ secrets.VERSIONING_APP_PRIVATE_KEY }}
+          permission-contents: write
+
       - name: Create immutable tags
         shell: bash
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -euo pipefail
           git fetch --tags --force
@@ -874,7 +886,7 @@ jobs:
             new_tags+=("${tag}")
           done
           ((${#new_tags[@]})) || exit 0
-          git push --atomic origin "${new_tags[@]}"
+          git push --atomic "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${new_tags[@]}"
 
       - name: Dispatch releases
         shell: bash
