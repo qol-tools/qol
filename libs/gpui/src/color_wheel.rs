@@ -9,7 +9,9 @@ use gpui::*;
 const DISC_SIZE: f32 = 200.0;
 const POPUP_SIZE: f32 = DISC_SIZE + 2.0 * (WHEEL_PADDING + WHEEL_BORDER);
 const DISC_RADIUS: f64 = DISC_SIZE as f64 / 2.0 - 1.0;
-const THUMB_SIZE: f32 = 16.0;
+const THUMB_SIZE: f32 = 20.0;
+const THUMB_OUTLINE: f32 = 1.0;
+const THUMB_RING: f32 = 2.0;
 const NUDGE_STEP: f64 = 6.0;
 const NUDGE_STEP_FAST: f64 = 18.0;
 const WHEEL_PADDING: f32 = 8.0;
@@ -351,9 +353,15 @@ impl ColorWheel {
                             .w(px(THUMB_SIZE))
                             .h(px(THUMB_SIZE))
                             .rounded_none()
-                            .border_1()
-                            .border_color(rgb(style.thumb_border))
-                            .bg(rgb(self.thumb_color())),
+                            .border(px(THUMB_OUTLINE))
+                            .border_color(rgb(style.bg))
+                            .child(
+                                div()
+                                    .size_full()
+                                    .border(px(THUMB_RING))
+                                    .border_color(rgb(style.thumb_border))
+                                    .bg(rgb(self.thumb_color())),
+                            ),
                     ),
             )
     }
