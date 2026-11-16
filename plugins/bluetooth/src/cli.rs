@@ -463,7 +463,7 @@ fn managed_devices_check() -> Result<DoctorCheckResult> {
             "managed_devices",
             "automatic reconnect has no managed devices",
         )
-        .with_fix("add paired device addresses in Bluetooth settings"));
+        .with_fix("turn on Reconnect automatically for a saved device in Bluetooth settings"));
     }
     Ok(DoctorCheckResult::ok(
         "managed_devices",

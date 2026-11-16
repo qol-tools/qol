@@ -141,6 +141,26 @@ impl ZigbeeController {
         Ok(nwk)
     }
 
+    pub fn remove_device(&self, ieee: &[u8; 8]) -> Result<()> {
+        let known = self
+            .registry
+            .lock()
+            .map_err(|_| anyhow::anyhow!("device table lock poisoned"))?
+            .by_ieee_address(ieee)
+            .cloned();
+        let Some(known) = known else {
+            return Ok(());
+        };
+        let nwk = self
+            .resolve_nwk_address(ieee)
+            .unwrap_or(known.network_address);
+        let left = coordinator::request_leave(&self.engine, nwk, ieee);
+        if let Ok(mut registry) = self.registry.lock() {
+            registry.remove(ieee);
+        }
+        left
+    }
+
     pub fn events(&self) -> &Receiver<ZigbeeEvent> {
         &self.events_rx
     }

@@ -15,10 +15,10 @@ use qol_gpui::settings_panel::components::{
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_action_busy, settings_busy_message,
-    settings_connection_spinner, settings_description, settings_list, settings_value_text,
-    CustomHints, CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier,
-    CustomSettingsBreadcrumbs, EscapeStep, Intent, SettingsDestination, SettingsGroupHeader,
-    SettingsRow, SettingsValueTone, SETTINGS_LIST_GAP,
+    settings_connection_spinner, settings_description, settings_list, settings_tag, CustomHints,
+    CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
+    EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsValueTone,
+    SETTINGS_LIST_GAP,
 };
 use qol_gpui::surface::SurfaceDismisser;
 
@@ -579,7 +579,7 @@ impl UpdatesView {
                         kit,
                     )
                 }))
-                .child(settings_value_text(
+                .child(settings_tag(
                     target.value.clone(),
                     value_tone(target.tone),
                     ground,

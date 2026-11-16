@@ -159,6 +159,25 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(entry["tag"], f"qol-cli-sessions-v{units['qol-cli-sessions']['version']}")
         self.assertTrue(entry["file"].startswith("qol-cli-sessions"), entry)
 
+    def test_the_manifest_names_the_settings_files_a_plugin_ships(self):
+        units = build.plugin_units(build.ROOT)
+        entry = build.installed_files(build.ROOT, units["qol-cli-sessions"])
+        self.assertEqual(entry["contract_files"], ["qol-config.toml", "qol-runtime.toml"])
+
+    def test_the_build_carries_each_settings_file_beside_the_binary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plugin = root / "plugins/demo"
+            plugin.mkdir(parents=True)
+            (plugin / "qol-config.toml").write_text("page", encoding="utf-8")
+            unit = {"dir": "plugins/demo"}
+            entry = {"tag": "qol-demo-v1.0.0", "contract_files": build.contract_files(root, unit)}
+            self.assertEqual(entry["contract_files"], ["qol-config.toml"])
+            build.stage_contract_files(root, unit, entry, root / "out")
+            staged = root / "out/plugins/qol-demo-v1.0.0"
+            self.assertEqual([path.name for path in staged.iterdir()], ["qol-config.toml"])
+            self.assertEqual((staged / "qol-config.toml").read_text(encoding="utf-8"), "page")
+
     def test_each_platform_names_its_own_release_file_and_target(self):
         units = build.plugin_units(build.ROOT)
         files = {
