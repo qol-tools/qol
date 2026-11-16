@@ -162,6 +162,16 @@ class PathTests(unittest.TestCase):
         found = gate.review(api, 7, HEAD, 1, LISTED)
         self.assertEqual(found.files, [".github/workflows/ci.yml"])
 
+    def test_a_path_with_a_control_character_fails_closed(self):
+        for path in ["a\nb/CLAUDE.md", ".github/x\ny", "docs/a\rb.md", "docs/\x00", "docs/\x7f"]:
+            with self.subTest(path=path), self.assertRaises(gate.Unverifiable):
+                gate.protected(["README.md", path], LISTED)
+
+    def test_a_pull_request_adding_a_path_with_a_newline_is_refused(self):
+        verdict = gate.judge(pull_env(), FakeApi([pull()], files={7: ["a\nb/CLAUDE.md"]}), LISTED)
+        self.assertEqual((verdict.conclusion, verdict.title), ("failure", "The gate could not verify this commit"))
+        self.assertIn("control characters", verdict.summary)
+
     def test_a_path_listed_twice_is_named_once(self):
         self.assertEqual(gate.protected([".github/a.yml", ".github/a.yml"], LISTED), [".github/a.yml"])
 
@@ -390,6 +400,21 @@ class QueueRunTests(unittest.TestCase):
             blobs={(HEAD, path): None, (GROUP, path): None},
         )
         self.assertEqual(self.judge(api).conclusion, "success")
+
+    def test_entries_sharing_one_group_commit_are_told_apart_by_the_branch_number(self):
+        path = ".github/workflows/ci.yml"
+        api = FakeApi(
+            compare=[path],
+            queue=[queue_entry(6, 1, GROUP, OLD, 1), queue_entry(7, 2, GROUP, HEAD, 1)],
+            files={6: ["README.md"], 7: [path]},
+            comments={7: [approval()]},
+            blobs={(HEAD, path): "same", (GROUP, path): "same"},
+        )
+        self.assertEqual(self.judge(api).conclusion, "success")
+        refused = FakeApi(compare=[path], queue=[queue_entry(6, 1, GROUP, OLD, 1), queue_entry(7, 2, GROUP, HEAD, 1)], files={6: [path], 7: ["README.md"]})
+        verdict = self.judge(refused)
+        self.assertEqual(verdict.conclusion, "failure")
+        self.assertIn("#6 changes", verdict.summary)
 
     def test_an_entry_that_cannot_be_found_fails_closed(self):
         protected = [".github/workflows/ci.yml"]

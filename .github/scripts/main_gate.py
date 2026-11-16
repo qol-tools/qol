@@ -17,6 +17,7 @@ OWNER = "KMRH47"
 PATHS_FILE = Path(__file__).resolve().parents[1] / "main-gate-paths"
 LIST_NAME = "`.github/main-gate-paths`"
 SHA = re.compile(r"[0-9a-f]{40}")
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 APPROVAL = re.compile(r"/gate-approve ([0-9a-f]{40})")
 QUEUE_BRANCH = re.compile(r"gh-readonly-queue/main/pr-(\d+)-[0-9a-f]{40}")
 PULL_FILES_CAP = 3000
@@ -199,6 +200,9 @@ class GitHub:
 
 
 def protected(paths: list[str], listed: list[str]) -> list[str]:
+    unreadable = [path for path in paths if CONTROL.search(path)]
+    if unreadable:
+        raise Unverifiable(f"{len(unreadable)} changed paths hold control characters, such as {unreadable[0]!r}")
     compiled = [pattern_regex(pattern) for pattern in listed]
     return list(dict.fromkeys(path for path in paths if any(regex.match(path) for regex in compiled)))
 
@@ -294,11 +298,9 @@ def queue_verdict(api: GitHub, sha: str, branch: str, listed: list[str]) -> Verd
     if not changed:
         return Verdict(sha, SUCCESS, "No protected path changed", f"None of the {len(files)} files this merge group changes is on {LIST_NAME}.")
     entries = api.queue_entries()
-    own = next((entry for entry in entries if entry["oid"] == sha), None)
+    own = next((entry for entry in entries if entry["oid"] == sha and entry["number"] == int(named.group(1))), None)
     if own is None:
-        raise Unverifiable(f"no merge queue entry has the commit `{sha[:7]}`")
-    if own["number"] != int(named.group(1)):
-        raise Unverifiable(f"the queue branch names #{named.group(1)} and the queue entry is #{own['number']}")
+        raise Unverifiable(f"no merge queue entry of #{named.group(1)} has the commit `{sha[:7]}`")
     group = sorted((entry for entry in entries if entry["position"] <= own["position"]), key=lambda entry: entry["position"])
     reviews = [review(api, entry["number"], entry["head"], entry["changed_files"], listed) for entry in group]
     unbound = [path for path in changed if not bound(api, sha, path, reviews)]
