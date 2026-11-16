@@ -391,7 +391,7 @@ fn popup_bounds(
 ) -> Bounds<Pixels> {
     let width = POPUP_SIZE;
     let height = POPUP_SIZE;
-    let anchor_left = (parent.origin.x + anchor.origin.x).to_f64() as f32;
+    let anchor_right = (parent.origin.x + anchor.origin.x + anchor.size.width).to_f64() as f32;
     let anchor_top = (parent.origin.y + anchor.origin.y).to_f64() as f32;
     let anchor_bottom = anchor_top + anchor.size.height.to_f64() as f32;
     let display_left = display.origin.x.to_f64() as f32 + WINDOW_MARGIN;
@@ -407,7 +407,7 @@ fn popup_bounds(
     };
     Bounds::new(
         point(
-            px(anchor_left.clamp(display_left, max_x)),
+            px((anchor_right - width).clamp(display_left, max_x)),
             px(preferred_y.clamp(display_top, max_y)),
         ),
         size(px(width), px(height)),
@@ -621,12 +621,12 @@ mod tests {
     }
 
     #[test]
-    fn popup_placement_anchors_flips_and_clamps_to_the_display() {
+    fn popup_placement_ends_at_the_anchors_right_edge_flips_and_clamps() {
         let anchor = bounds(16.0, 80.0, 488.0, 36.0);
         let display = bounds(0.0, 0.0, 1000.0, 1080.0);
         let cases = [
-            (bounds(200.0, 200.0, 520.0, 170.0), (216.0, 316.0)),
-            (bounds(200.0, 800.0, 520.0, 170.0), (216.0, 662.0)),
+            (bounds(200.0, 200.0, 520.0, 170.0), (486.0, 316.0)),
+            (bounds(200.0, 800.0, 520.0, 170.0), (486.0, 662.0)),
             (bounds(900.0, 100.0, 520.0, 170.0), (774.0, 216.0)),
         ];
         for (parent, expected) in cases {
