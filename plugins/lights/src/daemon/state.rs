@@ -442,6 +442,7 @@ impl DaemonState {
     // A full re-init (close serial + reopen) is handled by the Unavailable→reload
     // path in dispatch_action, not here.
     fn reload(&mut self) -> DaemonOutcome {
+        persist::flush();
         let config = match store::load() {
             Ok(c) => c,
             Err(e) => return DaemonOutcome::Error(e.to_string()),

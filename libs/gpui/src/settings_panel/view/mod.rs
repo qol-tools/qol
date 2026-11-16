@@ -3694,10 +3694,14 @@ impl SettingsPanelView {
         );
         if !edits {
             let fact = self.display_value(index);
-            return cell.flex_none().children(
-                (!fact.is_empty())
-                    .then(|| settings_tag(fact, self.value_tone(index), row, self.kit)),
-            );
+            return cell
+                .flex_none()
+                .max_w(relative(VALUE_CELL_MAX_FRACTION))
+                .justify_end()
+                .children(
+                    (!fact.is_empty())
+                        .then(|| settings_tag(fact, self.value_tone(index), row, self.kit)),
+                );
         }
         let value = if self.edit_selects_all(index) {
             settings_selected_text(self.kit.value(self.display_value(index)), self.kit)

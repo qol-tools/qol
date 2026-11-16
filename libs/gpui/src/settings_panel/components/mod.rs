@@ -402,6 +402,19 @@ pub fn settings_label_group(
         .children(description.map(|text| settings_description(text, row, kit)))
 }
 
+fn tag_ink(tone: SettingsValueTone, row: RowGround, kit: Kit) -> u32 {
+    let ground = row.rest(kit);
+    match (row, tone) {
+        (RowGround::Band, SettingsValueTone::Muted) => ground.soft,
+        (RowGround::Band, _) => ground.ink,
+        (RowGround::Pane, SettingsValueTone::Normal) => ground.soft,
+        (RowGround::Pane, SettingsValueTone::Muted) => ground.faint,
+        (RowGround::Pane, SettingsValueTone::Attention) => kit.palette.warning_ink,
+        (RowGround::Pane, SettingsValueTone::Danger) => kit.palette.danger,
+        (RowGround::Pane, SettingsValueTone::Success) => kit.palette.success,
+    }
+}
+
 pub fn settings_tag(
     text: impl Into<SharedString>,
     tone: SettingsValueTone,
@@ -415,15 +428,7 @@ pub fn settings_tag(
             .min_w_0()
             .overflow_hidden(),
     );
-    match (tone, row) {
-        (SettingsValueTone::Attention, _) => tag.text_color(rgb(kit.palette.warning_ink)),
-        (SettingsValueTone::Danger, _) => tag.text_color(rgb(kit.palette.danger)),
-        (SettingsValueTone::Success, _) => tag.text_color(rgb(kit.palette.success)),
-        (SettingsValueTone::Normal | SettingsValueTone::Muted, RowGround::Band) => {
-            tag.text_color(rgb(ground.ink))
-        }
-        (SettingsValueTone::Normal | SettingsValueTone::Muted, RowGround::Pane) => tag,
-    }
+    tag.text_color(rgb(tag_ink(tone, row, kit)))
 }
 
 pub fn settings_tagged_label_group(
@@ -695,7 +700,9 @@ pub fn settings_busy_message(
 
 #[cfg(test)]
 mod tests {
-    use super::RowGround;
+    use super::{tag_ink, RowGround, SettingsValueTone};
+    use crate::kit::Kit;
+    use crate::theme::{ThemeMode, DARK_SYSTEM};
 
     #[test]
     fn row_ground_is_band_only_with_selection_and_body_focus() {
@@ -703,5 +710,25 @@ mod tests {
         assert_eq!(RowGround::of(false, true), RowGround::Pane);
         assert_eq!(RowGround::of(true, false), RowGround::Pane);
         assert_eq!(RowGround::of(true, true), RowGround::Band);
+    }
+
+    #[test]
+    fn a_tag_on_the_band_never_takes_a_status_colour_and_a_muted_tag_is_quieter() {
+        let kit = Kit::new(ThemeMode::Dark, DARK_SYSTEM.with_accent(0x8a93f7));
+        let band = RowGround::Band.rest(kit);
+        for tone in [
+            SettingsValueTone::Normal,
+            SettingsValueTone::Attention,
+            SettingsValueTone::Danger,
+            SettingsValueTone::Success,
+        ] {
+            assert_eq!(tag_ink(tone, RowGround::Band, kit), band.ink);
+        }
+        for row in [RowGround::Pane, RowGround::Band] {
+            assert_ne!(
+                tag_ink(SettingsValueTone::Muted, row, kit),
+                tag_ink(SettingsValueTone::Normal, row, kit)
+            );
+        }
     }
 }
