@@ -620,28 +620,35 @@ impl ProfilesView {
                 kit,
             );
         }
+        let copy =
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(qol_theme::SPACE_STACK))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(qol_theme::SPACE_INSET))
+                        .children(row.spinner.then(|| {
+                            settings_action_spinner(("profiles-status-spinner", index), kit)
+                        }))
+                        .children(row.dot.map(|dot| status_dot(dot, kit)))
+                        .child(settings_label(row.label.clone(), kit)),
+                )
+                .child(settings_description(row.detail.clone(), ground, kit));
         div()
             .flex_1()
             .min_w_0()
             .flex()
-            .flex_col()
-            .gap(px(qol_theme::SPACE_STACK))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(qol_theme::SPACE_INSET))
-                    .children(
-                        row.spinner.then(|| {
-                            settings_action_spinner(("profiles-status-spinner", index), kit)
-                        }),
-                    )
-                    .children(row.dot.map(|dot| status_dot(dot, kit)))
-                    .child(settings_label(row.label.clone(), kit))
-                    .children(tag),
-            )
-            .child(settings_description(row.detail.clone(), ground, kit))
+            .flex_row()
+            .items_center()
+            .gap(px(qol_theme::SPACE_CELL))
+            .child(copy)
+            .children(tag)
     }
 
     fn render_values(

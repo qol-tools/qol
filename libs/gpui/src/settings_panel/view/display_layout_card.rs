@@ -760,7 +760,7 @@ impl SettingsPanelView {
         );
         let selected_is_primary = staged.selected().map(|display| staged.is_primary(display));
         let primary_value = match selected_is_primary {
-            Some(true) => settings_value_text(
+            Some(true) => settings_tag(
                 "primary",
                 SettingsValueTone::Normal,
                 primary_ground,

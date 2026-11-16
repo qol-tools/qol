@@ -3650,7 +3650,7 @@ impl SettingsPanelView {
             RowControl::Action { .. } => return self.render_action_value(index),
             RowControl::TextList(_) | RowControl::Status { .. } => return div(),
             RowControl::Unsupported { reason, .. } => {
-                return settings_value_text(
+                return settings_tag(
                     format!("Unsupported: {reason}"),
                     SettingsValueTone::Muted,
                     row,

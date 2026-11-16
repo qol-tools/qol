@@ -437,20 +437,11 @@ pub fn settings_tagged_label_group(
         .flex_1()
         .min_w_0()
         .flex()
-        .flex_col()
-        .gap(px(qol_theme::SPACE_STACK))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .min_w_0()
-                .overflow_hidden()
-                .gap(px(qol_theme::SPACE_INSET))
-                .child(settings_label(label, kit).flex_none())
-                .children(tags),
-        )
-        .children(description.map(|text| settings_description(text, row, kit)))
+        .flex_row()
+        .items_center()
+        .gap(px(qol_theme::SPACE_CELL))
+        .child(settings_label_group(label, description, row, kit))
+        .children(tags)
 }
 
 pub fn settings_destroy_label_group(

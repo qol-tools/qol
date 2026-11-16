@@ -18,7 +18,7 @@ use qol_gpui::settings_panel::components::{
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_action_busy, settings_action_spinner,
-    settings_busy_message, settings_list, settings_value_text, CustomHints, CustomPanelCallback,
+    settings_busy_message, settings_list, settings_tag, CustomHints, CustomPanelCallback,
     CustomSettingsBreadcrumbs, EscapeStep, Intent, SettingsDestination, SettingsGroupHeader,
     SettingsRow, SettingsValueTone, SETTINGS_LIST_GAP,
 };
@@ -616,14 +616,14 @@ impl LinkedDevicesView {
             values = values.child(settings_action_spinner((spinner_id, index), kit));
         }
         values = match &row.control {
-            _ if editing_name => values.child(settings_value_text(
+            _ if editing_name => values.child(settings_tag(
                 format!("{}_", self.field.text()),
                 SettingsValueTone::Normal,
                 ground,
                 kit,
             )),
             Control::Value(text, tone) => {
-                values.child(settings_value_text(text.clone(), *tone, ground, kit))
+                values.child(settings_tag(text.clone(), *tone, ground, kit))
             }
             Control::Toggle(on) => values.child(SettingsToggle::new(*on, ground, kit)),
             Control::Chip => values.children(

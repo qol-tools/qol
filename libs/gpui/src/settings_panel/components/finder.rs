@@ -5,8 +5,8 @@ use gpui::{
 use qol_theme::{translucent, Alpha, TextStyle};
 
 use super::{
-    finder_display_label, settings_description, settings_label_group, settings_value_text,
-    ChoiceArt, RowGround, SettingsChoiceArt, SettingsRow, SettingsValueTone,
+    finder_display_label, settings_description, settings_label_group, settings_tag, ChoiceArt,
+    RowGround, SettingsChoiceArt, SettingsRow, SettingsValueTone,
 };
 use crate::kit::Kit;
 use crate::pictures::PictureContext;
@@ -285,7 +285,7 @@ impl RenderOnce for SettingsFinderPick {
                             kit,
                         ))
                     })
-                    .child(settings_value_text(text, tone, row, kit)),
+                    .child(settings_tag(text, tone, row, kit)),
             ),
             FinderPickEnd::Action { text, working } => Some(
                 kit.button_inked(row.rest(kit))

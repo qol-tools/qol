@@ -15,7 +15,7 @@ pub mod components;
 pub use components::{
     settings_action_busy, settings_action_spinner, settings_busy_message,
     settings_connection_spinner, settings_description, settings_list, settings_query_spinner,
-    settings_value_text, SettingsGroupHeader, SettingsRow, SettingsValueTone, SETTINGS_LIST_GAP,
+    settings_tag, SettingsGroupHeader, SettingsRow, SettingsValueTone, SETTINGS_LIST_GAP,
 };
 pub use form_nav::{
     adjacent_visible_row, escape_step, intent, wrapping_visible_row, EscapeStep, Intent,

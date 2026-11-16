@@ -10,9 +10,9 @@ use qol_config::contract::NestedListSpec;
 use qol_config::object_array::pretty_label;
 
 use super::super::components::{
-    settings_arrow, settings_label_group, settings_mono_label, settings_value_group,
-    settings_value_text, HintTone, RowGround, SettingsHint, SettingsHintBar, SettingsModifierChip,
-    SettingsRow, SettingsTextField, SettingsToggle, SettingsValueTone,
+    settings_arrow, settings_label_group, settings_mono_label, settings_tag, settings_value_group,
+    HintTone, RowGround, SettingsHint, SettingsHintBar, SettingsModifierChip, SettingsRow,
+    SettingsTextField, SettingsToggle, SettingsValueTone,
 };
 use super::super::entry_form::{count_label, EntryForm, FormOutput, FormQuestion, FormValue};
 use super::super::object_array_row::{
@@ -367,7 +367,7 @@ impl SettingsPanelView {
             );
             if level_entries_len(level) == 0 {
                 content.push(
-                    settings_value_text("Empty", SettingsValueTone::Muted, ground, self.kit)
+                    settings_tag("Empty", SettingsValueTone::Muted, ground, self.kit)
                         .into_any_element(),
                 );
             }
@@ -401,7 +401,7 @@ impl SettingsPanelView {
             content.push(settings_label_group(label, None, ground, self.kit).into_any_element());
             if !summary.is_empty() {
                 content.push(
-                    settings_value_text(summary, SettingsValueTone::Muted, ground, self.kit)
+                    settings_tag(summary, SettingsValueTone::Muted, ground, self.kit)
                         .into_any_element(),
                 );
             }
@@ -492,7 +492,7 @@ impl SettingsPanelView {
                     .and_then(|card| card.lists.get(&field.key))
                     .and_then(|spec| spec.item_label.clone())
                     .unwrap_or_else(|| "item".to_string());
-                row = row.child(settings_value_text(
+                row = row.child(settings_tag(
                     count_label(values.len(), &noun),
                     SettingsValueTone::Muted,
                     ground,
