@@ -1571,11 +1571,17 @@ test("a fork's messaging call carries its own agent id, and the switchboard's ow
   ])
 })
 
-test('a message waiting for a fork is taken once and handed to that fork as the engine wrote it', async ($, on) => {
+test('a message waiting for a fork is taken once and handed to that fork as the engine wrote it, and what a take leaves is taken next', async ($, on) => {
   const sent: any[] = []
   const runs: string[][] = []
   engine(on, sent)
-  let waiting = [{ name: 'm1-fork.json', kind: 'file', size: 10, mtimeMs: 1, isLink: false }]
+  const knock = (size: number) => [{ name: 'm1-fork.json', kind: 'file', size, mtimeMs: size, isLink: false }]
+  let waiting = knock(10)
+  const mailOf = (text: string) => ({ key: 'm1-fork', friendly: 'a fork', cwd: '/work', agent_id: 'm1', text })
+  const takes = [
+    { left: knock(4), mail: [mailOf('[qol session] Message from other-fork: found it'), { key: 'forged', friendly: 'a fork', cwd: '/work', agent_id: '../m1', text: 'forged agent id' }, { key: 'textless', agent_id: 'm1' }] },
+    { left: [], mail: [mailOf('[qol session] Message from other-fork: the rest')] },
+  ]
   on('env.get', (_: unknown, e: { name: string }) => ({
     value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : e.name === 'QOL_SWITCHBOARD_KNOCKS' ? '/data/knocks' : undefined,
   }))
@@ -1584,29 +1590,18 @@ test('a message waiting for a fork is taken once and handed to that fork as the 
   on('process.run', (_: unknown, e: { argv: string[] }) => {
     if (!isRecord(e.argv)) return { value: NO_RECORD }
     if (e.argv[3] !== 'mail') return { value: recordReply(e.argv, []) }
+    const take = takes[runs.length]
     runs.push(e.argv)
-    waiting = []
-    return {
-      value: {
-        exitCode: 0,
-        stderr: '',
-        stdout: JSON.stringify({
-          mail: [
-            { key: 'm1-fork', friendly: 'a fork', cwd: '/work', agent_id: 'm1', text: '[qol session] Message from other-fork: found it' },
-            { key: 'forged', friendly: 'a fork', cwd: '/work', agent_id: '../m1', text: 'forged agent id' },
-            { key: 'textless', agent_id: 'm1' },
-          ],
-        }),
-      },
-    }
+    waiting = take?.left ?? []
+    return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ mail: take?.mail ?? [] }) } }
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'm1', 'm1-fork: a fork')
   await settle()
-  expect(runs).toEqual([['/bin/qol-cli-sessions', 'sessions', 'record', 'mail']])
-  expect(sent).toHaveLength(1)
+  expect(runs).toEqual(Array.from({ length: 3 }, () => ['/bin/qol-cli-sessions', 'sessions', 'record', 'mail']))
+  expect(sent.map(one => one.to)).toEqual(['m1', 'm1'])
   expect(JSON.stringify(sent[0])).toContain('[qol session] Message from other-fork: found it')
-  expect(JSON.stringify(sent[0].to)).toContain('m1')
+  expect(JSON.stringify(sent[1])).toContain('[qol session] Message from other-fork: the rest')
 })
 
 test('a fork whose agent entry has ended counts as out of the agent list', () => {

@@ -2393,9 +2393,11 @@ const deliverMail = async ($: EngineInterface): Promise<void> => {
   try {
     const knocks = await $.env.get('QOL_SWITCHBOARD_KNOCKS')
     if (knocks === undefined || knocks === '' || !(await $.fs.exists(knocks))) return
-    if ((await listingOf($, knocks)) === mailed) return
+    const listing = await listingOf($, knocks)
+    if (listing === mailed) return
     const taken = await recordRun($, 'mail', [])
     if (taken === undefined) return
+    mailed = listing
     for (const one of Array.isArray(taken.mail) ? taken.mail : []) {
       if (!isMail(one)) continue
       const name = recordName(one)
@@ -2403,7 +2405,6 @@ const deliverMail = async ($: EngineInterface): Promise<void> => {
         undelivered($, one.agent_id, name, `delivering it failed: ${error instanceof Error ? error.message : String(error)}`, one.text).catch(() => undefined),
       )
     }
-    mailed = await listingOf($, knocks)
   } catch {
   } finally {
     isMailing = false
