@@ -1,5 +1,6 @@
 mod cli;
 mod key;
+mod mail;
 mod search;
 mod store;
 #[cfg(test)]

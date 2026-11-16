@@ -183,7 +183,7 @@ pub(super) fn fetch(repo: &str, run: &Run, build: &Build, dir: &Path) -> Result<
     Ok(())
 }
 
-fn gh(args: &[&str]) -> Result<String> {
+pub(super) fn gh(args: &[&str]) -> Result<String> {
     let output = Command::new("gh")
         .args(args)
         .output()

@@ -105,6 +105,10 @@ pub fn delivered(claimed: &ClaimedKnock) -> io::Result<()> {
     store.delivered(&mail, claimed)
 }
 
+pub(crate) fn dir() -> Option<PathBuf> {
+    KnockStore::system().map(|store| store.dir)
+}
+
 pub fn lock_delivery(recipient_key: &str) -> io::Result<Option<File>> {
     KnockStore::system()
         .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "no sessions data directory"))?
@@ -363,6 +367,26 @@ impl KnockStore {
         })
     }
 
+    pub(super) fn take(
+        &self,
+        mail: &super::mailbox::MailboxStore,
+        key: &str,
+    ) -> io::Result<Option<String>> {
+        let Some(_delivery) = self.lock_delivery(key)? else {
+            return Ok(None);
+        };
+        let Some(claimed) = self.claim(key)? else {
+            return Ok(None);
+        };
+        if let Err(error) = self.delivered(mail, &claimed) {
+            qol_runtime::probe!(
+                "SESSIONS_KNOCK",
+                "event=taken_unmarked key={key} error={error}"
+            );
+        }
+        Ok(Some(claimed.text()))
+    }
+
     pub(super) fn clear(&self, key: &str) -> io::Result<()> {
         match fs::remove_file(self.path(key)?) {
             Ok(()) => Ok(()),
@@ -560,6 +584,37 @@ mod tests {
             stores.knocks.pending_knocks()[0].text,
             "[qol session] Message from child: two"
         );
+    }
+
+    #[test]
+    fn a_taken_knock_hands_over_its_text_once_and_marks_its_messages_read() {
+        let stores = super::super::mailbox::tests::Stores::new();
+        let messaging = stores.messaging();
+        let keys = ["architect".to_owned(), "child".to_owned()];
+        messaging
+            .send(
+                &keys,
+                &super::super::mailbox::SendRequest {
+                    from: "child",
+                    to: "architect",
+                    kind: super::super::mailbox::MessageKind::Note,
+                    text: "one",
+                    reply_to: None,
+                    as_user: false,
+                },
+            )
+            .unwrap();
+        stores.knocks.add_board("architect", "t1", true).unwrap();
+        let held = stores.knocks.lock_delivery("architect").unwrap().unwrap();
+        assert_eq!(stores.knocks.take(&stores.mail, "architect").unwrap(), None);
+        drop(held);
+        assert_eq!(
+            stores.knocks.take(&stores.mail, "architect").unwrap().as_deref(),
+            Some("[qol session] Message from child: one\n\nboard mention in thread t1. Read it with session_board.")
+        );
+        assert_eq!(stores.mail.counts("architect").unwrap().0, 0);
+        assert!(stores.knocks.pending_knocks().is_empty());
+        assert_eq!(stores.knocks.take(&stores.mail, "architect").unwrap(), None);
     }
 
     #[test]

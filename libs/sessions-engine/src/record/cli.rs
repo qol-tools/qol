@@ -22,6 +22,7 @@ Usage:
   qol-cli-sessions sessions record resume --key KEY
   qol-cli-sessions sessions record show (--key KEY | --agent-id ID)
   qol-cli-sessions sessions record list
+  qol-cli-sessions sessions record mail
 
 Details:
   claim creates a new record and never reuses one. A description of the form `<key>: <friendly>`, with a key of lowercase letters, digits and dashes that starts with a letter or digit and is at most 64 characters, keeps that key and friendly description. Any other description becomes the friendly description, and its key is the description in lowercase ASCII, each run of other characters turned into one dash, cut to at most 40 characters at a dash (`session` when nothing is left). A key already taken gets -2, -3 and so on. --cwd is the absolute project folder. The output carries key, friendly and description, the `<key>: <friendly>` text to give a fork (just the key when the friendly description is empty).
@@ -32,9 +33,10 @@ Details:
   resume clears done and stopped_ms, for a session that was done or stopped and works again; a record with neither set stays as it is.
   show prints the record for a key, or the record whose parts include the agent id.
   list prints every record, newest created first.
+  mail takes the knocks that wait for records that are not done, which is how a session_send message or a session_board mention addressed to a switchboard fork's key leaves the mailbox: each knock is taken once, its messages are marked read, and the switchboard hands its text to the agent of the record's newest part. A record without a part keeps its knock, and so does a key that no record has or that a live terminal session carries, because CLI Sessions types that one into the terminal.
 
 Output:
-  Every verb prints one JSON object on stdout: claim {key, friendly, description}, part {key, part}, archive {key, archived}, list {records}, and the record itself for done, stopped, resume and show. A record is {key, friendly, cwd, created_ms, parts: [{n, agent_id, transcript, started_ms}], done: {at_ms, reason}, stopped_ms}, where done and stopped_ms are absent until set. An error prints {\"error\": text}. Times are milliseconds since the Unix epoch. The session_records tool searches these records and their archived chats.
+  Every verb prints one JSON object on stdout: claim {key, friendly, description}, part {key, part}, archive {key, archived}, list {records}, mail {mail: [{key, friendly, cwd, agent_id, text}]}, and the record itself for done, stopped, resume and show. A record is {key, friendly, cwd, created_ms, parts: [{n, agent_id, transcript, started_ms}], done: {at_ms, reason}, stopped_ms}, where done and stopped_ms are absent until set. An error prints {\"error\": text}. Times are milliseconds since the Unix epoch. The session_records tool searches these records and their archived chats.
 
 Exit:
   0 on success, 1 when the records folder cannot be read or written, 2 for a usage error (a missing, repeated or unknown flag, a relative path, or an unknown verb), 3 when the key or agent id has no record.";
@@ -172,6 +174,20 @@ fn run_verb(
         "list" => {
             flags.only(&[])?;
             Ok(Outcome::ok(json!({ "records": store.list()? })))
+        }
+        "mail" => {
+            flags.only(&[])?;
+            let mail = match (
+                crate::knocks::KnockStore::system(),
+                crate::mailbox::MailboxStore::system(),
+                crate::terminal_keys(),
+            ) {
+                (Some(knocks), Ok(mail), Some(terminal_keys)) => {
+                    super::mail::take(store, &knocks, &mail, &terminal_keys)?
+                }
+                _ => Vec::new(),
+            };
+            Ok(Outcome::ok(json!({ "mail": mail })))
         }
         other => Err(Failure::Usage(format!("unknown record verb `{other}`"))),
     }
