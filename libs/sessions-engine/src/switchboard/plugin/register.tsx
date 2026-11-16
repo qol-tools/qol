@@ -240,31 +240,37 @@ const toggleBoard = async ($: EngineInterface): Promise<string> => {
   return opened.isPlaced ? 'Fork board opened. qols board or /board closes it.' : `The fork board waits for room: ${opened.reason}`
 }
 
-let putBack: ((text: string) => boolean) | undefined
+type TypedSince = (text: string) => string | undefined
+
+let putBack: TypedSince | undefined
+
+const typedSince = (dropped: string): TypedSince => text => (text === dropped ? '' : text.endsWith(`\n${dropped}`) ? text.slice(0, -dropped.length - 1) : undefined)
 
 const clearPutBack = async ($: EngineInterface, text: string): Promise<void> => {
-  if (putBack === undefined || text === '' || !putBack(text)) return
+  const kept = text === '' ? undefined : putBack?.(text)
+  if (kept === undefined) return
   putBack = undefined
-  await $.prompt.fill({ text: '', mode: 'replace' })
+  await $.prompt.fill({ text: kept, mode: 'replace' })
 }
 
-const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean, waits: readonly number[] = CLEAR_TYPED_MS): void => {
+const clearBox = ($: EngineInterface, typedAfter: TypedSince, waits: readonly number[] = CLEAR_TYPED_MS): void => {
   const [after, ...later] = waits
-  putBack = after === undefined ? undefined : isDropped
+  putBack = after === undefined ? undefined : typedAfter
   if (after === undefined) return
   $.clock.after(after, () => {
     void (async () => {
       const { text } = await $.prompt.read()
-      if (putBack !== isDropped) return
-      if (text === '') return clearBox($, isDropped, later)
+      if (putBack !== typedAfter) return
+      const kept = typedAfter(text)
+      if (kept === undefined) return clearBox($, typedAfter, later)
       putBack = undefined
-      if (isDropped(text)) await $.prompt.fill({ text: '', mode: 'replace' })
+      await $.prompt.fill({ text: kept, mode: 'replace' })
     })().catch(() => {})
   })
 }
 
 
-const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => TYPED_TOGGLE.test(text))
+const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => (TYPED_TOGGLE.test(text) ? '' : undefined))
 
 const SAID_KEPT = 8
 const SAID_CHARS = 4000
@@ -509,14 +515,11 @@ const saidOnDisk = async ($: EngineInterface, agentId: string): Promise<unknown[
   return rows
 }
 
-const lacksHistory = (held: unknown[]): boolean =>
-  recentWords(held, 1).length === 0 || held.some(one => typeof one === 'object' && one !== null && String((one as { text?: unknown }).text ?? '').trimStart().startsWith(COMPACTED))
-
 const messagesOf = async ($: EngineInterface, agentId: string): Promise<unknown[] | undefined> => {
-  const held: unknown = await $.session.messages({ agentId }).catch(() => undefined)
-  if (Array.isArray(held) && held.length > 0 && !lacksHistory(held)) return held
   const saved = await saidOnDisk($, agentId).catch(() => undefined)
-  return saved ?? (Array.isArray(held) ? held : undefined)
+  if (saved !== undefined && recentWords(saved, 1).length > 0) return saved
+  const held: unknown = await $.session.messages({ agentId }).catch(() => undefined)
+  return Array.isArray(held) && held.length > 0 ? held : saved
 }
 
 const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<void> => {
@@ -2875,7 +2878,7 @@ export const register: Register = on => {
       if (tree.commands.length === 0) await loadTree($)
       const at = sbAt(tree.commands, `${e.text.trim()} `)
       if (at !== undefined && (at.missing === undefined || at.path.length > 0)) {
-        clearBox($, text => text === e.text)
+        clearBox($, typedSince(e.text))
         return dropAs(await runSb($, e.text))
       }
     }
@@ -2891,19 +2894,19 @@ export const register: Register = on => {
       const own = (await read($, board)).find(entry => entry.agentId === viewing)
       const text = typed === undefined ? e.text : typed.message
       if (typed !== undefined && text.trim() === '') {
-        clearBox($, typedText => typedText === e.text)
+        clearBox($, typedSince(e.text))
         return dropAs(`${keyOf(typed.entry)} is open.`)
       }
       if (own === undefined || text.trim() === '') return next(e)
       const hooked = await promptHooks($, own, text)
       if (hooked.block !== undefined) {
-        clearBox($, typedText => typedText === e.text)
+        clearBox($, typedSince(e.text))
         return dropAs(printable(hooked.block))
       }
       return next({ ...e, text, ...(hooked.context.length === 0 ? {} : { context: [...(e.context ?? []), ...hooked.context] }) })
     }
     if (viewing !== undefined && typed !== undefined && typed.message === '') {
-      clearBox($, text => text === e.text)
+      clearBox($, typedSince(e.text))
       const shown = await $.ui.view({ agentId: typed.entry.agentId }).catch(() => ({ deny: 'it is not in the agent list' }))
       return dropAs(shown.deny === undefined ? `Opened ${keyOf(typed.entry)}.` : `${keyOf(typed.entry)} could not be opened: ${printable(String(shown.deny))}`)
     }
@@ -2915,12 +2918,12 @@ export const register: Register = on => {
         await setCurrent($, at.entry).catch(() => undefined)
         if ((await read($, current)) !== keyOf(at.entry)) return next(e)
         await writeTo($, at.entry)
-        clearBox($, text => text === e.text)
+        clearBox($, typedSince(e.text))
         return dropAs(`Writing to ${keyOf(at.entry)}. Esc on an empty prompt leaves.`)
       }
       const hooked = await promptHooks($, at.entry, at.message)
       if (hooked.block !== undefined) {
-        clearBox($, text => text === e.text)
+        clearBox($, typedSince(e.text))
         return dropAs(printable(hooked.block))
       }
       if (viewing === undefined) {
@@ -2952,7 +2955,7 @@ export const register: Register = on => {
         dropTyped(said)
       }
       if (viewing === undefined) await refreshWriting($, at.entry.agentId)
-      clearBox($, text => text === e.text)
+      clearBox($, typedSince(e.text))
       return dropAs(`→ ${keyOf(at.entry)}`)
     } finally {
       sending = undefined
