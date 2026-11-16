@@ -746,7 +746,7 @@ async fn run_cli(cx: &AsyncApp, state: &State, action: String) {
 
     let _ = cx
         .background_spawn(async move {
-            crate::cli::exit_code(std::iter::once(action));
+            let _ = crate::cli::exit_code(std::iter::once(action));
         })
         .await;
 }
