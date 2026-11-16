@@ -88,6 +88,7 @@ action = "set_light_brightness"
 min = 1
 max = 100
 step = 1
+variant = "slider"
 unit = "%"
 input = { ieee = "{ieee}", value = "{value}" }
 
@@ -100,6 +101,7 @@ action = "set_light_colortemp"
 min = 153
 max = 500
 step = 1
+variant = "slider"
 input = { ieee = "{ieee}", value = "{value}" }
 
 [[field.lights.row_actions]]
@@ -163,6 +165,7 @@ action = "set_preset_brightness"
 min = 0
 max = 100
 step = 1
+variant = "slider"
 unit = "%"
 input = { id = "{id}", value = "{value}" }
 
@@ -175,6 +178,7 @@ action = "set_preset_colortemp"
 min = 153
 max = 500
 step = 1
+variant = "slider"
 input = { id = "{id}", value = "{value}" }
 
 [[field.presets.row_actions]]
@@ -252,6 +256,7 @@ default = 11
 min = 11
 max = 26
 step = 1
+variant = "slider"
 
 [field.find_dongle]
 type = "action"

@@ -16,7 +16,6 @@ use crate::status_indicator::StatusTone;
 pub(super) const LIST_MAX_VISIBLE: usize = 5;
 pub(super) const ITEM_ROW_DANGER: &str = "item_danger";
 pub(super) const ITEM_ROW_MEMBER: &str = "item_member";
-pub(super) const ITEM_ROW_CONTROL: &str = "item_control";
 const ITEM_CONTROL_ID: &str = "control:";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2050,9 +2049,6 @@ pub(super) fn item_control_row_id(index: usize) -> String {
 }
 
 pub(super) fn item_control_index(row: &Row) -> Option<usize> {
-    if row.variant.as_deref() != Some(ITEM_ROW_CONTROL) {
-        return None;
-    }
     row.id.strip_prefix(ITEM_CONTROL_ID)?.parse().ok()
 }
 
@@ -2116,7 +2112,7 @@ pub(super) fn item_control_rows(
             label: spec.label.clone(),
             description: spec.description.clone(),
             placeholder: None,
-            variant: Some(ITEM_ROW_CONTROL.to_string()),
+            variant: spec.variant.clone(),
             config_key: list_row.config_key.clone(),
             default: FieldDefault::String(String::new()),
             stream: None,
@@ -2273,7 +2269,6 @@ mod tests {
         rows_from_resolved, runtime_query_names, sections_from_resolved, selected_list_item,
         set_config_value, set_member, stream_gated, visible_row_indices, FieldDefault, ListActions,
         ListItem, ResolvedConfig, Row, RowControl, RowSection, SelectOption, SliderHold,
-        ITEM_ROW_CONTROL,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -5126,6 +5121,7 @@ action = "set_brightness"
 min = 1
 max = 100
 unit = "%"
+variant = "slider"
 
 [[field.lights.row_controls]]
 control = "text"
@@ -5176,7 +5172,6 @@ detached = true
         assert_eq!(page.len(), 4);
         for (index, row) in page.iter().enumerate() {
             assert_eq!(item_control_index(row), Some(index));
-            assert_eq!(row.variant.as_deref(), Some(ITEM_ROW_CONTROL));
         }
         let values = page
             .iter()
@@ -5192,7 +5187,9 @@ detached = true
             ]
         );
         assert_eq!(page[2].action.as_deref(), Some("set_brightness"));
-        page[0].variant = None;
+        assert_eq!(page[2].variant.as_deref(), Some("slider"));
+        assert_eq!(page[0].variant, None);
+        page[0].id = "power".to_string();
         assert_eq!(item_control_index(&page[0]), None);
     }
 

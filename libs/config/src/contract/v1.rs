@@ -339,6 +339,8 @@ pub struct RowControlSpec {
     pub step: Option<f64>,
     #[serde(default)]
     pub unit: Option<String>,
+    #[serde(default)]
+    pub variant: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
