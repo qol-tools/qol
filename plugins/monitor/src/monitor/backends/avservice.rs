@@ -45,7 +45,6 @@ pub fn set_vcp_payload(feature: u8, value: u16) -> [u8; 6] {
     payload
 }
 
-#[cfg(any(target_os = "macos", test))]
 pub fn pnp_to_vendor_id(pnp: &str) -> u32 {
     let bytes = pnp.as_bytes();
     if bytes.len() < 3 {
