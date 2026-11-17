@@ -115,25 +115,17 @@ def queue_entry(number: int, position: int, oid: str, head: str, files: int) -> 
 
 
 class PathTests(unittest.TestCase):
-    def test_the_repository_list_protects_what_decides_the_required_checks(self):
+    def test_the_repository_list_protects_the_review_and_the_gate_only(self):
         guarded = [
-            ".github/workflows/ci.yml",
             ".github/workflows/claude-review.yml",
+            ".github/workflows/review-override.yml",
+            ".github/workflows/main-gate.yml",
             ".github/scripts/review_gate.py",
-            ".github/actions/rust-setup/action.yml",
+            ".github/scripts/main_gate.py",
+            ".github/scripts/queue_verdict.py",
+            ".github/scripts/cancel_superseded_queue_runs.py",
+            ".github/scripts/live_test.py",
             ".github/main-gate-paths",
-            ".githooks/commit-msg",
-            ".githooks/commit-msg-lib.sh",
-            ".githooks/single-source-guard.mjs",
-            "verify/repository-inventory.mjs",
-            "verify/repository-inventory.test.mjs",
-            ".qac/judges.json",
-            ".cargo/config.toml",
-            ".config/nextest.toml",
-            ".config/hakari.toml",
-            "rust-toolchain.toml",
-            "rustfmt.toml",
-            "clippy.toml",
             ".claude/settings.json",
             ".mcp.json",
             "CLAUDE.md",
@@ -141,29 +133,77 @@ class PathTests(unittest.TestCase):
             "apps/tray/CLAUDE.local.md",
         ]
         free = [
+            ".github/workflows/ci.yml",
+            ".github/workflows/queue-batch.yml",
+            ".github/scripts/queue_report.py",
+            ".github/scripts/live_test_build.py",
+            ".github/scripts/json.py",
+            ".github/scripts/tests/test_main_gate.py",
+            ".github/actions/rust-setup/action.yml",
+            ".github/live-test-paths",
+            ".githooks/commit-msg",
+            "verify/repository-inventory.mjs",
+            ".qac/judges.json",
+            ".cargo/config.toml",
+            ".config/nextest.toml",
+            "rust-toolchain.toml",
+            "rustfmt.toml",
+            "clippy.toml",
             "Cargo.toml",
             "Cargo.lock",
             "deny.toml",
             "README.md",
             "plugins/shot/src/lib.rs",
             "apps/tray/build.rs",
-            "libs/conventions/src/lib.rs",
-            "verify/sessions-relay-verify.sh",
             "docs/github/ci.md",
             "plugins/shot/CLAUDE.md.bak",
         ]
         self.assertEqual(gate.protected([*guarded, *free], LISTED), guarded)
 
+    def test_the_list_holds_every_script_a_judge_loads(self):
+        judges = ["review_gate.py", "main_gate.py"]
+        seen = set()
+        while judges:
+            name = judges.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            source = (SCRIPTS / name).read_text(encoding="utf-8")
+            for module in re.findall(r"^(?:from|import) (\w+)", source, re.MULTILINE):
+                if (SCRIPTS / f"{module}.py").exists():
+                    judges.append(f"{module}.py")
+        loaded = sorted(f".github/scripts/{name}" for name in seen)
+        self.assertGreaterEqual(len(loaded), 5)
+        self.assertEqual(gate.protected(loaded, LISTED), loaded)
+
+    def test_a_judge_never_loads_a_module_from_its_own_folder_ahead_of_pythons(self):
+        runs = []
+        for name in ["claude-review.yml", "review-override.yml", "main-gate.yml"]:
+            document = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            runs += re.findall(r"python3 .*(?:review_gate|main_gate)\.py \w+", document)
+        self.assertEqual(len(runs), 5)
+        for run in runs:
+            with self.subTest(run=run):
+                self.assertRegex(run, r"^python3 -P \.github/scripts/(review_gate|main_gate)\.py \w+$")
+        for name in ["review_gate.py", "main_gate.py"]:
+            source = (SCRIPTS / name).read_text(encoding="utf-8")
+            own = source.index("sys.path.append(os.path.dirname(os.path.abspath(__file__)))")
+            siblings = [match.start() for match in re.finditer(r"^from (\w+) import", source, re.MULTILINE) if (SCRIPTS / f"{match.group(1)}.py").exists()]
+            with self.subTest(name=name):
+                self.assertTrue(siblings)
+                self.assertLess(own, min(siblings))
+                self.assertNotIn("sys.path.insert", source)
+
     def test_a_rename_counts_its_old_path(self):
         api = FakeApi([pull()])
         api.files[7] = []
-        api.pull_files = lambda number: [{"filename": "docs/ci.yml", "previous_filename": ".github/workflows/ci.yml"}]
+        api.pull_files = lambda number: [{"filename": "docs/ci.yml", "previous_filename": ".github/workflows/claude-review.yml"}]
         api.pulls[7]["changed_files"] = 1
         found = gate.review(api, 7, HEAD, 1, LISTED)
-        self.assertEqual(found.files, [".github/workflows/ci.yml"])
+        self.assertEqual(found.files, [".github/workflows/claude-review.yml"])
 
     def test_a_path_with_a_control_character_fails_closed(self):
-        for path in ["a\nb/CLAUDE.md", ".github/x\ny", "docs/a\rb.md", "docs/\x00", "docs/\x7f"]:
+        for path in ["a\nb/CLAUDE.md", ".claude/x\ny", "docs/a\rb.md", "docs/\x00", "docs/\x7f"]:
             with self.subTest(path=path), self.assertRaises(gate.Unverifiable):
                 gate.protected(["README.md", path], LISTED)
 
@@ -173,7 +213,7 @@ class PathTests(unittest.TestCase):
         self.assertIn("control characters", verdict.summary)
 
     def test_a_path_listed_twice_is_named_once(self):
-        self.assertEqual(gate.protected([".github/a.yml", ".github/a.yml"], LISTED), [".github/a.yml"])
+        self.assertEqual(gate.protected([".claude/a.json", ".claude/a.json"], LISTED), [".claude/a.json"])
 
 
 class ApprovalTests(unittest.TestCase):
@@ -215,20 +255,20 @@ class PullRunTests(unittest.TestCase):
         self.assertIn("None of the 2 changed files", verdict.summary)
 
     def test_a_protected_change_without_approval_is_refused_with_the_line_to_post(self):
-        verdict = self.judge(FakeApi([pull()], files={7: [".github/workflows/ci.yml", "README.md"]}))
+        verdict = self.judge(FakeApi([pull()], files={7: [".github/workflows/claude-review.yml", "README.md"]}))
         self.assertEqual(verdict.conclusion, "failure")
-        self.assertIn("- `.github/workflows/ci.yml`", verdict.summary)
+        self.assertIn("- `.github/workflows/claude-review.yml`", verdict.summary)
         self.assertNotIn("README.md", verdict.summary)
         self.assertIn(f"    /gate-approve {HEAD}", verdict.summary)
 
     def test_the_owners_approval_of_the_head_passes(self):
-        api = FakeApi([pull()], files={7: [".githooks/commit-msg"]}, comments={7: [approval(url="https://c/1")]})
+        api = FakeApi([pull()], files={7: [".github/scripts/review_gate.py"]}, comments={7: [approval(url="https://c/1")]})
         verdict = self.judge(api)
         self.assertEqual((verdict.conclusion, verdict.title), ("success", "The owner approved the protected paths"))
         self.assertIn("https://c/1", verdict.summary)
 
     def test_an_approval_is_bound_to_the_commit_it_names(self):
-        api = FakeApi([pull()], files={7: [".githooks/commit-msg"]}, comments={7: [approval(OLD)]})
+        api = FakeApi([pull()], files={7: [".github/scripts/review_gate.py"]}, comments={7: [approval(OLD)]})
         self.assertEqual(self.judge(api).conclusion, "failure")
 
     def test_an_edited_approval_or_one_by_another_login_is_refused(self):
@@ -238,7 +278,7 @@ class PullRunTests(unittest.TestCase):
                 self.assertEqual(self.judge(api).conclusion, "failure")
 
     def test_a_fork_pull_request_found_by_its_branch_follows_the_same_rule(self):
-        api = FakeApi([pull()], files={7: [".github/workflows/ci.yml"]}, commit_pulls=[], branch_pulls=[{"number": 7}])
+        api = FakeApi([pull()], files={7: [".github/workflows/claude-review.yml"]}, commit_pulls=[], branch_pulls=[{"number": 7}])
         verdict = self.judge(api, HEAD_OWNER="forker", HEAD_BRANCH="patch-1")
         self.assertIn(("branch", "forker", "patch-1"), api.calls)
         self.assertEqual(verdict.conclusion, "failure")
@@ -256,7 +296,7 @@ class PullRunTests(unittest.TestCase):
     def test_every_open_pull_request_with_the_head_must_pass(self):
         api = FakeApi(
             [pull(7), pull(8)],
-            files={7: ["README.md"], 8: [".cargo/config.toml"]},
+            files={7: ["README.md"], 8: [".github/workflows/main-gate.yml"]},
         )
         verdict = self.judge(api)
         self.assertEqual(verdict.conclusion, "failure")
@@ -288,7 +328,7 @@ class PullRunTests(unittest.TestCase):
                 self.assertIn("cannot see every changed file", verdict.summary)
 
     def test_an_api_failure_fails_closed_on_the_head(self):
-        api = FakeApi([pull()], files={7: [".github/x"]})
+        api = FakeApi([pull()], files={7: [".claude/x"]})
 
         def broken(number):
             raise RuntimeError("HTTP 502")
@@ -309,12 +349,12 @@ class PullRunTests(unittest.TestCase):
 
 class CommentRunTests(unittest.TestCase):
     def test_an_approval_comment_judges_the_pull_requests_current_head(self):
-        api = FakeApi([pull()], files={7: [".github/workflows/ci.yml"]}, comments={7: [approval()]})
+        api = FakeApi([pull()], files={7: [".github/workflows/claude-review.yml"]}, comments={7: [approval()]})
         verdict = gate.judge(comment_env(), api, LISTED)
         self.assertEqual((verdict.sha, verdict.conclusion), (HEAD, "success"))
 
     def test_an_approval_of_an_older_commit_leaves_the_new_head_refused(self):
-        api = FakeApi([pull()], files={7: [".github/workflows/ci.yml"]}, comments={7: [approval(OLD)]})
+        api = FakeApi([pull()], files={7: [".github/workflows/claude-review.yml"]}, comments={7: [approval(OLD)]})
         verdict = gate.judge(comment_env(), api, LISTED)
         self.assertEqual((verdict.sha, verdict.conclusion), (HEAD, "failure"))
 
@@ -333,7 +373,7 @@ class QueueRunTests(unittest.TestCase):
         self.assertEqual(api.calls, [("compare", "main", GROUP)])
 
     def test_an_approved_entry_whose_queued_content_is_the_approved_head_passes(self):
-        path = ".github/workflows/ci.yml"
+        path = ".github/workflows/claude-review.yml"
         api = FakeApi(
             compare=[path, "README.md"],
             queue=[queue_entry(7, 1, GROUP, HEAD, 2)],
@@ -345,9 +385,9 @@ class QueueRunTests(unittest.TestCase):
 
     def test_an_unapproved_protected_entry_ahead_refuses_the_group(self):
         api = FakeApi(
-            compare=[".github/workflows/ci.yml", "README.md"],
+            compare=[".github/workflows/claude-review.yml", "README.md"],
             queue=[queue_entry(6, 1, AHEAD, OLD, 1), queue_entry(7, 2, GROUP, HEAD, 1)],
-            files={6: [".github/workflows/ci.yml"], 7: ["README.md"]},
+            files={6: [".github/workflows/claude-review.yml"], 7: ["README.md"]},
         )
         verdict = self.judge(api)
         self.assertEqual(verdict.conclusion, "failure")
@@ -356,18 +396,18 @@ class QueueRunTests(unittest.TestCase):
         self.assertNotIn("#7 changes", verdict.summary)
 
     def test_an_entry_behind_this_one_is_not_judged_here(self):
-        path = ".githooks/commit-msg"
+        path = ".github/scripts/review_gate.py"
         api = FakeApi(
             compare=[path],
             queue=[queue_entry(7, 1, GROUP, HEAD, 1), queue_entry(9, 2, BEHIND, OLD, 1)],
-            files={7: [path], 9: [".github/workflows/ci.yml"]},
+            files={7: [path], 9: [".github/workflows/claude-review.yml"]},
             comments={7: [approval()]},
             blobs={(HEAD, path): "same", (GROUP, path): "same"},
         )
         self.assertEqual(self.judge(api).conclusion, "success")
 
     def test_queued_content_that_differs_from_the_approved_head_is_refused(self):
-        path = ".github/workflows/ci.yml"
+        path = ".github/workflows/claude-review.yml"
         api = FakeApi(
             compare=[path],
             queue=[queue_entry(7, 1, GROUP, HEAD, 1)],
@@ -382,16 +422,16 @@ class QueueRunTests(unittest.TestCase):
 
     def test_a_protected_change_no_queued_pull_request_claims_is_refused(self):
         api = FakeApi(
-            compare=[".cargo/config.toml"],
+            compare=[".github/workflows/main-gate.yml"],
             queue=[queue_entry(7, 1, GROUP, HEAD, 1)],
             files={7: ["README.md"]},
         )
         verdict = self.judge(api)
         self.assertEqual(verdict.conclusion, "failure")
-        self.assertIn("- `.cargo/config.toml`", verdict.summary)
+        self.assertIn("- `.github/workflows/main-gate.yml`", verdict.summary)
 
     def test_a_deleted_protected_file_binds_to_an_approved_head_that_deletes_it(self):
-        path = ".config/nextest.toml"
+        path = ".github/scripts/main_gate.py"
         api = FakeApi(
             compare=[path],
             queue=[queue_entry(7, 1, GROUP, HEAD, 1)],
@@ -402,7 +442,7 @@ class QueueRunTests(unittest.TestCase):
         self.assertEqual(self.judge(api).conclusion, "success")
 
     def test_entries_sharing_one_group_commit_are_told_apart_by_the_branch_number(self):
-        path = ".github/workflows/ci.yml"
+        path = ".github/workflows/claude-review.yml"
         api = FakeApi(
             compare=[path],
             queue=[queue_entry(6, 1, GROUP, OLD, 1), queue_entry(7, 2, GROUP, HEAD, 1)],
@@ -417,7 +457,7 @@ class QueueRunTests(unittest.TestCase):
         self.assertIn("#6 changes", verdict.summary)
 
     def test_an_entry_that_cannot_be_found_fails_closed(self):
-        protected = [".github/workflows/ci.yml"]
+        protected = [".github/workflows/claude-review.yml"]
         for label, api, env in [
             ("not in the queue", FakeApi(compare=protected, queue=[queue_entry(7, 1, AHEAD, HEAD, 1)]), {}),
             ("another pull request", FakeApi(compare=protected, queue=[queue_entry(8, 1, GROUP, HEAD, 1)]), {}),
@@ -520,7 +560,7 @@ class CommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             verdict_file, summary = Path(temp) / "v.json", Path(temp) / "summary.md"
             env = {**pull_env(), "VERDICT_FILE": str(verdict_file), "GITHUB_STEP_SUMMARY": str(summary)}
-            api = FakeApi([pull()], files={7: [".github/workflows/ci.yml"]})
+            api = FakeApi([pull()], files={7: [".github/workflows/claude-review.yml"]})
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(gate.evaluate(env, api, LISTED), 0)
             self.assertEqual(json.loads(verdict_file.read_text())["conclusion"], "failure")

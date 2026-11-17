@@ -45,7 +45,7 @@ jobs:
           HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
           PR_NUMBER: ${{ github.event.issue.number }}
           VERDICT_FILE: ${{ runner.temp }}/main-gate.json
-        run: python3 .github/scripts/main_gate.py evaluate
+        run: python3 -P .github/scripts/main_gate.py evaluate
 
       - name: Mint the main gate app token
         id: app
@@ -62,7 +62,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           VERDICT_FILE: ${{ runner.temp }}/main-gate.json
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: python3 .github/scripts/main_gate.py post
+        run: python3 -P .github/scripts/main_gate.py post
 
       - name: Leave the check unposted until the app is set up
         if: vars.MAIN_GATE_APP_CLIENT_ID == ''

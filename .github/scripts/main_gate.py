@@ -9,6 +9,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from live_test import paths_of, pattern_regex, patterns
 from queue_verdict import gh_json
 
@@ -257,7 +259,7 @@ def bullets(paths: list[str]) -> list[str]:
 
 def asking(item: Review) -> list[str]:
     return [
-        f"#{item.number} changes these files on {LIST_NAME}, which decide what the required checks run:",
+        f"#{item.number} changes these files on {LIST_NAME}, which decide the review or the gate itself:",
         "",
         *bullets(item.files),
         "",

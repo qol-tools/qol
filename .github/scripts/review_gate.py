@@ -8,6 +8,8 @@ import sys
 import time
 from collections.abc import Callable
 
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from cancel_superseded_queue_runs import cancel
 from queue_verdict import gh_json
 
