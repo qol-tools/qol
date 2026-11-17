@@ -41,10 +41,8 @@ impl ImageCache for PreviewImages {
         if let Some(item) = self.items.get_mut(&key) {
             return item.get();
         }
-        let task = cx
-            .background_executor()
-            .spawn(AssetLogger::<ImageAssetLoader>::load(resource.clone(), cx))
-            .shared();
+        let loading = AssetLogger::<ImageAssetLoader>::load(resource.clone(), cx);
+        let task = cx.background_executor().spawn(loading).shared();
         self.items
             .insert(key, ImageCacheItem::Loading(task.clone()));
         let view = window.current_view();
