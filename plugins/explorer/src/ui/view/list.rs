@@ -9,7 +9,7 @@ use gpui::{
 };
 use qol_gpui::kit::{kit, Chip, Kit};
 use qol_gpui::scrollbar::{ScrollGrip, ScrollSource};
-use qol_gpui::text::{baseline, line_height, TextStyled};
+use qol_gpui::text::{baseline, laid_out_width, line_height, TextStyled};
 use qol_gpui::theme::{
     translucent, Alpha, Ground, TextStyle, HEIGHT_INLINE, LINE, OPACITY_DISABLED, OPACITY_REST,
     SPACE_CELL, SPACE_GUTTER, SPACE_INSET, SPACE_STACK,
@@ -58,7 +58,9 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
         .child(wheel_resize(cx))
         .on_mouse_down(
             MouseButton::Right,
-            cx.listener(|view, event: &MouseDownEvent, _window, cx| view.context_down(event, cx)),
+            cx.listener(|view, event: &MouseDownEvent, window, cx| {
+                view.context_down(event, window, cx);
+            }),
         )
         .on_drop(cx.listener(|view, paths: &ExternalPaths, _window, cx| {
             view.drop_here(paths.paths().to_vec(), cx);
@@ -214,6 +216,33 @@ fn shown(view: &ExplorerView, row: usize, now: Instant) -> Option<Shown<'_>> {
         cut: browser.is_cut(entry),
         arriving: arriving.is_some(),
     })
+}
+
+pub(super) fn row_reach(view: &ExplorerView, row: usize, window: &mut Window) -> Option<f32> {
+    let stop = view.stop;
+    if stop.is_grid() {
+        return None;
+    }
+    let lead = SPACE_GUTTER + ICON + SPACE_CELL;
+    if stop.shows_columns() {
+        return Some(lead + row_name_room(view, true) + COLUMNS_WIDTH);
+    }
+    let shown = shown(view, row, Instant::now())?;
+    let name = laid_out_width(
+        window,
+        &left_to_right(&shown.entry.display),
+        stop.name_style(),
+    );
+    let detail = if stop.two_lines() {
+        laid_out_width(
+            window,
+            &second_line(shown.entry, &shown.size),
+            TextStyle::Detail,
+        )
+    } else {
+        0.0
+    };
+    Some(lead + name.max(detail).min(row_name_room(view, false)))
 }
 
 fn fade(element: gpui::Stateful<Div>, cut: bool, arriving: bool) -> gpui::Stateful<Div> {

@@ -1,11 +1,17 @@
-use gpui::{point, px, Context, MouseDownEvent, Pixels, Point};
+use gpui::{point, px, Context, MouseDownEvent, Pixels, Point, Window};
 use qol_gpui::theme::SPACE_GUTTER;
 
+use super::list::row_reach;
 use super::menu::Menu;
 use super::{ExplorerView, ICON};
 
 impl ExplorerView {
-    pub(super) fn context_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+    pub(super) fn context_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.browser.end_range();
         self.browser.close_path();
         let area = self.pressing.area().get();
@@ -17,6 +23,7 @@ impl ExplorerView {
                 self.layout()
                     .tiles(self.list_width)
                     .at(x, y, self.browser.row_count())
+                    .filter(|row| row_reach(self, *row, window).is_none_or(|reach| x <= reach))
             })
             .flatten();
         match row {
