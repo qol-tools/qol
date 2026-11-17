@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -151,7 +152,8 @@ impl RateLimiter {
             return;
         };
         if let Err(error) = std::fs::write(path, content) {
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "Failed to save suppressed errors to {}: {error}",
                 path.display()
             );
