@@ -14,11 +14,15 @@ use super::objc::{
     CGWindowListCopyWindowInfo, CfGuard, AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE,
     CG_WINDOW_LIST_EXCLUDE_DESKTOP, CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
-use super::trace::{timed_bool, timed_opt, timed_pid, timed_pred, timed_result, trace_geometry};
+use super::trace::{
+    timed_bool, timed_opt, timed_pid, timed_pred, timed_result, trace_animation_pause,
+    trace_geometry,
+};
 
 const VERIFY_TIMEOUT: Duration = Duration::from_millis(120);
 const VERIFY_INTERVAL: Duration = Duration::from_millis(8);
 const RECT_TOLERANCE: f64 = 1.0;
+const ENHANCED_USER_INTERFACE: &str = "AXEnhancedUserInterface";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GeometryOutcome {
@@ -432,43 +436,71 @@ pub(super) fn set_position_and_size(
 ) -> Result<super::screen::Rect, GeometryError> {
     timed_result("set_pos_size", pid, || {
         let ft = front_target(pid).ok_or(GeometryError::NoWindow)?;
-        let before = read_window_rect(ft.win);
-        let pos = CGPoint {
-            x: rect.x,
-            y: rect.y,
-        };
-        let size = CGSize {
-            width: rect.w,
-            height: rect.h,
-        };
-        let pos_val = ax_value(AX_VALUE_TYPE_CG_POINT, &pos)?;
-        let size_val = ax_value(AX_VALUE_TYPE_CG_SIZE, &size)?;
-        let ax_pos = CfGuard::new(cfstr("AXPosition")).ok_or(GeometryError::Unencodable)?;
-        let ax_size = CfGuard::new(cfstr("AXSize")).ok_or(GeometryError::Unencodable)?;
-
-        let codes = unsafe {
-            [
-                (
-                    "AXSize",
-                    AXUIElementSetAttributeValue(ft.win, ax_size.as_const(), size_val.as_const()),
-                ),
-                (
-                    "AXPosition",
-                    AXUIElementSetAttributeValue(ft.win, ax_pos.as_const(), pos_val.as_const()),
-                ),
-                (
-                    "AXSize",
-                    AXUIElementSetAttributeValue(ft.win, ax_size.as_const(), size_val.as_const()),
-                ),
-            ]
-        };
-        first_rejection(codes)?;
-        let actual = read_window_rect(ft.win);
-        let outcome = geometry_outcome(before, actual, rect);
-        trace_geometry(pid, rect, actual, outcome.as_str());
-        outcome.verified()?;
-        actual.ok_or(GeometryError::Unreadable)
+        let app = ft.app.as_ptr();
+        let (paused, moved) = with_frame_animation_paused(
+            || ax_bool_attr_is(app, ENHANCED_USER_INTERFACE, true),
+            |enabled| set_ax_bool_attr(app, ENHANCED_USER_INTERFACE, enabled),
+            || apply_frame(pid, ft.win, rect),
+        );
+        trace_animation_pause(pid, paused);
+        moved
     })
+}
+
+fn with_frame_animation_paused<T>(
+    animates: impl FnOnce() -> bool,
+    mut set_animates: impl FnMut(bool) -> bool,
+    apply: impl FnOnce() -> T,
+) -> (bool, T) {
+    let paused = animates() && set_animates(false);
+    let applied = apply();
+    if paused {
+        let _ = set_animates(true);
+    }
+    (paused, applied)
+}
+
+fn apply_frame(
+    pid: i32,
+    win: *const c_void,
+    rect: super::screen::Rect,
+) -> Result<super::screen::Rect, GeometryError> {
+    let before = read_window_rect(win);
+    let pos = CGPoint {
+        x: rect.x,
+        y: rect.y,
+    };
+    let size = CGSize {
+        width: rect.w,
+        height: rect.h,
+    };
+    let pos_val = ax_value(AX_VALUE_TYPE_CG_POINT, &pos)?;
+    let size_val = ax_value(AX_VALUE_TYPE_CG_SIZE, &size)?;
+    let ax_pos = CfGuard::new(cfstr("AXPosition")).ok_or(GeometryError::Unencodable)?;
+    let ax_size = CfGuard::new(cfstr("AXSize")).ok_or(GeometryError::Unencodable)?;
+
+    let codes = unsafe {
+        [
+            (
+                "AXSize",
+                AXUIElementSetAttributeValue(win, ax_size.as_const(), size_val.as_const()),
+            ),
+            (
+                "AXPosition",
+                AXUIElementSetAttributeValue(win, ax_pos.as_const(), pos_val.as_const()),
+            ),
+            (
+                "AXSize",
+                AXUIElementSetAttributeValue(win, ax_size.as_const(), size_val.as_const()),
+            ),
+        ]
+    };
+    first_rejection(codes)?;
+    let actual = read_window_rect(win);
+    let outcome = geometry_outcome(before, actual, rect);
+    trace_geometry(pid, rect, actual, outcome.as_str());
+    outcome.verified()?;
+    actual.ok_or(GeometryError::Unreadable)
 }
 
 fn ax_value<T>(value_type: u32, value: &T) -> Result<CfGuard, GeometryError> {
@@ -757,7 +789,7 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
 mod tests {
     use super::{
         first_rejection, geometry_outcome, layer_zero_pids, rect_matches, select_normal_window_pid,
-        GeometryError, GeometryOutcome,
+        with_frame_animation_paused, GeometryError, GeometryOutcome,
     };
     use crate::platform::macos::screen::Rect;
 
@@ -988,6 +1020,44 @@ mod tests {
                 ("AXSize", size_after),
             ];
             assert_eq!(first_rejection(codes), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_animating_app_is_paused_only_around_the_frame_write() {
+        let cases = [
+            (
+                "animating app is paused and resumed",
+                true,
+                true,
+                vec!["off", "apply", "on"],
+                true,
+            ),
+            ("plain app is left alone", false, true, vec!["apply"], false),
+            (
+                "refused pause is never resumed",
+                true,
+                false,
+                vec!["off", "apply"],
+                false,
+            ),
+        ];
+        for (name, animates, accepts, expected_steps, expected_paused) in cases {
+            let steps = std::cell::RefCell::new(Vec::new());
+            let (paused, applied) = with_frame_animation_paused(
+                || animates,
+                |enabled| {
+                    steps.borrow_mut().push(if enabled { "on" } else { "off" });
+                    accepts
+                },
+                || {
+                    steps.borrow_mut().push("apply");
+                    7
+                },
+            );
+            assert_eq!(steps.into_inner(), expected_steps, "{name}");
+            assert_eq!(paused, expected_paused, "{name}");
+            assert_eq!(applied, 7, "{name}");
         }
     }
 

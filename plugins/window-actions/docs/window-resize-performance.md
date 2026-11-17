@@ -28,6 +28,10 @@ The system-wide Accessibility element supplies the focused application PID befor
 
 The setter reads the window frame once after applying position and size. It accepts exact frames, legitimate macOS work-area constraints, and other real adjustments, while rejecting unchanged or unreadable windows. The old 120ms polling loop waited for exact geometry even when macOS intentionally clamped the requested frame around the menu bar.
 
+### Frame writes without the enhanced-interface animation
+
+An application whose `AXEnhancedUserInterface` attribute is on animates every Accessibility frame write. Both Firefox builds on the reporting Mac had it on on 2026-11-17 with VoiceOver off, and no qol binary sets it. A snap then slides instead of jumping, lands on an inexact frame, and the read that follows the write still sees the old frame, so the action fails with "the window did not move". The setter turns the attribute off for the size, position, size writes and the verifying read, then turns it back on, and leaves an application alone when the attribute is already off or the application refuses the change.
+
 ## Measured Result
 
 | Path | Before | After |
