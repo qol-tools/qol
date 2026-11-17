@@ -22,6 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 qol-plugin-api.workspace = true
 qol-plugin-daemon.workspace = true
+qol-plugin-ids.workspace = true
 qol-watch.workspace = true
 qol-gpui.workspace = true
 qol-headless.workspace = true

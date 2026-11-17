@@ -606,7 +606,7 @@ impl LauncherView {
         let Some(flow) = self.state.flow.as_ref() else {
             return;
         };
-        if flow.entry.plugin_id != "qol-memory" {
+        if flow.entry.plugin_id != qol_plugin_ids::memory::ID {
             return;
         }
         let Some(row) = flow.rows.get(self.state.scroll_list.selected) else {

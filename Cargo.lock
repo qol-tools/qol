@@ -6311,6 +6311,7 @@ dependencies = [
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
+ "qol-plugin-ids",
  "qol-process",
  "qol-profile-sync",
  "qol-runtime",
@@ -6386,6 +6387,7 @@ dependencies = [
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
+ "qol-plugin-ids",
  "qol-process",
  "qol-runtime",
  "qol-windowing",
@@ -6580,6 +6582,7 @@ dependencies = [
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
+ "qol-plugin-ids",
  "qol-runtime",
  "serde",
  "serde_json",
@@ -7008,6 +7011,7 @@ dependencies = [
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
+ "qol-plugin-ids",
  "qol-process",
  "qol-runtime",
  "qol-search",
@@ -7285,6 +7289,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-plugin-ids"
+version = "1.0.0"
+dependencies = [
+ "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-plugin-index"
 version = "1.0.0"
 dependencies = [
@@ -7484,6 +7496,7 @@ dependencies = [
  "qol-mcp",
  "qol-platform",
  "qol-plugin-daemon",
+ "qol-plugin-ids",
  "qol-process",
  "qol-runtime",
  "qol-terminal-sessions",
@@ -7665,6 +7678,7 @@ dependencies = [
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
+ "qol-plugin-ids",
  "qol-plugin-index",
  "qol-process",
  "qol-profile-sync",

@@ -23,7 +23,7 @@ use crate::dev_shutdown::{
     terminate_daemon_groups, wait_for_daemons_to_exit, TrackedDaemonPid,
 };
 
-const MONITOR_DAEMON_SOCKET_FILE: &str = "qol-plugin-monitor.sock";
+const MONITOR_DAEMON_SOCKET_FILE: &str = qol_plugin_ids::monitor::SOCKET_NAME;
 const MONITOR_HANDOFF_TIMEOUT: Duration = Duration::from_millis(500);
 const RELOAD_TAIL_QUIET: Duration = Duration::from_millis(50);
 const RELOAD_TAIL_BUDGET: Duration = Duration::from_millis(500);

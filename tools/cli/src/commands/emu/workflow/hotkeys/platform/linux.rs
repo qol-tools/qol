@@ -22,7 +22,7 @@ const DISABLED_SETTLE: Duration = Duration::from_millis(500);
 const CYCLE_COUNT: usize = 40;
 const DISABLED_CYCLE_COUNT: usize = 5;
 const RELOAD_FLOOD_COUNT: usize = 40;
-const LAUNCHER_UID: &str = "5cc75f62-2e3b-463c-ac7b-ae269cff1ef1";
+const LAUNCHER_UID: &str = qol_plugin_ids::launcher::UID;
 const PASSTHROUGH_INPUT_PATH: &str = "/tmp/qol-hotkey-passthrough.txt";
 const PASSTHROUGH_WINDOW_TITLE: &str = "qol-hotkey-passthrough";
 const PORT_CLOSED_SCRIPT: &str = r#"
@@ -60,7 +60,7 @@ struct StormEvidence {
 pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     let mut guest = connect_desktop_guest(vm)?;
     install_payload(&mut guest)?;
-    let mut auth = start_tray_and_wait_plugin(&mut guest, "qol-launcher")?;
+    let mut auth = start_tray_and_wait_plugin(&mut guest, qol_plugin_ids::launcher::ID)?;
     let backend = hotkey_backend(&mut guest)?;
     let baseline = require_status(
         request(
