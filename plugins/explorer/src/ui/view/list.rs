@@ -20,7 +20,6 @@ use super::grid::{Layout, ACROSS};
 use super::moves::progress_label;
 use super::pictogram::entry_pictogram;
 use super::press;
-use super::previews;
 use super::rename::row_name_room;
 use super::targets::{self, Zone};
 use super::{ExplorerView, HEAD, ICON};
@@ -292,7 +291,7 @@ fn render_row(
             div().flex_none().w(px(ICON)).child(
                 view.previews
                     .of(entry, ICON * window.scale_factor())
-                    .map(|(shot, _)| previews::square(shot, ICON))
+                    .map(|(shot, _)| view.previews.square(shot, ICON))
                     .unwrap_or_else(|| entry_pictogram(entry, stop.pictogram(), shown.picked)),
             ),
         )
@@ -422,7 +421,7 @@ fn render_cell(
         .child(
             view.previews
                 .of(entry, room.0.max(room.1) * window.scale_factor())
-                .map(|(shot, video)| previews::framed(shot, video, room))
+                .map(|(shot, video)| view.previews.framed(shot, video, room))
                 .unwrap_or_else(|| entry_pictogram(entry, stop.pictogram(), shown.picked)),
         )
         .child(

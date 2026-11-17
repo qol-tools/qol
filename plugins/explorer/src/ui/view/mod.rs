@@ -12,6 +12,7 @@ mod menu;
 mod moves;
 mod pictogram;
 mod press;
+mod preview_images;
 mod previews;
 mod props;
 mod rail;
@@ -124,7 +125,7 @@ impl ExplorerView {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.on_release(|_, cx| cx.quit()).detach();
-        let (previews, readies) = Previews::new();
+        let (previews, readies) = Previews::new(cx);
         let mut view = Self {
             browser: {
                 let mut browser = Browser::new(start, home, config.show_hidden);
