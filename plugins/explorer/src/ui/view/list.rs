@@ -188,6 +188,14 @@ struct Shown<'a> {
     arriving: bool,
 }
 
+fn rows_in_focus(view: &ExplorerView, window: &Window) -> bool {
+    window.is_window_active()
+        && view
+            .menu
+            .as_ref()
+            .is_none_or(|menu| menu.owner().acts_on_rows())
+}
+
 fn shown(view: &ExplorerView, row: usize, now: Instant, active: bool) -> Option<Shown<'_>> {
     let browser = &view.browser;
     let entry = browser.entry(row)?;
@@ -279,7 +287,7 @@ fn render_row(
 ) -> Option<AnyElement> {
     let kit = kit();
     let stop = layout.stop;
-    let shown = shown(view, row, now, window.is_window_active())?;
+    let shown = shown(view, row, now, rows_in_focus(view, window))?;
     let entry = shown.entry;
     let ground = shown.ground;
     let path = entry.path.clone();
@@ -406,7 +414,7 @@ fn render_cell(
     let stop = layout.stop;
     let (width, height) = stop.cell()?;
     let room = preview_room(width, height, stop.name_style());
-    let shown = shown(view, row, now, window.is_window_active())?;
+    let shown = shown(view, row, now, rows_in_focus(view, window))?;
     let entry = shown.entry;
     let ground = shown.ground;
     let path = entry.path.clone();

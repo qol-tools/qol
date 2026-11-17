@@ -78,7 +78,7 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Left, Right | In the icon sizes, move the cursor one icon; Up and Down move a whole row |
 | Letters | Jump to the first name that starts with what you typed; a plain letter also matches its accented forms, an accented one only itself, and a letter that matches nothing is left out |
 
-The rows drawn selected are always the rows an action acts on: the picks, or the cursor row when nothing is picked. While the window is not focused they keep a faint wash instead.
+The rows drawn selected are always the rows an action acts on: the picks, or the cursor row when nothing is picked. While the window is not focused, or the folder or pin menu is open, they keep a faint wash instead.
 
 Right-click a row or icon to pick it and open a menu with Open, Cut, Copy, Paste, Rename, Move to trash, New folder and Undo, each showing its key. Right-clicking a row that is already picked keeps the picks, so the menu acts on all of them; Rename needs a single row and Paste needs something cut or copied. Right-click on empty space in the list, including the blank part of a row past its name and details, for Paste, New folder and Undo above the folder lines (pin, go to a path, hidden files, settings). Up and Down move through a menu, Enter runs the line and any other key closes it.
 
