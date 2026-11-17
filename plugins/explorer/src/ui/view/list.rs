@@ -180,7 +180,7 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
 struct Shown<'a> {
     entry: &'a Entry,
     picked: bool,
-    cursor: bool,
+    washed: bool,
     ground: Ground,
     typed: Option<usize>,
     size: String,
@@ -197,9 +197,10 @@ fn shown(view: &ExplorerView, row: usize, now: Instant) -> Option<Shown<'_>> {
         .then(|| typed_split(&entry.display, browser.jump_run(now)))
         .flatten();
     let arriving = browser.arriving_bytes(entry);
+    let hovered = view.hovered(Zone::Row(row));
     let size = match arriving {
         Some((done, total)) => progress_label(done, total),
-        None if view.hovered(Zone::Row(row)) => String::new(),
+        None if hovered => String::new(),
         None => size_label(
             entry,
             browser.listing().item_count(&entry.path),
@@ -209,7 +210,7 @@ fn shown(view: &ExplorerView, row: usize, now: Instant) -> Option<Shown<'_>> {
     Some(Shown {
         entry,
         picked,
-        cursor,
+        washed: !picked && (cursor || hovered),
         ground: kit().highlight_ground(picked),
         typed,
         size,
@@ -300,7 +301,6 @@ fn render_row(
         .flatten()
         .unwrap_or_else(|| name.into_any_element());
     let (cut, arriving) = (shown.cut, shown.arriving);
-    let hovered = view.hovered(Zone::Row(row));
     let tag = view.drop_overlay(Zone::Row(row), ground);
     let element = div()
         .id(("explorer-row", row))
@@ -312,9 +312,7 @@ fn render_row(
         .items_center()
         .gap(px(SPACE_CELL))
         .px(px(SPACE_GUTTER))
-        .when(shown.cursor || hovered, |element| {
-            element.child(cursor_wash(ground))
-        })
+        .when(shown.washed, |element| element.child(cursor_wash(ground)))
         .children(tag)
         .child(
             div().flex_none().w(px(ICON)).child(
@@ -429,7 +427,6 @@ fn render_cell(
         .flatten()
         .unwrap_or_else(|| name.into_any_element());
     let (cut, arriving) = (shown.cut, shown.arriving);
-    let hovered = view.hovered(Zone::Row(row));
     let tag = view.drop_overlay(Zone::Row(row), ground);
     let element = div()
         .id(("explorer-cell", row))
@@ -443,9 +440,7 @@ fn render_cell(
         .justify_center()
         .gap(px(SPACE_INSET))
         .p(px(SPACE_INSET))
-        .when(shown.cursor || hovered, |element| {
-            element.child(cursor_wash(ground))
-        })
+        .when(shown.washed, |element| element.child(cursor_wash(ground)))
         .children(tag)
         .child(
             view.previews
