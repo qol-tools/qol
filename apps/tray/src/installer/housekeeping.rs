@@ -32,13 +32,23 @@ fn migrate_dev_files(config_dir: &Path) {
         return;
     }
 
-    let _ = std::fs::create_dir_all(&dev_dir);
+    if let Err(error) = std::fs::create_dir_all(&dev_dir) {
+        log::warn!("Failed to create {}: {error}", dev_dir.display());
+        return;
+    }
 
     for (old_name, new_name) in migrations.iter().chain(extra.iter()) {
         let old = config_dir.join(old_name);
         let new = dev_dir.join(new_name);
-        if old.exists() && !new.exists() {
-            let _ = std::fs::rename(&old, &new);
+        if !old.exists() || new.exists() {
+            continue;
+        }
+        if let Err(error) = std::fs::rename(&old, &new) {
+            log::warn!(
+                "Failed to move {} to {}: {error}",
+                old.display(),
+                new.display()
+            );
         }
     }
 }

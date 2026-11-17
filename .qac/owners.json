@@ -111,5 +111,18 @@
       "Busy::ring", "Busy::new"
     ],
     "allow": []
+  },
+  "daemon launch env": {
+    "owner": ["libs/plugin-daemon/src/", "libs/conventions/src/", "apps/tray/src/plugins/daemon_lifecycle/"],
+    "use": "qol_plugin_daemon::daemon::launched_as_daemon, which a plugin asks before it runs its daemon, or qol_plugin_daemon::daemon::handed_socket and qol_plugin_daemon::daemon::asked_to_replace_existing; qol-tray's daemon spawn sets the variables and plugin-daemon reads them",
+    "scope": "production",
+    "paths": ["ENV_DAEMON_INSTANCE", "ENV_DAEMON_SOCKET", "ENV_DAEMON_REPLACE_EXISTING", "ENV_DAEMON_LISTENER_FD", "ENV_DAEMON_PORT_FD"],
+    "allow": [
+      { "path": "apps/tray/src/plugins/action_executor/execution.rs", "text": "ENV_DAEMON_SOCKET", "why": "hands an action the socket of its plugin's daemon" },
+      { "path": "apps/tray/src/settings_surface/platform/gpui_host.rs", "text": "ENV_DAEMON_SOCKET", "why": "keeps the settings host, which is no daemon, from inheriting a daemon's socket" },
+      { "path": "apps/tray/src/settings_surface/platform/gpui_host.rs", "text": "ENV_DAEMON_LISTENER_FD", "why": "keeps the settings host, which is no daemon, from inheriting a daemon's listener" },
+      { "path": "apps/tray/src/settings_surface/platform/gpui_host.rs", "text": "ENV_DAEMON_REPLACE_EXISTING", "why": "keeps the settings host, which is no daemon, from replacing a running daemon" },
+      { "path": "plugins/pointz/src/doctor/mod.rs", "text": "ENV_DAEMON_SOCKET", "why": "the doctor report names the variable qol-tray hands the socket in" }
+    ]
   }
 }

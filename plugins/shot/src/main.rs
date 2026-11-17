@@ -12,8 +12,8 @@ fn main() -> ExitCode {
             "SHOT_ENTRY",
             "mode=daemon args={} socket_env={} replace_env={}",
             args.len(),
-            std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some(),
-            std::env::var_os(qol_conventions::ENV_DAEMON_REPLACE_EXISTING).is_some()
+            qol_plugin_daemon::daemon::handed_socket().is_ok(),
+            qol_plugin_daemon::daemon::asked_to_replace_existing()
         );
         qol_shot::app::run();
         return ExitCode::SUCCESS;
@@ -23,8 +23,8 @@ fn main() -> ExitCode {
         "SHOT_ENTRY",
         "mode=cli args={} socket_env={} replace_env={}",
         args.len(),
-        std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some(),
-        std::env::var_os(qol_conventions::ENV_DAEMON_REPLACE_EXISTING).is_some()
+        qol_plugin_daemon::daemon::handed_socket().is_ok(),
+        qol_plugin_daemon::daemon::asked_to_replace_existing()
     );
     qol_shot::cli::exit_code(args)
 }
@@ -32,7 +32,7 @@ fn main() -> ExitCode {
 fn should_run_daemon(args: &[String]) -> bool {
     should_run_daemon_with_env(
         args.is_empty(),
-        std::env::var_os(qol_conventions::ENV_DAEMON_REPLACE_EXISTING).is_some(),
+        qol_plugin_daemon::daemon::asked_to_replace_existing(),
     )
 }
 

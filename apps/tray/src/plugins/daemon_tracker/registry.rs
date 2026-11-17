@@ -34,9 +34,15 @@ pub(crate) fn tracked_pid_set(pids_dir: &Path) -> HashSet<i32> {
 }
 
 fn write_pid_file(pids_dir: &Path, plugin_id: &str, pid: u32) {
-    let _ = std::fs::create_dir_all(pids_dir);
     let path = pids_dir.join(format!("{}.pid", plugin_id));
-    let _ = std::fs::write(&path, pid.to_string());
+    let written =
+        std::fs::create_dir_all(pids_dir).and_then(|()| std::fs::write(&path, pid.to_string()));
+    if let Err(error) = written {
+        log::warn!(
+            "Failed to record daemon pid {pid} in {}: {error}",
+            path.display()
+        );
+    }
 }
 
 fn remove_pid_file(pids_dir: &Path, plugin_id: &str) {

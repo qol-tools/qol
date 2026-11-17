@@ -12,7 +12,6 @@ crossbeam-channel = "0.5"
 futures-util = { version = "0.3", features = ["sink"] }
 qol-apps.workspace = true
 qol-config.workspace = true
-qol-conventions.workspace = true
 qol-headless.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true

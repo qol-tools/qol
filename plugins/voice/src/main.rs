@@ -3,7 +3,7 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     qol_log::init_stderr();
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if args.is_empty() && std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some() {
+    if qol_plugin_daemon::daemon::launched_as_daemon(&args) {
         return match qol_voice::app::run_daemon() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {

@@ -93,8 +93,12 @@ fn write_batch(
     if *bytes >= max_bytes {
         let rotated = format!("{log_file}.1");
         let _ = std::fs::remove_file(&rotated);
-        let _ = std::fs::rename(log_file, rotated);
-        *file = None;
+        match std::fs::rename(log_file, rotated) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                log::warn!("failed to rotate the trace log {log_file}: {error}");
+            }
+            _ => *file = None,
+        }
         *bytes = 0;
     }
     let f = match file {
@@ -302,6 +306,58 @@ mod tests {
             .read_to_string(&mut fresh)
             .unwrap();
         assert_eq!(fresh, format!("{}{}", "y".repeat(600), "z".repeat(400)));
+
+        drop(file);
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(&rotated);
+    }
+
+    #[test]
+    fn a_failed_rotation_keeps_the_log_open_until_the_next_threshold() {
+        let log = std::env::temp_dir()
+            .join(format!("qol-probe-stuck-rotation-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let blocker = std::path::PathBuf::from(format!("{log}.1"));
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_dir_all(&blocker);
+        std::fs::create_dir_all(blocker.join("held")).unwrap();
+
+        let mut file: Option<std::fs::File> = None;
+        let mut bytes: u64 = 0;
+        write_batch(&mut file, &mut bytes, &log, 1000, &"x".repeat(1200));
+        write_batch(&mut file, &mut bytes, &log, 1000, &"y".repeat(10));
+
+        assert!(file.is_some(), "a failed rotation keeps the open log");
+        assert_eq!(bytes, 10, "a failed rotation waits for another threshold");
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            format!("{}{}", "x".repeat(1200), "y".repeat(10))
+        );
+
+        drop(file);
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_dir_all(&blocker);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_deleted_log_is_recreated_at_the_next_rotation() {
+        let log = std::env::temp_dir()
+            .join(format!("qol-probe-deleted-log-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let rotated = format!("{log}.1");
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(&rotated);
+
+        let mut file: Option<std::fs::File> = None;
+        let mut bytes: u64 = 0;
+        write_batch(&mut file, &mut bytes, &log, 1000, &"x".repeat(1200));
+        std::fs::remove_file(&log).unwrap();
+        write_batch(&mut file, &mut bytes, &log, 1000, &"y".repeat(10));
+
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "y".repeat(10));
 
         drop(file);
         let _ = std::fs::remove_file(&log);
