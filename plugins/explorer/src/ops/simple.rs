@@ -235,11 +235,17 @@ fn rename_case(path: &Path, target: &Path) -> Result<(), NameProblem> {
     scratch.push(SCRATCH_SUFFIX);
     let scratch = free_name(parent, &scratch);
     fs::rename(path, &scratch).map_err(problem)?;
-    if let Err(error) = fs::rename(&scratch, target) {
-        let _ = fs::rename(&scratch, path);
-        return Err(problem(error));
+    let Err(error) = fs::rename(&scratch, target) else {
+        return Ok(());
+    };
+    if let Err(restore_error) = fs::rename(&scratch, path) {
+        log::error!(
+            "could not move {} back to {}: {restore_error}",
+            scratch.display(),
+            path.display()
+        );
     }
-    Ok(())
+    Err(problem(error))
 }
 
 fn has_sibling_named(target: &Path) -> bool {

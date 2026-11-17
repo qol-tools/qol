@@ -150,7 +150,12 @@ impl RateLimiter {
         let Ok(content) = serde_json::to_string_pretty(&suppressed) else {
             return;
         };
-        let _ = std::fs::write(path, content);
+        if let Err(error) = std::fs::write(path, content) {
+            eprintln!(
+                "Failed to save suppressed errors to {}: {error}",
+                path.display()
+            );
+        }
     }
 }
 

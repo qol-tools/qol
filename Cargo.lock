@@ -7472,6 +7472,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "log",
  "qol-agent-homes",
  "qol-agent-launch",
  "qol-config",
