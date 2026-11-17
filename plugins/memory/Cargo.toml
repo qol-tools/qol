@@ -17,7 +17,6 @@ serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"
 ureq = { version = "2", features = ["json"] }
 qol-agent-homes.workspace = true
 qol-config.workspace = true
-qol-conventions.workspace = true
 qol-fs.workspace = true
 qol-headless.workspace = true
 qol-platform.workspace = true

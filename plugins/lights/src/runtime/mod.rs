@@ -3,19 +3,14 @@ pub mod actions;
 use anyhow::{anyhow, Result};
 
 pub fn entrypoint(args: Vec<String>) -> Result<()> {
+    if qol_plugin_daemon::daemon::launched_as_daemon(&args) {
+        return crate::daemon::run_from_env();
+    }
     let Some(action) = args.first().map(String::as_str) else {
-        return daemon_or_settings();
+        return crate::platform::open_settings();
     };
 
     run_action(action)
-}
-
-fn daemon_or_settings() -> Result<()> {
-    if std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some() {
-        return crate::daemon::run_from_env();
-    }
-
-    crate::platform::open_settings()
 }
 
 pub fn run_action(action: &str) -> Result<()> {
