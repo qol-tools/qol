@@ -2,16 +2,19 @@ pub(crate) mod create;
 pub(crate) mod gather;
 pub(crate) mod layout;
 mod monitor_listener;
-pub(crate) mod platform;
+mod platform;
 mod reuse;
 pub(crate) mod run;
 pub(crate) mod state;
+mod view;
 
 pub(crate) use monitor_listener::request_frontmost_preview_refresh;
 pub use platform::is_modifier_held;
 pub(crate) use reuse::ReuseRequest;
+#[cfg(debug_assertions)]
+pub(crate) use view::{clear_cycle_origin, set_cycle_origin};
+pub(crate) use view::{AltTabApp, ACTIVE_PICKER_MONITOR, PICKER_VISIBLE};
 
-use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::capture;
 use crate::config::{ActionMode, AltTabConfig, DisplayConfig};
 use crate::rendering::RenderingFlow;
@@ -122,10 +125,10 @@ fn resolve_placement(
     let placement = PopupPlacement::from_tracker(tracker);
     if !is_visible {
         let placement = stabilize_placement(placement, current, "hidden");
-        *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap() = Some(placement.target());
+        *ACTIVE_PICKER_MONITOR.lock().unwrap() = Some(placement.target());
         return placement;
     }
-    let Some(active_target) = *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap() else {
+    let Some(active_target) = *ACTIVE_PICKER_MONITOR.lock().unwrap() else {
         return stabilize_placement(placement, current, "visible-no-active-target");
     };
     tracker
@@ -223,7 +226,7 @@ pub(super) fn try_cycle_visible(
     if !PICKER_VISIBLE.load(Ordering::Relaxed) {
         return false;
     }
-    let target = *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap();
+    let target = *ACTIVE_PICKER_MONITOR.lock().unwrap();
     cycle_existing_window(current, target, reverse, show_id, cx)
 }
 

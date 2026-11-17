@@ -80,7 +80,7 @@ pub(super) async fn self_update() -> impl IntoResponse {
 
 async fn shutdown(State(state): State<AppState>) -> StatusCode {
     log::info!("[lifecycle] graceful shutdown requested by local API");
-    crate::tray::platform::request_shutdown(&state.shutdown_tx);
+    crate::tray::request_shutdown(&state.shutdown_tx);
     StatusCode::ACCEPTED
 }
 

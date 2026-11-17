@@ -10,31 +10,14 @@ use crate::{capture::geometry, platform, Rect};
 const PREVIEW_MAX_WIDTH: u32 = 360;
 const PREVIEW_MAX_HEIGHT: u32 = 240;
 
-pub fn capture_screenshot() -> Result<Option<PathBuf>> {
-    finish_cli_screenshot(capture_to_file()?)
-}
-
-pub fn capture_monitor_screenshot() -> Result<Option<PathBuf>> {
-    finish_cli_screenshot(capture_monitor_to_file()?)
-}
-
-fn finish_cli_screenshot(output_file: Option<PathBuf>) -> Result<Option<PathBuf>> {
-    let Some(output_file) = output_file else {
-        return Ok(None);
-    };
-    let config = crate::config::load();
-    let completion = crate::capture::completion::PreviewCompletion::new(
-        &output_file,
-        config.capture.open_folder_after_save,
-    );
-    completion.announce_saved();
-    present_capture(&output_file, completion);
-    Ok(Some(output_file))
-}
-
-pub fn capture_to_file() -> Result<Option<PathBuf>> {
+pub(crate) fn capture_to_file(
+    select_region: impl FnOnce(
+        crate::capture::space::CaptureKind,
+        Option<FrozenFrame>,
+    ) -> Result<Option<Rect>>,
+) -> Result<Option<PathBuf>> {
     capture_area_to_file(|frozen_frame| {
-        platform::select_region(crate::capture::space::CaptureKind::Screenshot, frozen_frame)
+        select_region(crate::capture::space::CaptureKind::Screenshot, frozen_frame)
     })
 }
 
@@ -192,9 +175,10 @@ impl CaptureFileStart {
 pub(crate) fn capture_selected_for_preview(
     selected: Rect,
     frozen_frame: Option<&FrozenFrame>,
+    open_folder_after_save: bool,
 ) -> Result<PreviewCapture> {
     let rect = prepare_screenshot_rect(selected)?;
-    capture_rect_for_preview(rect, frozen_frame)
+    capture_rect_for_preview(rect, frozen_frame, open_folder_after_save)
 }
 
 pub(crate) fn freeze_frame() -> Option<FrozenFrame> {
@@ -278,6 +262,7 @@ fn capture_rect_to_file(rect: Rect, frozen_frame: Option<&FrozenFrame>) -> Resul
 fn capture_rect_for_preview(
     rect: Rect,
     frozen_frame: Option<&FrozenFrame>,
+    open_folder_after_save: bool,
 ) -> Result<PreviewCapture> {
     let started_at = Instant::now();
     let output_file = crate::capture::output::screenshot_output_file_path()?;
@@ -299,7 +284,7 @@ fn capture_rect_for_preview(
             height
         );
         return Ok(PreviewCapture {
-            completion: Some(preview_completion(&output_file)),
+            completion: Some(preview_completion(&output_file, open_folder_after_save)),
             path: output_file,
             pixels: Some(PreviewPixels::bgra(bgra, width, height)),
             file_ready,
@@ -316,7 +301,7 @@ fn capture_rect_for_preview(
         );
         let (file_ready, file_start) = spawn_file_write(rect, output_file.clone());
         return Ok(PreviewCapture {
-            completion: Some(preview_completion(&output_file)),
+            completion: Some(preview_completion(&output_file, open_folder_after_save)),
             path: output_file,
             pixels: Some(PreviewPixels::rgba(rgba, w, h)),
             file_ready,
@@ -334,7 +319,7 @@ fn capture_rect_for_preview(
         rect.h
     );
     Ok(PreviewCapture {
-        completion: Some(preview_completion(&output_file)),
+        completion: Some(preview_completion(&output_file, open_folder_after_save)),
         path: output_file,
         pixels: None,
         file_ready: CaptureFileReady::ready(),
@@ -343,9 +328,11 @@ fn capture_rect_for_preview(
     })
 }
 
-fn preview_completion(path: &Path) -> crate::capture::completion::PreviewCompletion {
-    let config = crate::config::load();
-    crate::capture::completion::PreviewCompletion::new(path, config.capture.open_folder_after_save)
+fn preview_completion(
+    path: &Path,
+    open_folder_after_save: bool,
+) -> crate::capture::completion::PreviewCompletion {
+    crate::capture::completion::PreviewCompletion::new(path, open_folder_after_save)
 }
 
 fn frozen_crop(frozen_frame: Option<&FrozenFrame>, rect: Rect) -> Result<Option<FrozenCrop>> {
@@ -442,25 +429,6 @@ fn swap_red_blue(data: &mut [u8]) {
     for pixel in data.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
-}
-
-fn present_capture(output_file: &Path, completion: crate::capture::completion::PreviewCompletion) {
-    let fallback = completion.clone();
-    if let Err(error) = show_preview(output_file, completion) {
-        log::warn!("preview unavailable, copying instead: {error:#}");
-        if let Err(error) = platform::copy_image_to_clipboard(output_file) {
-            log::warn!("failed to copy screenshot to clipboard: {error:#}");
-        }
-        send_notification("Screenshot saved", &output_file.display().to_string());
-        fallback.finish(crate::capture::completion::PreviewExit::Unavailable);
-    }
-}
-
-fn show_preview(
-    output_file: &Path,
-    completion: crate::capture::completion::PreviewCompletion,
-) -> Result<()> {
-    crate::ui::preview::show_saved(output_file, completion)
 }
 
 #[cfg(test)]

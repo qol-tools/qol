@@ -42,14 +42,14 @@ impl ForkAgent {
         }
     }
 
-    pub(super) fn system() -> Self {
+    pub(super) fn system(warn: &mut dyn FnMut(String)) -> Self {
         let defaults = crate::spawn::config_launch_defaults();
         let policy = crate::spawn::config_dispatch_policy();
         match (defaults, policy) {
             (Ok(defaults), Ok(policy)) => Self::resolve(&defaults, &policy),
             (defaults, policy) => {
                 for error in [defaults.err(), policy.err()].into_iter().flatten() {
-                    crate::cli::warn(format!("forks use the default model: {error:#}"));
+                    warn(format!("forks use the default model: {error:#}"));
                 }
                 Self::default()
             }

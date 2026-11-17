@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use qol_windowing::{WindowId, WindowRect};
 
+use crate::action::WindowAction;
 use crate::config::WindowActionsConfig;
 use crate::platform::layout::{self, Placement};
 use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
@@ -20,26 +21,26 @@ pub(crate) use glide::GlideController;
 const GRANTED_WAIT: Duration = Duration::from_millis(300);
 const GRANTED_POLL: Duration = Duration::from_millis(15);
 
-pub(crate) const DIAGNOSTIC_ACTIONS: &[crate::cli::ActionSpec] = &[];
+pub(crate) const DIAGNOSTIC_ACTIONS: &[WindowAction] = &[];
 
 pub(crate) fn execute_action(
-    action: &str,
+    action: WindowAction,
     store: &FileMinimizedStateStore,
     config: &WindowActionsConfig,
 ) -> Result<(), String> {
     win32::ensure_dpi_awareness();
     let fraction = config.snap_fraction;
     match action {
-        "snap-left" => place_foreground(|work| layout::snap_left(work, fraction)),
-        "snap-right" => place_foreground(|work| layout::snap_right(work, fraction)),
-        "snap-bottom" => place_foreground(|work| layout::snap_bottom(work, fraction)),
-        "center" => place_foreground(|work| layout::centered(work, config)),
-        "maximize" => foreground().map(Window::maximize),
-        "minimize" => restore::minimize_window(&Win32Windows, store),
-        "restore" => restore::restore_window(&Win32Windows, store),
-        "move-monitor-left" => move_monitor(-1),
-        "move-monitor-right" => move_monitor(1),
-        _ => Err(format!("Unknown action: {action}")),
+        WindowAction::SnapLeft => place_foreground(|work| layout::snap_left(work, fraction)),
+        WindowAction::SnapRight => place_foreground(|work| layout::snap_right(work, fraction)),
+        WindowAction::SnapBottom => place_foreground(|work| layout::snap_bottom(work, fraction)),
+        WindowAction::Center => place_foreground(|work| layout::centered(work, config)),
+        WindowAction::Maximize => foreground().map(Window::maximize),
+        WindowAction::Minimize => restore::minimize_window(&Win32Windows, store),
+        WindowAction::Restore => restore::restore_window(&Win32Windows, store),
+        WindowAction::MoveMonitorLeft => move_monitor(-1),
+        WindowAction::MoveMonitorRight => move_monitor(1),
+        WindowAction::Glide(_) | WindowAction::PrintWorkAreas => Err(action.unknown_message()),
     }
 }
 

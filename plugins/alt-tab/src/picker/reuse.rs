@@ -1,6 +1,6 @@
 use super::GatheredWindows;
-use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::AltTabConfig;
+use crate::picker::{AltTabApp, PICKER_VISIBLE};
 use crate::rendering::RenderingFlow;
 use gpui::*;
 use qol_gpui::window::PopupPlacement;

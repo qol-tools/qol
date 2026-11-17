@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp};
 
-const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+use crate::PLUGIN_ID;
+
 const PUBLIC_FLAG: &str = "--public";
 const DIRECT_ACTIONS: [(&str, &str); 6] = [
     ("settings", "Open the PointZerver settings surface."),

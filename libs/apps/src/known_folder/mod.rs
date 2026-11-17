@@ -1,3 +1,5 @@
-pub(crate) mod platform;
+mod platform;
 
-pub use platform::{pictures_dir, programs_dir, user_content_folders, videos_dir};
+pub use platform::{
+    common_programs_dir, pictures_dir, programs_dir, user_content_folders, videos_dir,
+};

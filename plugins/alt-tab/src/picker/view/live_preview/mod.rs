@@ -1,13 +1,12 @@
 mod lanes;
 
 use self::lanes::LaneScheduler;
-use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::capture;
 use crate::capture::{SendCVBuf, ShotReply};
 use crate::picker::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
 use crate::picker::run::SharedPreviewCache;
 use crate::picker::state::{current_open, PickerState};
-use crate::picker::PreviewMap;
+use crate::picker::{AltTabApp, PreviewMap, PICKER_VISIBLE};
 use crate::rendering::preview_image::{fast_pixel_hash, shot_request_dims};
 use gpui::{AsyncApp, Entity, RenderImage, Task, WeakEntity};
 use std::collections::{HashMap, HashSet};

@@ -3,8 +3,8 @@ use std::process::ExitCode;
 use qol_headless::{Command, CommandContext, CommandResult, DoctorCheck, HeadlessApp};
 
 use super::operational::Operation;
+use crate::PLUGIN_ID;
 
-const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const OPERATIONS: [OperationSpec; 5] = [
     OperationSpec::new(
         "daemon",

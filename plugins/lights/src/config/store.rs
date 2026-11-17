@@ -1,8 +1,8 @@
 use anyhow::{Error, Result};
 
 use super::model::PluginConfig;
+use crate::PLUGIN_ID;
 
-pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 
 pub fn load() -> Result<PluginConfig> {

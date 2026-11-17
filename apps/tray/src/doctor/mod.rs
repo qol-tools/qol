@@ -7,7 +7,7 @@ pub(crate) mod framework;
 mod host_bindings;
 mod host_cli;
 mod install_id;
-pub(crate) mod platform;
+mod platform;
 pub mod report;
 pub mod trigger;
 

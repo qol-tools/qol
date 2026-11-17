@@ -157,7 +157,7 @@ fn profile_capability(
     }
 }
 
-pub(super) fn run(args: &[OsString]) -> Result<()> {
+pub(super) fn run(args: &[OsString]) -> Result<String> {
     let tier = parse_args(args)?;
     let interpreter = CliSessionInterpreter::system();
     let policy = config_dispatch_policy()?;
@@ -179,8 +179,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         default_agent_profile: policy.agent.default_profile_name().map(str::to_owned),
         profiles,
     };
-    crate::cli::line(serde_json::to_string(&capability)?);
-    Ok(())
+    Ok(serde_json::to_string(&capability)?)
 }
 
 #[cfg(test)]

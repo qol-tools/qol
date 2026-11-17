@@ -5,12 +5,11 @@ use anyhow::{bail, Context, Result};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadinessGate, SocketSource};
 use qol_runtime::protocol::{DaemonResponse, ReadinessPhase};
 
-use crate::app::warm::WarmState;
 use crate::ingest::{self, IngestRoots};
 use crate::store::{Store, STALE_TEMP_AGE};
+use crate::warm::WarmState;
 
 pub mod request;
-pub mod warm;
 
 #[cfg(test)]
 mod verification_tests;

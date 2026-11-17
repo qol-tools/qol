@@ -194,13 +194,16 @@ impl DaemonState {
         if presets::is_preset_action(action) {
             return self.edit_presets(action, input);
         }
-        if let Some(preset) = self.config.preset_for_action(action) {
+        if let Some(preset) = presets::slot_for_apply_action(action)
+            .and_then(|number| self.config.presets.slot(number))
+            .cloned()
+        {
             return self.apply_preset(&preset);
         }
         if actions::is_run_action(action) {
             return DaemonOutcome::Error(format!(
                 "{} action '{}' is not implemented yet",
-                store::PLUGIN_ID,
+                crate::PLUGIN_ID,
                 action
             ));
         }

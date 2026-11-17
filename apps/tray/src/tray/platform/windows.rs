@@ -94,7 +94,7 @@ fn spawn_tray(
 }
 
 fn release_toast_identity() {
-    if let Err(error) = qol_plugin_daemon::notification::platform::release_toast_identity() {
+    if let Err(error) = qol_plugin_daemon::notification::release_toast_identity() {
         log::warn!("failed to remove the toast identity qol registered: {error}");
     }
 }

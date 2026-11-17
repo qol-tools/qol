@@ -12,6 +12,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTO
 
 use crate::capture::frozen_frame::FrozenFrame;
 use crate::capture::space::CaptureKind;
+use crate::platform::{
+    full_screen_bounds, logical_cursor, logical_rect, monitor_from_rect, native_displays,
+    NativeDisplay,
+};
 use crate::ui::region_selector::{
     bounds_from_monitor, fallback_bounds, open_all, rect_from_bounds, select_region_blocking_with,
     ActiveBounds, GlobalPointer, HoverTargetSource, SelectorWindow, SelectorWindowOptions,
@@ -19,12 +23,9 @@ use crate::ui::region_selector::{
 };
 use crate::Rect;
 
-use super::display::{
-    full_screen_bounds, logical_cursor, logical_rect, monitor_from_rect, native_displays,
-    NativeDisplay,
-};
-
 const MIN_TARGET_PX: i32 = 24;
+
+pub fn pre_create_selector(_cx: &mut App) {}
 
 pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {
     select_region_blocking_with(move |tx, cx| {
@@ -42,10 +43,6 @@ pub fn select_region_in_app(
     let (tx, rx) = mpsc::channel();
     open_selectors(tx, false, kind, frozen_frame, cx);
     Some(rx)
-}
-
-pub fn monitor_capture_rect(monitor: Bounds<Pixels>) -> Option<Rect> {
-    logical_rect(rect_from_bounds(monitor), &native_displays())
 }
 
 fn open_selectors(
@@ -268,7 +265,7 @@ mod tests {
     use gpui::{point, px, size, Bounds, Pixels};
 
     use super::display_placed_at;
-    use crate::platform::windows::display::NativeDisplay;
+    use crate::platform::NativeDisplay;
     use crate::Rect;
 
     fn bounds(x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels> {

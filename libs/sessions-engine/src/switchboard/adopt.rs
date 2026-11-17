@@ -239,6 +239,7 @@ pub(super) fn adopt(
     current: &str,
     fork: &str,
     fresh: Option<String>,
+    warn: &mut dyn FnMut(String),
 ) -> Result<Adopted> {
     if !is_id(current) || !is_id(fork) {
         bail!("a conversation and a fork are named by letters, digits, - and _");
@@ -247,7 +248,7 @@ pub(super) fn adopt(
         .ok_or_else(|| anyhow!("no fork named {fork} has a conversation to bring back"))?;
     if let Err(error) = super::stitch::join_fork(conversations, &found.transcript, &found.agent_id)
     {
-        crate::cli::warn(format!(
+        warn(format!(
             "the fork comes back with only its conversation since the last /clear: {error:#}"
         ));
     }
@@ -373,7 +374,7 @@ pub(super) fn is_switchboards(conversations: &Path, switchboard: Option<&Path>) 
         })
 }
 
-pub(super) fn run(args: &[OsString]) -> Result<()> {
+pub(super) fn run(args: &[OsString], warn: &mut dyn FnMut(String)) -> Result<Vec<String>> {
     let parsed = parse(args)?;
     let switchboard = switchboard_dir();
     if !is_switchboards(&parsed.conversations, switchboard.as_deref()) {
@@ -388,6 +389,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
             &parsed.conversation,
             fork,
             is_fresh.then(|| fresh_id(fork)),
+            warn,
         )?,
         Source::Session {
             transcript,
@@ -416,8 +418,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
             )?
         }
     };
-    crate::cli::line(serde_json::to_string(&adopted)?);
-    Ok(())
+    Ok(vec![serde_json::to_string(&adopted)?])
 }
 
 #[cfg(test)]
@@ -482,7 +483,7 @@ mod tests {
             &described,
             &[row("u2", Some("lost"), "2026-11-02T09:00:00.000Z")],
         );
-        let adopted = adopt(conversations, "current", "a1", None).unwrap();
+        let adopted = adopt(conversations, "current", "a1", None, &mut |_| {}).unwrap();
         assert_eq!(adopted.brought, Brought::Here);
         let joined =
             fs::read_to_string(conversations.join("current/subagents/agent-a1.jsonl")).unwrap();
@@ -515,7 +516,7 @@ mod tests {
             &rows("a1"),
         );
         fs::create_dir_all(conversations.join("current")).unwrap();
-        let adopted = adopt(conversations, "current", "kcd2-modding", None).unwrap();
+        let adopted = adopt(conversations, "current", "kcd2-modding", None, &mut |_| {}).unwrap();
         assert_eq!(adopted.agent_id, "a1");
         assert_eq!(adopted.brought, Brought::Copied);
         assert_eq!(adopted.name.as_deref(), Some("kcd2-modding: aim the rifle"));
@@ -537,7 +538,7 @@ mod tests {
         );
         let leftovers = fs::read_dir(&here).unwrap().count();
         assert_eq!(leftovers, 2, "no partial file is left behind");
-        let again = adopt(conversations, "current", "a1", None).unwrap();
+        let again = adopt(conversations, "current", "a1", None, &mut |_| {}).unwrap();
         assert_eq!(
             (again.agent_id.as_str(), again.brought),
             ("a1", Brought::Here)
@@ -559,7 +560,7 @@ mod tests {
         fs::write(&earlier, r#"{"agentId":"a1","type":"user"}"#).unwrap();
         fs::create_dir_all(conversations.join("current")).unwrap();
 
-        let adopted = adopt(conversations, "current", "a1", None).unwrap();
+        let adopted = adopt(conversations, "current", "a1", None, &mut |_| {}).unwrap();
 
         assert_eq!(adopted.brought, Brought::Copied);
         let here = conversations.join("current/subagents/agent-a1.jsonl");
@@ -591,7 +592,14 @@ mod tests {
             &meta("fix-board: fix it", r#","stoppedByUser":true"#),
             &rows("a1"),
         );
-        let adopted = adopt(conversations, "current", "fix-board", Some("a2".to_owned())).unwrap();
+        let adopted = adopt(
+            conversations,
+            "current",
+            "fix-board",
+            Some("a2".to_owned()),
+            &mut |_| {},
+        )
+        .unwrap();
         assert_eq!(
             (adopted.agent_id.as_str(), adopted.brought),
             ("a2", Brought::Fresh)
@@ -640,7 +648,7 @@ mod tests {
         );
         let subagents = conversations.join("current/subagents");
         let before = fs::read_to_string(subagents.join("agent-a1.jsonl")).unwrap();
-        let adopted = adopt(conversations, "current", "a1", None).unwrap();
+        let adopted = adopt(conversations, "current", "a1", None, &mut |_| {}).unwrap();
         assert_eq!(adopted.brought, Brought::Here);
         assert_eq!(
             read_meta(subagents.join("agent-a1.meta.json")),
@@ -690,7 +698,8 @@ mod tests {
             &rows("a7"),
         );
         let pick = |fork: &str| {
-            let picked = adopt(conversations, "current", fork, None).map(|one| one.agent_id);
+            let picked =
+                adopt(conversations, "current", fork, None, &mut |_| {}).map(|one| one.agent_id);
             let _ = fs::remove_dir_all(conversations.join("current"));
             picked
         };
@@ -701,7 +710,7 @@ mod tests {
         assert!(pick("explore").is_err());
         assert!(pick("missing").is_err());
         assert!(pick("../c1").is_err());
-        assert!(adopt(conversations, "../up", "same", None).is_err());
+        assert!(adopt(conversations, "../up", "same", None, &mut |_| {}).is_err());
     }
 
     #[cfg(unix)]
@@ -724,7 +733,7 @@ mod tests {
         )
         .unwrap();
         fs::write(root.path().join("elsewhere"), "{}\n").unwrap();
-        assert!(adopt(conversations, "current", "a1", None).is_err());
+        assert!(adopt(conversations, "current", "a1", None, &mut |_| {}).is_err());
     }
 
     #[test]

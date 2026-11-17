@@ -22,9 +22,9 @@ pub(crate) fn peer_is_alive(stream: &LocalStream) -> bool {
 }
 
 pub(crate) fn register_lifeline_for_exec_handoff(stream: &LocalStream) {
-    crate::lifeline_handoff::platform::unix::register(stream.as_raw_fd());
+    crate::lifeline_handoff::register(stream.as_raw_fd());
 }
 
 pub(crate) fn unregister_lifeline_for_exec_handoff(stream: &LocalStream) {
-    crate::lifeline_handoff::platform::unix::unregister(stream.as_raw_fd());
+    crate::lifeline_handoff::unregister(stream.as_raw_fd());
 }

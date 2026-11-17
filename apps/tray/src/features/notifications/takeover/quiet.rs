@@ -1,4 +1,6 @@
-use qol_plugin_daemon::notification::platform::{self, NotificationInhibit};
+use qol_plugin_daemon::notification::{
+    acquire_inhibit, os_banners_showing, set_os_banners, NotificationInhibit,
+};
 
 use super::state::{Health, Mechanism};
 
@@ -20,7 +22,7 @@ impl Quiet {
             return Vec::new();
         }
         if self.inhibit.is_none() {
-            self.inhibit = platform::acquire_inhibit();
+            self.inhibit = acquire_inhibit();
         }
         let mut mechanisms = Vec::new();
         if let Some(health) = self.hide_banners() {
@@ -33,18 +35,18 @@ impl Quiet {
     }
 
     fn hide_banners(&mut self) -> Option<Health> {
-        let showing = platform::os_banners_showing()?;
+        let showing = os_banners_showing()?;
         self.holds_banner_switch = true;
         if !showing {
             return Some(Health::Active);
         }
-        platform::set_os_banners(false);
-        Some(banner_switch_health(platform::os_banners_showing()))
+        set_os_banners(false);
+        Some(banner_switch_health(os_banners_showing()))
     }
 
     fn release(&mut self) {
         if self.holds_banner_switch {
-            platform::set_os_banners(true);
+            set_os_banners(true);
             self.holds_banner_switch = false;
         }
         self.inhibit = None;

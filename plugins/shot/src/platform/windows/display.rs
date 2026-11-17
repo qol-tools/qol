@@ -1,17 +1,18 @@
 use anyhow::{anyhow, Result};
+use gpui::{Bounds, Pixels};
 use qol_windowing::platform::windows::{cursor_position, ensure_dpi_awareness, monitors};
 
 use crate::capture::geometry::{rect_intersection, union_bounds};
 use crate::{Monitor, Rect};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct NativeDisplay {
-    pub(super) physical: Rect,
-    pub(super) scale: f32,
+pub(crate) struct NativeDisplay {
+    pub(crate) physical: Rect,
+    pub(crate) scale: f32,
 }
 
 impl NativeDisplay {
-    pub(super) fn logical(self) -> Rect {
+    pub(crate) fn logical(self) -> Rect {
         Rect {
             x: self.physical.x,
             y: self.physical.y,
@@ -63,7 +64,7 @@ fn scale_up(value: i32, scale: f32) -> i32 {
     (value as f32 * scale).round() as i32
 }
 
-pub(super) fn monitor_from_rect(rect: Rect) -> Monitor {
+pub(crate) fn monitor_from_rect(rect: Rect) -> Monitor {
     Monitor {
         x: rect.x,
         y: rect.y,
@@ -92,7 +93,7 @@ pub(super) fn physical_rect(rect: Rect, displays: &[NativeDisplay]) -> Rect {
     union_bounds(&pieces).map(rect_from_monitor).unwrap_or(rect)
 }
 
-pub(super) fn logical_rect(rect: Rect, displays: &[NativeDisplay]) -> Option<Rect> {
+pub(crate) fn logical_rect(rect: Rect, displays: &[NativeDisplay]) -> Option<Rect> {
     let center_x = rect.x + rect.w / 2;
     let center_y = rect.y + rect.h / 2;
     displays
@@ -108,12 +109,12 @@ pub(super) fn logical_point(x: i32, y: i32, displays: &[NativeDisplay]) -> Optio
         .map(|display| display.logical_point(x, y))
 }
 
-pub(super) fn logical_cursor(displays: &[NativeDisplay]) -> Option<(f32, f32)> {
+pub(crate) fn logical_cursor(displays: &[NativeDisplay]) -> Option<(f32, f32)> {
     let (x, y) = cursor_position()?;
     logical_point(x, y, displays)
 }
 
-pub(super) fn native_displays() -> Vec<NativeDisplay> {
+pub(crate) fn native_displays() -> Vec<NativeDisplay> {
     ensure_dpi_awareness();
     monitors()
         .into_iter()
@@ -146,6 +147,19 @@ pub fn get_monitors() -> Result<Vec<Monitor>> {
 
 pub fn full_screen_bounds() -> Result<Monitor> {
     union_bounds(&get_monitors()?).ok_or_else(|| anyhow!("Windows reported no display monitors"))
+}
+
+pub fn monitor_capture_rect(monitor: Bounds<Pixels>) -> Option<Rect> {
+    logical_rect(rect_from_bounds(monitor), &native_displays())
+}
+
+fn rect_from_bounds(bounds: Bounds<Pixels>) -> Rect {
+    Rect {
+        x: f32::from(bounds.origin.x) as i32,
+        y: f32::from(bounds.origin.y) as i32,
+        w: f32::from(bounds.size.width) as i32,
+        h: f32::from(bounds.size.height) as i32,
+    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) mod file_io;
 pub(crate) mod install_marker;
-pub(crate) mod platform;
+mod platform;
 
 const ACTIVE_INSTALL_ID_FILE: &str = qol_config::ACTIVE_INSTALL_ID_FILE;
 const ACTIVE_PROFILE_FILE: &str = "active";
@@ -113,6 +113,18 @@ pub fn tray_install_dir(profile: InstallProfile) -> Result<PathBuf> {
 
 pub fn tray_installed_binary(profile: InstallProfile) -> Result<PathBuf> {
     Ok(tray_install_dir(profile)?.join(qol_apps::tray_install::binary_filename()))
+}
+
+pub fn xdg_config_home() -> Result<PathBuf> {
+    platform::xdg_config_home()
+}
+
+pub fn xdg_data_home() -> Result<PathBuf> {
+    platform::xdg_data_home()
+}
+
+pub fn start_menu_programs_dir() -> Result<PathBuf> {
+    platform::start_menu_programs_dir()
 }
 
 pub fn is_safe_path_component(s: &str) -> bool {
@@ -459,7 +471,7 @@ mod tests {
 
     const READ_ONLY_HOME_LOOKUPS: [&str; 3] = [
         "dev/config/search_paths.rs dirs::home_dir",
-        "installer/platform/macos/codesign.rs dirs::home_dir",
+        "platform/macos/codesign.rs dirs::home_dir",
         "settings_surface/platform/native_tools/profiles/view.rs dirs::home_dir",
     ];
 

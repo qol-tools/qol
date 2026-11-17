@@ -4,7 +4,7 @@ pub mod entry_store;
 mod file_cache;
 mod file_scan;
 mod legacy_store;
-pub(crate) mod platform;
+mod platform;
 pub mod search;
 #[cfg(debug_assertions)]
 mod trace;
@@ -75,13 +75,13 @@ pub(crate) struct DiscoveryPaths {
     pub(crate) cache: Option<PathBuf>,
 }
 
-pub(crate) fn paths() -> DiscoveryPaths {
+pub(crate) fn paths(extra_file_scan_roots: Vec<PathBuf>) -> DiscoveryPaths {
     DiscoveryPaths {
         application_roots: platform::app_roots()
             .into_iter()
             .map(|root| root.path)
             .collect(),
-        file_roots: configured_file_roots(),
+        file_roots: configured_file_roots(extra_file_scan_roots),
         cache: file_cache::cache_path(),
     }
 }
@@ -90,8 +90,8 @@ pub fn recent_files() -> Vec<PathBuf> {
     platform::recent_files(entry_store::RECENT_LIMIT)
 }
 
-pub fn load_file_entries() -> Vec<FileEntry> {
-    let roots = configured_file_roots();
+pub fn load_file_entries(extra_file_scan_roots: Vec<PathBuf>) -> Vec<FileEntry> {
+    let roots = configured_file_roots(extra_file_scan_roots);
     load_file_entries_from_roots(&roots)
 }
 
@@ -111,11 +111,8 @@ fn load_file_entries_from_roots(roots: &[PathBuf]) -> Vec<FileEntry> {
     entries
 }
 
-fn configured_file_roots() -> Vec<PathBuf> {
-    merge_file_roots(
-        platform::file_watch_roots(),
-        crate::config::load_launcher_config().extra_file_scan_roots,
-    )
+fn configured_file_roots(extra_file_scan_roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    merge_file_roots(platform::file_watch_roots(), extra_file_scan_roots)
 }
 
 pub(crate) fn merge_file_roots(
@@ -242,10 +239,11 @@ fn spawn_host_subscriber(tx: std::sync::mpsc::Sender<WatchSignal>) {
 pub(crate) fn start(
     entries: SharedEntries,
     published: std::sync::mpsc::Sender<Arc<PreloadedEntries>>,
+    extra_file_scan_roots: Vec<PathBuf>,
 ) {
     std::thread::spawn(move || {
         let roots = platform::app_roots();
-        let file_roots = configured_file_roots();
+        let file_roots = configured_file_roots(extra_file_scan_roots);
         let mut cache = AppCache::default();
         cache.rescan_all(&roots);
         let mut file_entries = Arc::new(load_file_entries_from_roots(&file_roots));

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp};
 
-use crate::config::PLUGIN_ID;
+use crate::PLUGIN_ID;
 
 pub(crate) fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)

@@ -19,7 +19,7 @@ pub struct Platform;
 
 impl WindowOps for Platform {
     fn enumerate_windows(&self) -> Result<Vec<WindowId>, String> {
-        Ok(crate::discovery::platform::linux::get_open_windows()
+        Ok(crate::discovery::native::get_open_windows()
             .into_iter()
             .map(|window| WindowId::from_u32(window.id))
             .collect())

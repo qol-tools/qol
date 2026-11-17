@@ -8,16 +8,18 @@ cohesive capability.
 
 ```text
 src/
-├── main.rs                    # module wiring and process entrypoint
+├── main.rs                    # module wiring, PLUGIN_ID, and process entrypoint
 ├── runtime/                   # argument routing and daemon transport
 ├── config/                    # typed qol-config contract
-├── app/                       # GPUI view, input, rendering, live previews
-│   └── live_preview/          # capture loop, first-fill gate, lane scheduler
+├── app/                       # GPUI input handling and element rendering
+├── platform/                  # OS services shared by several capabilities
 ├── picker/                    # retained-window orchestration
 │   ├── state.rs               # selection and retained presentation state
 │   ├── layout.rs              # card/grid geometry
 │   ├── monitor_listener/      # monitor/data refresh routing
-│   └── platform/              # retained-window behavior per OS
+│   ├── platform/              # retained-window behavior per OS
+│   └── view/                  # GPUI view state and live previews
+│       └── live_preview/      # capture loop, first-fill gate, lane scheduler
 ├── discovery/                 # window identity, ordering, and enumeration
 ├── capture/                   # preview capture and live-frame adapters
 ├── actions/                   # activate, close, quit, and minimize adapters
@@ -40,27 +42,33 @@ directory uses either all OS files or all OS directories, never a mixture.
    monitor placement, and either cycles or updates the retained picker.
 5. `picker/` gathers cached images immediately and schedules missing icon or
    preview work through the relevant capability.
-6. `app/` owns input, selection presentation, dismissal, and live preview
-   updates until the picker is hidden again.
+6. `picker/view/` owns the retained view, dismissal, and live preview updates,
+   and `app/` owns its input and rendering, until the picker is hidden again.
 
 ## Ownership boundaries
 
 ### Runtime and configuration
 
-- `main.rs` only declares top-level modules and delegates arguments.
-- `runtime/mod.rs` owns command routing, daemon startup, and browser settings
-  fallback.
-- `runtime/daemon.rs` owns the socket command protocol.
+- `main.rs` only declares top-level modules, owns the `PLUGIN_ID` constant,
+  and delegates arguments.
+- `runtime/` owns command routing, daemon startup, the native settings panel
+  open, and the browser settings fallback. It loads the config and hands the
+  picker its config loader and settings opener as a `PickerHost`.
+- `runtime/daemon.rs` owns the socket command protocol and parses it into
+  `PickerCommand`.
 - `config/mod.rs` owns contract-backed settings types and defaults.
+- `platform/` holds OS services shared by several capabilities, such as the
+  macOS CoreFoundation and CoreGraphics bindings.
 
 ### GPUI application
 
-- `app/mod.rs` owns `AltTabApp`, focus/dismissal state, and retained-view
-  updates.
+- `picker/view/mod.rs` owns `AltTabApp`, the picker visibility state, focus
+  and dismissal state, and retained-view updates.
+- `picker/view/live_preview/` owns live capture coordination. Its first-fill
+  gate and lane scheduler are private implementation details, not crate-wide
+  helpers.
 - `app/input.rs` owns keyboard navigation and explicit actions.
 - `app/render.rs` owns GPUI elements and card presentation.
-- `app/live_preview/` owns live capture coordination. Its first-fill gate and
-  lane scheduler are private implementation details, not crate-wide helpers.
 
 ### Picker orchestration
 
@@ -69,13 +77,15 @@ directory uses either all OS files or all OS directories, never a mixture.
 - `picker/layout.rs` is the single source of truth for card and grid geometry.
 - `picker/gather.rs` owns discovery-to-presentation gathering and async fills.
 - `picker/create.rs` and `picker/reuse.rs` own the two retained-window paths.
-- `picker/run.rs` owns GPUI application startup and daemon command dispatch.
+- `picker/run.rs` owns GPUI application startup and `PickerCommand` dispatch.
 - `picker/monitor_listener/` owns topology and data-refresh events.
 - `picker/platform/` owns compositor-specific picker window behavior.
 
 ### Discovery, capture, actions, and rendering
 
-- `discovery/` returns stable window identity and ordering.
+- `discovery/` returns stable window identity and ordering. Its platform
+  module is private; `discovery::native` exposes the selected adapter to the
+  other capabilities' matching OS adapters.
 - `capture/` returns preview pixels or native live frames for those identities.
 - `actions/` performs operations on another application window.
 - `preview_plane/` integrates an external compositor preview surface when one

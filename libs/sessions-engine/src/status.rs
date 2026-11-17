@@ -43,13 +43,10 @@ impl StatusLine {
     }
 }
 
-pub(super) fn run(args: &[OsString]) -> Result<()> {
+pub(super) fn run(args: &[OsString]) -> Result<Vec<String>> {
     match args.first().and_then(|arg| arg.to_str()) {
         None => {}
-        Some("help" | "--help" | "-h") => {
-            crate::cli::line(HELP);
-            return Ok(());
-        }
+        Some("help" | "--help" | "-h") => return Ok(vec![HELP.to_owned()]),
         Some(other) => bail!("unknown status argument `{other}`\n\n{HELP}"),
     }
     let facts = super::service()?
@@ -72,10 +69,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         super::attention::read().as_ref(),
         today_start(),
     );
-    for line in lines {
-        crate::cli::line(line.render());
-    }
-    Ok(())
+    Ok(lines.iter().map(StatusLine::render).collect())
 }
 
 fn today_start() -> u64 {

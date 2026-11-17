@@ -1,6 +1,6 @@
 mod headless;
 pub mod icon;
-pub mod platform;
+mod platform;
 pub mod tone;
 
 use crate::daemon::EventBus;
@@ -30,6 +30,11 @@ where
     } else {
         platform::run_app(init)
     }
+}
+
+pub(crate) fn request_shutdown(shutdown_tx: &broadcast::Sender<()>) {
+    crate::hotkeys::capture::release_tap();
+    platform::request_shutdown(shutdown_tx);
 }
 
 pub(crate) fn shutdown_plugins(plugin_manager: &Arc<Mutex<PluginManager>>) {

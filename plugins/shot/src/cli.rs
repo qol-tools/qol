@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
+use crate::capture::completion::{PreviewCompletion, PreviewExit};
 use crate::capture::monitor::{RECORD_MONITOR_ACTION, SCREENSHOT_MONITOR_ACTION};
 use crate::capture::{actions, recording, screenshot};
-use crate::config::settings;
 use crate::{platform, Config, PLUGIN_ID};
 
 use actions::ShotAction;
@@ -67,7 +67,7 @@ fn record_command(binary_name: &'static str) -> Command {
                 return Ok(PlainTextOutput::empty());
             }
             let config = crate::config::load();
-            recording::toggle_recording(&config)?;
+            recording::toggle_recording(&config, crate::ui::region_selector::select_region)?;
             Ok(PlainTextOutput::empty())
         })
 }
@@ -114,7 +114,7 @@ fn screenshot_command(binary_name: &'static str) -> Command {
         .output("Prints the saved image path on success; prints nothing if selection is cancelled.")
         .exit_behavior("Exits 0 when the screenshot is saved or selection is cancelled.")
         .run_result(|_| {
-            let Some(path) = screenshot::capture_screenshot()? else {
+            let Some(path) = capture_screenshot()? else {
                 return Ok(CommandResult::success(""));
             };
             Ok(CommandResult::success(format!("{}\n", path.display())))
@@ -133,7 +133,7 @@ fn screenshot_monitor_command(binary_name: &'static str) -> Command {
             if forward_host_fallback_to_daemon(SCREENSHOT_MONITOR_ACTION) {
                 return Ok(CommandResult::success(""));
             }
-            let Some(path) = screenshot::capture_monitor_screenshot()? else {
+            let Some(path) = capture_monitor_screenshot()? else {
                 return Ok(CommandResult::success(""));
             };
             Ok(CommandResult::success(format!("{}\n", path.display())))
@@ -160,6 +160,39 @@ fn copy_path_command(binary_name: &'static str) -> Command {
         .run_result(|_| copy_latest(ShotAction::CopyPath))
 }
 
+fn capture_screenshot() -> Result<Option<PathBuf>> {
+    finish_screenshot(screenshot::capture_to_file(
+        crate::ui::region_selector::select_region,
+    )?)
+}
+
+fn capture_monitor_screenshot() -> Result<Option<PathBuf>> {
+    finish_screenshot(screenshot::capture_monitor_to_file()?)
+}
+
+fn finish_screenshot(output_file: Option<PathBuf>) -> Result<Option<PathBuf>> {
+    let Some(output_file) = output_file else {
+        return Ok(None);
+    };
+    let config = crate::config::load();
+    let completion = PreviewCompletion::new(&output_file, config.capture.open_folder_after_save);
+    completion.announce_saved();
+    present_capture(&output_file, completion);
+    Ok(Some(output_file))
+}
+
+fn present_capture(output_file: &Path, completion: PreviewCompletion) {
+    let fallback = completion.clone();
+    if let Err(error) = crate::ui::preview::show_saved(output_file, completion) {
+        log::warn!("preview unavailable, copying instead: {error:#}");
+        if let Err(error) = platform::copy_image_to_clipboard(output_file) {
+            log::warn!("failed to copy screenshot to clipboard: {error:#}");
+        }
+        send_notification("Screenshot saved", &output_file.display().to_string());
+        fallback.finish(PreviewExit::Unavailable);
+    }
+}
+
 fn copy_latest(action: ShotAction) -> Result<CommandResult> {
     let path = actions::perform_on_latest(action)?;
     send_notification(action.done_message(), &path.display().to_string());
@@ -173,9 +206,13 @@ fn settings_command(binary_name: &'static str) -> Command {
         .output("No stdout on success; opens the settings URL through the platform launcher.")
         .exit_behavior("Exits non-zero if the platform cannot open the settings URL.")
         .run_plain_text(|_| {
-            settings::open_qol_settings()?;
+            open_qol_settings()?;
             Ok(PlainTextOutput::empty())
         })
+}
+
+fn open_qol_settings() -> Result<()> {
+    Ok(qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)?)
 }
 
 fn doctor_checks() -> Vec<DoctorCheck> {

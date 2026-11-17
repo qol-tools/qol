@@ -6,7 +6,7 @@ pub(crate) fn native_notifications_diagnosis() -> CheckReport {
     if crate::features::notifications::native_handler() == NativeHandler::Qol {
         return super::super::other_apps::diagnosis();
     }
-    match qol_plugin_daemon::notification::platform::os_do_not_disturb() {
+    match qol_plugin_daemon::notification::os_do_not_disturb() {
         Some(true) => CheckReport::warn(
             "OS do-not-disturb is enabled; native notifications will be suppressed",
             NATIVE_NOTIFICATIONS_ID,

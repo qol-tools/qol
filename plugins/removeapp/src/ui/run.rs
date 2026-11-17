@@ -7,9 +7,9 @@ use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{OpenedSurface, Surface, SurfaceKind, WindowMemory};
 
-use crate::cli::PLUGIN_ID;
 use crate::daemon::actions::{self, Command};
 use crate::ui::{RemoveAppView, MIN_WINDOW_HEIGHT, WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
+use crate::PLUGIN_ID;
 
 type SharedPanel = Rc<RefCell<OpenedSurface<RemoveAppView>>>;
 

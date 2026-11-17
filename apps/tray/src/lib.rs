@@ -14,6 +14,7 @@ pub mod logging;
 pub mod menu;
 pub mod migrations;
 pub mod paths;
+pub(crate) mod platform;
 pub mod plugins;
 pub mod process;
 pub mod profile;

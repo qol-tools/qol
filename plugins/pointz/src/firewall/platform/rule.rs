@@ -90,7 +90,7 @@ impl Ownership {
         Self::at(
             data_dir
                 .join("plugins")
-                .join(env!("QOL_PLUGIN_ID"))
+                .join(crate::PLUGIN_ID)
                 .join(OWNERSHIP_FILE),
         )
     }

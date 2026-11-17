@@ -2,7 +2,6 @@ use qol_config::{PluginConfigInspection, PluginConfigInspectionError};
 use serde::{Deserialize, Serialize};
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
-const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 pub(crate) type ConfigInspection = PluginConfigInspection<WindowActionsConfig>;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -25,11 +24,11 @@ pub(crate) struct WindowActionsConfig {
 }
 
 pub(crate) fn load_config() -> WindowActionsConfig {
-    qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
+    qol_config::load_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
 }
 
 pub(crate) fn inspect_config() -> Result<ConfigInspection, PluginConfigInspectionError> {
-    qol_config::inspect_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
+    qol_config::inspect_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
 }
 
 #[cfg(test)]

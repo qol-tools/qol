@@ -166,8 +166,8 @@ fn config_path(file: &str) -> PathBuf {
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 
+    use super::super::ENV_LOCK;
     use super::*;
-    use crate::ENV_LOCK;
 
     struct Sandbox {
         root: std::path::PathBuf,

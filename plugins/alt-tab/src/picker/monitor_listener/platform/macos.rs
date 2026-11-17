@@ -17,9 +17,7 @@ pub(crate) fn data_refresh_listener_loop() {
                 ..
             } => {
                 if let Some(window_id) = window_id {
-                    crate::discovery::platform::macos::window_enum::promote_focused_window(
-                        window_id,
-                    );
+                    crate::discovery::native::window_enum::promote_focused_window(window_id);
                 }
                 if monitor_idx != last_monitor_idx {
                     last_monitor_idx = monitor_idx;

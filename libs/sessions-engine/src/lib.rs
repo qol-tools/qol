@@ -85,27 +85,27 @@ pub const SUBCOMMANDS: [SessionSubcommand; 27] = [
     },
     SessionSubcommand {
         name: "capability",
-        run: |rest, _format| capability::run(rest),
+        run: |rest, _format| cli::capability(rest),
     },
     SessionSubcommand {
         name: "spawn",
-        run: |rest, _format| spawn::run(rest),
+        run: |rest, _format| cli::spawn(rest),
     },
     SessionSubcommand {
         name: "fork",
-        run: |rest, _format| fork::run(rest),
+        run: |rest, _format| cli::fork(rest),
     },
     SessionSubcommand {
         name: "forks",
-        run: |rest, _format| fork::run_list(rest),
+        run: |rest, _format| cli::forks(rest),
     },
     SessionSubcommand {
         name: "status",
-        run: |rest, _format| status::run(rest),
+        run: |rest, _format| cli::status(rest),
     },
     SessionSubcommand {
         name: "switchboard",
-        run: |rest, _format| switchboard::run(rest),
+        run: |rest, _format| cli::switchboard(rest),
     },
     SessionSubcommand {
         name: "park",
@@ -149,11 +149,11 @@ pub const SUBCOMMANDS: [SessionSubcommand; 27] = [
     },
     SessionSubcommand {
         name: "close",
-        run: |rest, _format| close::run(rest),
+        run: |rest, _format| cli::close(rest),
     },
     SessionSubcommand {
         name: "loop-close",
-        run: |rest, format| close::run_loop_close(rest, format),
+        run: |rest, format| cli::loop_close(rest, format),
     },
     SessionSubcommand {
         name: "read",
@@ -169,19 +169,19 @@ pub const SUBCOMMANDS: [SessionSubcommand; 27] = [
     },
     SessionSubcommand {
         name: "watch",
-        run: |rest, _format| watch::run(rest),
+        run: |rest, _format| cli::watch(rest),
     },
     SessionSubcommand {
         name: "record",
-        run: |rest, _format| record::run(rest),
+        run: |rest, _format| cli::record(rest),
     },
     SessionSubcommand {
         name: "mcp",
-        run: |rest, _format| mcp::run(rest),
+        run: |rest, _format| cli::mcp(rest),
     },
     SessionSubcommand {
         name: "export",
-        run: |rest, _format| export::run(rest),
+        run: |rest, _format| cli::export(rest),
     },
     SessionSubcommand {
         name: "lane-exec",

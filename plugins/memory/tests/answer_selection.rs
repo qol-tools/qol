@@ -3,9 +3,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use qol_memory::aliases::AliasMap;
-use qol_memory::app::{request, warm::WarmState};
+use qol_memory::app::request;
 use qol_memory::ask::{self, AskRequest};
 use qol_memory::store::Store;
+use qol_memory::warm::WarmState;
 use qol_plugin_daemon::daemon::ReadResult;
 use qol_runtime::protocol::DaemonRequest;
 use serde_json::{json, Value};

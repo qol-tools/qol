@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::PLUGIN_ID;
+
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
-pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 pub(crate) type ConfigInspection = qol_config::PluginConfigInspection<Config>;
 
 pub const TUNING_REVISION: u32 = 1;
@@ -24,11 +25,11 @@ pub struct Config {
     pub tuning_revision: u32,
 }
 
-pub fn load() -> Config {
+pub fn load(plugin_id: &str) -> Config {
     let mut config = load_from_disk();
     if config.tuning_revision < TUNING_REVISION {
         reset_tuning(&mut config);
-        persist_tuning_reset(&config);
+        persist_tuning_reset(&config, plugin_id);
     }
     log_config(&config);
     config
@@ -60,17 +61,16 @@ fn reset_tuning(config: &mut Config) {
     );
 }
 
-fn persist_tuning_reset(config: &Config) {
-    let id = qol_config::plugin_id_from_env(PLUGIN_ID);
+fn persist_tuning_reset(config: &Config, id: &str) {
     let Ok(value) = serde_json::to_value(config) else {
         log::warn!("tuning reset could not be serialized and was not persisted");
         return;
     };
-    if qol_runtime::PlatformStateClient::from_env().set_plugin_config(&id, &value) {
+    if qol_runtime::PlatformStateClient::from_env().set_plugin_config(id, &value) {
         log::debug!("tuning reset persisted via the state socket");
         return;
     }
-    let Some(path) = qol_config::plugin_config_write_path(&id) else {
+    let Some(path) = qol_config::plugin_config_write_path(id) else {
         log::warn!("tuning reset could not be persisted, it re-applies on next start");
         return;
     };

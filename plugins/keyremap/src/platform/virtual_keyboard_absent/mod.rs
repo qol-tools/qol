@@ -2,6 +2,8 @@ use anyhow::Result;
 use qol_headless::{CommandResult, DoctorCheckResult};
 
 use super::{ConfigInspection, PlatformAdapter, ABSENT_NAME};
+use crate::config::Inspection;
+use crate::control::Host;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Adapter;
@@ -15,7 +17,7 @@ impl PlatformAdapter for Adapter {
         false
     }
 
-    fn launch(&self) -> Result<CommandResult> {
+    fn launch(&self, _host: &Host) -> Result<CommandResult> {
         Ok(unsupported())
     }
 
@@ -27,15 +29,15 @@ impl PlatformAdapter for Adapter {
         Ok(unsupported())
     }
 
-    fn karabiner_rules(&self) -> Result<CommandResult> {
+    fn karabiner_rules(&self, _host: &Host) -> Result<CommandResult> {
         Ok(unsupported())
     }
 
-    fn karabiner_sync(&self) -> Result<CommandResult> {
+    fn karabiner_sync(&self, _host: &Host) -> Result<CommandResult> {
         Ok(unsupported())
     }
 
-    fn karabiner_remove(&self) -> Result<CommandResult> {
+    fn karabiner_remove(&self, _host: &Host) -> Result<CommandResult> {
         Ok(unsupported())
     }
 
@@ -43,7 +45,7 @@ impl PlatformAdapter for Adapter {
         Ok(unsupported())
     }
 
-    fn inspect_config(&self) -> Result<ConfigInspection> {
+    fn inspect_config(&self, _inspected: &Inspection) -> Result<ConfigInspection> {
         anyhow::bail!("typed key-remap configuration is only available on macOS and Windows")
     }
 
@@ -51,7 +53,7 @@ impl PlatformAdapter for Adapter {
         Ok(unavailable("virtual_hid_driver"))
     }
 
-    fn virtual_hid_daemon(&self) -> DoctorCheckResult {
+    fn virtual_hid_daemon(&self, _host: &Host) -> DoctorCheckResult {
         unavailable("virtual_hid_daemon")
     }
 
@@ -59,32 +61,32 @@ impl PlatformAdapter for Adapter {
         unavailable("hid_helper")
     }
 
-    fn key_backend(&self) -> DoctorCheckResult {
+    fn key_backend(&self, _host: &Host) -> DoctorCheckResult {
         unavailable("key_backend")
     }
 
-    fn karabiner_block(&self) -> DoctorCheckResult {
+    fn karabiner_block(&self, _host: &Host) -> DoctorCheckResult {
         unavailable("karabiner_rules")
     }
 
-    fn secure_input(&self) -> DoctorCheckResult {
+    fn secure_input(&self, _host: &Host) -> DoctorCheckResult {
         unavailable("secure_input")
     }
 
-    fn layout_characters(&self) -> DoctorCheckResult {
+    fn layout_characters(&self, _host: &Host) -> DoctorCheckResult {
         unavailable("layout_characters")
     }
 }
 
-pub(super) fn reload() -> CommandResult {
+pub(super) fn reload(_host: &Host) -> CommandResult {
     unsupported()
 }
 
-pub(super) fn toggle() -> CommandResult {
+pub(super) fn toggle(_host: &Host) -> CommandResult {
     unsupported()
 }
 
-pub(super) fn kill() -> CommandResult {
+pub(super) fn kill(_host: &Host) -> CommandResult {
     unsupported()
 }
 

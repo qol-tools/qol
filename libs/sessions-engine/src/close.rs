@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
-use qol_headless::OutputFormat;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
     ScreenReader, SessionBinding, SessionInventory, TerminalSessionService,
@@ -54,17 +53,15 @@ pub(super) struct SiblingLaneClose {
     pub(super) close_detail: Option<String>,
 }
 
-pub(super) fn run(args: &[OsString]) -> Result<()> {
+pub(super) fn run(args: &[OsString]) -> Result<CloseOutcome> {
     let binding = super::single_binding(args, "qol sessions close <session>")?;
-    let outcome = execute(
+    execute(
         &TerminalSessionService::system(),
         &PendingBridgeStore::system()?,
         &super::bridge::trace_dir(),
         &binding,
         false,
-    )?;
-    crate::cli::line(serde_json::to_string(&outcome).context("failed to serialize close outcome")?);
-    Ok(())
+    )
 }
 
 pub(super) fn close_spawned_terminal(
@@ -233,15 +230,14 @@ struct LoopCloseArgs {
     remaining: Option<String>,
 }
 
-pub(super) fn run_loop_close(args: &[OsString], output_format: OutputFormat) -> Result<()> {
+pub(super) fn run_loop_close(args: &[OsString]) -> Result<Value> {
     let reports_dir = qol_config::data_subdir("sessions").unwrap_or_else(|| PathBuf::from("."));
-    let receipt = loop_close_from_args(
+    loop_close_from_args(
         &TerminalSessionService::system(),
         &PendingBridgeStore::system()?,
         &reports_dir,
         args,
-    )?;
-    print_loop_close_receipt(&receipt, output_format)
+    )
 }
 
 pub(super) fn loop_close_from_args(
@@ -291,35 +287,6 @@ pub(super) fn loop_close_from_args(
             narrative: super::mcp::LoopCloseNarrative::Filled(&filled),
         },
     )
-}
-
-fn print_loop_close_receipt(receipt: &Value, output_format: OutputFormat) -> Result<()> {
-    match output_format {
-        OutputFormat::Json => crate::cli::line(
-            serde_json::to_string_pretty(receipt)
-                .context("failed to serialize loop-close receipt")?,
-        ),
-        OutputFormat::PlainText => {
-            crate::cli::line(format_args!(
-                "loop_closed={} outcome={}",
-                receipt["loop_closed"].as_bool().unwrap_or_default(),
-                receipt["outcome"].as_str().unwrap_or_default()
-            ));
-            if let Some(state) = receipt.get("terminal_state").and_then(Value::as_str) {
-                crate::cli::line(format_args!(
-                    "terminal_closed={} terminal_state={}",
-                    receipt["terminal_closed"].as_bool().unwrap_or_default(),
-                    state
-                ));
-            }
-            if let Some(lanes) = receipt.get("sibling_lanes").and_then(Value::as_array) {
-                crate::cli::line(format_args!("sibling lanes closed: {}", lanes.len()));
-            }
-            crate::cli::blank();
-            crate::cli::line(receipt["final_report"].as_str().unwrap_or_default());
-        }
-    }
-    Ok(())
 }
 
 fn parse_loop_close_args(args: &[OsString]) -> Result<(String, LoopCloseArgs)> {

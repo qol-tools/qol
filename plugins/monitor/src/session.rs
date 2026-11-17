@@ -531,7 +531,6 @@ pub struct Session<C: ?Sized> {
 
 impl<C: DisplayControl + ?Sized> Session<C> {
     pub fn new(control: Arc<C>, store: SessionStore, lut: Arc<dyn LutProvider>) -> Self {
-        let adoption_generation = std::env::var(qol_conventions::ENV_DEV_GENERATION_ID).ok();
         Self {
             control,
             store,
@@ -539,7 +538,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             applet: Arc::new(NoAppletControl),
             snapshotted: Mutex::new(HashSet::new()),
             adjustments: Mutex::new(BTreeMap::new()),
-            adoption_generation,
+            adoption_generation: None,
         }
     }
 
@@ -548,7 +547,6 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         self
     }
 
-    #[cfg(test)]
     pub fn with_adoption_generation(mut self, generation: Option<String>) -> Self {
         self.adoption_generation = generation;
         self

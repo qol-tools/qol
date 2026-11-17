@@ -11,10 +11,9 @@ use qol_gpui::window::PopupPlacement;
 use super::gather::{
     capture_target_for_lane, CaptureLane, PreviewCaptureRequest, PreviewCaptureScheduler,
 };
-use super::run::{SharedPreviewCache, WindowCache};
-use crate::app::PICKER_VISIBLE;
+use super::run::{ConfigLoader, SharedPreviewCache, WindowCache};
 use crate::discovery::{Platform, WindowDiscovery};
-use crate::picker::{PickerWindowState, SharedIconCache};
+use crate::picker::{AltTabApp, PickerWindowState, SharedIconCache, PICKER_VISIBLE};
 use crate::rendering::RenderingFlow;
 
 mod platform;
@@ -245,6 +244,7 @@ pub(crate) struct ListenerInputs {
     pub show_id: Arc<AtomicU64>,
     pub capture_scheduler: PreviewCaptureScheduler,
     pub warmer: WarmerControl,
+    pub load_config: ConfigLoader,
 }
 
 #[derive(Clone)]
@@ -471,7 +471,7 @@ fn enqueue_warmer_from_cache(inputs: &ListenerInputs, activity_generation: u64, 
     );
 }
 
-fn active_picker_handle(inputs: &ListenerInputs) -> Option<WindowHandle<crate::app::AltTabApp>> {
+fn active_picker_handle(inputs: &ListenerInputs) -> Option<WindowHandle<AltTabApp>> {
     let active_target = qol_gpui::monitor::active_monitor()
         .or_else(|| inputs.tracker.snapshot_monitor())
         .map(|monitor| PopupPlacement::from_monitor(Some(monitor)).target());
@@ -609,7 +609,7 @@ fn rebuild_ghosts_for_topology(state: &ListenerState, event: &RuntimeEvent, app_
         return;
     }
     let _reason = qol_gpui::popup_window::reason_scope("topology");
-    let config = crate::config::load_alt_tab_config();
+    let config = (inputs.load_config)();
     let rebuilt =
         qol_gpui::ghost::rebuild_on_topology(event, false, &inputs.current, app_cx, |cx| {
             super::platform::pre_create(
@@ -704,7 +704,7 @@ async fn refresh_data(
     request: RefreshRequest,
     show_id: u64,
 ) {
-    let config = crate::config::load_alt_tab_config();
+    let config = (inputs.load_config)();
     let show_minimized = config.display.show_minimized;
     let switchable = config.switchable_panels.clone();
     let executor = cx.background_executor().clone();
@@ -777,7 +777,7 @@ async fn refresh_data(
             config.reset_selection_on_open
         };
         let active_target = if picker_visible {
-            *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap()
+            *crate::picker::ACTIVE_PICKER_MONITOR.lock().unwrap()
         } else {
             let active_monitor =
                 qol_gpui::monitor::active_monitor().or_else(|| inputs.tracker.snapshot_monitor());
@@ -829,7 +829,7 @@ async fn refresh_data(
 fn enqueue_requested_capture(
     inputs: &ListenerInputs,
     request: RefreshRequest,
-    handle: WindowHandle<crate::app::AltTabApp>,
+    handle: WindowHandle<AltTabApp>,
     windows: &[crate::discovery::WindowInfo],
     picker_visible: bool,
     app_cx: &mut App,
@@ -859,7 +859,7 @@ fn capture_lane_requested(
 fn enqueue_capture_lane(
     inputs: &ListenerInputs,
     lane: CaptureLane,
-    handle: WindowHandle<crate::app::AltTabApp>,
+    handle: WindowHandle<AltTabApp>,
     windows: &[crate::discovery::WindowInfo],
     app_cx: &mut App,
 ) {

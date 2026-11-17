@@ -1,11 +1,11 @@
 pub mod classify;
 pub mod guards;
-pub mod platform;
+mod platform;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::cli::PLUGIN_ID;
+use crate::PLUGIN_ID;
 use anyhow::Result;
 
 pub use classify::MatchKind;

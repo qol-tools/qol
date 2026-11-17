@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 
 use crate::core::guards::{ManagedPackage, PackageIndex};
 use crate::core::{AppPlatform, Disposal, InstalledApp, RemovalOutcome, RemovalPlan};
+use crate::PLUGIN_ID;
 
 #[derive(Default)]
 pub struct Platform;
@@ -14,20 +15,19 @@ impl Platform {
     }
 }
 
-const UNSUPPORTED: &str = concat!(
-    env!("QOL_PLUGIN_ID"),
-    ": not implemented on this platform yet"
-);
+fn unsupported() -> anyhow::Error {
+    anyhow!("{PLUGIN_ID}: not implemented on this platform yet")
+}
 
 impl AppPlatform for Platform {
     fn installed_apps(&self) -> Result<Vec<InstalledApp>> {
-        Err(anyhow!(UNSUPPORTED))
+        Err(unsupported())
     }
     fn scan(&self, _app: &InstalledApp, _inventory: &[InstalledApp]) -> Result<RemovalPlan> {
-        Err(anyhow!(UNSUPPORTED))
+        Err(unsupported())
     }
     fn remove_items(&self, _items: &[(PathBuf, Disposal)]) -> Result<RemovalOutcome> {
-        Err(anyhow!(UNSUPPORTED))
+        Err(unsupported())
     }
     fn is_protected(&self, _app: &InstalledApp) -> bool {
         true
@@ -36,12 +36,12 @@ impl AppPlatform for Platform {
         false
     }
     fn quit(&self, _app: &InstalledApp) -> Result<()> {
-        Err(anyhow!(UNSUPPORTED))
+        Err(unsupported())
     }
     fn package_index(&self, _inventory: &[InstalledApp]) -> PackageIndex {
         PackageIndex::absent()
     }
     fn uninstall_package(&self, _app: &InstalledApp, _package: &ManagedPackage) -> Result<()> {
-        Err(anyhow!(UNSUPPORTED))
+        Err(unsupported())
     }
 }

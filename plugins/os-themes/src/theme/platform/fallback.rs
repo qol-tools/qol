@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 
-use crate::config::PLUGIN_ID;
 use crate::session::{RestoreMode, RestoreReport};
 use crate::theme::ColorScheme;
+use crate::PLUGIN_ID;
 
 use super::ThemePlatform;
 

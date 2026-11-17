@@ -24,12 +24,16 @@ pub(super) fn caller_config_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-pub(super) fn config_dir(switchboard: &Path, caller: Option<PathBuf>) -> Option<PathBuf> {
+pub(super) fn config_dir(
+    switchboard: &Path,
+    caller: Option<PathBuf>,
+    warn: &mut dyn FnMut(String),
+) -> Option<PathBuf> {
     let record = switchboard.join(CONFIG_DIR_RECORD);
     match caller {
         Some(caller) => {
             if let Err(error) = remember_config_dir(&record, &caller) {
-                crate::cli::warn(format!(
+                warn(format!(
                     "the switchboard will not remember its Claude account for the next launch from the tray: {error:#}"
                 ));
             }
@@ -106,26 +110,49 @@ mod tests {
     fn a_launch_from_a_terminal_names_the_account_a_later_launch_from_the_tray_reuses() {
         let switchboard = tempfile::tempdir().unwrap();
         let account = tempfile::tempdir().unwrap();
-        assert_eq!(config_dir(switchboard.path(), None), None);
+        assert_eq!(config_dir(switchboard.path(), None, &mut |_| {}), None);
         assert_eq!(
-            config_dir(switchboard.path(), Some(account.path().to_path_buf())),
+            config_dir(
+                switchboard.path(),
+                Some(account.path().to_path_buf()),
+                &mut |_| {}
+            ),
             Some(account.path().to_path_buf())
         );
         assert_eq!(
-            config_dir(switchboard.path(), None),
+            config_dir(switchboard.path(), None, &mut |_| {}),
             Some(account.path().to_path_buf()),
             "a caller without CLAUDE_CONFIG_DIR, such as the tray, reuses the recorded account"
         );
         let other = tempfile::tempdir().unwrap();
         assert_eq!(
-            config_dir(switchboard.path(), Some(other.path().to_path_buf())),
+            config_dir(
+                switchboard.path(),
+                Some(other.path().to_path_buf()),
+                &mut |_| {}
+            ),
             Some(other.path().to_path_buf())
         );
         assert_eq!(
-            config_dir(switchboard.path(), None),
+            config_dir(switchboard.path(), None, &mut |_| {}),
             Some(other.path().to_path_buf()),
             "the newest terminal launch replaces the record"
         );
+    }
+
+    #[test]
+    fn an_account_that_cannot_be_recorded_comes_back_as_a_warning() {
+        let account = tempfile::tempdir().unwrap();
+        let blocker = tempfile::NamedTempFile::new().unwrap();
+        let mut warnings = Vec::new();
+        let found = config_dir(
+            blocker.path(),
+            Some(account.path().to_path_buf()),
+            &mut |text| warnings.push(text),
+        );
+        assert_eq!(found, Some(account.path().to_path_buf()));
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert!(warnings[0].starts_with("the switchboard will not remember its Claude account"));
     }
 
     #[test]
@@ -134,11 +161,11 @@ mod tests {
         let account = tempfile::tempdir().unwrap();
         set_recorded_config_dir(switchboard.path(), Some(account.path())).unwrap();
         assert_eq!(
-            config_dir(switchboard.path(), None),
+            config_dir(switchboard.path(), None, &mut |_| {}),
             Some(account.path().to_path_buf())
         );
         set_recorded_config_dir(switchboard.path(), None).unwrap();
-        assert_eq!(config_dir(switchboard.path(), None), None);
+        assert_eq!(config_dir(switchboard.path(), None, &mut |_| {}), None);
         set_recorded_config_dir(switchboard.path(), None).unwrap();
     }
 
@@ -147,9 +174,9 @@ mod tests {
         let switchboard = tempfile::tempdir().unwrap();
         let record = switchboard.path().join(CONFIG_DIR_RECORD);
         std::fs::write(&record, "  \n").unwrap();
-        assert_eq!(config_dir(switchboard.path(), None), None);
+        assert_eq!(config_dir(switchboard.path(), None, &mut |_| {}), None);
         std::fs::write(&record, switchboard.path().join("gone").to_str().unwrap()).unwrap();
-        assert_eq!(config_dir(switchboard.path(), None), None);
+        assert_eq!(config_dir(switchboard.path(), None, &mut |_| {}), None);
     }
 
     #[test]

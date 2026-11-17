@@ -591,7 +591,7 @@ fn prune_missing(registry: &Arc<Mutex<Registry>>, caches: &mut ReconcileCaches, 
 }
 
 fn persist_if_changed(registry: &Arc<Mutex<Registry>>, caches: &mut ReconcileCaches) {
-    let Some(path) = paths::state_path() else {
+    let Some(path) = paths::state_path(&super::plugin_id()) else {
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
             "phase=persist outcome=skip reason=no_path"

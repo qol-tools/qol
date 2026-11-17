@@ -4,14 +4,13 @@ use anyhow::{bail, Result};
 
 mod pi;
 
-pub(crate) fn run(args: &[OsString]) -> Result<()> {
+pub(crate) fn run(args: &[OsString]) -> Result<String> {
     match args.first().and_then(|argument| argument.to_str()) {
-        Some("pi") => crate::cli::text(pi::pi_extension()?),
-        Some("help") | Some("-h") | Some("--help") => crate::cli::text(help_text()),
+        Some("pi") => pi::pi_extension(),
+        Some("help") | Some("-h") | Some("--help") => Ok(help_text().to_owned()),
         Some(other) => bail!("unknown export client `{other}`\n\n{}", help_text()),
-        None => crate::cli::text(help_text()),
+        None => Ok(help_text().to_owned()),
     }
-    Ok(())
 }
 
 pub(crate) fn help_text() -> &'static str {

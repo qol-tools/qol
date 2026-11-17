@@ -4,8 +4,6 @@ use anyhow::Result;
 use crossbeam_channel::Receiver;
 
 #[cfg(feature = "linux_evdev")]
-pub(crate) mod classify;
-#[cfg(feature = "linux_evdev")]
 pub(crate) mod evdev_backend;
 #[cfg(feature = "linux_evdev")]
 mod heal;
@@ -46,6 +44,8 @@ pub(crate) fn release_held_keys() {
 
 #[cfg(not(feature = "linux_evdev"))]
 pub(crate) fn release_held_keys() {}
+
+pub(crate) fn release_tap() {}
 
 #[cfg(not(feature = "linux_evdev"))]
 pub(crate) fn install(

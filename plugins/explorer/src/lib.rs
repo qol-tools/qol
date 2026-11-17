@@ -7,3 +7,5 @@ pub mod places;
 pub mod props;
 pub mod thumbs;
 pub mod ui;
+
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");

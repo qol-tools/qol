@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::model::{DeviceId, GroupId, LightTarget};
-use crate::runtime::actions;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -40,10 +39,6 @@ impl Default for PluginConfig {
 impl PluginConfig {
     pub fn main_target(&self) -> LightTarget {
         target_from_parts(&self.main_target_type, &self.main_target_id)
-    }
-
-    pub fn preset_for_action(&self, action: &str) -> Option<PresetSlot> {
-        self.presets.preset_for_action(action)
     }
 }
 
@@ -162,34 +157,6 @@ impl PresetConfig {
             8 => &mut self.preset_8,
             _ => return None,
         })
-    }
-
-    pub fn preset_for_action(&self, action: &str) -> Option<PresetSlot> {
-        if action == actions::PRESET_1 {
-            return Some(self.preset_1.clone());
-        }
-        if action == actions::PRESET_2 {
-            return Some(self.preset_2.clone());
-        }
-        if action == actions::PRESET_3 {
-            return Some(self.preset_3.clone());
-        }
-        if action == actions::PRESET_4 {
-            return Some(self.preset_4.clone());
-        }
-        if action == actions::PRESET_5 {
-            return Some(self.preset_5.clone());
-        }
-        if action == actions::PRESET_6 {
-            return Some(self.preset_6.clone());
-        }
-        if action == actions::PRESET_7 {
-            return Some(self.preset_7.clone());
-        }
-        if action == actions::PRESET_8 {
-            return Some(self.preset_8.clone());
-        }
-        None
     }
 }
 

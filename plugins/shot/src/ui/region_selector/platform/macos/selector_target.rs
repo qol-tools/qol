@@ -1,8 +1,8 @@
-use gpui::Pixels;
 use qol_gpui::monitor::ActiveMonitor;
 use std::ffi::c_void;
 use std::rc::Rc;
 
+use crate::platform::rect_from_bounds;
 use crate::ui::region_selector::{HoverTargetSource, SnapshotTargets};
 use crate::Rect;
 
@@ -242,15 +242,6 @@ fn dictionary_rect(dictionary: *const c_void, key: *const c_void) -> Option<Rect
         h: bounds.size.height.round() as i32,
     };
     (rect.w > 0 && rect.h > 0).then_some(rect)
-}
-
-pub(super) fn rect_from_bounds(bounds: gpui::Bounds<Pixels>) -> Rect {
-    Rect {
-        x: f32::from(bounds.origin.x).round() as i32,
-        y: f32::from(bounds.origin.y).round() as i32,
-        w: f32::from(bounds.size.width).round() as i32,
-        h: f32::from(bounds.size.height).round() as i32,
-    }
 }
 
 fn rects_intersect(left: Rect, right: Rect) -> bool {

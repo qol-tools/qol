@@ -9,8 +9,8 @@ use serde_json::{json, Value};
 use crate::app::rows;
 use crate::capture::{CaptureError, Support};
 use crate::history::{now_ms, Clip, History, Retention, Store};
+use crate::PLUGIN_ID;
 
-const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const LIST_LIMIT: usize = 50;
 const OPEN_COMMAND: &str = "open";
 

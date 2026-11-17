@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use crate::broker::path::broker_socket_path;
 use crate::broker::protocol::{BrokerEvent, BrokerRequest, SubscribeAck};
-use crate::client::platform::{connect, Connection};
+use crate::client::{connect, Connection};
 
 const TIMEOUT: Duration = Duration::from_millis(50);
 

@@ -4,4 +4,4 @@ mod pages;
 mod session;
 mod updates;
 
-pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");

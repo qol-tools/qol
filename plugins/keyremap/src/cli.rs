@@ -7,9 +7,9 @@ use qol_headless::{
 use qol_platform::PermissionState;
 use serde_json::json;
 
+use crate::control::Host;
 use crate::platform::{ConfigInspection, Platform, PlatformAdapter};
-
-pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+use crate::PLUGIN_ID;
 
 const SUPPORTED_FIX: &str = "Run Key Remap on macOS or Windows.";
 
@@ -21,12 +21,10 @@ fn app<A>(adapter: A) -> HeadlessApp
 where
     A: PlatformAdapter,
 {
-    app_with_handlers(adapter, || {
-        qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
-    })
+    app_with_handlers(adapter, crate::app::host, crate::app::open_settings)
 }
 
-fn app_with_handlers<A, Settings>(adapter: A, settings: Settings) -> HeadlessApp
+fn app_with_handlers<A, Settings>(adapter: A, host: fn() -> Host, settings: Settings) -> HeadlessApp
 where
     A: PlatformAdapter,
     Settings: Fn() -> std::io::Result<()> + Send + Sync + 'static,
@@ -56,7 +54,7 @@ where
                 .exit_behavior("Runs until killed; exits non-zero on unsupported platforms.")
                 .run_result(move |context| {
                     no_args(context)?;
-                    launch.launch()
+                    launch.launch(&host())
                 }),
         )
         .command(
@@ -68,7 +66,7 @@ where
                 .exit_behavior("Exits zero whether or not a daemon is currently running.")
                 .run_result(move |context| {
                     no_args(context)?;
-                    reload.reload()
+                    reload.reload(&host())
                 }),
         )
         .command(
@@ -80,7 +78,7 @@ where
                 .exit_behavior("Exits non-zero if the new state cannot be saved.")
                 .run_result(move |context| {
                     no_args(context)?;
-                    toggle.toggle()
+                    toggle.toggle(&host())
                 }),
         )
         .command(
@@ -92,7 +90,7 @@ where
                 .exit_behavior("Exits zero whether or not a daemon is currently running.")
                 .run_result(move |context| {
                     no_args(context)?;
-                    kill.kill()
+                    kill.kill(&host())
                 }),
         )
         .command(
@@ -143,7 +141,7 @@ where
                 .exit_behavior("Exits non-zero on platforms other than macOS.")
                 .run_result(move |context| {
                     no_args(context)?;
-                    karabiner.karabiner_rules()
+                    karabiner.karabiner_rules(&host())
                 }),
         )
         .command(
@@ -158,7 +156,7 @@ where
                 .exit_behavior("Exits non-zero when karabiner.json is missing or has no selected profile, and on platforms other than macOS.")
                 .run_result(move |context| {
                     no_args(context)?;
-                    karabiner_sync.karabiner_sync()
+                    karabiner_sync.karabiner_sync(&host())
                 }),
         )
         .command(
@@ -170,11 +168,11 @@ where
                 .exit_behavior("Exits non-zero when karabiner.json is missing, and on platforms other than macOS.")
                 .run_result(move |context| {
                     no_args(context)?;
-                    karabiner_remove.karabiner_remove()
+                    karabiner_remove.karabiner_remove(&host())
                 }),
         )
         .command(settings_command(settings))
-        .doctor_checks(doctor_checks(adapter))
+        .doctor_checks(doctor_checks(adapter, host))
 }
 
 fn settings_command(settings: impl Fn() -> std::io::Result<()> + Send + Sync + 'static) -> Command {
@@ -201,7 +199,7 @@ fn result_for(result: std::io::Result<()>) -> CommandResult {
     }
 }
 
-fn doctor_checks<A>(adapter: A) -> Vec<DoctorCheck>
+fn doctor_checks<A>(adapter: A, host: fn() -> Host) -> Vec<DoctorCheck>
 where
     A: PlatformAdapter,
 {
@@ -226,12 +224,12 @@ where
         DoctorCheck::new(
             "config_readable",
             "Read and deserialize config without changing config state.",
-            move || config_result(&config),
+            move || config_result(&config, host),
         ),
         DoctorCheck::new(
             "rules_valid",
             "Validate typed remapping rules without enabling interception.",
-            move || rules_result(&rules),
+            move || rules_result(&rules, host),
         ),
         DoctorCheck::new(
             "accessibility_trust",
@@ -252,7 +250,7 @@ where
             "Check the virtual keyboard daemon is running.",
             move || {
                 supported_or(&daemon, "virtual_hid_daemon", |adapter| {
-                    Ok(adapter.virtual_hid_daemon())
+                    Ok(adapter.virtual_hid_daemon(&host()))
                 })
             },
         ),
@@ -268,14 +266,18 @@ where
         DoctorCheck::new(
             "key_backend",
             "Report which key backend Key Remap picks for the Key backend setting, and why.",
-            move || supported_or(&backend, "key_backend", |adapter| Ok(adapter.key_backend())),
+            move || {
+                supported_or(&backend, "key_backend", |adapter| {
+                    Ok(adapter.key_backend(&host()))
+                })
+            },
         ),
         DoctorCheck::new(
             "karabiner_rules",
             "Compare Key Remap's rules in karabiner.json with the current rules without writing.",
             move || {
                 supported_or(&karabiner, "karabiner_rules", |adapter| {
-                    Ok(adapter.karabiner_block())
+                    Ok(adapter.karabiner_block(&host()))
                 })
             },
         ),
@@ -283,11 +285,9 @@ where
             "secure_input",
             "Report which app holds Secure Input and which key backend is active.",
             move || {
-                supported_or(
-                    &secure,
-                    "secure_input",
-                    |adapter| Ok(adapter.secure_input()),
-                )
+                supported_or(&secure, "secure_input", |adapter| {
+                    Ok(adapter.secure_input(&host()))
+                })
             },
         ),
         DoctorCheck::new(
@@ -295,7 +295,7 @@ where
             "Check every character rule can be typed in the active keyboard layout.",
             move || {
                 supported_or(&characters, "layout_characters", |adapter| {
-                    Ok(adapter.layout_characters())
+                    Ok(adapter.layout_characters(&host()))
                 })
             },
         ),
@@ -339,7 +339,12 @@ fn platform_result(adapter: &impl PlatformAdapter) -> DoctorCheckResult {
     }))
 }
 
-fn config_result(adapter: &impl PlatformAdapter) -> Result<DoctorCheckResult> {
+fn inspect(adapter: &impl PlatformAdapter, host: fn() -> Host) -> Result<ConfigInspection> {
+    let inspected = (host().inspect_config)()?;
+    adapter.inspect_config(&inspected)
+}
+
+fn config_result(adapter: &impl PlatformAdapter, host: fn() -> Host) -> Result<DoctorCheckResult> {
     if !adapter.supported() {
         return Ok(DoctorCheckResult::fail(
             "config_readable",
@@ -348,7 +353,7 @@ fn config_result(adapter: &impl PlatformAdapter) -> Result<DoctorCheckResult> {
         .with_fix(SUPPORTED_FIX));
     }
 
-    let inspected = adapter.inspect_config()?;
+    let inspected = inspect(adapter, host)?;
     let source = if inspected.source {
         "stored config"
     } else {
@@ -361,7 +366,7 @@ fn config_result(adapter: &impl PlatformAdapter) -> Result<DoctorCheckResult> {
     .with_details(config_details(&inspected)))
 }
 
-fn rules_result(adapter: &impl PlatformAdapter) -> Result<DoctorCheckResult> {
+fn rules_result(adapter: &impl PlatformAdapter, host: fn() -> Host) -> Result<DoctorCheckResult> {
     if !adapter.supported() {
         return Ok(DoctorCheckResult::fail(
             "rules_valid",
@@ -370,7 +375,7 @@ fn rules_result(adapter: &impl PlatformAdapter) -> Result<DoctorCheckResult> {
         .with_fix(SUPPORTED_FIX));
     }
 
-    let inspected = adapter.inspect_config()?;
+    let inspected = inspect(adapter, host)?;
     let details = config_details(&inspected);
     if inspected.issues.is_empty() {
         return Ok(DoctorCheckResult::ok(
@@ -450,6 +455,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::config::{Inspection, RemapConfig};
 
     #[derive(Default)]
     struct Calls {
@@ -479,22 +485,22 @@ mod tests {
             true
         }
 
-        fn launch(&self) -> Result<CommandResult> {
+        fn launch(&self, _host: &Host) -> Result<CommandResult> {
             self.calls.launch.fetch_add(1, Ordering::SeqCst);
             Ok(CommandResult::success(""))
         }
 
-        fn reload(&self) -> Result<CommandResult> {
+        fn reload(&self, _host: &Host) -> Result<CommandResult> {
             self.calls.reload.fetch_add(1, Ordering::SeqCst);
             Ok(CommandResult::success(""))
         }
 
-        fn toggle(&self) -> Result<CommandResult> {
+        fn toggle(&self, _host: &Host) -> Result<CommandResult> {
             self.calls.toggle.fetch_add(1, Ordering::SeqCst);
             Ok(CommandResult::success(""))
         }
 
-        fn kill(&self) -> Result<CommandResult> {
+        fn kill(&self, _host: &Host) -> Result<CommandResult> {
             self.calls.kill.fetch_add(1, Ordering::SeqCst);
             Ok(CommandResult::success(""))
         }
@@ -514,19 +520,19 @@ mod tests {
             Ok(CommandResult::success(""))
         }
 
-        fn karabiner_rules(&self) -> Result<CommandResult> {
+        fn karabiner_rules(&self, _host: &Host) -> Result<CommandResult> {
             Ok(CommandResult::success(""))
         }
 
-        fn karabiner_sync(&self) -> Result<CommandResult> {
+        fn karabiner_sync(&self, _host: &Host) -> Result<CommandResult> {
             Ok(CommandResult::success(""))
         }
 
-        fn karabiner_remove(&self) -> Result<CommandResult> {
+        fn karabiner_remove(&self, _host: &Host) -> Result<CommandResult> {
             Ok(CommandResult::success(""))
         }
 
-        fn inspect_config(&self) -> Result<ConfigInspection> {
+        fn inspect_config(&self, _inspected: &Inspection) -> Result<ConfigInspection> {
             self.calls.config.fetch_add(1, Ordering::SeqCst);
             Ok(ConfigInspection {
                 source: false,
@@ -549,7 +555,7 @@ mod tests {
             Ok(DoctorCheckResult::ok("virtual_hid_driver", "sentinel"))
         }
 
-        fn virtual_hid_daemon(&self) -> DoctorCheckResult {
+        fn virtual_hid_daemon(&self, _host: &Host) -> DoctorCheckResult {
             DoctorCheckResult::ok("virtual_hid_daemon", "sentinel")
         }
 
@@ -557,20 +563,39 @@ mod tests {
             DoctorCheckResult::ok("hid_helper", "sentinel")
         }
 
-        fn key_backend(&self) -> DoctorCheckResult {
+        fn key_backend(&self, _host: &Host) -> DoctorCheckResult {
             DoctorCheckResult::ok("key_backend", "sentinel")
         }
 
-        fn karabiner_block(&self) -> DoctorCheckResult {
+        fn karabiner_block(&self, _host: &Host) -> DoctorCheckResult {
             DoctorCheckResult::ok("karabiner_rules", "sentinel")
         }
 
-        fn secure_input(&self) -> DoctorCheckResult {
+        fn secure_input(&self, _host: &Host) -> DoctorCheckResult {
             DoctorCheckResult::ok("secure_input", "sentinel")
         }
 
-        fn layout_characters(&self) -> DoctorCheckResult {
+        fn layout_characters(&self, _host: &Host) -> DoctorCheckResult {
             DoctorCheckResult::ok("layout_characters", "sentinel")
+        }
+    }
+
+    fn sentinel_host() -> Host {
+        Host {
+            plugin_id: PLUGIN_ID.to_string(),
+            read_config: RemapConfig::default,
+            inspect_config: || {
+                Ok(Inspection {
+                    config: RemapConfig::default(),
+                    source: None,
+                })
+            },
+            flip_enabled: || Ok(true),
+            listen: |_| false,
+            send_reload: || false,
+            send_kill: || false,
+            cleanup: || {},
+            open_settings: || Ok(()),
         }
     }
 
@@ -582,6 +607,7 @@ mod tests {
                 SentinelAdapter {
                     calls: Arc::clone(&calls),
                 },
+                sentinel_host,
                 move || {
                     settings_calls.settings.fetch_add(1, Ordering::SeqCst);
                     Ok(())
@@ -608,6 +634,7 @@ mod tests {
             SentinelAdapter {
                 calls: Arc::clone(&calls),
             },
+            sentinel_host,
             || {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,

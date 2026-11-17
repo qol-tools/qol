@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::cli::PLUGIN_ID;
+use crate::PLUGIN_ID;
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 

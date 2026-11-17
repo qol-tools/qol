@@ -47,6 +47,10 @@ impl InstallerOps for Platform {
 
     fn remove_legacy_install(&self) {}
 
+    fn refresh_after_update(&self, _binary_path: &Path, _installer: Option<&Path>) -> Result<()> {
+        Ok(())
+    }
+
     fn uninstall(&self, _binary_path: &Path, _profile: InstallProfile) -> Result<()> {
         unavailable()
     }

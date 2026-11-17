@@ -7,8 +7,8 @@ use qol_platform::Os;
 
 use crate::nav::path;
 use crate::thumbs::{self, Flavor};
+use crate::PLUGIN_ID;
 
-pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const OPEN_COMMAND: &str = "open";
 const SETTINGS_COMMAND: &str = "settings";
 const THUMBNAIL_COMMAND: &str = "thumbnail";

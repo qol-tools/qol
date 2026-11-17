@@ -2,7 +2,6 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use super::{Control, PlatformSupport};
-use crate::daemon::Command;
 use crate::monitor::night::Tint;
 use crate::monitor::{GammaTable, StubControl};
 
@@ -31,6 +30,10 @@ pub(crate) fn brightness_floor(_base: &GammaTable) -> u8 {
     crate::monitor::BRIGHTNESS_MIN
 }
 
-pub(crate) fn install_signal_handlers(_tx: Sender<Command>) -> SignalGuard {
+pub(crate) fn install_signal_handlers<Message: Send + 'static>(
+    _tx: Sender<Message>,
+    _on_terminate: Message,
+    _on_hangup: Message,
+) -> SignalGuard {
     SignalGuard
 }

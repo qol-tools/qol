@@ -883,7 +883,7 @@ fn session_state(session: Option<&Path>, id: &str, status: Option<&str>) -> Opti
     fork_state::state(status, agent_transcript(session, id).as_deref())
 }
 
-pub(super) fn run() -> Result<()> {
+pub(super) fn run() -> Result<Vec<String>> {
     let mut raw = String::new();
     std::io::stdin()
         .read_to_string(&mut raw)
@@ -908,10 +908,7 @@ pub(super) fn run() -> Result<()> {
         state: &state,
         started_label: &local_started_label,
     };
-    for line in render(&raw, &clock)? {
-        crate::cli::line(line);
-    }
-    Ok(())
+    render(&raw, &clock)
 }
 
 #[cfg(test)]

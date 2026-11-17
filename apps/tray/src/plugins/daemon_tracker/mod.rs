@@ -9,7 +9,7 @@ pub struct ManagedProcess {
 
 mod census;
 mod identity;
-pub mod platform;
+mod platform;
 mod reaper;
 pub(crate) mod registry;
 

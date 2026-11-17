@@ -1,6 +1,6 @@
 use std::process::Command;
 
-#[path = "src/installer/platform/windows/ico.rs"]
+#[path = "src/platform/windows/ico.rs"]
 mod ico;
 #[path = "build/platform.rs"]
 mod platform;

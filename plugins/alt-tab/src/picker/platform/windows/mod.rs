@@ -1,7 +1,6 @@
-use crate::app::AltTabApp;
 use crate::config::AltTabConfig;
 use crate::picker::create::PICKER_WINDOW_TITLE;
-use crate::picker::PickerWindowState;
+use crate::picker::{AltTabApp, PickerWindowState};
 use qol_gpui::window::MonitorKey;
 
 pub fn picker_window_title(_target: MonitorKey) -> String {

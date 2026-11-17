@@ -3,7 +3,7 @@ use std::sync::Arc;
 use qol_runtime::MonitorBounds;
 
 mod ignore_pids;
-pub(crate) mod platform;
+mod platform;
 
 pub(crate) type SharedPlatform = Arc<dyn Platform>;
 

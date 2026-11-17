@@ -1,9 +1,7 @@
-pub(crate) mod ico;
 mod plugin_release;
 mod registration;
 mod registry;
 pub(in crate::installer) mod run_key;
-pub(crate) mod shortcut;
 
 use anyhow::{Context, Result};
 use qol_apps::tray_install::InstallProfile;
@@ -92,6 +90,10 @@ impl InstallerOps for Platform {
 
     fn remove_legacy_install(&self) {}
 
+    fn refresh_after_update(&self, binary_path: &Path, installer: Option<&Path>) -> Result<()> {
+        refresh_after_update(binary_path, installer)
+    }
+
     fn uninstall(&self, binary_path: &Path, profile: InstallProfile) -> Result<()> {
         let layout = Layout::for_binary(binary_path)?;
         run_uninstall(&mut WindowsUninstall {
@@ -103,7 +105,7 @@ impl InstallerOps for Platform {
     }
 }
 
-pub(crate) fn refresh_after_update(binary: &Path, installer: Option<&Path>) -> Result<()> {
+fn refresh_after_update(binary: &Path, installer: Option<&Path>) -> Result<()> {
     let Some(layout) = installed_layout(binary)? else {
         return Ok(());
     };
@@ -174,7 +176,7 @@ impl UninstallSteps for WindowsUninstall<'_> {
         if self.profile == InstallProfile::Development {
             return Ok(());
         }
-        qol_plugin_daemon::notification::platform::uninstall_toast_identity()
+        qol_plugin_daemon::notification::uninstall_toast_identity()
             .context("Failed to remove the QoL Tray notification identity")
     }
 

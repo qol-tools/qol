@@ -8,7 +8,7 @@ mod linux;
 mod macos;
 mod windows;
 
-pub(super) use crate::commands::emu::workflow::desktop::platform::linux as desktop;
+pub(super) use crate::commands::emu::workflow::desktop::linux as desktop;
 pub(super) use crate::commands::emu::workflow::Verdict;
 
 pub(super) fn run(vm: &BootedVm, guest: DesktopGuestPlatform) -> Result<Verdict> {

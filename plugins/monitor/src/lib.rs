@@ -7,3 +7,5 @@ pub mod hotkeys;
 pub mod monitor;
 pub mod platform;
 pub mod session;
+
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");

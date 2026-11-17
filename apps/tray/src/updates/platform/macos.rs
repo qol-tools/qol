@@ -11,7 +11,7 @@ use super::super::{verify_host_update, FoundUpdate};
 use super::download::HostUpdate;
 use super::InstallKind;
 use super::{download, unix};
-use crate::installer::platform::macos::codesign;
+use crate::platform::macos::codesign;
 
 const APP_BUNDLE_NAME: &str = "QoL Tray.app";
 const MACOS_RELEASE_ASSET: &str = "qol-tray-macos-universal.tar.gz";

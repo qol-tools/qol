@@ -13,8 +13,8 @@ use super::objc::{
     CGMainDisplayID, CGRect,
 };
 use super::trace::{timed_result, trace_screen_snapshot};
+use crate::action::WindowAction;
 
-pub(super) const SCREENS_ACTION: &str = "print-work-areas";
 const SCREEN_HELPER_ENV: &str = "QOL_WINDOW_ACTIONS_SCREEN_HELPER";
 const MAX_DISPLAYS: usize = 16;
 const HELPER_TIMEOUT: Duration = Duration::from_secs(3);
@@ -315,7 +315,9 @@ fn helper_screens() -> Result<Vec<Rect>, String> {
     let exe =
         std::env::current_exe().map_err(|error| format!("cannot locate this binary: {error}"))?;
     let mut command = Command::new(exe);
-    command.arg(SCREENS_ACTION).env(SCREEN_HELPER_ENV, "1");
+    command
+        .arg(WindowAction::PrintWorkAreas.id())
+        .env(SCREEN_HELPER_ENV, "1");
     let output = run_owned_with_output_timeout(command, HELPER_TIMEOUT, HELPER_OUTPUT_LIMIT)
         .map_err(|error| format!("cannot run it: {error}"))?;
     let completed = match output {

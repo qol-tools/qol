@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime};
 
 pub(crate) mod jobs;
-pub(crate) mod platform;
+mod platform;
 pub mod version;
 mod workspace_build;
 

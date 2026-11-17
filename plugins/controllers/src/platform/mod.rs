@@ -1,5 +1,3 @@
-use anyhow::{Context, Result};
-
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -86,11 +84,4 @@ pub struct NativeAdapter {
 pub struct NativeButtonInput {
     pub index: usize,
     pub pressed: bool,
-}
-
-const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-
-pub fn open_settings() -> Result<()> {
-    qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
-        .context("failed to open settings URL")
 }

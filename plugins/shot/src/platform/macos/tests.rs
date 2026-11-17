@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::platform::{CaptureSegment, CaptureSession};
 use crate::{Config, Monitor, Rect};
 
-use super::{conversion, display, recording, selector, swift, system};
+use super::{conversion, display, recording, swift, system};
 
 #[test]
 fn capture_file_stages_every_format_in_the_work_directory() {
@@ -140,85 +140,6 @@ fn rect_intersection_returns_overlap() {
             w: 380,
             h: 400,
         })
-    );
-}
-
-#[test]
-fn selector_rect_mapper_preserves_dragged_rect_touching_active_displays() {
-    let rect = Rect {
-        x: 1800,
-        y: 100,
-        w: 500,
-        h: 400,
-    };
-    let displays = [
-        Monitor {
-            x: 0,
-            y: 0,
-            w: 1920,
-            h: 1080,
-        },
-        Monitor {
-            x: 1920,
-            y: 0,
-            w: 1920,
-            h: 1080,
-        },
-    ];
-
-    assert_eq!(
-        selector::map_selector_rect_to_capture(rect, &displays),
-        Some(rect)
-    );
-}
-
-#[test]
-fn selector_rect_mapper_preserves_canvas_across_vertically_offset_displays() {
-    let rect = Rect {
-        x: -1200,
-        y: 0,
-        w: 3200,
-        h: 1400,
-    };
-    let displays = [
-        Monitor {
-            x: 0,
-            y: 0,
-            w: 2000,
-            h: 1400,
-        },
-        Monitor {
-            x: -1512,
-            y: 458,
-            w: 1512,
-            h: 982,
-        },
-    ];
-
-    assert_eq!(
-        selector::map_selector_rect_to_capture(rect, &displays),
-        Some(rect)
-    );
-}
-
-#[test]
-fn selector_rect_mapper_rejects_off_display_selection() {
-    let rect = Rect {
-        x: 4000,
-        y: 100,
-        w: 100,
-        h: 100,
-    };
-    let displays = [Monitor {
-        x: 0,
-        y: 0,
-        w: 1920,
-        h: 1080,
-    }];
-
-    assert_eq!(
-        selector::map_selector_rect_to_capture(rect, &displays),
-        None
     );
 }
 

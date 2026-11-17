@@ -1,9 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use windows_sys::Win32::UI::Shell::{FOLDERID_CommonPrograms, FOLDERID_Programs};
-
-use crate::known_folder::platform::windows::known_folder;
+use crate::known_folder::{common_programs_dir, programs_dir};
 use crate::start_menu::is_start_menu_shortcut;
 use crate::AppRoot;
 
@@ -16,9 +14,9 @@ pub(super) struct Platform;
 
 impl StartMenuPlatform for Platform {
     fn program_roots(&self) -> Vec<AppRoot> {
-        [&FOLDERID_Programs, &FOLDERID_CommonPrograms]
+        [programs_dir(), common_programs_dir()]
             .into_iter()
-            .filter_map(known_folder)
+            .flatten()
             .map(|path| AppRoot {
                 path,
                 max_depth: MAX_DEPTH,

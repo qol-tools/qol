@@ -1,3 +1,3 @@
-pub(crate) mod platform;
+mod platform;
 
-pub use platform::{adopt_handed_off_fds, prepare_for_exec};
+pub use platform::{adopt_handed_off_fds, prepare_for_exec, register, unregister};

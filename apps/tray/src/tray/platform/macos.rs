@@ -20,7 +20,6 @@ pub enum PlatformTray {
 }
 
 pub(crate) fn request_shutdown(shutdown_tx: &broadcast::Sender<()>) {
-    crate::hotkeys::capture::platform::macos::release_tap();
     let _ = shutdown_tx.send(());
     stop_event_loop();
 }

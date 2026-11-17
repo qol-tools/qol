@@ -7,7 +7,7 @@ use windows::core::HSTRING;
 use windows::ApplicationModel::{Package, PackageSignatureKind};
 use windows::Management::Deployment::PackageManager;
 
-use crate::cli::PLUGIN_ID;
+use crate::PLUGIN_ID;
 
 const CACHE_TTL: Duration = Duration::from_secs(10);
 const RESOURCE_PREFIX: &str = "ms-resource:";

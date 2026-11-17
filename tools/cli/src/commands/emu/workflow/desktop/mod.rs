@@ -4,7 +4,9 @@ use crate::commands::emu::BootedVm;
 
 use super::{DesktopGuestPlatform, Verdict};
 
-pub(in crate::commands::emu::workflow) mod platform;
+mod platform;
+
+pub(in crate::commands::emu::workflow) use platform::linux;
 
 pub(super) fn run(vm: &BootedVm, guest: DesktopGuestPlatform) -> Result<Verdict> {
     platform::run(vm, guest)

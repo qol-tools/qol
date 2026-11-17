@@ -9,8 +9,7 @@ use crate::core::{
     self, Disposal, Guards, ManagedPackage, PackageManager, PackageStatus, RemovalOutcome,
     RemovalPlan,
 };
-
-pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+use crate::PLUGIN_ID;
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)

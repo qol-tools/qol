@@ -1,4 +1,5 @@
-use super::evdev_backend::{emit_key_ups, keycode_name, TrackedVirtualDevice};
+use super::evdev_backend::{emit_key_ups, TrackedVirtualDevice};
+use crate::platform::linux::keycode::keycode_name;
 use evdev::raw_stream::RawDevice;
 use evdev::{AttributeSet, KeyCode};
 use std::collections::HashSet;
@@ -42,7 +43,7 @@ pub(super) fn heal_stuck_keys(
     physical_down: &HashSet<u16>,
     declared_keys: &AttributeSet<KeyCode>,
 ) {
-    if crate::desktop_state::platform::linux::is_wayland() {
+    if qol_platform::linux_display_backend() == qol_platform::LinuxDisplayBackend::Wayland {
         log::info!(
             "evdev: skipping stuck-key heal on a Wayland session; the X server (XWayland) core keymap only reflects events delivered to X clients and is empty or stale whenever a Wayland-native window has focus, so its bits are not trustworthy stuck-key candidates"
         );

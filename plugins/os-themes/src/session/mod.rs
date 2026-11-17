@@ -1,4 +1,4 @@
-pub(crate) mod platform;
+mod platform;
 
 pub use qol_host_session::{RestoreMode, RestoreReport};
 

@@ -1,11 +1,11 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 
 pub(super) fn os_bucket() -> &'static str {
     qol_platform::Os::Linux.name()
 }
 
-pub(crate) fn xdg_config_home() -> Result<PathBuf> {
+pub(super) fn xdg_config_home() -> Result<PathBuf> {
     #[cfg(any(test, debug_assertions))]
     if let Some(home) = crate::paths::test_home_dir() {
         return Ok(home.join(".config"));
@@ -14,13 +14,17 @@ pub(crate) fn xdg_config_home() -> Result<PathBuf> {
     dirs::config_dir().context("Could not determine config directory")
 }
 
-pub(crate) fn xdg_data_home() -> Result<PathBuf> {
+pub(super) fn xdg_data_home() -> Result<PathBuf> {
     #[cfg(any(test, debug_assertions))]
     if let Some(home) = crate::paths::test_home_dir() {
         return Ok(home.join(".local").join("share"));
     }
 
     dirs::data_dir().context("Could not determine data directory")
+}
+
+pub(super) fn start_menu_programs_dir() -> Result<PathBuf> {
+    bail!("the Start menu Programs folder exists only on Windows")
 }
 
 #[cfg(not(test))]

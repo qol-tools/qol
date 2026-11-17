@@ -597,11 +597,10 @@ pub(super) fn await_remote_control_url(
     }
 }
 
-pub(super) fn run(args: &[OsString]) -> Result<()> {
+pub(super) fn run(args: &[OsString]) -> Result<String> {
     let parsed = parse_args(args)?;
     if parsed.help {
-        crate::cli::line(help());
-        return Ok(());
+        return Ok(help());
     }
     let dispatch = AgentDispatch::new(config_dispatch_policy()?, parsed.assignment_request());
     let brief = match (&parsed.brief, &parsed.brief_file) {
@@ -679,15 +678,13 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
             report: false,
         }),
     )?;
-    crate::cli::line(serde_json::to_string_pretty(&outcome)?);
-    Ok(())
+    Ok(serde_json::to_string_pretty(&outcome)?)
 }
 
-pub(super) fn run_list(_args: &[OsString]) -> Result<()> {
+pub(super) fn run_list(_args: &[OsString]) -> Result<Vec<String>> {
     let records = ForkStore::system()?.list()?;
     if records.is_empty() {
-        crate::cli::line(format_args!("no detached forks recorded"));
-        return Ok(());
+        return Ok(vec!["no detached forks recorded".to_owned()]);
     }
     let interpreter = CliSessionInterpreter::system();
     let live = super::service()?
@@ -699,6 +696,7 @@ pub(super) fn run_list(_args: &[OsString]) -> Result<()> {
             Some((token, interpreter.remote_control_url(session)))
         })
         .collect::<Vec<_>>();
+    let mut rows = Vec::with_capacity(records.len());
     for record in records {
         let brief = if record.brief.is_empty() {
             "blank"
@@ -726,9 +724,9 @@ pub(super) fn run_list(_args: &[OsString]) -> Result<()> {
             row.push('\t');
             row.push_str(column.unwrap_or("-"));
         }
-        crate::cli::line(row);
+        rows.push(row);
     }
-    Ok(())
+    Ok(rows)
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]

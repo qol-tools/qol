@@ -28,7 +28,7 @@ impl AutostartOps for Platform {
 }
 
 fn autostart_path_impl() -> Result<PathBuf> {
-    Ok(crate::paths::platform::linux::xdg_config_home()?
+    Ok(crate::paths::xdg_config_home()?
         .join("autostart")
         .join("qol-tray.desktop"))
 }

@@ -39,7 +39,7 @@ impl Backing for HostBacking {
     }
 
     fn save(&self, keys: &Value) -> io::Result<()> {
-        let id = qol_config::plugin_id_from_env(store::PLUGIN_ID);
+        let id = qol_config::plugin_id_from_env(crate::PLUGIN_ID);
         qol_plugin_api::host_exec::save_plugin_config_keys(&id, keys)
     }
 }

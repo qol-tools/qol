@@ -188,7 +188,7 @@ impl Drop for CursorSession {
 }
 
 pub(super) fn journal_store() -> SessionStore {
-    SessionStore::new(crate::session::platform::store::session_subdir(
+    SessionStore::new(crate::platform::session_store::session_subdir(
         scale_journal::SUBDIR,
     ))
 }

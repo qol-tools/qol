@@ -5,9 +5,9 @@
 //! because the constructor never succeeds, but they still return typed `Err`
 //! to satisfy the trait without `unimplemented!()`.
 
-use crate::cli::PLUGIN_ID;
 use crate::command::ModifierKeys;
 use crate::input::{InputHandlerTrait, InputReadiness, PlatformSupport};
+use crate::PLUGIN_ID;
 use anyhow::{anyhow, Result};
 
 pub struct InputHandlerImpl;

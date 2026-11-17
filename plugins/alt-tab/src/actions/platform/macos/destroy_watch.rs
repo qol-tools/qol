@@ -1,4 +1,4 @@
-use crate::discovery::platform::macos::ffi::{self, CFRelease, CFRetain};
+use crate::platform::macos::ffi::{self, CFRelease, CFRetain};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use std::cell::RefCell;
 use std::collections::HashMap;

@@ -8,6 +8,8 @@ mod input;
 mod network;
 mod qol;
 
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+
 fn main() -> std::process::ExitCode {
     qol_log::init_stderr();
     cli::exit_code(std::env::args().skip(1))

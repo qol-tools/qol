@@ -17,13 +17,12 @@ pub(crate) struct Store {
 }
 
 impl Store {
-    pub(crate) fn locate() -> Result<Self> {
+    pub(crate) fn locate(plugin_id: &str) -> Result<Self> {
         let home = std::env::var_os("HOME").context("HOME is not set")?;
-        let id = qol_config::plugin_id_from_env(crate::cli::PLUGIN_ID);
         let state = qol_config::data_dir()
             .context("no data directory for keyremap's Karabiner record")?
             .join("plugins")
-            .join(id);
+            .join(plugin_id);
         Ok(Self {
             config: Path::new(&home).join(CONFIG_PATH),
             sidecar: state.join(SIDECAR_FILE),

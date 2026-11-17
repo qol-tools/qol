@@ -8,7 +8,7 @@ use qol_apps::desktop_integration::{self, OpenHandler};
 
 use super::menu::Menu;
 use super::ExplorerView;
-use crate::ui::PLUGIN_ID;
+use crate::PLUGIN_ID;
 
 pub(super) struct OpenWith {
     paths: Vec<PathBuf>,

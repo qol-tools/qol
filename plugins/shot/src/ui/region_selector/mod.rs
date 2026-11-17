@@ -18,8 +18,10 @@ use qol_gpui::theme::runtime_theme;
 use qol_gpui::toast::{Toast, ToastLayout, ToastTone};
 use qol_gpui::window_options::PopupWindowOptions;
 
+mod platform;
 mod targets;
 
+pub(crate) use platform::{pre_create_selector, select_region, select_region_in_app};
 pub(crate) use targets::SnapshotTargets;
 
 const SELECTOR_TITLE: &str = "qol-shot-selector";

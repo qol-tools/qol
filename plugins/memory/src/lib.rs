@@ -18,4 +18,7 @@ pub mod skills;
 pub mod store;
 pub mod text;
 pub mod verification;
+pub mod warm;
 pub mod watch;
+
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");

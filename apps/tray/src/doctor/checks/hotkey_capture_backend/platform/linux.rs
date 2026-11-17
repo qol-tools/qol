@@ -1,9 +1,7 @@
 use super::super::CaptureProbe;
 
 #[cfg(feature = "linux_evdev")]
-use crate::hotkeys::capture::platform::linux::classify::{
-    classify, DeviceCapabilities, DeviceClass, SkipReason,
-};
+use crate::platform::linux::classify::{classify, DeviceCapabilities, DeviceClass, SkipReason};
 #[cfg(feature = "linux_evdev")]
 use std::fs;
 #[cfg(feature = "linux_evdev")]

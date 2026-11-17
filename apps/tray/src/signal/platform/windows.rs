@@ -95,7 +95,7 @@ fn request_shutdown(source: &str, name: &str) -> bool {
         return false;
     };
     log::info!("[lifecycle] graceful shutdown requested by {source} {name}");
-    crate::tray::platform::request_shutdown(&sender);
+    crate::tray::request_shutdown(&sender);
     true
 }
 

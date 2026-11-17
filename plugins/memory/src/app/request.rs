@@ -5,8 +5,8 @@ use qol_plugin_daemon::daemon::ReadResult;
 use qol_runtime::protocol::DaemonRequest;
 use serde_json::{json, Value};
 
-use crate::app::warm::WarmState;
 use crate::ask::{AskRequest, LogOptions};
+use crate::warm::WarmState;
 
 const DEFAULT_ASK_K: usize = 5;
 const DEFAULT_LOG_SOURCE: &str = "daemon";
@@ -332,7 +332,7 @@ fn feedback(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
 fn reindex(state: &Arc<Mutex<WarmState>>) -> Result<Value> {
     let mut warm = lock_state(state);
     let store = warm.store().clone();
-    let layers = crate::app::warm::reindex(&store)?;
+    let layers = crate::warm::reindex(&store)?;
     warm.invalidate_layers();
     Ok(json!({ "layers": layers }))
 }

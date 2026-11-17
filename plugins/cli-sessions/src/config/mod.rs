@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::storage::paths::PLUGIN_ID;
-use crate::ui::placement::{parse_corner, Corner};
+use crate::PLUGIN_ID;
+
+pub use qol_gpui::placement::Corner;
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 pub(crate) type ConfigInspection = qol_config::PluginConfigInspection<CliSessionsConfig>;
@@ -40,6 +41,15 @@ impl CliSessionsConfig {
             model: self.switchboard_model().to_owned(),
             effort: self.switchboard_effort().to_owned(),
         }
+    }
+}
+
+pub fn parse_corner(value: &str) -> Corner {
+    match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "top-left" => Corner::TopLeft,
+        "bottom-left" => Corner::BottomLeft,
+        "bottom-right" => Corner::BottomRight,
+        _ => Corner::TopRight,
     }
 }
 

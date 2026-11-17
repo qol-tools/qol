@@ -89,7 +89,7 @@ fn query_inner(query: &str) -> HttpResult<Response> {
         DO_NOT_DISTURB_QUERY => http_json::encode_json(
             &QueryResponse {
                 value: do_not_disturb(
-                    qol_plugin_daemon::notification::platform::os_do_not_disturb(),
+                    qol_plugin_daemon::notification::os_do_not_disturb(),
                     takeover::holds_banner_switch(),
                 )
                 .to_string(),

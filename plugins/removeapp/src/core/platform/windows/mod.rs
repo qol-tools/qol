@@ -12,7 +12,6 @@ use anyhow::{bail, Context, Result};
 use qol_apps::shell_link::{LinkTarget, ShellLink};
 use qol_windowing::platform::windows::top_level_windows;
 
-use crate::cli::PLUGIN_ID;
 use crate::core::guards::{
     ManagedPackage, PackageIndex, PackageManager, PackageScope, PackageStatus,
 };
@@ -20,6 +19,7 @@ use crate::core::{
     delete_path, dir_size, AppPlatform, Disposal, IdentitySnapshot, InstalledApp, Leftover,
     LeftoverKind, MatchKind, RemovalOutcome, RemovalPlan,
 };
+use crate::PLUGIN_ID;
 
 use self::catalog::{
     build_catalog, normalize, owned_keys, uninstall_launch, with_store, CatalogApp, Shortcut,

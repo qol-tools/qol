@@ -270,7 +270,7 @@ fn coordinator_result(config: &PluginConfig, metadata: &SerialMetadata) -> Docto
         )
         .with_fix(format!(
             "Run {} reload to perform coordinator detection",
-            crate::config::store::PLUGIN_ID
+            crate::PLUGIN_ID
         ))
         .with_details(details);
     }

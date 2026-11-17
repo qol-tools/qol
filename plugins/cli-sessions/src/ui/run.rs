@@ -26,7 +26,7 @@ use crate::ui::{collapse, trace, SessionsView, WINDOW_TITLE};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 
-const APP_ID: &str = paths::PLUGIN_ID;
+const APP_ID: &str = crate::PLUGIN_ID;
 const WINDOW_WIDTH: f32 = 360.0;
 const WINDOW_HEIGHT: f32 = 400.0;
 const VISIBLE_ACTIVE_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
@@ -51,13 +51,15 @@ struct ReconcileRuntime {
 }
 
 pub fn run(show_on_start: bool) -> anyhow::Result<()> {
+    let plugin_id = crate::daemon::plugin_id();
+    anomaly::set_default_dir(paths::anomalies_dir(&plugin_id));
     #[cfg(debug_assertions)]
     anomaly::enable();
 
     let registry: Arc<Mutex<Registry>> = Arc::new(Mutex::new(Registry::default()));
     let host: Arc<dyn TerminalHost + Send + Sync> = crate::host::system();
 
-    if let Some(path) = paths::state_path() {
+    if let Some(path) = paths::state_path(&plugin_id) {
         if let Ok(mut reg) = registry.lock() {
             reg.restore(persist::load(&path));
         }
@@ -153,7 +155,7 @@ fn mono_now() -> u64 {
 }
 
 fn snapshot_now(host: &Arc<dyn TerminalHost + Send + Sync>, registry: &Arc<Mutex<Registry>>) {
-    let Some(dir) = paths::snapshots_dir() else {
+    let Some(dir) = paths::snapshots_dir(&crate::daemon::plugin_id()) else {
         log::debug!("snapshot: no data dir");
         return;
     };

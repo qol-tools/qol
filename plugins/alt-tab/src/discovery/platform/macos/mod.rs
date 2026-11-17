@@ -1,6 +1,7 @@
 use super::super::{DiscoveryError, WindowDiscovery, WindowInfo};
 use crate::config::SwitchablePanelOverride;
-use ffi::{
+use crate::platform::macos::ffi;
+use crate::platform::macos::ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryRef, CFRelease,
     CGWindowListCopyWindowInfo, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL,
     K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
@@ -14,7 +15,6 @@ use window_enum::{
 };
 
 pub(crate) mod ax;
-pub(crate) mod ffi;
 mod process;
 mod spaces;
 mod switchable;
