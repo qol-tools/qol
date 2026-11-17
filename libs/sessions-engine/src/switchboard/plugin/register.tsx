@@ -1014,8 +1014,9 @@ export const reachable = (list: Entry[]): Entry[] => {
     ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && !isEnded(entry)),
     ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && isEnded(entry)).reverse(),
   ]
+  const isTop = (entry: Entry) => parentOf(list, entry) === undefined
   const seen = new Set<string>()
-  return ordered.filter(entry => {
+  return [...ordered.filter(isTop), ...ordered.filter(entry => !isTop(entry))].filter(entry => {
     const key = keyOf(entry)
     if (!KEY_SHAPE.test(key) || seen.has(key)) return false
     seen.add(key)
@@ -1032,7 +1033,9 @@ export const keyCompletions = (list: Entry[], token: string): PromptAutocomplete
   const typed = token.toLowerCase()
   if (!KEY_SHAPE.test(typed)) return []
   const rows = reachable(list)
-  return [...keyStarts(rows, typed), ...wordStarts(rows, typed)]
+  const top = rows.filter(entry => parentOf(list, entry) === undefined)
+  const subs = rows.filter(entry => parentOf(list, entry) !== undefined)
+  return [...keyStarts(top, typed), ...wordStarts(top, typed), ...keyStarts(subs, typed), ...wordStarts(subs, typed)]
     .map(entry => ({ text: `${keyOf(entry)} `, label: keyOf(entry), description: `${friendlyName(entry.name)}${entry.project === undefined ? '' : ` · ${entry.project}`}` }))
 }
 
@@ -2579,6 +2582,25 @@ export const isKilledOnly = (text: string): boolean => {
   return blocks.length > 0 && blocks.every(block => block.includes('<status>killed</status>'))
 }
 
+const answersUser = new Map<string, boolean>()
+
+const isHarnessPreamble = (rest: string): boolean => rest.split(/\n\s*\n/).every(part => part.trim() === '' || part.trim().startsWith('[SYSTEM NOTIFICATION'))
+
+export const echoesOnly = (list: Entry[], agentId: string, text: string, isUserTurn: (subId: string) => boolean): boolean => {
+  const blocks = text.match(NOTIFICATIONS) ?? []
+  if (blocks.length === 0 || text.includes(FROM_USER)) return false
+  if (!isHarnessPreamble(blocks.reduce((left, block) => left.replace(block, ''), text))) return false
+  return blocks.every(block => {
+    const subId = field(block, 'task-id')
+    const sub = subId === undefined ? undefined : list.find(entry => entry.agentId === subId)
+    if (subId === undefined || sub === undefined || parentOf(list, sub)?.agentId !== agentId) return false
+    if (field(block, 'status') !== 'completed' || !once(block, '<result>')) return false
+    return isUserTurn(subId) || isHeldReply(RESULT.exec(block)?.[2] ?? '')
+  })
+}
+
+const quietTurns = new Set<string>()
+
 export const resumedFork = (text: string, isFork: (agentId: string) => boolean): string | undefined => {
   const block = text.trim()
   if (!NOTIFICATION.test(block) || block.includes('<status>') || block.includes('<result>')) return undefined
@@ -2952,6 +2974,7 @@ export const register: Register = on => {
           .catch(forget)
           .finally(() => dropTyped(said))
       } else {
+        answersUser.set(sent.agentId, true)
         dropTyped(said)
       }
       if (viewing === undefined) await refreshWriting($, at.entry.agentId)
@@ -3125,6 +3148,14 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     const isHeld = await claimHold($, e.agentId, e.turnId, e.text)
+    if (e.agentId !== undefined && !isHeld) {
+      const forkId = e.agentId
+      if (echoesOnly(await read($, board), forkId, e.text, subId => answersUser.get(subId) === true)) {
+        quietTurns.add(e.turnId)
+        return next(e)
+      }
+      answersUser.set(forkId, e.text.includes(FROM_USER))
+    }
     if (e.agentId !== undefined && (isHeld || [BACK, WAIT_FOR_USER, REOPENED].some(one => e.text.includes(one)))) {
       await noteReopen($, { turnStart: e.turnId, agentId: e.agentId, isHeld, text: printable(e.text).slice(0, 120), at: await $.clock.now() })
     }
@@ -3136,6 +3167,12 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('turn.step', async function* ($, e, next) {
+    if (quietTurns.has(e.turnId)) {
+      quietTurns.delete(e.turnId)
+      yield { kind: 'text', index: 0, text: RESTARTED_REPLY }
+      yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+      return { turnId: e.turnId, index: e.index, usage: null, answer: RESTARTED_REPLY, toolUses: [], stopReason: 'end_turn' }
+    }
     const reply = await heldReply($, e.agentId, e.turnId)
     if (reply === undefined || e.index > 1) {
       if (reply !== undefined && e.agentId !== undefined) await finishHold($, e.agentId)
@@ -3155,6 +3192,7 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
+    quietTurns.delete(e.turnId)
     if (e.agentId !== undefined && (await holdOf($, e.agentId))?.turnId === e.turnId) await finishHold($, e.agentId)
     const done = await next(e)
     const ended = e.agentId
@@ -3164,7 +3202,7 @@ export const register: Register = on => {
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
       await update($, focusActivity, () => '')
-      if (typeof e.answer === 'string' && e.answer.trim() !== '' && !e.isAborted) await update($, freshReply, () => e.agentId ?? '')
+      if (typeof e.answer === 'string' && e.answer.trim() !== '' && !isHeldReply(e.answer) && !e.isAborted) await update($, freshReply, () => e.agentId ?? '')
     }
     if (e.agentId === undefined && viewedFork === undefined) suggestFork($, await read($, board))
     if (e.agentId === undefined) await followFocus($).catch(() => {})

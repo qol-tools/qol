@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { claimsUser, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withSent } from '../hooks/register'
+import { claimsUser, echoesOnly, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1163,6 +1163,57 @@ test('closing the switchboard kills each fork hold, and the turn that notice sta
   expect(isKilledOnly('Make it amber.')).toBe(false)
   await $.turn.start({ text: 'Make it amber.', turnId: 'real-1', agentId: 'a1' })
   expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('working')
+})
+
+const WAKE = '[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.'
+
+test('a wake made only of sub-fork replies to the user, or of held replies, counts as an echo', () => {
+  const list = [row('p1', 'parent-fork: parent'), row('s1', 'sub-one: first', { launcher: 'p1' }), row('s2', 'sub-two: second', { launcher: 'p1' }), row('o1', 'other-fork: other')] as any[]
+  const toUser = (subId: string) => subId === 's1'
+  const sub = (agentId: string, result: string) => notification(agentId, `${agentId}-fork: a fork`, result)
+  const cases: [string, string, boolean][] = [
+    ['a reply to the user', `${WAKE}\n\n${sub('s1', 'Lane 2 report.')}`, true],
+    ['two wakes in one turn', `${WAKE}\n\n${sub('s1', 'One.')}\n${sub('s1', 'Two.')}`, true],
+    ['a held reply', `${WAKE}\n\n${sub('s2', 'Back on the fork board.')}`, true],
+    ['a real report', `${WAKE}\n\n${sub('s2', 'Lane 3 report.')}`, false],
+    ['a real report beside an echo', `${WAKE}\n\n${sub('s1', 'One.')}\n${sub('s2', 'Lane 3 report.')}`, false],
+    ['words beside it', `${sub('s1', 'One.')}\n\nMake it amber.`, false],
+    ['the user typed to the parent', `${sub('s1', 'One.')}\n${fromUser('Make it amber.')}`, false],
+    ['a fork that is not its sub-fork', `${WAKE}\n\n${sub('o1', 'Back on the fork board.')}`, false],
+    ['a failed sub-fork', `${WAKE}\n\n${sub('s1', 'One.').replace('completed', 'failed')}`, false],
+    ['no notification', 'Make it amber.', false],
+  ]
+  for (const [label, text, expected] of cases) expect([label, echoesOnly(list, 'p1', text, toUser)]).toEqual([label, expected])
+})
+
+test('a sub-fork answering the user never wakes its parent fork, which still wakes for the sub-fork’s own work', async ($, on) => {
+  const sent: any[] = []
+  const steps: string[] = []
+  engine(on, sent)
+  on('agent.list', () => ({ value: [] }))
+  on('turn.step', async function* (_: unknown, e: { agentId?: string; turnId: string; index: number }) {
+    steps.push(`${e.agentId}:${e.turnId}`)
+    yield { kind: 'text', index: 0, text: 'model' }
+    return { turnId: e.turnId, index: e.index, answer: 'model', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  on('clock.after', () => new Promise(() => {}))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'p1', 'parent-fork: a parent')
+  await spawn($, 's1', 'sub-fork: a sub-fork', 'p1')
+  await typed($, notification('p1', 'parent-fork: a parent', 'The lanes are running.'), 'task-notification')
+  await typed($, 'sub-fork which rule first?')
+  expect(sent.at(-1)).toMatchObject({ to: 's1', text: fromUser('which rule first?') })
+  await $.turn.start({ text: fromUser('which rule first?'), turnId: 'sub-1', agentId: 's1' })
+  await $.turn.start({ text: `${WAKE}\n\n${notification('s1', 'sub-fork: a sub-fork', 'Plugin names first.')}`, turnId: 'parent-1', agentId: 'p1' })
+  const quiet = await answered($, 'p1', 0, 'parent-1')
+  expect(quiet.filter(one => one.kind === 'text').map(one => one.text).join('')).toBe('Back on the fork board.')
+  expect(steps).toEqual([])
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).not.toContain('[fork board] parent-fork (working')
+  await $.turn.complete({ turnId: 'parent-1', agentId: 'p1', answer: 'Back on the fork board.', durationMs: 1 })
+  await $.turn.start({ text: 'The pull request watcher exited 0.', turnId: 'sub-2', agentId: 's1' })
+  await $.turn.start({ text: `${WAKE}\n\n${notification('s1', 'sub-fork: a sub-fork', 'Pull request #9 merged.')}`, turnId: 'parent-2', agentId: 'p1' })
+  await answered($, 'p1', 0, 'parent-2')
+  expect(steps).toEqual(['p1:parent-2'])
 })
 
 test('a turn queued ahead of a hold leaves the hold pending, so the hold turn still runs no model', async ($, on) => {
@@ -2347,6 +2398,20 @@ test('a key that starts with the typed letters completes and addresses before a 
   expect(keyCompletions(rows, 'impro').map(one => one.label)).toEqual(['improve-economy-site-design', 'switchboard-flow-improvements'])
   expect(toFork(rows, 'impro: hi')?.entry.agentId).toBe('b2')
   expect(toFork(rows, 'flow: hi')?.entry.agentId).toBe('b1')
+})
+
+test('a sub-fork never completes, cycles or is suggested ahead of a top-level fork, even while it asks', () => {
+  const rows = [
+    row('p1', 'qac-lint-pattern-audit: audit', { isWorking: true }),
+    row('s1', 'qac-lane-4-layering-direction: lane 4', { kind: 'ask', launcher: 'p1' }),
+    row('s2', 'audit-helper: helper', { kind: 'ask', launcher: 'p1' }),
+    row('k1', 'kcd2-forge-modding: kcd2', { isWorking: true, at: 2 }),
+  ] as any[]
+  expect(reachable(rows).map(one => one.agentId)).toEqual(['p1', 'k1', 's1', 's2'])
+  expect(keyCompletions(rows, 'qac').map(one => one.label)).toEqual(['qac-lint-pattern-audit', 'qac-lane-4-layering-direction'])
+  expect(keyCompletions(rows, 'audit').map(one => one.label)).toEqual(['qac-lint-pattern-audit', 'audit-helper'])
+  expect(nextKey(rows, '')).toBe('qac-lint-pattern-audit')
+  expect(nextKey(rows, 'kcd2-forge-modding')).toBe('qac-lane-4-layering-direction')
 })
 
 test('Tab walks the forks in board order and Shift+Tab walks back, wrapping at both ends', () => {
