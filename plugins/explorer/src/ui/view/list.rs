@@ -179,7 +179,7 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
 
 struct Shown<'a> {
     entry: &'a Entry,
-    picked: bool,
+    lit: bool,
     washed: bool,
     ground: Ground,
     typed: Option<usize>,
@@ -188,10 +188,11 @@ struct Shown<'a> {
     arriving: bool,
 }
 
-fn shown(view: &ExplorerView, row: usize, now: Instant) -> Option<Shown<'_>> {
+fn shown(view: &ExplorerView, row: usize, now: Instant, active: bool) -> Option<Shown<'_>> {
     let browser = &view.browser;
     let entry = browser.entry(row)?;
-    let picked = browser.is_picked(entry);
+    let selected = browser.selects(row);
+    let lit = selected && active;
     let cursor = row == browser.cursor();
     let typed = cursor
         .then(|| typed_split(&entry.display, browser.jump_run(now)))
@@ -209,9 +210,9 @@ fn shown(view: &ExplorerView, row: usize, now: Instant) -> Option<Shown<'_>> {
     };
     Some(Shown {
         entry,
-        picked,
-        washed: !picked && (cursor || hovered),
-        ground: kit().highlight_ground(picked),
+        lit,
+        washed: if selected { !active } else { cursor || hovered },
+        ground: kit().highlight_ground(lit),
         typed,
         size,
         cut: browser.is_cut(entry),
@@ -228,7 +229,7 @@ pub(super) fn row_reach(view: &ExplorerView, row: usize, window: &mut Window) ->
     if stop.shows_columns() {
         return Some(lead + row_name_room(view, true) + COLUMNS_WIDTH);
     }
-    let shown = shown(view, row, Instant::now())?;
+    let shown = shown(view, row, Instant::now(), true)?;
     let name = laid_out_width(
         window,
         &left_to_right(&shown.entry.display),
@@ -278,7 +279,7 @@ fn render_row(
 ) -> Option<AnyElement> {
     let kit = kit();
     let stop = layout.stop;
-    let shown = shown(view, row, now)?;
+    let shown = shown(view, row, now, window.is_window_active())?;
     let entry = shown.entry;
     let ground = shown.ground;
     let path = entry.path.clone();
@@ -319,7 +320,7 @@ fn render_row(
                 view.previews
                     .of(entry, ICON * window.scale_factor())
                     .map(|(shot, _)| view.previews.square(shot, ICON))
-                    .unwrap_or_else(|| entry_pictogram(entry, stop.pictogram(), shown.picked)),
+                    .unwrap_or_else(|| entry_pictogram(entry, stop.pictogram(), shown.lit)),
             ),
         )
         .map(|element| {
@@ -368,7 +369,7 @@ fn render_row(
             view.click_row(&path, event, cx);
         }));
     let element = folder_target(fade(element, cut, arriving), entry, row, cx);
-    Some(kit.highlight(element, shown.picked).into_any_element())
+    Some(kit.highlight(element, shown.lit).into_any_element())
 }
 
 fn render_line(
@@ -405,7 +406,7 @@ fn render_cell(
     let stop = layout.stop;
     let (width, height) = stop.cell()?;
     let room = preview_room(width, height, stop.name_style());
-    let shown = shown(view, row, now)?;
+    let shown = shown(view, row, now, window.is_window_active())?;
     let entry = shown.entry;
     let ground = shown.ground;
     let path = entry.path.clone();
@@ -446,7 +447,7 @@ fn render_cell(
             view.previews
                 .of(entry, room.0.max(room.1) * window.scale_factor())
                 .map(|(shot, video)| view.previews.framed(shot, video, room))
-                .unwrap_or_else(|| entry_pictogram(entry, stop.pictogram(), shown.picked)),
+                .unwrap_or_else(|| entry_pictogram(entry, stop.pictogram(), shown.lit)),
         )
         .child(
             div()
@@ -467,7 +468,7 @@ fn render_cell(
             view.click_row(&path, event, cx);
         }));
     let element = folder_target(fade(element, cut, arriving), entry, row, cx);
-    Some(kit.highlight(element, shown.picked).into_any_element())
+    Some(kit.highlight(element, shown.lit).into_any_element())
 }
 
 fn preview_room(width: f32, height: f32, name: TextStyle) -> (f32, f32) {

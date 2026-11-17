@@ -322,6 +322,14 @@ impl Browser {
             .then_some((running.done, running.total))
     }
 
+    pub fn selects(&self, row: usize) -> bool {
+        if self.picks.is_empty() {
+            return row == self.cursor && self.entry(row).is_some();
+        }
+        self.entry(row)
+            .is_some_and(|entry| self.picks.is_picked(&entry.path))
+    }
+
     pub fn operands(&self) -> Vec<PathBuf> {
         if !self.picks.is_empty() {
             let mut paths: Vec<PathBuf> = self.picks.paths().map(Path::to_path_buf).collect();
