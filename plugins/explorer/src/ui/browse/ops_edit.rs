@@ -299,14 +299,23 @@ impl Browser {
 
     pub(super) fn continue_undo(&mut self) {
         if let Some(transfer) = self.ops.undoing.pop() {
-            let _ = fs::create_dir_all(&transfer.into);
+            if let Err(error) = fs::create_dir_all(&transfer.into) {
+                log::warn!("could not recreate {}: {error}", transfer.into.display());
+            }
             self.begin_journaled(transfer, false);
             return;
         }
         let returned = std::mem::take(&mut self.ops.returned);
         for (landed, original) in std::mem::take(&mut self.ops.renaming) {
-            if returned.contains(&landed) && fs::symlink_metadata(&original).is_err() {
-                let _ = fs::rename(&landed, &original);
+            if !returned.contains(&landed) || fs::symlink_metadata(&original).is_ok() {
+                continue;
+            }
+            if let Err(error) = fs::rename(&landed, &original) {
+                log::error!(
+                    "could not rename {} back to {}: {error}",
+                    landed.display(),
+                    original.display()
+                );
             }
         }
         let restore = std::mem::take(&mut self.ops.restoring);

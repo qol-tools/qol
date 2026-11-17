@@ -195,9 +195,6 @@ pub(super) fn save_values(
             "tray unreachable, no local path to save: {tray_error:#}"
         ));
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     let file_body = match serde_json::to_string(&over_stored_file(path, changed, all)) {
         Ok(body) => body,
         Err(error) => {
@@ -205,7 +202,11 @@ pub(super) fn save_values(
             return Err(format!("settings serialize failed: {error:#}"));
         }
     };
-    if let Err(error) = std::fs::write(path, file_body) {
+    let written = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(path, file_body));
+    if let Err(error) = written {
         qol_runtime::probe!(
             "SETTINGS_PERSIST",
             "panel={base} transport=file outcome=failed"
