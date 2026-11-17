@@ -46,6 +46,10 @@ options = ["os", "qol"]
 os = "System notifications"
 qol = "qol toasts"
 
+[field.other_apps_shown.option_pictures]
+os = "system-bubbles"
+qol = "qol-toasts"
+
 [field.other_apps_shown.show_when]
 field = "handler"
 equals = "qol"
@@ -63,6 +67,10 @@ options = ["os", "qol"]
 [field.other_apps_hidden.option_labels]
 os = "System notifications"
 qol = "Hidden"
+
+[field.other_apps_hidden.option_pictures]
+os = "system-bubbles"
+qol = "no-bubbles"
 
 [field.other_apps_hidden.show_when]
 field = "handler"

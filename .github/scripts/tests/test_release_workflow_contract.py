@@ -1106,7 +1106,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         release = workflow.split("  release:\n", 1)[1]
         self.assertIn("needs: gate", release)
         self.assertIn("for platform in linux macos windows; do", named_step(release, "Require every platform", "      "))
-        updater = (ROOT / "apps/tray/src/updates/platform/windows.rs").read_text()
+        updater = (ROOT / "apps/tray/src/updates/platform/windows/mod.rs").read_text()
         self.assertIn('format!("qol-tray-windows-{}.exe", std::env::consts::ARCH)', updater)
 
     def test_merge_queue_builds_windows_release_binaries(self):

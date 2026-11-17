@@ -48,10 +48,13 @@ pub(super) fn save(path: &Path, sizes: &DoctorSizes) {
     let Ok(serialized) = serde_json::to_string(sizes) else {
         return;
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    let saved = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(path, serialized));
+    if let Err(error) = saved {
+        log::warn!("Failed to save doctor sizes to {}: {error}", path.display());
     }
-    let _ = std::fs::write(path, serialized);
 }
 
 #[cfg(test)]

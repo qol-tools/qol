@@ -11,10 +11,12 @@ use qol_runtime::local_ipc::{self, LocalListener, LocalStream};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse, ReadinessPhase};
 
 mod client_socket;
+mod launch;
 mod platform;
 #[cfg(test)]
 mod tests;
 
+pub use launch::{asked_to_replace_existing, handed_socket, launched_as_daemon};
 use platform::{fallback_socket_dir, inherited_listener};
 pub use platform::{inherited_port_fd, inherited_primary_port_fd, restore_cloexec};
 
@@ -515,9 +517,7 @@ fn existing_instance_listens(config: &DaemonConfig) -> bool {
 }
 
 fn replace_existing(config: &DaemonConfig) -> io::Result<bool> {
-    if !config.support_replace_existing
-        || std::env::var_os(qol_conventions::ENV_DAEMON_REPLACE_EXISTING).is_none()
-    {
+    if !config.support_replace_existing || !asked_to_replace_existing() {
         return Ok(false);
     }
     if !send_kill(config) {

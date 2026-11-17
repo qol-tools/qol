@@ -6532,7 +6532,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.159.2"
+version = "0.159.4"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6736,7 +6736,7 @@ dependencies = [
 
 [[package]]
 name = "qol-explorer"
-version = "0.31.1"
+version = "0.31.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6841,6 +6841,7 @@ dependencies = [
  "anyhow",
  "qol-dev-guest",
  "qol-headless",
+ "qol-log",
  "qol-platform",
  "qol-process",
  "serde_json",
@@ -6978,7 +6979,7 @@ dependencies = [
 
 [[package]]
 name = "qol-launcher"
-version = "1.122.1"
+version = "1.122.2"
 dependencies = [
  "anyhow",
  "block2",
@@ -7075,7 +7076,7 @@ dependencies = [
 
 [[package]]
 name = "qol-memory"
-version = "0.53.1"
+version = "0.53.2"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7127,7 +7128,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.58.1"
+version = "0.58.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7162,7 +7163,7 @@ dependencies = [
 
 [[package]]
 name = "qol-os-themes"
-version = "0.89.1"
+version = "0.89.2"
 dependencies = [
  "anyhow",
  "libc",
@@ -7454,11 +7455,12 @@ dependencies = [
 
 [[package]]
 name = "qol-session"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "qol-conventions",
  "qol-headless",
+ "qol-log",
  "qol-platform",
  "qol-plugin-api",
  "qol-process",
@@ -7472,6 +7474,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "log",
  "qol-agent-homes",
  "qol-agent-launch",
  "qol-config",
@@ -7561,6 +7564,7 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-headless",
+ "qol-log",
  "qol-platform",
  "qol-plugin-api",
  "serde",
@@ -7608,7 +7612,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.144.0"
+version = "3.144.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -7766,7 +7770,7 @@ dependencies = [
 
 [[package]]
 name = "qol-window-actions"
-version = "2.83.1"
+version = "2.83.2"
 dependencies = [
  "log",
  "proptest",

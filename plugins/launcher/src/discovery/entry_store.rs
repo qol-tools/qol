@@ -456,7 +456,12 @@ fn save_boosts(frecency_path: &Path, boosts: &HashMap<String, i32>) {
     let Ok(content) = toml::to_string(&table) else {
         return;
     };
-    let _ = std::fs::write(&boosts_path, content);
+    if let Err(error) = std::fs::write(&boosts_path, content) {
+        log::warn!(
+            "failed to save boosts to {}: {error}",
+            boosts_path.display()
+        );
+    }
 }
 
 #[cfg(test)]

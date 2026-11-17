@@ -73,7 +73,8 @@ impl GitRepo {
     ) -> Result<Self> {
         reject_if_cancelled(cancelled)?;
         if let Some(parent) = repo_path.parent() {
-            std::fs::create_dir_all(parent).ok();
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
         }
         let mut callbacks = RemoteCallbacks::new();
         bind_credentials(&mut callbacks, token);

@@ -66,6 +66,7 @@ const GOLDENS: &[&str] = &[
     "qol-toasts",
     "system-bubbles",
     "both-notices",
+    "no-bubbles",
     "launch-app",
     "open-url",
     "bundle-ref",

@@ -217,7 +217,9 @@ pub(super) fn apply_disk_outcome(
     match outcome {
         Ok((report, ledger)) => {
             let at_ms = now_unix_ms();
-            persist_report(&dash.running_worktree, &report, &ledger, at_ms);
+            if let Err(error) = persist_report(&dash.running_worktree, &report, &ledger, at_ms) {
+                dash.notice = Some((Instant::now(), format!("disk report not cached: {error}")));
+            }
             dash.disk.last = Some(report);
             dash.disk.last_at_ms = Some(at_ms);
             dash.disk.error = None;
@@ -248,19 +250,20 @@ fn cache_path(running: &Path) -> PathBuf {
         .join("disk-report.json")
 }
 
-pub(super) fn persist_report(running: &Path, report: &DiskReport, ledger: &ScanLedger, at_ms: u64) {
-    let Ok(serialized) = serde_json::to_string(&CachedDiskReport {
+pub(super) fn persist_report(
+    running: &Path,
+    report: &DiskReport,
+    ledger: &ScanLedger,
+    at_ms: u64,
+) -> std::io::Result<()> {
+    let serialized = serde_json::to_string(&CachedDiskReport {
         scanned_at_ms: at_ms,
         rows: &report.rows,
         ledger,
-    }) else {
-        return;
-    };
+    })?;
     let path = cache_path(running);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(path, serialized);
+    path.parent().map_or(Ok(()), std::fs::create_dir_all)?;
+    std::fs::write(path, serialized)
 }
 
 pub(super) fn load_cached_report(running: &Path) -> Option<(DiskReport, u64, ScanLedger)> {
@@ -1511,7 +1514,7 @@ mod tests {
         let (report, ledger) =
             scan_disk_usage_in(&running, &progress(), &no_host_caches()).expect("seed scan");
         let at_ms = 987_654;
-        persist_report(&running, &report, &ledger, at_ms);
+        persist_report(&running, &report, &ledger, at_ms).expect("cache the seed scan");
 
         let mut dash = Dash::new(Vec::new());
         dash.running_worktree = running.clone();

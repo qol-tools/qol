@@ -1,11 +1,12 @@
 [package]
 name = "qol-session"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
 
 [dependencies]
 anyhow = "1"
 qol-headless.workspace = true
+qol-log.workspace = true
 qol-platform.workspace = true
 qol-process.workspace = true
 workspace-hack.workspace = true
