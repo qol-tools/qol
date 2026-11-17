@@ -273,10 +273,7 @@ pub fn parse_error_marker_path(config_path: &Path) -> PathBuf {
 
 fn record_parse_failure(path: &Path, error: &dyn std::fmt::Display) {
     log::warn!("failed to parse {}: {}", path.display(), error);
-    let marker = parse_error_marker_path(path);
-    if let Err(write_error) = fs::write(&marker, error.to_string()) {
-        log::warn!("failed to write {}: {write_error}", marker.display());
-    }
+    let _ = fs::write(parse_error_marker_path(path), error.to_string());
 }
 
 fn clear_parse_failure(path: &Path) {
