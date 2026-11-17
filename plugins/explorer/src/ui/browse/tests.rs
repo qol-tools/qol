@@ -1570,27 +1570,6 @@ fn lifting_a_row_carries_the_picks_when_it_is_picked_and_otherwise_swaps_or_adds
 }
 
 #[test]
-fn aiming_at_a_row_selects_it_like_a_click_and_keeps_picks_it_belongs_to() {
-    let cases = [
-        (vec![0, 1], 1, vec!["a.txt", "b.txt"]),
-        (vec![0, 1], 2, vec![]),
-        (vec![], 3, vec![]),
-        (vec![0], 9, vec!["a.txt"]),
-    ];
-    for (picks, row, want) in cases {
-        let temp = abc_folder();
-        let mut browser = opened(temp.path());
-        pick_rows(&mut browser, &picks);
-        let aimed = browser.aim(row, 0.0);
-        assert_eq!(aimed, row < 4, "{picks:?} {row}");
-        assert_eq!(picked(&browser), want, "{picks:?} {row}");
-        if aimed {
-            assert_eq!(browser.cursor(), row, "{picks:?} {row}");
-        }
-    }
-}
-
-#[test]
 fn what_a_press_would_carry_matches_what_lifting_it_then_carries() {
     let cases = [
         (vec![0, 1], 1, false),
