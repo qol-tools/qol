@@ -74,7 +74,7 @@ fn names(browser: &Browser) -> Vec<String> {
 fn picked(browser: &Browser) -> Vec<String> {
     (0..browser.row_count())
         .map(|row| browser.entry(row).unwrap())
-        .filter(|entry| browser.is_picked(entry))
+        .filter(|entry| browser.picks.is_picked(&entry.path))
         .map(|entry| entry.display.clone())
         .collect()
 }
