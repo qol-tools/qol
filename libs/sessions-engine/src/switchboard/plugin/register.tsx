@@ -2974,7 +2974,6 @@ export const register: Register = on => {
           .catch(forget)
           .finally(() => dropTyped(said))
       } else {
-        answersUser.set(sent.agentId, true)
         dropTyped(said)
       }
       if (viewing === undefined) await refreshWriting($, at.entry.agentId)

@@ -1214,6 +1214,11 @@ test('a sub-fork answering the user never wakes its parent fork, which still wak
   await $.turn.start({ text: `${WAKE}\n\n${notification('s1', 'sub-fork: a sub-fork', 'Pull request #9 merged.')}`, turnId: 'parent-2', agentId: 'p1' })
   await answered($, 'p1', 0, 'parent-2')
   expect(steps).toEqual(['p1:parent-2'])
+  await $.turn.start({ text: 'The build finished.', turnId: 'sub-3', agentId: 's1' })
+  await typed($, 'sub-fork also check the docs')
+  await $.turn.start({ text: `${WAKE}\n\n${notification('s1', 'sub-fork: a sub-fork', 'The build passed.')}`, turnId: 'parent-3', agentId: 'p1' })
+  await answered($, 'p1', 0, 'parent-3')
+  expect(steps).toEqual(['p1:parent-2', 'p1:parent-3'])
 })
 
 test('a turn queued ahead of a hold leaves the hold pending, so the hold turn still runs no model', async ($, on) => {
