@@ -482,6 +482,16 @@ impl Browser {
         self.range_to(self.stepped(step, page, columns))
     }
 
+    pub fn aim(&mut self, row: usize, scroll: f32) -> bool {
+        let Some(picked) = self.entry(row).map(|entry| self.is_picked(entry)) else {
+            return false;
+        };
+        if picked {
+            return self.place_cursor(row, scroll);
+        }
+        self.click_to(row, scroll)
+    }
+
     pub fn click_to(&mut self, row: usize, scroll: f32) -> bool {
         let had_picks = !self.picks.is_empty();
         self.picks.clear();

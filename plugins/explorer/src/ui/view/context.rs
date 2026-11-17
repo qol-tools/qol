@@ -56,7 +56,7 @@ impl ExplorerView {
 
     fn open_item_menu(&mut self, row: usize, at: Point<Pixels>, cx: &mut Context<Self>) {
         let scroll = self.scroll_offset();
-        if !self.browser.lift(row, false, scroll) {
+        if !self.browser.aim(row, scroll) {
             return;
         }
         self.renaming = None;
