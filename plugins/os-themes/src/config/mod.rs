@@ -74,8 +74,12 @@ fn persist_tuning_reset(config: &Config) {
         log::warn!("tuning reset could not be persisted, it re-applies on next start");
         return;
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    if let Err(error) = path.parent().map_or(Ok(()), std::fs::create_dir_all) {
+        log::warn!(
+            "tuning reset could not be persisted to {}, it re-applies on next start: {error}",
+            path.display()
+        );
+        return;
     }
     let Ok(json) = serde_json::to_string_pretty(config) else {
         log::warn!(

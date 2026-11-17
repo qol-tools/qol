@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -150,7 +151,13 @@ impl RateLimiter {
         let Ok(content) = serde_json::to_string_pretty(&suppressed) else {
             return;
         };
-        let _ = std::fs::write(path, content);
+        if let Err(error) = std::fs::write(path, content) {
+            let _ = writeln!(
+                std::io::stderr(),
+                "Failed to save suppressed errors to {}: {error}",
+                path.display()
+            );
+        }
     }
 }
 

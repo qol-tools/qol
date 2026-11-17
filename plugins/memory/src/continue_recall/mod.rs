@@ -148,7 +148,13 @@ fn log_entry(store: &Store, entry: Value) {
             line.insert(key, value);
         }
     }
-    let _ = std::fs::create_dir_all(store.root());
+    if let Err(error) = std::fs::create_dir_all(store.root()) {
+        log::warn!(
+            "hook log append failed for {}: {error}",
+            store.root().display()
+        );
+        return;
+    }
     let path = store.root().join("hook.log");
     crate::retrieval_log::rotate_if_needed(&path, HOOK_LOG_CAP, HOOK_LOG_TAIL);
     if let Ok(mut file) = std::fs::OpenOptions::new()
