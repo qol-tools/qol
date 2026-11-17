@@ -16,6 +16,7 @@ pub const SEARCH_WINDOW: Duration = Duration::from_secs(60);
 
 const UUID_GROUP_LENGTHS: [usize; 5] = [8, 4, 4, 4, 12];
 const SYSTEM_BLUETOOTH_SETTINGS: &str = "the system Bluetooth settings";
+const UNKNOWN_DEVICE_KIND: &str = "Device";
 
 pub fn normalize_address(value: &str) -> Result<String> {
     Ok(qol_bluetooth_control::normalize_address(value)?)
@@ -338,8 +339,7 @@ fn resting_status(
         )),
         Pairing::Backend if ready => Cow::Borrowed("Connected"),
         Pairing::Backend if device.connected && audio => Cow::Borrowed("Connected without audio"),
-        Pairing::Backend if device.paired => Cow::Borrowed("Paired"),
-        Pairing::Backend => Cow::Borrowed("Available"),
+        Pairing::Backend => Cow::Borrowed("Not connected"),
     }
 }
 
@@ -424,6 +424,7 @@ pub fn devices_payload(
                 "can_untrust": capabilities.separate_trust_flag && device.trusted,
                 "connected": device.connected,
                 "detail": detail,
+                "kind": find::device_kind(device).unwrap_or(UNKNOWN_DEVICE_KIND),
                 "managed": managed.contains(&device.address),
                 "name": device.alias,
                 "paired": device.paired,
@@ -584,6 +585,7 @@ mod tests {
                         "can_untrust": true,
                         "connected": true,
                         "detail": "-30 dBm · AA:BB:CC:DD:EE:01",
+                        "kind": "Device",
                         "managed": true,
                         "name": "Alpha",
                         "paired": true,
@@ -600,7 +602,7 @@ mod tests {
                         "address": "AA:BB:CC:DD:EE:02",
                         "action_pending": false,
                         "audio": false,
-                        "badge": "Paired",
+                        "badge": "Not connected",
                         "badge_tone": "accent",
                         "can_connect": true,
                         "can_disconnect": false,
@@ -611,6 +613,7 @@ mod tests {
                         "can_untrust": true,
                         "connected": false,
                         "detail": "Signal unknown · AA:BB:CC:DD:EE:02",
+                        "kind": "Device",
                         "managed": false,
                         "name": "Luna 2",
                         "paired": true,
@@ -618,7 +621,7 @@ mod tests {
                         "rssi": null,
                         "services_resolved": false,
                         "signal": "Signal unknown",
-                        "status": "Paired",
+                        "status": "Not connected",
                         "trusted": true,
                         "uuids": [],
                     },
@@ -958,6 +961,44 @@ mod tests {
             );
         }
         assert!(!audio_output_degraded(None));
+    }
+
+    #[test]
+    fn devices_payload_names_the_kind_and_a_plain_resting_state() {
+        let cases = [
+            (
+                "speaker",
+                audio_device(false, false, &[]),
+                "Speaker",
+                "Not connected",
+            ),
+            (
+                "unknown",
+                device("07", "Thing", true, true, false, None),
+                "Device",
+                "Not connected",
+            ),
+            (
+                "connected",
+                DeviceInfo {
+                    icon: Some("input-mouse".into()),
+                    ..device("08", "Mouse", true, true, true, None)
+                },
+                "Mouse",
+                "Connected",
+            ),
+        ];
+        for (label, device, kind, badge) in cases {
+            let payload = devices_payload(
+                &[device],
+                &[],
+                &DiscoveryState::default(),
+                None,
+                TRUST_CAPABLE,
+            );
+            assert_eq!(payload["items"][0]["kind"], kind, "case: {label}");
+            assert_eq!(payload["items"][0]["badge"], badge, "case: {label}");
+        }
     }
 
     fn audio_device(connected: bool, services_resolved: bool, uuids: &[&str]) -> DeviceInfo {

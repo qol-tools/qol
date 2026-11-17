@@ -128,11 +128,7 @@ fn allow_runtime_fallback(
     let Some(daemon_command_path) = daemon_command_path(plugin) else {
         return true;
     };
-    if !paths_match(runtime_command_path, &daemon_command_path) {
-        return true;
-    }
-
-    false
+    !paths_match(runtime_command_path, &daemon_command_path)
 }
 
 fn should_dedupe_runtime_spawn(action_id: &str, daemon_socket: Option<&PathBuf>) -> bool {

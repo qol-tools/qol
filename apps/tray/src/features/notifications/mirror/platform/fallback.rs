@@ -1,9 +1,7 @@
-use super::super::{ActivateOutcome, MirrorAccess};
+use super::super::{ActivateOutcome, Mechanism};
 
-pub(in super::super) fn sync(_enabled: bool) {}
-
-pub(in super::super) fn access() -> MirrorAccess {
-    MirrorAccess::Unsupported
+pub(in super::super) fn apply(_wanted: bool) -> Vec<Mechanism> {
+    Vec::new()
 }
 
 pub(in super::super) fn activate(_id: &str) -> anyhow::Result<ActivateOutcome> {

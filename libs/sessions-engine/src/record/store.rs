@@ -271,6 +271,14 @@ impl RecordStore {
         });
         Ok(records)
     }
+
+    pub(crate) fn open(&self, terminal_keys: &[String]) -> Result<Vec<Record>> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|record| record.done.is_none() && !terminal_keys.contains(&record.key))
+            .collect())
+    }
 }
 
 fn unknown_key(key: &str) -> Error {

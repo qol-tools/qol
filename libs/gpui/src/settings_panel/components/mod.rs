@@ -5,7 +5,7 @@ use qol_theme::TextStyle;
 
 use crate::busy::Busy;
 use crate::kit::kit;
-use crate::kit::Kit;
+use crate::kit::{Chip, Kit};
 use crate::theme::Ground;
 
 mod choice_value;
@@ -28,7 +28,7 @@ mod tile;
 mod toggle;
 
 use choice_value::SettingsChevron;
-pub use choice_value::{ChoiceArt, SettingsChoiceArt, SettingsChoiceValue};
+pub use choice_value::{ChoiceArt, SettingsChoiceArt, SettingsWell};
 pub use device_entry::{
     settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
     DEVICE_KIND_HEIGHT, DEVICE_LIST_WIDTH,
@@ -62,7 +62,8 @@ pub use tile::{
 pub use toggle::SettingsToggle;
 
 pub const DIMMED_OPACITY: f32 = qol_theme::OPACITY_DISABLED;
-const CHOICE_WORD_MAX_WIDTH: f32 = 180.0;
+const WELL_WIDTH: f32 = 44.0;
+const WELL_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
 const CHOICE_PICTURE_WIDTH: f32 = 56.0;
 const CHOICE_PICTURE_HEIGHT: f32 = 35.0;
 const CHOICE_CHEVRON_WIDTH: f32 = 8.0;
@@ -401,6 +402,53 @@ pub fn settings_label_group(
         .children(description.map(|text| settings_description(text, row, kit)))
 }
 
+fn tag_ink(tone: SettingsValueTone, row: RowGround, kit: Kit) -> u32 {
+    let ground = row.rest(kit);
+    match (row, tone) {
+        (RowGround::Band, SettingsValueTone::Muted) => ground.soft,
+        (RowGround::Band, _) => ground.ink,
+        (RowGround::Pane, SettingsValueTone::Normal) => ground.soft,
+        (RowGround::Pane, SettingsValueTone::Muted) => ground.faint,
+        (RowGround::Pane, SettingsValueTone::Attention) => kit.palette.warning_ink,
+        (RowGround::Pane, SettingsValueTone::Danger) => kit.palette.danger,
+        (RowGround::Pane, SettingsValueTone::Success) => kit.palette.success,
+    }
+}
+
+pub fn settings_tag(
+    text: impl Into<SharedString>,
+    tone: SettingsValueTone,
+    row: RowGround,
+    kit: Kit,
+) -> gpui::Div {
+    let ground = row.rest(kit);
+    let tag = one_line(
+        kit.chip(Chip::Tag(text.into()), ground)
+            .flex_shrink()
+            .min_w_0()
+            .overflow_hidden(),
+    );
+    tag.text_color(rgb(tag_ink(tone, row, kit)))
+}
+
+pub fn settings_tagged_label_group(
+    label: impl Into<SharedString>,
+    tags: impl IntoIterator<Item = gpui::Div>,
+    description: Option<SharedString>,
+    row: RowGround,
+    kit: Kit,
+) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(qol_theme::SPACE_CELL))
+        .child(settings_label_group(label, description, row, kit))
+        .children(tags)
+}
+
 pub fn settings_destroy_label_group(
     label: impl Into<SharedString>,
     description: Option<SharedString>,
@@ -552,6 +600,18 @@ pub fn settings_swatch(color: u32) -> gpui::Div {
         .bg(rgb(color))
 }
 
+pub fn settings_swatch_tile(color: u32, lit: bool, kit: Kit) -> gpui::Div {
+    div()
+        .flex_none()
+        .w(px(CHOICE_PICTURE_WIDTH))
+        .h(px(CHOICE_PICTURE_HEIGHT))
+        .rounded(px(qol_theme::RADIUS_TIGHT))
+        .border_1()
+        .border_color(gpui::rgba(kit.washes.hairline_strong.packed()))
+        .bg(rgb(color))
+        .when(!lit, |tile| tile.opacity(qol_theme::OPACITY_REST))
+}
+
 pub fn settings_accent_dot(accent: u32) -> gpui::Div {
     div()
         .flex_none()
@@ -640,7 +700,9 @@ pub fn settings_busy_message(
 
 #[cfg(test)]
 mod tests {
-    use super::RowGround;
+    use super::{tag_ink, RowGround, SettingsValueTone};
+    use crate::kit::Kit;
+    use crate::theme::{ThemeMode, DARK_SYSTEM};
 
     #[test]
     fn row_ground_is_band_only_with_selection_and_body_focus() {
@@ -648,5 +710,25 @@ mod tests {
         assert_eq!(RowGround::of(false, true), RowGround::Pane);
         assert_eq!(RowGround::of(true, false), RowGround::Pane);
         assert_eq!(RowGround::of(true, true), RowGround::Band);
+    }
+
+    #[test]
+    fn a_tag_on_the_band_never_takes_a_status_colour_and_a_muted_tag_is_quieter() {
+        let kit = Kit::new(ThemeMode::Dark, DARK_SYSTEM.with_accent(0x8a93f7));
+        let band = RowGround::Band.rest(kit);
+        for tone in [
+            SettingsValueTone::Normal,
+            SettingsValueTone::Attention,
+            SettingsValueTone::Danger,
+            SettingsValueTone::Success,
+        ] {
+            assert_eq!(tag_ink(tone, RowGround::Band, kit), band.ink);
+        }
+        for row in [RowGround::Pane, RowGround::Band] {
+            assert_ne!(
+                tag_ink(SettingsValueTone::Muted, row, kit),
+                tag_ink(SettingsValueTone::Normal, row, kit)
+            );
+        }
     }
 }

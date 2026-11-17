@@ -1,0 +1,69 @@
+name: main gate
+
+on:
+  workflow_run:
+    workflows: [tests]
+    types: [requested]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Judge the protected paths
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'merge_group')) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/gate-approve ') &&
+       github.event.comment.user.login == 'KMRH47')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: main-gate
+      deployment: false
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Judge the commit with main's path list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          VERDICT_FILE: ${{ runner.temp }}/main-gate.json
+        run: python3 -P .github/scripts/main_gate.py evaluate
+
+      - name: Mint the main gate app token
+        id: app
+        if: vars.MAIN_GATE_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MAIN_GATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MAIN_GATE_APP_PRIVATE_KEY }}
+          permission-checks: write
+
+      - name: Post the main gate check
+        if: steps.app.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERDICT_FILE: ${{ runner.temp }}/main-gate.json
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 -P .github/scripts/main_gate.py post
+
+      - name: Leave the check unposted until the app is set up
+        if: vars.MAIN_GATE_APP_CLIENT_ID == ''
+        run: echo "::notice::the main-gate environment has no MAIN_GATE_APP_CLIENT_ID yet, so the verdict above was not posted"

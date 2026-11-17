@@ -11,19 +11,18 @@ use gpui::{
 use qol_gpui::deck;
 use qol_gpui::key::Key;
 use qol_gpui::kit::{kit, Kit};
-use qol_gpui::pictures::PictureContext;
 use qol_gpui::scroll_list::{wheel_steps, ListHeight, ScrollList};
 use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::settings_panel::components::{
-    settings_label, settings_label_group, settings_launch_description, settings_page,
-    settings_value_group, ChoiceArt, Launch, RowGround, SettingsChoiceValue, SettingsHint,
-    SettingsTextField, SettingsToggle,
+    settings_label, settings_launch_description, settings_page, settings_tag,
+    settings_tagged_label_group, settings_value_group, ChoiceArt, Launch, RowGround, SettingsHint,
+    SettingsTextField, SettingsToggle, SettingsValueTone, SettingsWell,
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_action_busy, settings_action_spinner,
-    settings_busy_message, settings_description, settings_list, settings_value_text, CustomHints,
-    CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
-    EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SETTINGS_LIST_GAP,
+    settings_busy_message, settings_description, settings_list, CustomHints, CustomPanelCallback,
+    CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs, EscapeStep, Intent,
+    SettingsDestination, SettingsGroupHeader, SettingsRow, SETTINGS_LIST_GAP,
 };
 use qol_gpui::text_edit::{self, TextField};
 
@@ -600,35 +599,56 @@ impl ProfilesView {
                     kit,
                 ));
         }
+        let tag = match &row.value {
+            Value::Text(text, tone) if !text.is_empty() => {
+                Some(settings_tag(text.clone(), *tone, ground, kit))
+            }
+            Value::Choice { word, .. } if !word.is_empty() => Some(settings_tag(
+                word.clone(),
+                SettingsValueTone::Normal,
+                ground,
+                kit,
+            )),
+            _ => None,
+        };
         if row.dot.is_none() && !row.spinner {
-            return settings_label_group(
+            return settings_tagged_label_group(
                 row.label.clone(),
+                tag,
                 (!row.detail.is_empty()).then(|| row.detail.clone().into()),
                 ground,
                 kit,
             );
         }
+        let copy =
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(qol_theme::SPACE_STACK))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(qol_theme::SPACE_INSET))
+                        .children(row.spinner.then(|| {
+                            settings_action_spinner(("profiles-status-spinner", index), kit)
+                        }))
+                        .children(row.dot.map(|dot| status_dot(dot, kit)))
+                        .child(settings_label(row.label.clone(), kit)),
+                )
+                .child(settings_description(row.detail.clone(), ground, kit));
         div()
             .flex_1()
             .min_w_0()
             .flex()
-            .flex_col()
-            .gap(px(qol_theme::SPACE_STACK))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(qol_theme::SPACE_INSET))
-                    .children(
-                        row.spinner.then(|| {
-                            settings_action_spinner(("profiles-status-spinner", index), kit)
-                        }),
-                    )
-                    .children(row.dot.map(|dot| status_dot(dot, kit)))
-                    .child(settings_label(row.label.clone(), kit)),
-            )
-            .child(settings_description(row.detail.clone(), ground, kit))
+            .flex_row()
+            .items_center()
+            .gap(px(qol_theme::SPACE_CELL))
+            .child(copy)
+            .children(tag)
     }
 
     fn render_values(
@@ -645,19 +665,11 @@ impl ProfilesView {
             values = values.child(settings_action_spinner(("profiles-spinner", index), kit));
         }
         match &row.value {
-            Value::None => values,
-            Value::Text(text, tone) => {
-                values.child(settings_value_text(text.clone(), *tone, ground, kit))
-            }
-            Value::Choice { word, art } => values
-                .child(SettingsChoiceValue::new(
-                    word.clone(),
+            Value::None | Value::Text(..) => values,
+            Value::Choice { art, .. } => values
+                .child(SettingsWell::new(
                     ChoiceArt::Picture(art.clone()),
                     ground,
-                    PictureContext::for_accent(
-                        qol_theme::runtime_theme().mode,
-                        qol_theme::runtime_accent_key(),
-                    ),
                     kit,
                 ))
                 .children(

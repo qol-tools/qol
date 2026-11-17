@@ -1,4 +1,5 @@
 name: review override
+run-name: review override for comment ${{ github.event.comment.id }}
 
 on:
   issue_comment:
@@ -33,4 +34,4 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
           COMMENT: ${{ github.event.comment.body }}
           ACTOR: ${{ github.event.comment.user.login }}
-        run: python3 .github/scripts/review_gate.py override
+        run: python3 -P .github/scripts/review_gate.py override

@@ -117,7 +117,7 @@ pub(super) fn replace(swap: &Swap<'_>, state: &mut State, state_path: &Path) -> 
     swap_in(swap.source, swap.target)
 }
 
-fn back_up(target: &Path, backup: &Path) -> Result<()> {
+pub(super) fn back_up(target: &Path, backup: &Path) -> Result<()> {
     let parent = backup
         .parent()
         .with_context(|| format!("{} has no folder", backup.display()))?;
@@ -165,7 +165,7 @@ pub(super) fn restore(swapped: &Swapped) -> Result<Restored> {
     })
 }
 
-fn swap_in(source: &Path, target: &Path) -> Result<()> {
+pub(super) fn swap_in(source: &Path, target: &Path) -> Result<()> {
     let parent = target
         .parent()
         .with_context(|| format!("{} has no folder", target.display()))?;

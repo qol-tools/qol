@@ -30,6 +30,7 @@ pub use windows::NotificationInhibit;
 pub(super) trait NotificationPlatform {
     fn send_notification(&self, title: &str, message: &str) -> bool;
     fn os_do_not_disturb(&self) -> Option<bool>;
+    fn os_banners_showing(&self) -> Option<bool>;
     fn set_os_banners(&self, showing: bool);
     fn acquire_inhibit(&self) -> Option<NotificationInhibit>;
     fn release_toast_identity(&self) -> std::io::Result<()>;
@@ -43,6 +44,10 @@ pub fn send_notification(title: &str, message: &str) -> bool {
 
 pub fn os_do_not_disturb() -> Option<bool> {
     imp::Platform.os_do_not_disturb()
+}
+
+pub fn os_banners_showing() -> Option<bool> {
+    imp::Platform.os_banners_showing()
 }
 
 pub fn set_os_banners(showing: bool) {

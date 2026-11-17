@@ -8,6 +8,8 @@ import sys
 import time
 from collections.abc import Callable
 
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from cancel_superseded_queue_runs import cancel
 from queue_verdict import gh_json
 
@@ -19,6 +21,9 @@ OVERRIDE_WORKFLOW_PATH = ".github/workflows/review-override.yml"
 OVERRIDE_EVENT = "issue_comment"
 OWNER = "KMRH47"
 RECORD = re.compile(r"<!-- qol-review-override ([0-9a-f]{40}) (\S+) (\d+) -->")
+TRIGGER = re.compile(r"review override for comment (\d+)")
+EDITS_QUERY = "query($ids: [ID!]!) { nodes(ids: $ids) { ... on IssueComment { id lastEditedAt editor { login } includesCreatedEdit } } }"
+EDITS_BATCH = 100
 CANCEL_GRACE_SECONDS = 300
 RESTART_POLLS = 12
 POLL_SECONDS = 5
@@ -39,7 +44,15 @@ def review_runs(repo: str, head_sha: str) -> list[dict]:
 
 def comments(repo: str, pr: str) -> list[dict]:
     pages = json.loads(gh(["--paginate", "--slurp", f"repos/{repo}/issues/{pr}/comments"]))
-    return [comment for page in pages for comment in page]
+    found = [comment for page in pages for comment in page]
+    owned = [comment["node_id"] for comment in found if (comment.get("user") or {}).get("login") == OWNER and comment.get("node_id")]
+    edits = {}
+    for start in range(0, len(owned), EDITS_BATCH):
+        ids = [field for node_id in owned[start : start + EDITS_BATCH] for field in ("-f", f"ids[]={node_id}")]
+        for node in gh_json(["graphql", "-f", f"query={EDITS_QUERY}", *ids])["data"]["nodes"]:
+            if node:
+                edits[node["id"]] = {key: node[key] for key in ("lastEditedAt", "editor", "includesCreatedEdit")}
+    return [{**comment, **edits.get(comment.get("node_id"), {})} for comment in found]
 
 
 def run_of(repo: str, run_id: str) -> dict:
@@ -52,14 +65,24 @@ def is_owner_override_run(run: dict) -> bool:
     return (run.get("triggering_actor") or {}).get("login") == OWNER
 
 
-def asked_by_owner(earlier: list[dict], head_sha: str) -> bool:
+def never_edited(comment: dict) -> bool:
+    return comment.get("lastEditedAt", "missing") is None and comment.get("editor", "missing") is None and comment.get("includesCreatedEdit", True) is False
+
+
+def asked_by_owner(earlier: list[dict], head_sha: str) -> set[str]:
+    asked = set()
     for comment in earlier:
-        if (comment.get("user") or {}).get("login") != OWNER:
+        if (comment.get("user") or {}).get("login") != OWNER or not never_edited(comment):
             continue
         named = COMMAND.fullmatch(((comment.get("body") or "").strip().splitlines() or [""])[0].strip())
         if named and named.group(1) == head_sha:
-            return True
-    return False
+            asked.add(str(comment.get("id")))
+    return asked
+
+
+def triggered_by(run: dict, asked: set[str]) -> bool:
+    named = TRIGGER.fullmatch(run.get("display_title") or "")
+    return bool(named) and named.group(1) in asked
 
 
 def override_for(entries: list[dict], head_sha: str, repo: str, lookup: Callable[[str, str], dict] | None = None) -> dict | None:
@@ -69,13 +92,14 @@ def override_for(entries: list[dict], head_sha: str, repo: str, lookup: Callable
         match = RECORD.match(comment.get("body") or "")
         if (comment.get("user") or {}).get("login") != REVIEW_BOT or not match or match.group(1) != head_sha:
             continue
-        if not asked_by_owner(entries[:index], head_sha):
+        asked = asked_by_owner(entries[:index], head_sha)
+        if not asked:
             continue
         try:
             run = lookup(repo, match.group(3))
         except RuntimeError:
             continue
-        if is_owner_override_run(run):
+        if is_owner_override_run(run) and triggered_by(run, asked):
             return {"actor": match.group(2), "url": comment.get("html_url", "")}
     return None
 

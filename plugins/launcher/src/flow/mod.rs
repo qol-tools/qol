@@ -706,6 +706,9 @@ mod tests {
             description: None,
             key: None,
             when: None,
+            member_of: None,
+            member: None,
+            tone: None,
         };
         let row = FlowRow {
             title: "t".to_string(),
@@ -727,6 +730,9 @@ mod tests {
             description: None,
             key: None,
             when: None,
+            member_of: None,
+            member: None,
+            tone: None,
         };
         assert_eq!(render_action_input(&action, &row), serde_json::json!({}));
     }

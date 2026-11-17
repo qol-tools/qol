@@ -103,10 +103,11 @@ const REOPEN_DELAY_MS = 300
 const HOLD = { command: 'sleep infinity', description: 'Hold this fork in the agent list', run_in_background: true }
 const REOPENED = 'Opened from the fork board.'
 const RESUMED = 'Carry on your work from where you stopped. This answers no question you asked and approves nothing you were waiting on the user for: if you were waiting on the user, keep waiting.'
-const FORK_RESUME = 'Only the switchboard resumes, continues, opens or messages another fork or session. Tell the user in one line which fork or session it is for and that they can select it in the agent list.'
-const CROSS_SESSION = /__session_(send|reopen|fork|spawn|submit|bridge|close|remote_control|loop_close)$/
+const FORK_RESUME = 'Only the switchboard resumes, continues, opens or closes another fork or session. Tell the user in one line which fork or session it is for and that they can select it in the agent list.'
+const CROSS_SESSION = /__session_(reopen|fork|spawn|submit|bridge|close|remote_control|loop_close)$/
+const MESSAGING = /__session_(send|inbox|board)$/
 const FORK_TO_FORK =
-  'Not sent: a fork messages only the forks it started and the fork that started it. Something the user typed for another fork is for that fork: tell the user in one line to select it in the agent list.'
+  'Not sent: with SendMessage a fork messages only the forks it started and the fork that started it. Your own words reach any other fork or session with session_send to its key from sessions_list. Something the user typed for another fork is for that fork: tell the user in one line to select it in the agent list.'
 const COLOR: Record<Kind, string> = {
   ask: 'warning',
   test: 'suggestion',
@@ -239,31 +240,37 @@ const toggleBoard = async ($: EngineInterface): Promise<string> => {
   return opened.isPlaced ? 'Fork board opened. qols board or /board closes it.' : `The fork board waits for room: ${opened.reason}`
 }
 
-let putBack: ((text: string) => boolean) | undefined
+type TypedSince = (text: string) => string | undefined
+
+let putBack: TypedSince | undefined
+
+const typedSince = (dropped: string): TypedSince => text => (text === dropped ? '' : text.endsWith(`\n${dropped}`) ? text.slice(0, -dropped.length - 1) : undefined)
 
 const clearPutBack = async ($: EngineInterface, text: string): Promise<void> => {
-  if (putBack === undefined || text === '' || !putBack(text)) return
+  const kept = text === '' ? undefined : putBack?.(text)
+  if (kept === undefined) return
   putBack = undefined
-  await $.prompt.fill({ text: '', mode: 'replace' })
+  await $.prompt.fill({ text: kept, mode: 'replace' })
 }
 
-const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean, waits: readonly number[] = CLEAR_TYPED_MS): void => {
+const clearBox = ($: EngineInterface, typedAfter: TypedSince, waits: readonly number[] = CLEAR_TYPED_MS): void => {
   const [after, ...later] = waits
-  putBack = after === undefined ? undefined : isDropped
+  putBack = after === undefined ? undefined : typedAfter
   if (after === undefined) return
   $.clock.after(after, () => {
     void (async () => {
       const { text } = await $.prompt.read()
-      if (putBack !== isDropped) return
-      if (text === '') return clearBox($, isDropped, later)
+      if (putBack !== typedAfter) return
+      const kept = typedAfter(text)
+      if (kept === undefined) return clearBox($, typedAfter, later)
       putBack = undefined
-      if (isDropped(text)) await $.prompt.fill({ text: '', mode: 'replace' })
+      await $.prompt.fill({ text: kept, mode: 'replace' })
     })().catch(() => {})
   })
 }
 
 
-const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => TYPED_TOGGLE.test(text))
+const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => (TYPED_TOGGLE.test(text) ? '' : undefined))
 
 const SAID_KEPT = 8
 const SAID_CHARS = 4000
@@ -391,7 +398,9 @@ const typedTarget = (list: Entry[], text: string): Entry | undefined => {
 
 const COORDINATOR_NOTE = /^The coordinator sent a message while you were working:\n+/
 
-const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', 'This session is being continued from a previous conversation', '[SYSTEM NOTIFICATION']
+const COMPACTED = 'This session is being continued from a previous conversation'
+
+const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', COMPACTED, '[SYSTEM NOTIFICATION']
 
 const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY].includes(text.trim())
 
@@ -507,10 +516,10 @@ const saidOnDisk = async ($: EngineInterface, agentId: string): Promise<unknown[
 }
 
 const messagesOf = async ($: EngineInterface, agentId: string): Promise<unknown[] | undefined> => {
-  const held: unknown = await $.session.messages({ agentId }).catch(() => undefined)
-  if (Array.isArray(held) && held.length > 0) return held
   const saved = await saidOnDisk($, agentId).catch(() => undefined)
-  return saved ?? (Array.isArray(held) ? held : undefined)
+  if (saved !== undefined && recentWords(saved, 1).length > 0) return saved
+  const held: unknown = await $.session.messages({ agentId }).catch(() => undefined)
+  return Array.isArray(held) && held.length > 0 ? held : saved
 }
 
 const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<void> => {
@@ -1177,7 +1186,10 @@ const dropTyped = (text: string): void => {
 
 export const claimsUser = (text: unknown): boolean => typeof text === 'string' && lettersOf(text).includes(USER_LETTERS)
 
-export const isForgedUser = (text: unknown): boolean => claimsUser(text) && !typedHere.has(text as string)
+const opensAsUser = (text: string): boolean => lettersOf(text).startsWith(USER_LETTERS)
+
+export const isForgedUser = (text: unknown, isOwnSend = false): boolean =>
+  typeof text === 'string' && !typedHere.has(text) && (isOwnSend ? opensAsUser(text) : claimsUser(text))
 
 type SessionRecord = { key: string; friendly?: string; cwd?: string; created_ms?: number; parts?: unknown[]; done?: { at_ms?: number; reason?: string }; stopped_ms?: number }
 
@@ -1412,6 +1424,7 @@ const recordPart = async ($: EngineInterface, key: string, agentId: string): Pro
   const transcript = await subagentPath($, agentId).catch(() => undefined)
   if (transcript === undefined) return
   await recordRun($, 'part', ['--key', key, '--agent-id', agentId, '--transcript', transcript])
+  mailed = ''
 }
 
 type Claimed = { key: string; description: string }
@@ -2284,6 +2297,13 @@ export const resumeSession = async ($: EngineInterface, session: ClosedSession, 
   return { isResumed: true, text: `Resumed as ${keyName(name)}, agent id ${sent.agentId}: its view shows the conversation and it has the message.` }
 }
 
+export const asFork = <T extends { agentId?: string }>(e: T): T => {
+  const call = { ...e } as T & { as_fork?: string }
+  if (e.agentId === undefined) delete call.as_fork
+  else call.as_fork = e.agentId
+  return call
+}
+
 export const relay = async ($: EngineInterface, result: Delivery, fork: ForkRecord): Promise<void> => reach($, fork.agentId, fork.name, fork.cwd, result.message)
 
 let isDelivering = false
@@ -2322,6 +2342,12 @@ export const fileMerged = async ($: EngineInterface, result: Delivery, fork: For
   return entry
 }
 
+const listingOf = async ($: EngineInterface, folder: string): Promise<string> =>
+  (await $.fs.list(folder))
+    .map(entry => `${entry.name}:${entry.size}:${entry.mtimeMs}`)
+    .sort()
+    .join('|')
+
 const handIn = async ($: EngineInterface, program: string, result: Delivery): Promise<boolean> => {
   if (typeof result.id !== 'string' || !WATCH_ID.test(result.id) || refused.has(result.id)) return true
   const fork = typeof result.agent_id === 'string' && typeof result.conversation === 'string' ? await forkRecord($, result.conversation, result.agent_id).catch(() => undefined) : undefined
@@ -2344,10 +2370,7 @@ export const deliver = async ($: EngineInterface): Promise<void> => {
     const program = await $.env.get('QOL_CLI_SESSIONS')
     const watches = await $.env.get('QOL_SWITCHBOARD_WATCHES')
     if (program === undefined || program === '' || watches === undefined || watches === '' || !(await $.fs.exists(watches))) return
-    const listing = (await $.fs.list(watches))
-      .map(entry => `${entry.name}:${entry.size}:${entry.mtimeMs}`)
-      .sort()
-      .join('|')
+    const listing = await listingOf($, watches)
     if (listing === delivered) return
     const ran = await $.process.run([program, 'fork-watch', '--deliver'], { timeoutMs: DELIVER_TIMEOUT_MS })
     if (ran.exitCode !== 0) return
@@ -2362,6 +2385,40 @@ export const deliver = async ($: EngineInterface): Promise<void> => {
   } catch {
   } finally {
     isDelivering = false
+  }
+}
+
+type Mail = { key: string; friendly?: string; cwd?: string; agent_id: string; text: string }
+
+const isMail = (one: unknown): one is Mail => {
+  const mail = one as Partial<Mail> | null
+  return typeof mail === 'object' && mail !== null && typeof mail.key === 'string' && typeof mail.agent_id === 'string' && ID.test(mail.agent_id) && typeof mail.text === 'string'
+}
+
+let isMailing = false
+let mailed = ''
+
+const deliverMail = async ($: EngineInterface): Promise<void> => {
+  if (isMailing) return
+  isMailing = true
+  try {
+    const knocks = await $.env.get('QOL_SWITCHBOARD_KNOCKS')
+    if (knocks === undefined || knocks === '' || !(await $.fs.exists(knocks))) return
+    const listing = await listingOf($, knocks)
+    if (listing === mailed) return
+    const taken = await recordRun($, 'mail', [])
+    if (taken === undefined) return
+    mailed = listing
+    for (const one of Array.isArray(taken.mail) ? taken.mail : []) {
+      if (!isMail(one)) continue
+      const name = recordName(one)
+      await reach($, one.agent_id, name, typeof one.cwd === 'string' ? one.cwd : undefined, one.text).catch(error =>
+        undelivered($, one.agent_id, name, `delivering it failed: ${error instanceof Error ? error.message : String(error)}`, one.text).catch(() => undefined),
+      )
+    }
+  } catch {
+  } finally {
+    isMailing = false
   }
 }
 
@@ -2678,6 +2735,7 @@ export const register: Register = on => {
       isAutoOpenPending = e.isInteractive
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($).then(() => refreshWriting($)).catch(() => undefined).then(() => refreshStates($)))
+      $.clock.every(DELIVER_MS, () => void deliverMail($))
       if (pending.length > 0) {
         isReady = false
         await update($, starting, () => bringingBack(pending.length))
@@ -2820,7 +2878,7 @@ export const register: Register = on => {
       if (tree.commands.length === 0) await loadTree($)
       const at = sbAt(tree.commands, `${e.text.trim()} `)
       if (at !== undefined && (at.missing === undefined || at.path.length > 0)) {
-        clearBox($, text => text === e.text)
+        clearBox($, typedSince(e.text))
         return dropAs(await runSb($, e.text))
       }
     }
@@ -2836,19 +2894,19 @@ export const register: Register = on => {
       const own = (await read($, board)).find(entry => entry.agentId === viewing)
       const text = typed === undefined ? e.text : typed.message
       if (typed !== undefined && text.trim() === '') {
-        clearBox($, typedText => typedText === e.text)
+        clearBox($, typedSince(e.text))
         return dropAs(`${keyOf(typed.entry)} is open.`)
       }
       if (own === undefined || text.trim() === '') return next(e)
       const hooked = await promptHooks($, own, text)
       if (hooked.block !== undefined) {
-        clearBox($, typedText => typedText === e.text)
+        clearBox($, typedSince(e.text))
         return dropAs(printable(hooked.block))
       }
       return next({ ...e, text, ...(hooked.context.length === 0 ? {} : { context: [...(e.context ?? []), ...hooked.context] }) })
     }
     if (viewing !== undefined && typed !== undefined && typed.message === '') {
-      clearBox($, text => text === e.text)
+      clearBox($, typedSince(e.text))
       const shown = await $.ui.view({ agentId: typed.entry.agentId }).catch(() => ({ deny: 'it is not in the agent list' }))
       return dropAs(shown.deny === undefined ? `Opened ${keyOf(typed.entry)}.` : `${keyOf(typed.entry)} could not be opened: ${printable(String(shown.deny))}`)
     }
@@ -2860,12 +2918,12 @@ export const register: Register = on => {
         await setCurrent($, at.entry).catch(() => undefined)
         if ((await read($, current)) !== keyOf(at.entry)) return next(e)
         await writeTo($, at.entry)
-        clearBox($, text => text === e.text)
+        clearBox($, typedSince(e.text))
         return dropAs(`Writing to ${keyOf(at.entry)}. Esc on an empty prompt leaves.`)
       }
       const hooked = await promptHooks($, at.entry, at.message)
       if (hooked.block !== undefined) {
-        clearBox($, text => text === e.text)
+        clearBox($, typedSince(e.text))
         return dropAs(printable(hooked.block))
       }
       if (viewing === undefined) {
@@ -2897,7 +2955,7 @@ export const register: Register = on => {
         dropTyped(said)
       }
       if (viewing === undefined) await refreshWriting($, at.entry.agentId)
-      clearBox($, text => text === e.text)
+      clearBox($, typedSince(e.text))
       return dropAs(`→ ${keyOf(at.entry)}`)
     } finally {
       sending = undefined
@@ -3048,7 +3106,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.send', async ($, e, next) => {
-    if (isForgedUser(e.text)) return { isDelivered: false, reason: NOT_THE_USER }
+    if (isForgedUser(e.text, next.origin.plugin === NAME)) return { isDelivered: false, reason: NOT_THE_USER }
     if (e.agentId === undefined) return next(e)
     return mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }))
@@ -3062,7 +3120,7 @@ export const register: Register = on => {
         void noteActivity($, agentId, label).catch(() => {})
       } catch {}
     }
-    return next(e)
+    return next(MESSAGING.test(e.tool) ? asFork(e) : e)
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { deny: FORK_RESUME }))
 
   on('turn.start', async ($, e, next) => {

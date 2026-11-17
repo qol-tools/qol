@@ -25,9 +25,12 @@ impl NotificationPlatform for Platform {
     }
 
     fn os_do_not_disturb(&self) -> Option<bool> {
+        self.os_banners_showing().map(|showing| !showing)
+    }
+
+    fn os_banners_showing(&self) -> Option<bool> {
         let (schema, key) = banner_setting()?;
         parse_gsettings_bool(&gsettings::get_within(schema, key, GSETTINGS_TIMEOUT).ok()?)
-            .map(|showing| !showing)
     }
 
     fn set_os_banners(&self, showing: bool) {

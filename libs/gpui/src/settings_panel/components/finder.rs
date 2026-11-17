@@ -5,8 +5,8 @@ use gpui::{
 use qol_theme::{translucent, Alpha, TextStyle};
 
 use super::{
-    finder_display_label, settings_description, settings_label_group, settings_value_text,
-    ChoiceArt, RowGround, SettingsChoiceArt, SettingsRow, SettingsValueTone,
+    finder_display_label, settings_description, settings_label_group, settings_tag, ChoiceArt,
+    RowGround, SettingsChoiceArt, SettingsRow, SettingsValueTone,
 };
 use crate::kit::Kit;
 use crate::pictures::PictureContext;
@@ -14,10 +14,9 @@ use crate::search_mark::{MarkState, SearchMark};
 use crate::text::TextStyled;
 
 pub const FINDER_MARK_LEAD: f32 = qol_theme::HEIGHT_SETTING_ROW;
-pub const FINDER_MARK_EMPTY: f32 = qol_theme::HEIGHT_BAND;
 pub const FINDER_MARK_SMALL: f32 = qol_theme::SPACE_PAD;
 const FINDER_EMPTY_HEIGHT: f32 =
-    2.0 * qol_theme::HEIGHT_BAND + 2.0 * qol_theme::SPACE_CELL + qol_theme::SPACE_TIGHT;
+    qol_theme::HEIGHT_BAND + 2.0 * qol_theme::SPACE_CELL + qol_theme::SPACE_TIGHT;
 const SIGNAL_BAR_WIDTH: f32 = 3.0;
 const SIGNAL_BAR_HEIGHTS: [f32; 4] = [5.0, 8.0, 11.0, 14.0];
 
@@ -61,10 +60,8 @@ pub fn settings_signal_bars(level: u8, row: RowGround, kit: Kit) -> gpui::Div {
 }
 
 pub fn settings_finder_empty(
-    id: impl Into<ElementId>,
     title: impl Into<SharedString>,
     detail: Option<SharedString>,
-    state: MarkState,
     kit: Kit,
 ) -> gpui::Div {
     let pane = kit.grounds.pane;
@@ -78,18 +75,6 @@ pub fn settings_finder_empty(
         .justify_center()
         .gap(px(qol_theme::SPACE_TIGHT))
         .px(px(qol_theme::SPACE_GUTTER))
-        .child(
-            div()
-                .flex_none()
-                .mb(px(qol_theme::SPACE_INSET))
-                .child(settings_search_mark(
-                    id,
-                    FINDER_MARK_EMPTY,
-                    state,
-                    RowGround::Pane,
-                    kit,
-                )),
-        )
         .child(
             div()
                 .text(TextStyle::Name)
@@ -300,7 +285,7 @@ impl RenderOnce for SettingsFinderPick {
                             kit,
                         ))
                     })
-                    .child(settings_value_text(text, tone, row, kit)),
+                    .child(settings_tag(text, tone, row, kit)),
             ),
             FinderPickEnd::Action { text, working } => Some(
                 kit.button_inked(row.rest(kit))

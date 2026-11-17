@@ -477,7 +477,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "name: claude review",
             "needs: [review, publish]",
             "if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}",
-            "run: python3 .github/scripts/review_gate.py verdict",
+            "run: python3 -P .github/scripts/review_gate.py verdict",
             "VERDICT: ${{ needs.review.outputs.verdict }}",
             "BASE: ${{ github.event.pull_request.base.ref }}",
             "github.event.pull_request.user.login == 'dependabot[bot]'",
@@ -488,13 +488,14 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("verdict: ${{ steps.verdict.outputs.verdict }}", workflow)
         superseded = named_step(verdict, "End a run a newer review replaced", "      ")
         self.assertIn("if: github.event_name == 'pull_request' && needs.review.result == 'cancelled'", superseded)
-        self.assertIn("run: python3 .github/scripts/review_gate.py superseded", superseded)
+        self.assertIn("run: python3 -P .github/scripts/review_gate.py superseded", superseded)
         publish = workflow.split("  publish:\n", 1)[1].split("    runs-on:", 1)[0]
         self.assertIn("needs.review.result != 'cancelled'", publish)
 
     def test_only_the_owner_overrides_the_review_and_only_for_the_commit_named(self):
         workflow = (ROOT / ".github/workflows/review-override.yml").read_text()
         self.assertIn("  issue_comment:\n    types: [created]\n", workflow.split("jobs:\n", 1)[0])
+        self.assertIn("\nrun-name: review override for comment ${{ github.event.comment.id }}\n", workflow.split("jobs:\n", 1)[0])
         override = workflow.split("jobs:\n", 1)[1]
         for contract in [
             "github.event.issue.pull_request &&",
@@ -502,7 +503,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "github.event.comment.user.login == 'KMRH47'",
             "github.triggering_actor == 'KMRH47'",
             "COMMENT: ${{ github.event.comment.body }}",
-            "run: python3 .github/scripts/review_gate.py override",
+            "run: python3 -P .github/scripts/review_gate.py override",
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, override)

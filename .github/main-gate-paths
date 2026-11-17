@@ -1,0 +1,13 @@
+.github/workflows/claude-review.yml
+.github/workflows/review-override.yml
+.github/workflows/main-gate.yml
+.github/scripts/review_gate.py
+.github/scripts/main_gate.py
+.github/scripts/queue_verdict.py
+.github/scripts/cancel_superseded_queue_runs.py
+.github/scripts/live_test.py
+.github/main-gate-paths
+.claude/**
+.mcp.json
+**/CLAUDE.md
+**/CLAUDE.local.md
