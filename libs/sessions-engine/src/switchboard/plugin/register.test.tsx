@@ -4025,7 +4025,7 @@ test('saidOf reads the rows the transcript reader prints and nothing else', () =
   expect(saidOf('not json')).toBeUndefined()
 })
 
-test("a fork Claude Code cannot read back shows its conversation from its transcript on disk, read again only once the transcript changed", async ($, on) => {
+test("a fork Claude Code cannot read back shows its conversation from its transcript on disk, read again only once the transcript or the reader's build changed", async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
   on('clock.after', () => ({ value: undefined }))
@@ -4037,7 +4037,10 @@ test("a fork Claude Code cannot read back shows its conversation from its transc
   on('env.get', (_: unknown, e: { name: string }) => ({ value: env[e.name] }))
   on('session.messages', () => ({ value: { deny: 'a8 is not one of the agents of this session' } }))
   let size = 10
-  on('fs.stat', (_: unknown, e: { path: string }) => ({ value: e.path === '/conv/switchboard-session/subagents/agent-a8.jsonl' ? { size, mtimeMs: 5 } : { size: 0, mtimeMs: 0 } }))
+  let built = 1
+  on('fs.stat', (_: unknown, e: { path: string }) => ({
+    value: e.path === '/conv/switchboard-session/subagents/agent-a8.jsonl' ? { size, mtimeMs: 5 } : e.path === '/bin/qol-cli-sessions' ? { size: 1, mtimeMs: built } : { size: 0, mtimeMs: 0 },
+  }))
   const asked: unknown[] = []
   on('process.run', (_: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
     if (e.argv.slice(1).join(' ') !== 'sessions switchboard hook fork-said') return { value: NO_RECORD }
@@ -4059,6 +4062,10 @@ test("a fork Claude Code cannot read back shows its conversation from its transc
   await $.turn.complete({ turnId: 'held-2', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
   await settle()
   expect(asked).toHaveLength(2)
+  built = 2
+  await $.turn.complete({ turnId: 'held-3', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
+  await settle()
+  expect(asked).toHaveLength(3)
   await ui.unmount()
 })
 

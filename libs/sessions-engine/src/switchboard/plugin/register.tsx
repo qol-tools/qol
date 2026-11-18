@@ -523,7 +523,8 @@ const saidOnDisk = async ($: EngineInterface, agentId: string): Promise<unknown[
   const session = await $.session.id()
   const stat = await $.fs.stat(`${conversations}/${session}/subagents/agent-${agentId}.jsonl`).catch(() => undefined)
   if (stat === undefined || stat.size === 0) return undefined
-  const stamp = `${stat.size}:${stat.mtimeMs}`
+  const reader = await $.fs.stat(program).catch(() => undefined)
+  const stamp = `${stat.size}:${stat.mtimeMs}:${reader?.mtimeMs ?? 0}`
   const known = saidRead.get(agentId)
   if (known?.stamp === stamp) return known.rows
   const ran = await $.process.run([program, 'sessions', 'switchboard', 'hook', 'fork-said'], {
