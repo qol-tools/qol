@@ -6532,7 +6532,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.159.4"
+version = "0.160.0"
 dependencies = [
  "anyhow",
  "gpui",
