@@ -90,9 +90,25 @@ runs:
         lookup-only: ${{ inputs.lookup-only }}
         save-if: ${{ github.ref == 'refs/heads/main' && inputs.save-cache == 'true' && inputs.lookup-only != 'true' }}
 
+    # Every Linux job restores the newest saved set of package files and hands
+    # it to apt, which checks each file against Ubuntu's signed lists before it
+    # uses one, so a stale or altered file is downloaded again. The key never
+    # exists: the restore key picks the newest entry under it.
+    - name: Restore downloaded Linux system packages
+      id: saved-packages
+      if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && inputs.lookup-only != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/apt-archives
+        key: apt-archives-${{ env.ImageOS }}-newest
+        restore-keys: apt-archives-${{ env.ImageOS }}-
+
     - name: Install Linux system dependencies
+      id: packages
       if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && inputs.lookup-only != 'true'
       shell: bash
+      env:
+        RESTORED_KEY: ${{ steps.saved-packages.outputs.cache-matched-key }}
       # A stalled Ubuntu mirror once hung apt-get update until the 45-minute job
       # timeout; bound each call and retry so a dead mirror fails in minutes.
       # A slow mirror is not a dead one, and no timeout of apt's own ends it. On
@@ -100,16 +116,25 @@ runs:
       # names us-east-2.ec2.archive.ubuntu.com. It served these 26 MB at under
       # 150 kB/s, so the install ran out its five minutes up to three times on
       # that one mirror: 4 to 13 minutes of update and install, where every
-      # Azure runner took 17 to 40 seconds. The download therefore gets one
-      # minute on the runner's mirror and then moves to the outside one. It is
-      # a call of its own, so the short bound only ever stops a download, never
-      # dpkg.
+      # Azure runner took 17 to 40 seconds. The outside mirror served the same
+      # runner at 300 kB/s and the cache at 81 MB/s, so the package files come
+      # from the cache and a mirror serves only the ones that changed. That
+      # download is a call of its own, so its one-minute bound on the runner's
+      # mirror only ever stops a download, never dpkg, before it moves to the
+      # outside mirror. autoclean drops the files Ubuntu has replaced, so the
+      # saved set does not grow.
+      # The key names the files, so a set is saved once and the prune keeps the
+      # newest. Main saves a changed set. Any other run saves only when it
+      # restored nothing, into its own pull request's scope, which covers the
+      # time before main has saved a first set.
       run: |
         packages=(
           pkg-config libx11-dev libxi-dev libxtst-dev libxcb1-dev
           libxkbcommon-dev libxkbcommon-x11-dev libxdo-dev libvulkan-dev
           libwayland-dev libglib2.0-dev libgtk-3-dev libayatana-appindicator3-dev
         )
+        archives=/var/cache/apt/archives
+        saved="$RUNNER_TEMP/apt-archives"
         apt_get() {
           sudo timeout "$1" apt-get -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 "${@:2}"
@@ -123,6 +148,10 @@ runs:
         download() {
           apt_get "$1" install -y --no-install-recommends --download-only "${packages[@]}"
         }
+        mkdir -p "$saved"
+        if compgen -G "$saved/*.deb" > /dev/null; then
+          sudo cp "$saved"/*.deb "$archives"/
+        fi
         for attempt in 1 2 3; do
           apt_get 120 update && break
           if [ "$attempt" = 3 ]; then exit 1; fi
@@ -131,11 +160,28 @@ runs:
         if ! download 60; then
           use_outside_mirror
           for attempt in 1 2 3; do
-            apt_get 120 update && download 300 && break
+            download 300 && break
             if [ "$attempt" = 3 ]; then exit 1; fi
+            apt_get 120 update || true
           done
+        fi
+        apt_get 60 autoclean || true
+        rm -f "$saved"/*.deb
+        if compgen -G "$archives/*.deb" > /dev/null; then
+          cp "$archives"/*.deb "$saved"/
+          key="apt-archives-$ImageOS-$(cd "$saved" && LC_ALL=C ls | sha256sum | cut -c1-8)"
+          if [ "$key" != "$RESTORED_KEY" ] && { [ "$GITHUB_REF" = refs/heads/main ] || [ -z "$RESTORED_KEY" ]; }; then
+            echo "save-key=$key" >> "$GITHUB_OUTPUT"
+          fi
         fi
         for attempt in 1 2 3; do
           apt_get 300 install -y --no-install-recommends "${packages[@]}" && break
           if [ "$attempt" = 3 ]; then exit 1; fi
         done
+
+    - name: Save downloaded Linux system packages
+      if: steps.packages.outputs.save-key != ''
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/apt-archives
+        key: ${{ steps.packages.outputs.save-key }}
