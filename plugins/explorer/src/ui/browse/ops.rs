@@ -300,7 +300,7 @@ impl Browser {
         else {
             return false;
         };
-        clash.choice = choice;
+        clash.choice = clash.fitted(choice);
         true
     }
 
@@ -309,7 +309,7 @@ impl Browser {
             return false;
         };
         for clash in &mut waiting.survey.clashes {
-            clash.choice = choice;
+            clash.choice = clash.fitted(choice);
         }
         true
     }

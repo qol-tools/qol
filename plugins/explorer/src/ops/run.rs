@@ -183,7 +183,11 @@ impl Run {
         };
         let incoming_folder = fs::symlink_metadata(src).is_ok_and(|meta| meta.is_dir());
         if incoming_folder && here.is_dir() {
-            return Spot::Merge;
+            return match self.choices.get(existing).copied() {
+                Some(Resolve::Keep) => Spot::Skip,
+                Some(Resolve::KeepBoth) => Spot::Place(free_name(parent, name)),
+                _ => Spot::Merge,
+            };
         }
         match self.choices.get(existing).copied() {
             Some(Resolve::Replace) if self.discard(existing) => Spot::Place(existing.to_path_buf()),

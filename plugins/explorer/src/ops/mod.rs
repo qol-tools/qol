@@ -45,6 +45,7 @@ pub struct Stamp {
 pub enum Resolve {
     Keep,
     Replace,
+    Merge,
     KeepBoth,
 }
 
@@ -56,6 +57,29 @@ pub struct Clash {
     pub incoming: Stamp,
     pub same: bool,
     pub choice: Resolve,
+}
+
+impl Clash {
+    pub fn merges(&self) -> bool {
+        self.here.folder && self.incoming.folder
+    }
+
+    pub fn fitted(&self, choice: Resolve) -> Resolve {
+        match choice {
+            Resolve::Replace | Resolve::Merge if self.merges() => Resolve::Merge,
+            Resolve::Merge => Resolve::Replace,
+            other => other,
+        }
+    }
+
+    pub fn applies(&self, clashes: &[Clash]) -> bool {
+        !clashes.iter().any(|folder| {
+            folder.merges()
+                && folder.choice != Resolve::Merge
+                && folder.existing != self.existing
+                && self.existing.starts_with(&folder.existing)
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

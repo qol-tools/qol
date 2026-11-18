@@ -181,6 +181,11 @@ fn undo_brings_back_an_empty_folder_that_a_move_merged_into_a_new_folder() {
     visit(&mut browser, &dest);
     let transfer = browser.paste().unwrap();
     browser.begin(transfer);
+    wait_until(&mut browser, "the sheet", |browser| {
+        browser.surveyed().is_some()
+    });
+    assert!(browser.choose(0, Resolve::Merge));
+    assert!(browser.confirm());
     wait_until(&mut browser, "the move", finished);
     assert!(!moved.exists());
 
@@ -189,6 +194,51 @@ fn undo_brings_back_an_empty_folder_that_a_move_merged_into_a_new_folder() {
     assert!(made.is_dir());
     assert!(browser.undo());
     assert!(!made.exists());
+}
+
+#[test]
+fn a_folder_moved_onto_one_with_its_name_asks_and_keeps_both_unless_you_merge() {
+    let (temp, dest) = two_folders();
+    let hello = temp.path().join("hello");
+    fs::create_dir(&hello).unwrap();
+    let mut browser = opened(temp.path());
+    browser.begin(Transfer {
+        verb: Verb::Copy,
+        sources: vec![hello.clone()],
+        into: dest.clone(),
+    });
+    wait_until(&mut browser, "the copy", finished);
+    assert!(dest.join("hello").is_dir());
+
+    browser.begin(Transfer {
+        verb: Verb::Move,
+        sources: vec![hello.clone()],
+        into: dest.clone(),
+    });
+    wait_until(&mut browser, "the sheet", |browser| {
+        browser.surveyed().is_some()
+    });
+    let clashes = &browser.surveyed().unwrap().clashes;
+    assert_eq!(clashes.len(), 1);
+    assert!(clashes[0].merges());
+    assert_eq!(clashes[0].choice, Resolve::KeepBoth);
+    assert!(browser.choose(0, Resolve::Replace));
+    assert_eq!(
+        browser.surveyed().unwrap().clashes[0].choice,
+        Resolve::Merge
+    );
+    assert!(browser.choose(0, Resolve::KeepBoth));
+    assert!(browser.confirm());
+    wait_until(&mut browser, "the move", finished);
+    assert!(!hello.exists());
+    assert!(dest.join("hello").is_dir());
+    assert!(dest.join("hello (2)").is_dir());
+
+    assert!(browser.undo());
+    wait_until(&mut browser, "the undo", |_| hello.is_dir());
+    assert!(dest.join("hello").is_dir());
+    assert!(!dest.join("hello (2)").exists());
+    assert!(!temp.path().join("hello (2)").exists());
 }
 
 #[test]
@@ -818,6 +868,44 @@ fn the_kept_sentence_counts_newer_files_and_identical_ones() {
         "The 3 were already the same."
     );
     assert_eq!(ops_text::kept_sentence(&replaced, 0), "");
+
+    let folder = |choice| Clash {
+        existing: PathBuf::from("docs"),
+        here: Stamp {
+            folder: true,
+            ..stamp(newer)
+        },
+        incoming: Stamp {
+            folder: true,
+            ..stamp(older)
+        },
+        ..clash(newer, older, choice)
+    };
+    let inside = |choice| Clash {
+        existing: PathBuf::from("docs/a"),
+        ..clash(newer, older, choice)
+    };
+    let cases = [
+        (vec![folder(Resolve::Keep)], 0, "Kept 1 folder there."),
+        (
+            vec![folder(Resolve::KeepBoth), inside(Resolve::Keep)],
+            3,
+            "",
+        ),
+        (
+            vec![folder(Resolve::Merge), inside(Resolve::Keep)],
+            3,
+            "Kept the 1 newer file there. The other 3 were already the same.",
+        ),
+        (
+            vec![folder(Resolve::Keep), clash(newer, older, Resolve::Keep)],
+            0,
+            "Kept 2 items there.",
+        ),
+    ];
+    for (clashes, same_inside, expected) in cases {
+        assert_eq!(ops_text::kept_sentence(&clashes, same_inside), expected);
+    }
 }
 
 #[test]
