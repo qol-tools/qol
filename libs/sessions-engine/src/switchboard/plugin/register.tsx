@@ -1091,7 +1091,11 @@ export const toFork = (list: Entry[], text: string): { entry: Entry; message: st
   const rows = reachable(list)
   const exact = rows.find(entry => keyOf(entry) === word)
   if (exact !== undefined) return { entry: exact, message: message.trim() }
-  if (colon !== ':') return undefined
+  if (colon !== ':') {
+    const tabbed = message === '' && word.length > 1 ? keyCompletions(list, word)[0]?.label : undefined
+    const entry = tabbed === undefined ? undefined : rows.find(one => keyOf(one) === tabbed)
+    return entry === undefined ? undefined : { entry, message: '' }
+  }
   const starts = keyStarts(rows, word)
   const typed = starts.length > 0 ? starts : wordStarts(rows, word)
   return typed.length === 1 && typed[0] !== undefined ? { entry: typed[0], message: message.trim() } : undefined

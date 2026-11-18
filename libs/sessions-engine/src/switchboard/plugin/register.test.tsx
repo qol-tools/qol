@@ -2803,6 +2803,27 @@ test('a bare fork key makes that fork current and lets esc on an empty prompt le
   expect((await typed($, 'hello')).drop).toContain('→ asking-fork')
 })
 
+test('enter on the start of a fork key, as when it overtakes the tab that would complete it, goes to that fork and sends nothing', async ($, on) => {
+  const sent: any[] = []
+  engine(on, sent)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await spawn($, 'a9', 'qol-ci-build-speed: speeds up the build')
+  await typed($, 'qols board')
+  await typed($, 'asking-fork')
+  sent.length = 0
+  expect((await typed($, 'qo')).drop).toContain('Writing to qol-ci-build-speed')
+  expect((await typed($, 'bu')).drop).toContain('Writing to qol-ci-build-speed')
+  expect((await typed($, 'as')).drop).toContain('Writing to asking-fork')
+  expect(sent).toEqual([])
+  expect((await typed($, 'a')).drop).toContain('→ asking-fork')
+  expect((await typed($, 'yes')).drop).toContain('→ asking-fork')
+  expect((await typed($, 'qo it')).drop).toContain('→ asking-fork')
+  expect(sent.map(one => JSON.stringify(one)).filter(one => one.includes('qo it') || one.includes('yes'))).toHaveLength(2)
+})
+
 test('a send while the board is hidden leaves the current fork and takes back the esc that would close the board', async ($, on) => {
   const panes: string[] = []
   const hidden = new Set<string>()
