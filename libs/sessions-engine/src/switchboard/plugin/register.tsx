@@ -400,9 +400,7 @@ const MID_TURN_NOTE = /^The (?:coordinator sent a message|user sent a new messag
 
 const COMPACTED = 'This session is being continued from a previous conversation'
 
-const HIDDEN_ROWS = ['Base directory for this skill:', '[Image: original ', 'Stop hook feedback:']
-
-const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', COMPACTED, '[SYSTEM NOTIFICATION', ...HIDDEN_ROWS]
+const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', COMPACTED, '[SYSTEM NOTIFICATION']
 
 const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY].includes(text.trim())
 
@@ -517,11 +515,19 @@ const saidOnDisk = async ($: EngineInterface, agentId: string): Promise<unknown[
   return rows
 }
 
+const HIDDEN_ROWS = ['Base directory for this skill:', '[Image: original ', 'Stop hook feedback:']
+
+export const withoutHidden = (held: readonly unknown[]): unknown[] =>
+  held.filter(one => {
+    const { role, text } = (one ?? {}) as { role?: unknown; text?: unknown }
+    return role !== 'user' || typeof text !== 'string' || !HIDDEN_ROWS.some(open => text.trimStart().startsWith(open))
+  })
+
 const messagesOf = async ($: EngineInterface, agentId: string): Promise<unknown[] | undefined> => {
   const saved = await saidOnDisk($, agentId).catch(() => undefined)
   if (saved !== undefined && recentWords(saved, 1).length > 0) return saved
   const held: unknown = await $.session.messages({ agentId }).catch(() => undefined)
-  return Array.isArray(held) && held.length > 0 ? held : saved
+  return Array.isArray(held) && held.length > 0 ? withoutHidden(held) : saved
 }
 
 const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<void> => {

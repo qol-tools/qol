@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { claimsUser, echoesOnly, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withSent } from '../hooks/register'
+import { claimsUser, echoesOnly, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1299,16 +1299,23 @@ test('recentWords shows what the user typed in the fork view mid-turn without th
   expect(recentWords([{ role: 'user', text: `tests pass\n<system-reminder>\n${typed}\n</system-reminder>` }])).toEqual([{ isUser: true, text: 'what about the items?' }])
 })
 
-test('recentWords leaves out the rows Claude Code hides: a loaded skill, an image note and stop hook feedback', () => {
-  const messages = [
-    { role: 'user', text: fromUser('commit it') },
+test('withoutHidden drops the rows Claude Code hides from a conversation it read back, and keeps words the user typed that open the same way', () => {
+  const typed = { role: 'user', text: fromUser('Stop hook feedback: why did this fail?') }
+  const midTurn = { role: 'user', text: 'The user sent a new message while you were working:\nBase directory for this skill: where is it?' }
+  const spoken = { role: 'assistant', text: 'Base directory for this skill: is how a loaded skill starts.' }
+  const held = [
+    typed,
     { role: 'user', text: 'Base directory for this skill: /skills/commit\n\nqol-tools commit conventions' },
     { role: 'user', text: '[Image: original 2560x1440, displayed at 2000x1125. Multiply coordinates by 1.28 to map to original image.]' },
-    { role: 'user', text: 'Stop hook feedback:\nThe pull request you opened is not being watched yet.' },
-    { role: 'assistant', text: 'Base directory for this skill: is how a loaded skill starts.' },
+    { role: 'user', text: '\nStop hook feedback:\nThe pull request you opened is not being watched yet.' },
+    midTurn,
+    spoken,
+    { deny: 'no' },
   ]
-  expect(recentWords(messages)).toEqual([
-    { isUser: true, text: 'commit it' },
+  expect(withoutHidden(held)).toEqual([typed, midTurn, spoken, { deny: 'no' }])
+  expect(recentWords(withoutHidden(held))).toEqual([
+    { isUser: true, text: 'Stop hook feedback: why did this fail?' },
+    { isUser: true, text: 'Base directory for this skill: where is it?' },
     { isUser: false, text: 'Base directory for this skill: is how a loaded skill starts.' },
   ])
 })
