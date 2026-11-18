@@ -1,9 +1,10 @@
 #[cfg(test)]
 mod tests;
 
-use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crate::ops::{Failure, NameProblem};
+use crate::ops::bin::Bin;
+use crate::ops::NameProblem;
 
 const NO_RESTORE: &str =
     "macOS does not let apps put things back from the Trash, use Put Back in Finder";
@@ -17,20 +18,6 @@ pub(crate) fn name_problem(name: &str) -> Option<NameProblem> {
     super::unix::name_problem(name)
 }
 
-pub(crate) fn trash_one(path: &Path) -> Result<(), String> {
-    trash::delete(path).map_err(|error| super::trash_reason::describe(&error))
-}
-
-pub(crate) fn trash_locations(_originals: &[PathBuf]) -> Vec<(PathBuf, PathBuf)> {
-    Vec::new()
-}
-
-pub(crate) fn restore_trashed(paths: &[PathBuf]) -> Vec<Failure> {
-    paths
-        .iter()
-        .map(|path| Failure {
-            path: path.clone(),
-            reason: NO_RESTORE.into(),
-        })
-        .collect()
+pub(crate) fn system_bin() -> Arc<dyn Bin> {
+    super::bin::system_bin(NO_RESTORE)
 }

@@ -1,24 +1,12 @@
 use std::ffi::OsStr;
 use std::fs;
-use std::path::PathBuf;
+use std::io;
 
-use super::{copy_name, delete, free_name, new_file, new_folder, rename, trash, NameProblem};
-use crate::ops::{Done, JobId, Journal, Transfer, Undo, Verb};
-
-fn done(verb: Verb, placed: Vec<(PathBuf, PathBuf)>) -> Done {
-    Done {
-        id: JobId(1),
-        verb,
-        landed: placed.clone(),
-        matched: Vec::new(),
-        merged: Vec::new(),
-        trashed: false,
-        placed,
-        replaced: Vec::new(),
-        kept_originals: Vec::new(),
-        failures: Vec::new(),
-    }
-}
+use super::{
+    copy_name, delete, free_name, move_noreplace, move_through_scratch, new_file, new_folder,
+    rename, trash, NameProblem,
+};
+use crate::ops::{Bin, FolderBin};
 
 #[test]
 fn free_name_returns_the_name_when_it_is_free() {
@@ -154,193 +142,154 @@ fn rename_reports_a_missing_entry_plainly() {
 }
 
 #[test]
+fn trash_hands_back_what_the_bin_holds_and_reports_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let bin = FolderBin::new(bin_dir.path().join("bin"));
+    let file = dir.path().join("a.md");
+    fs::write(&file, "x").unwrap();
+    let gone = dir.path().join("gone.md");
+    let result = trash(&bin, &[file.clone(), gone.clone()]);
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].path, gone);
+    assert_eq!(result.failures[0].reason, "it is no longer there");
+    assert_eq!(result.trashed.len(), 1);
+    let (path, held) = &result.trashed[0];
+    assert_eq!(path, &file);
+    let held = held.clone().unwrap();
+    assert!(!file.exists());
+    assert!(held.item.starts_with(bin.root()));
+    assert_eq!(fs::read_to_string(&held.item).unwrap(), "x");
+    bin.restore(&held, &file).unwrap();
+    assert_eq!(fs::read_to_string(&file).unwrap(), "x");
+}
+
+#[test]
 fn trash_of_a_missing_path_fails_with_a_reason() {
     let dir = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let bin = FolderBin::new(bin_dir.path().join("bin"));
     let gone = dir.path().join("gone.md");
-    let result = trash(std::slice::from_ref(&gone));
-    assert!(result.placed.is_empty());
+    let result = trash(&bin, std::slice::from_ref(&gone));
+    assert!(result.trashed.is_empty());
     assert_eq!(result.failures.len(), 1);
     assert_eq!(result.failures[0].path, gone);
     assert!(!result.failures[0].reason.is_empty());
 }
 
 #[test]
-fn journal_undoes_a_copy_as_trash_of_the_copies() {
-    let mut journal = Journal::default();
-    journal.record(&done(
-        Verb::Copy,
-        vec![
-            ("/a/x".into(), "/b/x".into()),
-            ("/a/y".into(), "/b/y".into()),
-        ],
-    ));
-    assert_eq!(
-        journal.undo(),
-        Some(Undo::Trash {
-            copies: vec!["/b/x".into(), "/b/y".into()],
-            restore: Vec::new(),
-        })
-    );
-    assert_eq!(journal.undo(), None);
-}
-
-#[test]
-fn journal_undoes_a_move_in_one_step_per_original_folder() {
-    let mut journal = Journal::default();
-    journal.record(&done(
-        Verb::Move,
-        vec![
-            ("/a/x".into(), "/c/x".into()),
-            ("/b/y".into(), "/c/y".into()),
-        ],
-    ));
-    assert_eq!(
-        journal.undo(),
-        Some(Undo::Transfer {
-            back: vec![
-                Transfer {
-                    verb: Verb::Move,
-                    sources: vec!["/c/x".into()],
-                    into: "/a".into(),
-                },
-                Transfer {
-                    verb: Verb::Move,
-                    sources: vec!["/c/y".into()],
-                    into: "/b".into(),
-                },
-            ],
-            renames: Vec::new(),
-            restore: Vec::new(),
-            recreate: Vec::new(),
-        })
-    );
-    assert_eq!(journal.undo(), None);
-}
-
-#[test]
-fn journal_undo_of_a_keep_both_move_returns_the_original_name() {
-    let mut journal = Journal::default();
-    journal.record(&done(Verb::Move, vec![("/a/x".into(), "/c/x (2)".into())]));
-    assert_eq!(
-        journal.undo(),
-        Some(Undo::Transfer {
-            back: vec![Transfer {
-                verb: Verb::Move,
-                sources: vec!["/c/x (2)".into()],
-                into: "/a".into(),
-            }],
-            renames: vec![("/a/x (2)".into(), "/a/x".into())],
-            restore: Vec::new(),
-            recreate: Vec::new(),
-        })
-    );
-}
-
-#[test]
-fn journal_undo_of_a_merging_move_copies_back_the_files_that_matched() {
-    let mut journal = Journal::default();
-    let mut moved = done(Verb::Move, Vec::new());
-    moved.matched = vec![("/a/docs/same".into(), "/c/docs/same".into())];
-    journal.record(&moved);
-    assert_eq!(
-        journal.undo(),
-        Some(Undo::Transfer {
-            back: vec![Transfer {
-                verb: Verb::Copy,
-                sources: vec!["/c/docs/same".into()],
-                into: "/a/docs".into(),
-            }],
-            renames: Vec::new(),
-            restore: Vec::new(),
-            recreate: Vec::new(),
-        })
-    );
-}
-
-#[test]
-fn journal_undo_of_a_move_that_merged_an_empty_folder_recreates_it() {
-    let mut journal = Journal::default();
-    journal.record_new_folder("/c/docs".into());
-    let mut moved = done(Verb::Move, Vec::new());
-    moved.placed = vec![("/a/docs".into(), "/c/docs".into())];
-    moved.merged = vec!["/a/docs".into()];
-    journal.record(&moved);
-    assert_eq!(
-        journal.undo(),
-        Some(Undo::Transfer {
-            back: Vec::new(),
-            renames: Vec::new(),
-            restore: Vec::new(),
-            recreate: vec!["/a/docs".into()],
-        })
-    );
-}
-
-#[test]
-fn journal_undoes_a_move_into_a_folder_named_like_the_trash_as_a_move() {
-    let mut journal = Journal::default();
-    let into = "/home/me/Trash/files/x";
-    journal.record(&done(Verb::Move, vec![("/a/x".into(), into.into())]));
-    assert!(matches!(journal.undo(), Some(Undo::Transfer { .. })));
-}
-
-#[test]
-fn journal_undo_of_a_copy_puts_back_what_it_replaced() {
-    let mut journal = Journal::default();
-    let mut copied = done(Verb::Copy, vec![("/a/x".into(), "/b/x".into())]);
-    copied.replaced = vec!["/b/x".into()];
-    journal.record(&copied);
-    assert_eq!(
-        journal.undo(),
-        Some(Undo::Trash {
-            copies: vec!["/b/x".into()],
-            restore: vec!["/b/x".into()],
-        })
-    );
-}
-
-#[test]
-fn journal_undoes_a_trash_whose_location_is_unknown_as_restore() {
-    let mut journal = Journal::default();
-    let mut trashed = done(Verb::Move, vec![("/a/x".into(), "/a/x".into())]);
-    trashed.trashed = true;
-    journal.record(&trashed);
-    assert_eq!(journal.undo(), Some(Undo::Restore(vec!["/a/x".into()])));
-}
-
-#[test]
-fn journal_undoes_a_rename_by_swapping_the_names() {
-    let mut journal = Journal::default();
-    journal.record_rename("/a/old".into(), "/a/new".into());
-    assert_eq!(
-        journal.undo(),
-        Some(Undo::Rename {
-            from: "/a/new".into(),
-            to: "/a/old".into(),
-        })
-    );
-}
-
-#[test]
-fn journal_removes_a_new_folder_only_while_it_is_empty() {
+fn move_noreplace_moves_onto_a_free_name() {
     let dir = tempfile::tempdir().unwrap();
-    let empty = dir.path().join("empty");
-    let filled = dir.path().join("filled");
-    fs::create_dir(&empty).unwrap();
-    fs::create_dir(&filled).unwrap();
-    fs::write(filled.join("x"), "").unwrap();
-    let mut journal = Journal::default();
-    journal.record_new_folder(empty.clone());
-    journal.record_new_folder(filled);
-    assert_eq!(journal.undo(), None);
-    assert_eq!(journal.undo(), Some(Undo::Remove(empty)));
+    let from = dir.path().join("a.md");
+    let to = dir.path().join("b.md");
+    fs::write(&from, "a").unwrap();
+    move_noreplace(&from, &to).unwrap();
+    assert!(!from.exists());
+    assert_eq!(fs::read_to_string(&to).unwrap(), "a");
 }
 
 #[test]
-fn journal_ignores_a_job_that_placed_nothing() {
-    let mut journal = Journal::default();
-    journal.record(&done(Verb::Copy, Vec::new()));
-    assert_eq!(journal.undo(), None);
+fn move_noreplace_refuses_to_replace_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let from = dir.path().join("a.md");
+    let to = dir.path().join("b.md");
+    fs::write(&from, "a").unwrap();
+    fs::write(&to, "b").unwrap();
+    let error = move_noreplace(&from, &to).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read_to_string(&from).unwrap(), "a");
+    assert_eq!(fs::read_to_string(&to).unwrap(), "b");
+}
+
+#[test]
+fn move_noreplace_refuses_to_replace_a_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let from = dir.path().join("a");
+    let to = dir.path().join("b");
+    fs::create_dir(&from).unwrap();
+    fs::create_dir(&to).unwrap();
+    fs::write(to.join("keep.md"), "kept").unwrap();
+    let error = move_noreplace(&from, &to).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert!(from.is_dir());
+    assert_eq!(fs::read_to_string(to.join("keep.md")).unwrap(), "kept");
+}
+
+#[test]
+fn move_noreplace_with_a_case_only_change_keeps_the_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let from = dir.path().join("notes.md");
+    let to = dir.path().join("NOTES.md");
+    fs::write(&from, "x").unwrap();
+    move_noreplace(&from, &to).unwrap();
+    let names: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name())
+        .collect();
+    assert_eq!(names, vec![OsStr::new("NOTES.md")]);
+    assert_eq!(fs::read_to_string(&to).unwrap(), "x");
+}
+
+#[cfg(unix)]
+#[test]
+fn move_noreplace_with_a_case_only_change_is_still_the_same_file() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let from = dir.path().join("notes.md");
+    let to = dir.path().join("NOTES.md");
+    fs::write(&from, "x").unwrap();
+    let index = fs::metadata(&from).unwrap().ino();
+    move_noreplace(&from, &to).unwrap();
+    assert_eq!(fs::metadata(&to).unwrap().ino(), index);
+}
+
+#[test]
+fn move_noreplace_with_a_case_only_change_never_replaces_a_different_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let from = dir.path().join("a.md");
+    let to = dir.path().join("A.md");
+    fs::write(&from, "a").unwrap();
+    fs::write(&to, "upper").unwrap();
+    if fs::read_dir(dir.path()).unwrap().count() == 2 {
+        let error = move_noreplace(&from, &to).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&from).unwrap(), "a");
+        assert_eq!(fs::read_to_string(&to).unwrap(), "upper");
+    }
+}
+
+#[test]
+fn the_two_leg_move_puts_the_entry_back_when_the_second_leg_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let from = dir.path().join("a.md");
+    let to = dir.path().join("b.md");
+    fs::write(&from, "a").unwrap();
+    fs::write(&to, "b").unwrap();
+    let error = move_through_scratch(&from, &to).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read_to_string(&from).unwrap(), "a");
+    assert_eq!(fs::read_to_string(&to).unwrap(), "b");
+    let names: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name())
+        .collect();
+    assert_eq!(names.len(), 2);
+}
+
+#[test]
+fn the_two_leg_move_leaves_an_occupied_scratch_name_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let from = dir.path().join("a.md");
+    let to = dir.path().join("A.md");
+    let scratch = dir.path().join(".a.md.qol-rename");
+    fs::write(&from, "a").unwrap();
+    fs::write(&scratch, "mine").unwrap();
+    move_through_scratch(&from, &to).unwrap();
+    assert_eq!(fs::read_to_string(&to).unwrap(), "a");
+    assert_eq!(fs::read_to_string(&scratch).unwrap(), "mine");
+    assert!(!dir.path().join(".a.md.qol-rename (2)").exists());
 }
 
 #[test]
@@ -397,34 +346,4 @@ fn delete_removes_files_and_folders_and_reports_what_is_gone() {
     assert!(!folder.exists());
     assert_eq!(failures.len(), 1);
     assert_eq!(failures[0].path, missing);
-}
-
-#[test]
-fn journal_undo_of_a_new_file_only_proceeds_while_it_is_empty() {
-    let dir = tempfile::tempdir().unwrap();
-    let empty = new_file(dir.path(), "a").unwrap();
-    let mut journal = Journal::default();
-    journal.record_new_file(empty.clone());
-    assert_eq!(journal.undo(), Some(Undo::RemoveFile(empty)));
-
-    let written = dir.path().join("b");
-    fs::write(&written, "text").unwrap();
-    journal.record_new_file(written);
-    assert_eq!(journal.undo(), None);
-}
-
-#[test]
-fn journal_undo_of_a_duplicate_trashes_the_copies() {
-    let mut journal = Journal::default();
-    journal.record(&done(
-        Verb::Duplicate,
-        vec![("/a/x".into(), "/a/x copy".into())],
-    ));
-    assert_eq!(
-        journal.undo(),
-        Some(Undo::Trash {
-            copies: vec!["/a/x copy".into()],
-            restore: Vec::new(),
-        })
-    );
 }

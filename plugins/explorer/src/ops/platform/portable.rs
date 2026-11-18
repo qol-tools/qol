@@ -17,3 +17,7 @@ pub(crate) fn open_dir(path: &Path) -> io::Result<File> {
 pub(crate) fn keep_mode(file: &File, source: &Metadata) -> io::Result<()> {
     file.set_permissions(source.permissions())
 }
+
+pub(crate) fn changed_at(_meta: &Metadata) -> Option<(i64, i64)> {
+    None
+}

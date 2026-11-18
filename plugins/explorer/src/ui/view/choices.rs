@@ -10,21 +10,27 @@ const MINUTE: u64 = 60;
 const HOUR: u64 = 60 * MINUTE;
 const DAY: u64 = 24 * HOUR;
 
-pub(super) fn choices(clash: &Clash) -> [(Resolve, &'static str); 3] {
+pub(super) fn choices(clash: &Clash, undo: bool) -> Vec<(Resolve, &'static str)> {
+    if undo {
+        return vec![
+            (Resolve::Keep, "Keep this"),
+            (Resolve::KeepBoth, "Keep both"),
+        ];
+    }
     let middle = if clash.merges() {
         (Resolve::Merge, "Merge")
     } else {
         (Resolve::Replace, "Replace")
     };
-    [
+    vec![
         (Resolve::Keep, "Keep this"),
         middle,
         (Resolve::KeepBoth, "Keep both"),
     ]
 }
 
-fn stepped(clash: &Clash, forward: bool) -> Resolve {
-    let choices = choices(clash);
+fn stepped(clash: &Clash, forward: bool, undo: bool) -> Resolve {
+    let choices = choices(clash, undo);
     let index = choices
         .iter()
         .position(|(choice, _)| *choice == clash.choice)
@@ -176,11 +182,12 @@ impl ExplorerView {
             "down" => self.select_clash(self.clash_row + 1, cx),
             "left" | "right" => {
                 let forward = keystroke.key == "right";
+                let undo = self.browser.undo_asking();
                 let next = self.browser.surveyed().and_then(|survey| {
                     let clash = survey.clashes.get(self.clash_row)?;
                     clash
                         .applies(&survey.clashes)
-                        .then(|| stepped(clash, forward))
+                        .then(|| stepped(clash, forward, undo))
                 });
                 if let Some(choice) = next {
                     if shift {
@@ -244,32 +251,53 @@ mod tests {
     #[test]
     fn choices_step_left_and_right_and_stop_at_the_ends() {
         let cases = [
-            (false, Keep, false, Keep),
-            (false, Keep, true, Replace),
-            (false, Replace, true, KeepBoth),
-            (false, KeepBoth, true, KeepBoth),
-            (false, KeepBoth, false, Replace),
-            (true, Keep, false, Keep),
-            (true, Keep, true, Merge),
-            (true, Merge, true, KeepBoth),
-            (true, KeepBoth, true, KeepBoth),
-            (true, KeepBoth, false, Merge),
+            (false, false, Keep, false, Keep),
+            (false, false, Keep, true, Replace),
+            (false, false, Replace, true, KeepBoth),
+            (false, false, KeepBoth, true, KeepBoth),
+            (false, false, KeepBoth, false, Replace),
+            (true, false, Keep, false, Keep),
+            (true, false, Keep, true, Merge),
+            (true, false, Merge, true, KeepBoth),
+            (true, false, KeepBoth, true, KeepBoth),
+            (true, false, KeepBoth, false, Merge),
+            (false, true, Keep, false, Keep),
+            (false, true, Keep, true, KeepBoth),
+            (false, true, KeepBoth, true, KeepBoth),
+            (false, true, KeepBoth, false, Keep),
+            (true, true, Keep, true, KeepBoth),
+            (true, true, KeepBoth, false, Keep),
         ];
-        for (folder, from, forward, expected) in cases {
+        for (folder, undo, from, forward, expected) in cases {
             let row = clash("docs", folder, from);
             assert_eq!(
-                stepped(&row, forward),
+                stepped(&row, forward, undo),
                 expected,
-                "{folder} {from:?} {forward}"
+                "{folder} {undo} {from:?} {forward}"
             );
         }
     }
 
     #[test]
     fn a_folder_onto_a_folder_offers_merge_where_a_file_offers_replace() {
-        let labels = |folder| choices(&clash("docs", folder, Keep)).map(|(_, text)| text);
-        assert_eq!(labels(false), ["Keep this", "Replace", "Keep both"]);
-        assert_eq!(labels(true), ["Keep this", "Merge", "Keep both"]);
+        let labels = |folder, undo| {
+            choices(&clash("docs", folder, Keep), undo)
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(labels(false, false), ["Keep this", "Replace", "Keep both"]);
+        assert_eq!(labels(true, false), ["Keep this", "Merge", "Keep both"]);
+    }
+
+    #[test]
+    fn the_undo_sheet_offers_only_keep_this_and_keep_both() {
+        for folder in [false, true] {
+            assert_eq!(
+                choices(&clash("docs", folder, KeepBoth), true),
+                [(Keep, "Keep this"), (KeepBoth, "Keep both")]
+            );
+        }
     }
 
     #[test]

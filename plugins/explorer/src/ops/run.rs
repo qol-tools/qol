@@ -1,36 +1,39 @@
+use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::fs;
+use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use super::copy::{
-    copy_node, remove_all, remove_copied, same_content, same_entry, same_link, same_object, Meter,
-    ALREADY_THERE,
+    copy_to, remove_copied, same_content, same_entry, same_link, same_object, Meter, ALREADY_THERE,
 };
+use super::print::{Print, TreePrint};
 use super::simple::plain;
 use super::{
-    copy_name, free_name, next_job_id, restore, trash, Done, Failure, Job, JobId, Progress,
-    Resolve, Survey, Verb,
+    copy_name, free_name, next_job_id, Bin, Change, Done, Failure, Held, Job, JobId, Progress,
+    Resolve, Source, Survey, Tools, Verb,
 };
 
 const PULSE: Duration = Duration::from_millis(120);
 const PARTIAL_SUFFIX: &str = ".qol-partial";
 const PARTIAL_NAME_BYTES: usize = 230;
 
-pub fn start(survey: Survey, wake: impl Fn() + Send + 'static) -> Job {
+pub fn start(survey: Survey, tools: Tools, wake: impl Fn() + Send + 'static) -> Job {
     let id = next_job_id();
     let (tx, rx) = channel();
     thread::spawn(move || {
-        let mut run = Run::new(id, &survey, tx, Box::new(wake));
+        let shared = tools.gate.share();
+        let mut run = Run::new(id, &survey, tools, tx, Box::new(wake));
         for source in &survey.transfer.sources {
             let copy_only = survey.copy_only.iter().any(|kept| kept.path == *source);
             run.item(source, &survey.transfer.into, copy_only);
         }
-        run.finish();
+        run.finish(shared);
     });
     Job { id, progress: rx }
 }
@@ -45,16 +48,15 @@ struct Run {
     id: JobId,
     verb: Verb,
     choices: HashMap<PathBuf, Resolve>,
+    bin: Arc<dyn Bin>,
+    key: RandomState,
     tx: Sender<Progress>,
     wake: Box<dyn Fn() + Send>,
     total: u64,
     done: u64,
     last: Option<Instant>,
     placed: Vec<(PathBuf, PathBuf)>,
-    landed: Vec<(PathBuf, PathBuf)>,
-    matched: Vec<(PathBuf, PathBuf)>,
-    merged: Vec<PathBuf>,
-    replaced: Vec<PathBuf>,
+    replaced: Vec<(PathBuf, Option<Held>)>,
     kept_originals: Vec<PathBuf>,
     failures: Vec<Failure>,
 }
@@ -69,7 +71,13 @@ impl Meter for Run {
 }
 
 impl Run {
-    fn new(id: JobId, survey: &Survey, tx: Sender<Progress>, wake: Box<dyn Fn() + Send>) -> Self {
+    fn new(
+        id: JobId,
+        survey: &Survey,
+        tools: Tools,
+        tx: Sender<Progress>,
+        wake: Box<dyn Fn() + Send>,
+    ) -> Self {
         Self {
             id,
             verb: survey.transfer.verb,
@@ -78,15 +86,14 @@ impl Run {
                 .iter()
                 .map(|clash| (clash.existing.clone(), clash.choice))
                 .collect(),
+            bin: tools.bin,
+            key: tools.key,
             tx,
             wake,
             total: survey.bytes,
             done: 0,
             last: None,
             placed: Vec::new(),
-            landed: Vec::new(),
-            matched: Vec::new(),
-            merged: Vec::new(),
             replaced: Vec::new(),
             kept_originals: Vec::new(),
             failures: Vec::new(),
@@ -98,6 +105,10 @@ impl Run {
         (self.wake)();
     }
 
+    fn placed(&self, change: Change) {
+        self.send(Progress::Placed(Box::new(change)));
+    }
+
     fn pulse(&mut self) {
         self.last = Some(Instant::now());
         self.send(Progress::Bytes {
@@ -107,27 +118,27 @@ impl Run {
     }
 
     fn fail(&mut self, path: &Path, error: &io::Error) {
+        self.report(path, plain(error));
+    }
+
+    fn report(&mut self, path: &Path, reason: String) {
         self.failures.push(Failure {
             path: path.to_path_buf(),
-            reason: plain(error),
+            reason,
         });
     }
 
-    fn finish(mut self) {
+    fn finish(mut self, shared: Option<File>) {
         self.done = self.total;
         self.pulse();
         let done = Done {
             id: self.id,
             verb: self.verb,
             placed: std::mem::take(&mut self.placed),
-            landed: std::mem::take(&mut self.landed),
-            matched: std::mem::take(&mut self.matched),
-            merged: std::mem::take(&mut self.merged),
-            trashed: false,
-            replaced: std::mem::take(&mut self.replaced),
             kept_originals: std::mem::take(&mut self.kept_originals),
             failures: std::mem::take(&mut self.failures),
         };
+        drop(shared);
         self.send(Progress::Finished(done));
     }
 
@@ -159,9 +170,7 @@ impl Run {
                     self.put_back(before);
                     return;
                 }
-                if !copy_only {
-                    self.landed.push((src.to_path_buf(), target.clone()));
-                }
+                self.replaced.truncate(before);
                 target
             }
             Spot::Merge => {
@@ -197,53 +206,143 @@ impl Run {
     }
 
     fn discard(&mut self, existing: &Path) -> bool {
-        let trashed = trash(&[existing.to_path_buf()]);
-        let clean = trashed.failures.is_empty();
-        self.replaced
-            .extend(trashed.placed.into_iter().map(|(_, location)| location));
-        self.failures.extend(trashed.failures);
-        clean
+        match self.bin.trash(existing) {
+            Ok(held) => {
+                self.replaced.push((existing.to_path_buf(), held.clone()));
+                self.placed(Change::Replaced {
+                    at: existing.to_path_buf(),
+                    held,
+                });
+                true
+            }
+            Err(error) => {
+                self.report(existing, error.reason());
+                false
+            }
+        }
     }
 
     fn put_back(&mut self, from: usize) {
-        let trashed: Vec<PathBuf> = self.replaced.drain(from..).collect();
-        if !trashed.is_empty() {
-            self.failures.extend(restore(&trashed));
+        let replaced: Vec<(PathBuf, Option<Held>)> = self.replaced.drain(from..).collect();
+        for (at, held) in replaced.into_iter().rev() {
+            let Some(held) = held else {
+                self.report(&at, "it is in the trash and could not be put back".into());
+                continue;
+            };
+            match self.bin.restore(&held, &at) {
+                Ok(()) => self.send(Progress::Retracted(at)),
+                Err(error) => self.report(
+                    &at,
+                    format!(
+                        "it could not be put back and is still in the trash ({})",
+                        error.reason()
+                    ),
+                ),
+            }
         }
     }
 
     fn place(&mut self, src: &Path, target: &Path, moving: bool) -> bool {
+        let mut from_device = None;
         if moving {
+            let at = match Print::read(src) {
+                Ok(at) => at,
+                Err(error) => {
+                    self.fail(src, &error);
+                    return false;
+                }
+            };
             match qol_fs::rename_noreplace(src, target) {
-                Ok(()) => return true,
-                Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {}
+                Ok(()) => {
+                    self.placed(Change::Moved {
+                        from: src.to_path_buf(),
+                        to: target.to_path_buf(),
+                        at,
+                    });
+                    return true;
+                }
+                Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+                    from_device = at.device();
+                }
                 Err(error) => {
                     self.fail(src, &error);
                     return false;
                 }
             }
         }
-        let Some(partial) = partial_name(target)
-            .and_then(|partial| Some(free_name(partial.parent()?, partial.file_name()?)))
-        else {
-            return false;
-        };
-        let mut copied = Vec::new();
-        if let Err(error) = copy_node(src, &partial, self, &mut copied) {
-            let _ = remove_all(&partial);
-            self.fail(src, &error);
-            return false;
-        }
-        if let Err(error) = qol_fs::rename_noreplace(&partial, target) {
-            let _ = remove_all(&partial);
-            self.fail(src, &error);
-            return false;
-        }
         if moving {
-            if let Err(error) = remove_copied(&copied) {
-                self.fail(src, &error);
-            }
+            self.cross(src, target, from_device)
+        } else {
+            self.copy(src, target)
         }
+    }
+
+    fn copy(&mut self, src: &Path, target: &Path) -> bool {
+        let original = match TreePrint::read(src, &self.key) {
+            Ok(original) => original,
+            Err(error) => {
+                self.fail(src, &error);
+                return false;
+            }
+        };
+        if let Err(error) = copy_to(src, target, self, false) {
+            self.fail(src, &error);
+            return false;
+        }
+        match TreePrint::read(target, &self.key) {
+            Ok(tree) => self.placed(Change::Copied {
+                from: src.to_path_buf(),
+                to: target.to_path_buf(),
+                tree,
+                original,
+            }),
+            Err(error) => log::warn!(
+                "could not read {} after copying it, so it is not in the undo history: {error}",
+                target.display()
+            ),
+        }
+        true
+    }
+
+    fn cross(&mut self, src: &Path, target: &Path, from_device: Option<u64>) -> bool {
+        let copied = match copy_to(src, target, self, true) {
+            Ok(copied) => copied,
+            Err(error) => {
+                self.fail(src, &error);
+                return false;
+            }
+        };
+        let tree = match TreePrint::read(target, &self.key) {
+            Ok(tree) => tree,
+            Err(error) => {
+                self.report(
+                    src,
+                    format!(
+                        "the copy could not be checked, so the original was left where it is ({})",
+                        plain(&error)
+                    ),
+                );
+                return true;
+            }
+        };
+        self.placed(Change::Crossed {
+            from: src.to_path_buf(),
+            to: target.to_path_buf(),
+            tree,
+            source: Source::Removing,
+            from_device,
+        });
+        let source = match remove_copied(&copied) {
+            Ok(()) => Source::Removed,
+            Err(error) => {
+                self.fail(src, &error);
+                Source::Partly
+            }
+        };
+        self.send(Progress::Amended {
+            to: target.to_path_buf(),
+            source,
+        });
         true
     }
 
@@ -269,10 +368,10 @@ impl Run {
             let target = existing.join(&name);
             if self.identical(&path, &target) {
                 if moving {
-                    match fs::remove_file(&path) {
-                        Ok(()) => self.matched.push((path, target)),
+                    match self.bin.trash(&path) {
+                        Ok(held) => self.placed(Change::Matched { from: path, held }),
                         Err(error) => {
-                            self.fail(&path, &error);
+                            self.report(&path, error.reason());
                             emptied = false;
                         }
                     }
@@ -285,10 +384,10 @@ impl Run {
             emptied &= match self.settle(&path, &target, existing, &name) {
                 Spot::Place(landing) => {
                     let placed = self.place(&path, &landing, moving);
-                    if !placed {
+                    if placed {
+                        self.replaced.truncate(before);
+                    } else {
                         self.put_back(before);
-                    } else if moving || self.verb == Verb::Copy {
-                        self.landed.push((path.clone(), landing));
                     }
                     placed && moving
                 }
@@ -297,11 +396,21 @@ impl Run {
             };
         }
         if moving && emptied {
+            let at = match Print::read(src) {
+                Ok(at) => at,
+                Err(error) => {
+                    self.fail(src, &error);
+                    return false;
+                }
+            };
             if let Err(error) = fs::remove_dir(src) {
                 self.fail(src, &error);
                 return false;
             }
-            self.merged.push(src.to_path_buf());
+            self.placed(Change::Emptied {
+                folder: src.to_path_buf(),
+                at,
+            });
         }
         moving && emptied
     }
@@ -330,6 +439,16 @@ pub fn partial_of(target: &Path, entry: &Path) -> bool {
     };
     entry.parent() == target.parent()
         && matches!((stem(&first), stem(entry)), (Some(first), Some(found)) if found.starts_with(&first))
+}
+
+pub(super) fn partial_variant(target: &Path, number: u32) -> Option<PathBuf> {
+    let first = partial_name(target)?;
+    if number <= 1 {
+        return Some(first);
+    }
+    let name = first.file_name()?.to_str()?;
+    let stem = name.strip_suffix(PARTIAL_SUFFIX)?;
+    Some(first.with_file_name(format!("{stem} ({number}){PARTIAL_SUFFIX}")))
 }
 
 pub fn partial_name(target: &Path) -> Option<PathBuf> {

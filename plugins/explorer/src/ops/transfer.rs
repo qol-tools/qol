@@ -199,7 +199,7 @@ fn merge(source: &Path, existing: &Path, tally: &mut Tally) -> io::Result<()> {
     Ok(())
 }
 
-fn stamp(path: &Path, meta: &Metadata) -> Stamp {
+pub(super) fn stamp(path: &Path, meta: &Metadata) -> Stamp {
     let folder = meta.is_dir();
     Stamp {
         bytes: if folder { tree_bytes(path) } else { meta.len() },

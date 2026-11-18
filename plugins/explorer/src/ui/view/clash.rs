@@ -41,7 +41,15 @@ pub(super) fn render(
         .and_then(|source| source.parent())
         .and_then(|parent| parent.file_name())
         .map_or_else(String::new, crate::listing::display_name);
-    let lines = say(view, survey);
+    let undo = view.browser.undo_asking();
+    let lines = if undo {
+        view.browser
+            .undo_lines()
+            .map(<[String]>::to_vec)
+            .unwrap_or_default()
+    } else {
+        say(view, survey)
+    };
     let apply = if clashes > 0 {
         "Apply choices"
     } else {
@@ -75,8 +83,8 @@ pub(super) fn render(
         .when(clashes > 0, |sheet| {
             sheet
                 .child(columns(kit, &from))
-                .child(table(view, survey, kit, cx))
-                .when(newer > 0, |sheet| sheet.child(hint(kit, newer)))
+                .child(table(view, survey, kit, undo, cx))
+                .when(newer > 0 && !undo, |sheet| sheet.child(hint(kit, newer)))
         })
         .when(clashes == 0, |sheet| sheet.child(div().flex_1()))
         .child(buttons(
@@ -132,6 +140,7 @@ fn table(
     view: &ExplorerView,
     survey: &Survey,
     kit: Kit,
+    undo: bool,
     cx: &mut Context<ExplorerView>,
 ) -> AnyElement {
     let clashes = survey.clashes.clone();
@@ -149,15 +158,13 @@ fn table(
                     rows.filter_map(|row| {
                         let clash = clashes.get(row)?;
                         let applies = clash.applies(&clashes);
-                        Some(clash_row(
-                            clash,
+                        let slot = Slot {
                             row,
-                            row == selected,
+                            selected: row == selected,
                             applies,
-                            now,
-                            kit,
-                            cx,
-                        ))
+                            undo,
+                        };
+                        Some(clash_row(clash, slot, now, kit, cx))
                     })
                     .collect::<Vec<_>>()
                 }),
@@ -168,21 +175,33 @@ fn table(
         .into_any_element()
 }
 
-fn clash_row(
-    clash: &Clash,
+#[derive(Clone, Copy)]
+struct Slot {
     row: usize,
     selected: bool,
     applies: bool,
+    undo: bool,
+}
+
+fn clash_row(
+    clash: &Clash,
+    slot: Slot,
     now: SystemTime,
     kit: Kit,
     cx: &mut Context<ExplorerView>,
 ) -> AnyElement {
+    let Slot {
+        row,
+        selected,
+        applies,
+        undo,
+    } = slot;
     let ground = kit.highlight_ground(selected);
     let name = clash
         .existing
         .file_name()
         .map_or_else(String::new, crate::listing::display_name);
-    let choices = choices(clash);
+    let choices = choices(clash, undo);
     let per_row = choices.len();
     let segments = choices
         .into_iter()
