@@ -2342,6 +2342,15 @@ const claim = async ($: EngineInterface, program: string, id: string): Promise<b
 const logs = new Map<string, Quiet>()
 let logged = 0
 
+const FORK_CALLS_KEPT = 500
+const forkCalls = new Set<string>()
+
+const noteForkCall = (toolUseId: unknown): void => {
+  if (typeof toolUseId !== 'string' || toolUseId === '') return
+  forkCalls.add(toolUseId)
+  if (forkCalls.size > FORK_CALLS_KEPT) forkCalls.delete(forkCalls.values().next().value as string)
+}
+
 export const logEvent = async ($: EngineInterface, event: Quiet): Promise<void> => {
   logged += 1
   const id = `${LOG_PREFIX}${await $.clock.now()}-${logged}`
@@ -2886,7 +2895,9 @@ export const register: Register = on => {
     if (e.props.origin.kind !== 'task-notification' || e.props.isExpanded) return next(e)
     const list = await read($, board)
     const taskId = e.props.task?.id
-    const isOtherFork = taskId !== undefined && viewedFork === undefined && (await read($, writingTo)) !== '' && list.some(entry => entry.agentId === taskId)
+    const call = e.props.task?.toolUseId
+    const isForkTask = (taskId !== undefined && list.some(entry => entry.agentId === taskId)) || (call !== undefined && forkCalls.has(call))
+    const isOtherFork = isForkTask && viewedFork === undefined && (await read($, writingTo)) !== ''
     const name = RESUMED_SUMMARY.exec(e.props.text.trim())?.[1]
     if (!isOtherFork && (name === undefined || !list.some(entry => namesFork(entry.name, name)))) return next(e)
     const { Box } = $.ui.resolve(e)
@@ -3158,6 +3169,7 @@ export const register: Register = on => {
     if (e.agentId !== undefined && CROSS_SESSION.test(e.tool)) return { deny: FORK_RESUME }
     if (e.agentId !== undefined) {
       const agentId = e.agentId
+      if ((e as unknown as Record<string, unknown>).run_in_background === true) noteForkCall(e.tool_use_id)
       try {
         const label = toolLabel(e.tool, e as unknown as Record<string, unknown>)
         void noteActivity($, agentId, label).catch(() => {})

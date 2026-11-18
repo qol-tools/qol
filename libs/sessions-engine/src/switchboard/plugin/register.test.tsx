@@ -304,6 +304,44 @@ test("while the prompt writes to a fork, fork notification rows draw as nothing 
   expect([await shows('a7'), await shows('a8'), await shows('b1')]).toEqual([true, true, true])
 })
 
+test("while the prompt writes to a fork, the notification of a background command another fork started draws as nothing, and one the switchboard started keeps its row", async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  on('clock.after', () => new Promise(() => {}))
+  const calls: string[] = []
+  on('tool.call', (_: any, e: any) => {
+    calls.push(e.tool_use_id)
+    return { result: 'ok' }
+  })
+  on('env.get', () => ({ value: undefined }))
+  on('session.messages', () => ({ value: [{ role: 'assistant', text: 'Amber or teal?' }] }))
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{e.props.text}</Text>
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a7', 'quiet-fork: quiet')
+  await spawn($, 'a8', 'asking-fork: asks')
+  await $.tool.call({ tool: 'Bash', agentId: 'a7', command: 'sleep 9', description: 'Watch the pull request', run_in_background: true })
+  await $.tool.call({ tool: 'Bash', command: 'sleep 9', description: 'Watch the build', run_in_background: true })
+  const [byFork, bySwitchboard] = calls as [string, string]
+  expect(byFork).not.toBe(bySwitchboard)
+  const shows = async (toolUseId: string) => {
+    const mounted = await $.ui.mount({
+      plugin: 'qol-switchboard',
+      surface: 'terminal',
+      component: 'UserMessage',
+      props: { text: 'Background command "Watch" completed', origin: { kind: 'task-notification' }, isExpanded: false, task: { id: 'b1', toolUseId } },
+    } as const)
+    const found = (await mounted.find({ type: 'Text' })) !== undefined
+    await mounted.unmount()
+    return found
+  }
+  expect([await shows(byFork), await shows(bySwitchboard)]).toEqual([true, true])
+  expect((await typed($, 'asking-fork teal')).drop).toContain('→ asking-fork')
+  expect([await shows(byFork), await shows(bySwitchboard)]).toEqual([false, true])
+})
+
 test("a message typed to a fork from the switchboard's prompt shows in the fork's view as the user's words alone", async ($, on) => {
   engine(on)
   on('ui.render', ($: any, e: any) => {
