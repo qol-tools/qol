@@ -1,9 +1,32 @@
 import itertools
+import os
 import re
+import subprocess
+import sys
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
+
+RECORDING_SUDO = """
+import os, sys
+
+args = sys.argv[1:]
+if args[0] == "tee":
+    with open(args[1], "w") as mirrors:
+        mirrors.write(sys.stdin.read())
+    sys.exit(0)
+verb = "download" if "--download-only" in args else next(arg for arg in args if arg in ("update", "install"))
+with open(os.environ["APT_MIRRORS"]) as mirrors:
+    mirror = mirrors.read().strip()
+with open(os.environ["APT_CALLS"]) as calls:
+    nth = sum(line.split()[0] == verb for line in calls) + 1
+with open(os.environ["APT_CALLS"], "a") as calls:
+    calls.write(f"{verb} {args[1]} {mirror}\\n")
+sys.exit(124 if f"{verb}:{nth}" in os.environ["APT_FAIL"].split() else 0)
+"""
 
 
 def field(block, name):
@@ -110,6 +133,44 @@ class BuildCacheSetupTests(unittest.TestCase):
         self.assertNotIn("trusted=yes", install)
         self.assertNotIn("allow-unauthenticated", install)
         self.assertNotIn("AllowUnauthenticated", install)
+
+    def test_a_slow_package_download_moves_to_the_outside_mirror(self):
+        install = next(step for step in self.steps if step.startswith("name: Install Linux system dependencies"))
+        script = textwrap.dedent(install.split("      run: |\n", 1)[1])
+        self.assertIn("local list=/etc/apt/apt-mirrors.txt", script)
+        runner, outside = "http://runner.invalid/ubuntu/", "https://mirrors.edge.kernel.org/ubuntu/"
+        healthy = [("update", "120", runner), ("download", "60", runner), ("install", "300", runner)]
+        moved = [("update", "120", outside), ("download", "300", outside)]
+        for failing, code, calls in [
+            ([], 0, healthy),
+            (["download:1"], 0, healthy[:2] + moved + [("install", "300", outside)]),
+            (["download:1", "update:2"], 0, healthy[:2] + moved[:1] + moved + [("install", "300", outside)]),
+            (["download:1", "download:2"], 0, healthy[:2] + moved + moved + [("install", "300", outside)]),
+            (["download:1", "download:2", "download:3", "download:4"], 1, healthy[:2] + moved * 3),
+            (["update:1"], 0, [healthy[0]] + [(verb, bound, outside) for verb, bound, _ in healthy]),
+            (["install:1"], 0, healthy + healthy[2:]),
+        ]:
+            with self.subTest(failing=failing), tempfile.TemporaryDirectory() as folder:
+                mirrors, log = Path(folder, "apt-mirrors.txt"), Path(folder, "calls")
+                mirrors.write_text(f"{runner}\n")
+                log.write_text("")
+                sudo = Path(folder, "sudo")
+                sudo.write_text(f"#!{sys.executable}\n{RECORDING_SUDO}")
+                sudo.chmod(0o755)
+                result = subprocess.run(
+                    ["bash", "-e", "-c", script.replace("/etc/apt/apt-mirrors.txt", str(mirrors))],
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PATH": f"{folder}{os.pathsep}{os.environ['PATH']}",
+                        "APT_MIRRORS": str(mirrors),
+                        "APT_CALLS": str(log),
+                        "APT_FAIL": " ".join(failing),
+                    },
+                )
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                self.assertEqual([tuple(line.split()) for line in log.read_text().splitlines()], calls)
 
 
 if __name__ == "__main__":
