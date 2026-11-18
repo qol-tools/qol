@@ -1578,10 +1578,10 @@ fn selected_rect(origin: Point<Pixels>, start: Point<Pixels>, end: Point<Pixels>
 #[cfg(test)]
 mod tests {
     use super::{
-        backdrop_segments, capture_estimate, format_duration, kind_label, local_from_global,
-        selected_rect, selection_bounds_in_window, selection_global_rect, shift_rect,
-        top_stack_area, ChipModel, DetectedTarget, DetectedTargetRole, HoverTarget, SelectionState,
-        CHIP_H, CHIP_TOP, CHIP_W,
+        backdrop_segments, capture_estimate, format_duration, hover_poll_during_drag, kind_label,
+        local_from_global, selected_rect, selection_bounds_in_window, selection_global_rect,
+        shift_rect, top_stack_area, ChipModel, DetectedTarget, DetectedTargetRole, HoverTarget,
+        SelectionState, SelectorPollResult, CHIP_H, CHIP_TOP, CHIP_W,
     };
     use crate::capture::space::{CaptureKind, DisplayScale, Quality};
     use crate::Rect;
