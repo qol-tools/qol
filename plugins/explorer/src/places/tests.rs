@@ -317,20 +317,25 @@ fn rename_pin_trims_and_ignores_blank_unchanged_or_missing() {
 #[test]
 fn a_pin_for_a_folder_names_and_places_it_by_its_home() {
     let home = Path::new("/home/me");
+    let project = home.join("Projects").join("qol");
     let cases = [
-        (home, "Home", "~"),
-        (Path::new("/home/me/Projects/qol"), "qol", "~/Projects/qol"),
-        (Path::new("/srv/music"), "music", "/srv/music"),
-        (Path::new("/"), "/", "/"),
+        (home, "Home", "~".to_string()),
+        (project.as_path(), "qol", sep("~/Projects/qol")),
+        (Path::new("/srv/music"), "music", "/srv/music".to_string()),
+        (Path::new("/"), "/", "/".to_string()),
     ];
     for (folder, name, path) in cases {
         let pin = pin_for(folder, home);
         assert_eq!(
             (pin.name.as_str(), pin.path.as_str()),
-            (name, path),
+            (name, path.as_str()),
             "{folder:?}"
         );
     }
+}
+
+fn sep(text: &str) -> String {
+    text.replace('/', std::path::MAIN_SEPARATOR_STR)
 }
 
 #[test]
@@ -358,7 +363,7 @@ fn a_usual_folder_where_user_dirs_agrees_pins_as_the_usual_path() {
         let pin = pin_in(&desktop, home, known);
         assert_eq!(
             (pin.name.as_str(), pin.path.as_str()),
-            ("Desktop", "~/Desktop")
+            ("Desktop", sep("~/Desktop").as_str())
         );
     }
 }
