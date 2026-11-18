@@ -49,6 +49,7 @@ use super::browse::{Browser, Held, Opening, PathStep};
 use super::keys::{self, Action, Click, Resize, Step};
 use crate::config::{ConfigSaver, ExplorerConfig, Pin, ViewSize};
 use crate::listing::{ListingState, SortBy, SortOrder};
+use crate::ops::Transfer;
 use crate::places::{self, Device, Place};
 use crate::ui::trail::{self, Crumb};
 use crate::ui::PLUGIN_ID;
@@ -390,7 +391,10 @@ impl ExplorerView {
                 self.browser.hold(Held::Copied);
             }
             Command::Paste => {
-                self.paste();
+                self.paste(Browser::paste);
+            }
+            Command::PasteHere => {
+                self.paste(Browser::paste_here);
             }
             Command::RenameItem => {
                 self.browser.rename_open();
@@ -888,7 +892,7 @@ impl ExplorerView {
             Action::Resize(resize) => self.resize(self.stop.resized(resize)),
             Action::Copy => self.browser.hold(Held::Copied),
             Action::Cut => self.browser.hold(Held::Cut),
-            Action::Paste => self.paste(),
+            Action::Paste => self.paste(Browser::paste),
             Action::Trash => self.browser.trash_picks(),
             Action::Rename => self.browser.rename_open(),
             Action::NewFolder => self.revealed(Browser::new_folder),
@@ -906,8 +910,8 @@ impl ExplorerView {
         }
     }
 
-    fn paste(&mut self) -> bool {
-        let Some(transfer) = self.browser.paste() else {
+    fn paste(&mut self, into: impl FnOnce(&mut Browser) -> Option<Transfer>) -> bool {
+        let Some(transfer) = into(&mut self.browser) else {
             return false;
         };
         self.browser.begin(transfer);

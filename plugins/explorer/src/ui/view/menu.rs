@@ -27,6 +27,7 @@ pub(super) enum Command {
     Cut,
     Copy,
     Paste,
+    PasteHere,
     RenameItem,
     Trash,
     NewFolder,
@@ -100,13 +101,8 @@ fn secondary(key: Key) -> Option<Key> {
     Some(key.secondary())
 }
 
-fn paste_line(can_paste: bool) -> Item {
-    entry(
-        Command::Paste,
-        "Paste",
-        secondary(Key::letter('v')),
-        can_paste,
-    )
+fn paste_line(command: Command, can_paste: bool) -> Item {
+    entry(command, "Paste", secondary(Key::letter('v')), can_paste)
 }
 
 fn make_lines() -> [Item; 3] {
@@ -128,7 +124,7 @@ fn make_lines() -> [Item; 3] {
 }
 
 fn edit_lines(can_paste: bool) -> Vec<Item> {
-    let mut lines = vec![paste_line(can_paste)];
+    let mut lines = vec![paste_line(Command::PasteHere, can_paste)];
     lines.extend(make_lines());
     lines.push(entry(
         Command::OpenTerminal,
@@ -151,7 +147,7 @@ fn item_lines(can_paste: bool, single: bool, file: bool) -> Vec<Item> {
         Item::Rule,
         entry(Command::Cut, "Cut", secondary(Key::letter('x')), true),
         entry(Command::Copy, "Copy", secondary(Key::letter('c')), true),
-        paste_line(can_paste),
+        paste_line(Command::Paste, can_paste),
         entry(
             Command::Duplicate,
             "Duplicate",
@@ -636,7 +632,7 @@ mod tests {
         assert_eq!(
             lines(&menu),
             vec![
-                (Command::Paste, false),
+                (Command::PasteHere, false),
                 (Command::NewFolder, true),
                 (Command::NewFile, true),
                 (Command::Undo, true),
@@ -654,6 +650,6 @@ mod tests {
         assert_eq!(menu.selected_command(), Some(Command::NewFolder));
         assert_eq!(menu.owner(), Owner::Folder);
         let held = Menu::background("Docs", None, true, SortOrder::default(), true, at());
-        assert_eq!(held.selected_command(), Some(Command::Paste));
+        assert_eq!(held.selected_command(), Some(Command::PasteHere));
     }
 }

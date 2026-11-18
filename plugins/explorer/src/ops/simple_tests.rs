@@ -11,6 +11,7 @@ fn done(verb: Verb, placed: Vec<(PathBuf, PathBuf)>) -> Done {
         verb,
         landed: placed.clone(),
         matched: Vec::new(),
+        merged: Vec::new(),
         trashed: false,
         placed,
         replaced: Vec::new(),
@@ -210,6 +211,7 @@ fn journal_undoes_a_move_in_one_step_per_original_folder() {
             ],
             renames: Vec::new(),
             restore: Vec::new(),
+            recreate: Vec::new(),
         })
     );
     assert_eq!(journal.undo(), None);
@@ -229,6 +231,7 @@ fn journal_undo_of_a_keep_both_move_returns_the_original_name() {
             }],
             renames: vec![("/a/x (2)".into(), "/a/x".into())],
             restore: Vec::new(),
+            recreate: Vec::new(),
         })
     );
 }
@@ -249,6 +252,26 @@ fn journal_undo_of_a_merging_move_copies_back_the_files_that_matched() {
             }],
             renames: Vec::new(),
             restore: Vec::new(),
+            recreate: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn journal_undo_of_a_move_that_merged_an_empty_folder_recreates_it() {
+    let mut journal = Journal::default();
+    journal.record_new_folder("/c/docs".into());
+    let mut moved = done(Verb::Move, Vec::new());
+    moved.placed = vec![("/a/docs".into(), "/c/docs".into())];
+    moved.merged = vec!["/a/docs".into()];
+    journal.record(&moved);
+    assert_eq!(
+        journal.undo(),
+        Some(Undo::Transfer {
+            back: Vec::new(),
+            renames: Vec::new(),
+            restore: Vec::new(),
+            recreate: vec!["/a/docs".into()],
         })
     );
 }

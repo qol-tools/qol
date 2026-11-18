@@ -53,6 +53,7 @@ struct Run {
     placed: Vec<(PathBuf, PathBuf)>,
     landed: Vec<(PathBuf, PathBuf)>,
     matched: Vec<(PathBuf, PathBuf)>,
+    merged: Vec<PathBuf>,
     replaced: Vec<PathBuf>,
     kept_originals: Vec<PathBuf>,
     failures: Vec<Failure>,
@@ -85,6 +86,7 @@ impl Run {
             placed: Vec::new(),
             landed: Vec::new(),
             matched: Vec::new(),
+            merged: Vec::new(),
             replaced: Vec::new(),
             kept_originals: Vec::new(),
             failures: Vec::new(),
@@ -120,6 +122,7 @@ impl Run {
             placed: std::mem::take(&mut self.placed),
             landed: std::mem::take(&mut self.landed),
             matched: std::mem::take(&mut self.matched),
+            merged: std::mem::take(&mut self.merged),
             trashed: false,
             replaced: std::mem::take(&mut self.replaced),
             kept_originals: std::mem::take(&mut self.kept_originals),
@@ -180,7 +183,11 @@ impl Run {
         };
         let incoming_folder = fs::symlink_metadata(src).is_ok_and(|meta| meta.is_dir());
         if incoming_folder && here.is_dir() {
-            return Spot::Merge;
+            return match self.choices.get(existing).copied() {
+                Some(Resolve::Keep) => Spot::Skip,
+                Some(Resolve::KeepBoth) => Spot::Place(free_name(parent, name)),
+                _ => Spot::Merge,
+            };
         }
         match self.choices.get(existing).copied() {
             Some(Resolve::Replace) if self.discard(existing) => Spot::Place(existing.to_path_buf()),
@@ -294,6 +301,7 @@ impl Run {
                 self.fail(src, &error);
                 return false;
             }
+            self.merged.push(src.to_path_buf());
         }
         moving && emptied
     }

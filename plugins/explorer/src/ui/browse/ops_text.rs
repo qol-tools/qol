@@ -6,12 +6,23 @@ use qol_gpui::format_bytes;
 use super::ops::Held;
 use crate::ops::{Clash, NameProblem, Room, Survey, Verb};
 
-pub(super) fn held_note(held: Held, count: usize) -> String {
+pub(super) fn held_note(held: Held, count: usize, into: Option<&str>) -> String {
     let word = match held {
         Held::Cut => "cut",
         Held::Copied => "copied",
     };
-    format!("{count} {word}. Open a folder and press ctrl+v")
+    match into {
+        Some(folder) => format!("{count} {word}. Press ctrl+v to paste into {folder}"),
+        None => format!("{count} {word}. Open a folder and press ctrl+v"),
+    }
+}
+
+pub(super) fn already_in(into: &Path, here: &Path) -> String {
+    if into == here {
+        "Already in this folder".to_string()
+    } else {
+        format!("Already in {}", name_of(into))
+    }
 }
 
 pub(super) fn drop_hint(copy: bool) -> &'static str {
@@ -195,22 +206,34 @@ pub(super) fn not_started_detail(survey: &Survey) -> String {
 pub(super) fn kept_sentence(clashes: &[Clash], same_inside: usize) -> String {
     let kept: Vec<&Clash> = clashes
         .iter()
-        .filter(|clash| clash.choice == crate::ops::Resolve::Keep)
+        .filter(|clash| clash.choice == crate::ops::Resolve::Keep && clash.applies(clashes))
         .collect();
     let mut text = String::new();
     if !kept.is_empty() {
-        let newer = kept.iter().all(|clash| {
-            matches!((clash.here.modified, clash.incoming.modified), (Some(here), Some(incoming)) if here >= incoming)
-        });
+        let folders = kept.iter().filter(|clash| clash.merges()).count();
+        let newer = folders == 0
+            && kept.iter().all(|clash| {
+                matches!((clash.here.modified, clash.incoming.modified), (Some(here), Some(incoming)) if here >= incoming)
+            });
         let count = kept.len();
-        let files = if count == 1 { "file" } else { "files" };
-        if newer {
-            text.push_str(&format!("Kept the {count} newer {files} there."));
+        let (one, many) = if folders == 0 {
+            ("file", "files")
+        } else if folders == count {
+            ("folder", "folders")
         } else {
-            text.push_str(&format!("Kept {count} {files} there."));
+            ("item", "items")
+        };
+        let noun = if count == 1 { one } else { many };
+        if newer {
+            text.push_str(&format!("Kept the {count} newer {noun} there."));
+        } else {
+            text.push_str(&format!("Kept {count} {noun} there."));
         }
     }
-    if same_inside > 0 {
+    let declined = clashes
+        .iter()
+        .any(|clash| clash.merges() && clash.choice != crate::ops::Resolve::Merge);
+    if same_inside > 0 && !declined {
         let others = if kept.is_empty() { "The" } else { " The other" };
         text.push_str(&format!("{others} {same_inside} were already the same."));
     }

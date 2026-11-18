@@ -13,7 +13,7 @@ use qol_gpui::theme::{
 };
 use qol_gpui::Key;
 
-use super::choices::{choice_index, newer_here, newer_incoming, say, stamp_label, CHOICES};
+use super::choices::{choices, newer_here, newer_incoming, say, stamp_label};
 use super::pictogram::{named_pictogram, PictogramSize};
 use super::{ExplorerView, BAND};
 use crate::ops::{Clash, Room, Survey};
@@ -32,7 +32,7 @@ pub(super) fn render(
     let newer = survey
         .clashes
         .iter()
-        .filter(|clash| newer_here(clash))
+        .filter(|clash| !clash.merges() && clash.applies(&survey.clashes) && newer_here(clash))
         .count();
     let from = survey
         .transfer
@@ -148,7 +148,16 @@ fn table(
                     let now = SystemTime::now();
                     rows.filter_map(|row| {
                         let clash = clashes.get(row)?;
-                        Some(clash_row(clash, row, row == selected, now, kit, cx))
+                        let applies = clash.applies(&clashes);
+                        Some(clash_row(
+                            clash,
+                            row,
+                            row == selected,
+                            applies,
+                            now,
+                            kit,
+                            cx,
+                        ))
                     })
                     .collect::<Vec<_>>()
                 }),
@@ -163,6 +172,7 @@ fn clash_row(
     clash: &Clash,
     row: usize,
     selected: bool,
+    applies: bool,
     now: SystemTime,
     kit: Kit,
     cx: &mut Context<ExplorerView>,
@@ -172,18 +182,22 @@ fn clash_row(
         .existing
         .file_name()
         .map_or_else(String::new, crate::listing::display_name);
-    let segments = CHOICES.iter().map(|(choice, text)| {
-        let choice = *choice;
-        kit.segment(*text, clash.choice == choice)
-            .id((
-                "explorer-clash-choice",
-                row * CHOICES.len() + choice_index(choice),
-            ))
-            .cursor_pointer()
-            .on_click(cx.listener(move |view, _, _window, cx| {
-                view.choose_clash(row, choice, cx);
-            }))
-    });
+    let choices = choices(clash);
+    let per_row = choices.len();
+    let segments = choices
+        .into_iter()
+        .enumerate()
+        .map(|(index, (choice, text))| {
+            kit.segment(text, clash.choice == choice)
+                .id(("explorer-clash-choice", row * per_row + index))
+                .when(applies, |segment| {
+                    segment
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |view, _, _window, cx| {
+                            view.choose_clash(row, choice, cx);
+                        }))
+                })
+        });
     let element = div()
         .id(("explorer-clash", row))
         .w_full()
@@ -225,7 +239,10 @@ fn clash_row(
         )
         .on_click(cx.listener(move |view, _, _window, cx| {
             view.select_clash(row, cx);
-        }));
+        }))
+        .when(!applies, |element| {
+            element.opacity(qol_gpui::theme::OPACITY_DISABLED)
+        });
     kit.highlight(element, selected).into_any_element()
 }
 

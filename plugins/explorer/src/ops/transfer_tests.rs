@@ -130,7 +130,7 @@ fn survey_marks_identical_file_same_and_keep() {
 }
 
 #[test]
-fn survey_merges_folder_onto_folder_and_lists_only_differing_files() {
+fn survey_asks_about_a_folder_onto_a_folder_and_lists_differing_files_inside() {
     let (_root, from, into) = two_folders();
     for name in ["one", "two", "three"] {
         write(&from.join("docs").join(name), name, 50);
@@ -142,9 +142,100 @@ fn survey_merges_folder_onto_folder_and_lists_only_differing_files() {
     write(&into.join("docs/three"), "different!", 5);
     let found = survey(transfer(Verb::Copy, &[&from.join("docs")], &into)).unwrap();
     assert_eq!(found.same_inside, 2);
-    assert_eq!(found.clashes.len(), 1);
-    assert_eq!(found.clashes[0].existing, into.join("docs/three"));
-    assert_eq!(found.bytes, "three".len() as u64 + "fresh".len() as u64);
+    assert_eq!(found.clashes.len(), 2);
+    assert!(found.clashes[0].merges());
+    assert_eq!(found.clashes[0].existing, into.join("docs"));
+    assert_eq!(found.clashes[0].choice, Resolve::KeepBoth);
+    assert_eq!(found.clashes[1].existing, into.join("docs/three"));
+    let whole: u64 = ["one", "two", "three", "fresh"]
+        .iter()
+        .map(|name| name.len() as u64)
+        .sum();
+    assert_eq!(found.bytes, whole);
+}
+
+#[test]
+fn a_folder_onto_a_folder_keeps_both_merges_or_stays_as_chosen() {
+    let cases = [
+        (None, vec!["hello", "hello (2)"], vec!["old.txt"], false),
+        (
+            Some(Resolve::Merge),
+            vec!["hello"],
+            vec!["new.txt", "old.txt"],
+            false,
+        ),
+        (Some(Resolve::Keep), vec!["hello"], vec!["old.txt"], true),
+    ];
+    for (choice, landed, inside, stays) in cases {
+        let (_root, from, into) = two_folders();
+        write(&from.join("hello/new.txt"), "new", 10);
+        write(&into.join("hello/old.txt"), "old", 10);
+        let mut found = survey(transfer(Verb::Move, &[&from.join("hello")], &into)).unwrap();
+        assert_eq!(found.clashes.len(), 1, "{choice:?}");
+        assert!(found.clashes[0].merges(), "{choice:?}");
+        assert_eq!(found.clashes[0].choice, Resolve::KeepBoth, "{choice:?}");
+        if let Some(choice) = choice {
+            found.clashes[0].choice = choice;
+        }
+        let (done, _) = run(found);
+        assert!(done.failures.is_empty(), "{choice:?}");
+        assert_eq!(names(&into), landed, "{choice:?}");
+        assert_eq!(names(&into.join("hello")), inside, "{choice:?}");
+        assert_eq!(from.join("hello").exists(), stays, "{choice:?}");
+        if into.join("hello (2)").exists() {
+            assert_eq!(names(&into.join("hello (2)")), vec!["new.txt"]);
+        }
+    }
+}
+
+#[test]
+fn rows_inside_a_folder_apply_only_while_it_merges_and_choices_fit_each_row() {
+    let (_root, from, into) = two_folders();
+    write(&from.join("docs/a.txt"), "incoming", 10);
+    write(&into.join("docs/a.txt"), "here", 100);
+    write(&from.join("b.txt"), "incoming", 10);
+    write(&into.join("b.txt"), "here", 100);
+    let mut found = survey(transfer(
+        Verb::Copy,
+        &[&from.join("docs"), &from.join("b.txt")],
+        &into,
+    ))
+    .unwrap();
+    let existing: Vec<PathBuf> = found
+        .clashes
+        .iter()
+        .map(|clash| clash.existing.clone())
+        .collect();
+    assert_eq!(
+        existing,
+        vec![
+            into.join("docs"),
+            into.join("docs/a.txt"),
+            into.join("b.txt")
+        ]
+    );
+    let applies = |found: &super::Survey| {
+        found
+            .clashes
+            .iter()
+            .map(|clash| clash.applies(&found.clashes))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(applies(&found), vec![true, false, true]);
+    found.clashes[0].choice = Resolve::Merge;
+    assert_eq!(applies(&found), vec![true, true, true]);
+    let fitted = |choice| {
+        found
+            .clashes
+            .iter()
+            .map(|clash| clash.fitted(choice))
+            .collect::<Vec<_>>()
+    };
+    let middle = vec![Resolve::Merge, Resolve::Replace, Resolve::Replace];
+    assert_eq!(fitted(Resolve::Replace), middle);
+    assert_eq!(fitted(Resolve::Merge), middle);
+    assert_eq!(fitted(Resolve::KeepBoth), vec![Resolve::KeepBoth; 3]);
+    assert_eq!(fitted(Resolve::Keep), vec![Resolve::Keep; 3]);
 }
 
 #[test]
@@ -297,8 +388,9 @@ fn move_merge_removes_identical_and_moved_files_but_keeps_kept_ones() {
     fs::create_dir_all(into.join("docs")).unwrap();
     clone_file(&from.join("docs/same"), &into.join("docs/same"));
     write(&into.join("docs/clash"), "here", 10);
-    let found = survey(transfer(Verb::Move, &[&from.join("docs")], &into)).unwrap();
-    assert_eq!(found.clashes[0].choice, Resolve::Keep);
+    let mut found = survey(transfer(Verb::Move, &[&from.join("docs")], &into)).unwrap();
+    assert_eq!(found.clashes[1].choice, Resolve::Keep);
+    found.clashes[0].choice = Resolve::Merge;
     let (done, _) = run(found);
     assert!(done.failures.is_empty());
     assert_eq!(names(&from.join("docs")), vec!["clash"]);
@@ -367,7 +459,8 @@ fn copy_merge_replace_lands_the_new_file_and_undo_reverses_only_arrivals() {
     write(&into.join("docs/clash"), "here", 100);
     write(&into.join("docs/kept"), "kept", 100);
     let mut found = survey(transfer(Verb::Copy, &[&from.join("docs")], &into)).unwrap();
-    found.clashes[0].choice = Resolve::Replace;
+    found.clashes[0].choice = Resolve::Merge;
+    found.clashes[1].choice = Resolve::Replace;
     let (done, _) = run(found);
     assert!(done.failures.is_empty());
     assert_eq!(
@@ -391,11 +484,29 @@ fn move_merge_removes_the_source_folder_when_nothing_is_left() {
     let (_root, from, into) = two_folders();
     write(&from.join("docs/new"), "new", 50);
     fs::create_dir_all(into.join("docs")).unwrap();
-    let found = survey(transfer(Verb::Move, &[&from.join("docs")], &into)).unwrap();
+    let mut found = survey(transfer(Verb::Move, &[&from.join("docs")], &into)).unwrap();
+    found.clashes[0].choice = Resolve::Merge;
     let (done, _) = run(found);
     assert!(done.failures.is_empty());
     assert!(!from.join("docs").exists());
     assert_eq!(names(&into.join("docs")), vec!["new"]);
+}
+
+#[test]
+fn move_merge_lists_the_emptied_folders_it_removed() {
+    let (_root, from, into) = two_folders();
+    fs::create_dir_all(from.join("docs/empty")).unwrap();
+    fs::create_dir_all(into.join("docs/empty")).unwrap();
+    let mut found = survey(transfer(Verb::Move, &[&from.join("docs")], &into)).unwrap();
+    found.clashes[0].choice = Resolve::Merge;
+    let (done, _) = run(found);
+    assert!(done.failures.is_empty());
+    assert!(!from.join("docs").exists());
+    assert!(into.join("docs/empty").is_dir());
+    assert_eq!(
+        done.merged,
+        vec![from.join("docs/empty"), from.join("docs")]
+    );
 }
 
 #[test]
@@ -438,7 +549,8 @@ fn links_with_the_same_target_count_as_the_same_whatever_their_age() {
     std::thread::sleep(Duration::from_millis(2500));
     std::os::unix::fs::symlink("../shared", into.join("docs/link")).unwrap();
     let found = survey(transfer(Verb::Copy, &[&from.join("docs")], &into)).unwrap();
-    assert!(found.clashes.is_empty());
+    assert_eq!(found.clashes.len(), 1);
+    assert!(found.clashes[0].merges());
     assert_eq!(found.same_inside, 1);
 }
 
@@ -467,10 +579,11 @@ fn a_hard_linked_pair_inside_a_merge_is_a_kept_clash_and_stays_put() {
     write(&from.join("docs/a.txt"), "shared", 50);
     fs::create_dir_all(into.join("docs")).unwrap();
     fs::hard_link(from.join("docs/a.txt"), into.join("docs/a.txt")).unwrap();
-    let found = survey(transfer(Verb::Move, &[&from.join("docs")], &into)).unwrap();
+    let mut found = survey(transfer(Verb::Move, &[&from.join("docs")], &into)).unwrap();
     assert_eq!(found.same_inside, 0);
-    assert_eq!(found.clashes.len(), 1);
-    assert_eq!(found.clashes[0].choice, Resolve::Keep);
+    assert_eq!(found.clashes.len(), 2);
+    assert_eq!(found.clashes[1].choice, Resolve::Keep);
+    found.clashes[0].choice = Resolve::Merge;
     let (done, _) = run(found);
     assert!(done.failures.is_empty());
     assert!(done.matched.is_empty());

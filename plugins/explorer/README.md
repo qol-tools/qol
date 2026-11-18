@@ -51,7 +51,7 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Ctrl+A | Pick every row |
 | Esc | Drop the picks, a cut and the red note; while dragging, cancel the drag; while drawing a selection box, put the picks back as they were |
 | Ctrl+C, Ctrl+X | Copy or cut the picks, or the row under the cursor when nothing is picked; cut rows fade until they are pasted |
-| Ctrl+V | Paste into the folder you are in |
+| Ctrl+V | Paste into the folder you clicked, reached with the keys or picked on its own; otherwise, as right after opening a folder or with several rows picked, into the folder you are in. A folder you cut or copied is never the target, and the note beside the crumbs names the folder when it is not the one you are in |
 | Delete | Move the picks, or the row under the cursor, to the trash |
 | Shift+Delete | Delete the picks, or the row under the cursor, for good after asking, since the trash cannot bring them back |
 | Ctrl+Alt+N | Make an empty file named New file, then rename it |
@@ -80,11 +80,11 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 
 The rows drawn selected are always the rows an action acts on: the picks, or the cursor row when nothing is picked. While the window is not focused, or the folder or pin menu is open, they keep a faint wash instead.
 
-Right-click a row or icon to pick it and open a menu with Open, Cut, Copy, Paste, Rename, Move to trash, New folder and Undo, each showing its key. Right-clicking a row that is already picked keeps the picks, so the menu acts on all of them; Rename needs a single row and Paste needs something cut or copied. Right-click on empty space in the list, including the blank part of a row past its name and details, for Paste, New folder and Undo above the folder lines (pin, go to a path, hidden files, settings). Up and Down move through a menu, Enter runs the line and any other key closes it.
+Right-click a row or icon to pick it and open a menu with Open, Cut, Copy, Paste, Rename, Move to trash, New folder and Undo, each showing its key. Right-clicking a row that is already picked keeps the picks, so the menu acts on all of them; Rename needs a single row and Paste needs something cut or copied. Paste on a folder pastes into it, unless other rows are picked with it. Right-click on empty space in the list, including the blank part of a row past its name and details, for Paste, which pastes into the folder you are in, New folder and Undo above the folder lines (pin, go to a path, hidden files, settings). Up and Down move through a menu, Enter runs the line and any other key closes it.
 
 Press anywhere in the list and move at once to draw a selection box: every row or icon it touches is picked while you drag, Ctrl or Shift keeps the picks you had, Esc puts them back, and the list scrolls when you pull past its top or bottom edge. A click on empty space drops the picks. Press a row and hold still for half a second and a circle grows beside the pointer, then the files lift and you can drag them. Drag rows onto a folder, a place in the sidebar or a folder in the path to move them there; hold Ctrl to copy instead. Rows dragged to another drive, and files dropped in from another app, are copied. The target says "move here" or "copy here", or "no room" or "copy only" when the drive is too full or the files cannot be removed from where they are.
 
-When a paste or a drop meets names that are already there, a sheet asks first and nothing moves until you apply it. Left and Right choose Keep this, Replace or Keep both for a row, with Shift for every row; Up and Down move between rows; Enter applies and Esc cancels. A replaced file goes to the trash.
+When a paste or a drop meets a name that is already there, file or folder, a sheet asks first and nothing moves until you apply it. Left and Right choose Keep this, Replace or Keep both for a file, or Keep this, Merge or Keep both for a folder, with Shift for every row; Up and Down move between rows; Enter applies and Esc cancels. A folder starts on Keep both, which puts it beside the one already there with (2) after its name, as in hello (2). Merge puts its contents into the folder that is there instead, and the files inside that differ get rows of their own, faded until you choose Merge. A replaced file goes to the trash.
 
 ## License
 
