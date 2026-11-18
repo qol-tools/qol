@@ -180,13 +180,9 @@ impl Layout {
         scroll: f32,
         height: f32,
     ) -> Option<f32> {
-        if !browser.resort(order) {
-            return None;
-        }
-        if height <= 0.0 {
-            return Some(scroll);
-        }
-        Some(self.revealed(browser.cursor(), scroll, height, browser.row_count()))
+        browser
+            .resort(order)
+            .then(|| scroll.clamp(0.0, self.max_scroll(browser.row_count(), height)))
     }
 }
 
