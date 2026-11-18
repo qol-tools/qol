@@ -194,7 +194,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{Kind, Print, TreePrint};
+    use super::{Kind, Print, TreePrint, LITTER};
 
     fn then() -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000)
