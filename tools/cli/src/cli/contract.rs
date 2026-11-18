@@ -208,11 +208,11 @@ fn app() -> HeadlessApp {
             ))
             .subcommand(command(
                 "approve",
-                "Post the owner's approval of a pull request's protected paths for its current head commit.",
+                "Copy the owner's approval of a pull request's protected paths and open the pull request to post it.",
                 crate::commands::pr::USAGE,
-                "approve [number] reads the head commit of pull request <number> of qol-tools/qol, or of the pull request of the branch checked out in the current folder when no number is given, and posts `/gate-approve <commit id>` as a new comment on it through gh. That comment is what the main gate check asks the repository owner for when a pull request changes a file on .github/main-gate-paths; it counts only from the owner's GitHub account and only for that commit, so a later push needs approve again. It runs only with a terminal on stdin, so a script or an agent cannot approve for you.",
-                "One line naming the pull request, the commit and the comment on stdout; diagnostics on stderr.",
-                "Exits non-zero without a terminal on stdin, when gh fails, when no pull request is found, or when it belongs to another repository.",
+                "approve [number] reads the head commit of pull request <number> of qol-tools/qol, or of the pull request of the branch checked out in the current folder when no number is given, puts `/gate-approve <commit id>` on the clipboard and opens the pull request's comment box in the browser with `gh pr comment --web`, where you paste it and post it. That comment is what the main gate check asks the repository owner for when a pull request changes a file on .github/main-gate-paths; it counts only when the owner's GitHub account posts it and only for that commit, so a later push needs approve again. approve posts nothing itself, so the account gh signs in with does not matter. It runs only with a terminal on stdin.",
+                "One line naming the pull request and the commit on stdout; diagnostics on stderr.",
+                "Exits non-zero without a terminal on stdin, when gh fails or cannot open the browser, when no pull request is found, when it belongs to another repository, or when no clipboard tool works.",
             )),
         )
         .command(

@@ -133,6 +133,12 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
         .h_full()
         .relative()
         .bg(rgb(kit.grounds.rail.bg))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(|view, event: &MouseDownEvent, _window, cx| {
+                view.open_folder_menu(event.position, false, cx);
+            }),
+        )
         .child(
             div()
                 .id("explorer-rail")
@@ -263,14 +269,15 @@ fn render_row(
                 .child("not connected"),
         );
     }
-    if let Some(place) = place {
-        element = element.on_mouse_down(
-            MouseButton::Right,
-            cx.listener(move |view, event: &MouseDownEvent, _window, cx| {
+    element = element.on_mouse_down(
+        MouseButton::Right,
+        cx.listener(move |view, event: &MouseDownEvent, _window, cx| {
+            cx.stop_propagation();
+            if let Some(place) = place {
                 view.open_pin_menu(place, event.position, cx);
-            }),
-        );
-    }
+            }
+        }),
+    );
     if let Some(place) = more {
         element = element.child(more_button(
             ("explorer-rail-more", place),

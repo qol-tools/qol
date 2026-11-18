@@ -74,7 +74,7 @@ fn names(browser: &Browser) -> Vec<String> {
 fn picked(browser: &Browser) -> Vec<String> {
     (0..browser.row_count())
         .map(|row| browser.entry(row).unwrap())
-        .filter(|entry| browser.is_picked(entry))
+        .filter(|entry| browser.picks.is_picked(&entry.path))
         .map(|entry| entry.display.clone())
         .collect()
 }
@@ -1566,6 +1566,33 @@ fn lifting_a_row_carries_the_picks_when_it_is_picked_and_otherwise_swaps_or_adds
         if lifted {
             assert_eq!(browser.cursor(), row, "{picks:?} {row} {additive}");
         }
+    }
+}
+
+#[test]
+fn the_rows_shown_selected_are_exactly_the_rows_an_action_acts_on() {
+    let cases = [
+        (vec![], 0),
+        (vec![], 2),
+        (vec![1], 0),
+        (vec![0, 2], 2),
+        (vec![0, 2], 3),
+    ];
+    for (picks, cursor) in cases {
+        let temp = abc_folder();
+        let mut browser = opened(temp.path());
+        pick_rows(&mut browser, &picks);
+        browser.set_cursor(cursor);
+        let operands = browser.operands();
+        for row in 0..browser.row_count() {
+            let path = &browser.entry(row).unwrap().path;
+            assert_eq!(
+                browser.selects(row),
+                operands.contains(path),
+                "{picks:?} {cursor} {row}"
+            );
+        }
+        assert!(!browser.selects(browser.row_count()), "{picks:?} {cursor}");
     }
 }
 

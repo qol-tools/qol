@@ -50,6 +50,12 @@ pub(super) enum Owner {
     OpenWith,
 }
 
+impl Owner {
+    pub(super) fn acts_on_rows(self) -> bool {
+        matches!(self, Owner::Item | Owner::OpenWith)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Line {
     command: Command,
@@ -534,6 +540,18 @@ mod tests {
         assert_ne!(pin.owner(), Owner::Folder);
         let folder = Menu::folder("Docs", None, false, SortOrder::default(), at());
         assert_eq!(folder.owner(), Owner::Folder);
+    }
+
+    #[test]
+    fn only_row_menus_act_on_the_rows() {
+        for (owner, acts) in [
+            (Owner::Item, true),
+            (Owner::OpenWith, true),
+            (Owner::Folder, false),
+            (Owner::Pin(0), false),
+        ] {
+            assert_eq!(owner.acts_on_rows(), acts, "{owner:?}");
+        }
     }
 
     fn lines(menu: &Menu) -> Vec<(Command, bool)> {

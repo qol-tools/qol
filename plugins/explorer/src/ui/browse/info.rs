@@ -68,7 +68,7 @@ mod tests {
         assert_eq!(browser.props().map(|props| props.title()), Some("2 items"));
         assert!(browser.dismiss());
         assert!(!browser.props_open());
-        assert!(browser.is_picked(browser.entry(0).expect("entry")));
+        assert!(browser.selects(1));
     }
 
     #[test]
