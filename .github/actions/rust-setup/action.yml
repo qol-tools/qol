@@ -93,21 +93,30 @@ runs:
     # Every Linux job restores the newest saved set of package files and hands
     # it to apt, which checks each file against Ubuntu's signed lists before it
     # uses one, so a stale or altered file is downloaded again. The key never
-    # exists: the restore key picks the newest entry under it.
+    # exists: the restore key picks the newest entry under it. The runner's
+    # image is a variable of its shell and no part of the env context, where
+    # it reads as empty, so a shell step names the sets of this image.
+    - name: Name the saved Linux system packages
+      id: package-sets
+      if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && inputs.lookup-only != 'true'
+      shell: bash
+      run: echo "prefix=apt-archives-$ImageOS-" >> "$GITHUB_OUTPUT"
+
     - name: Restore downloaded Linux system packages
       id: saved-packages
       if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && inputs.lookup-only != 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/apt-archives
-        key: apt-archives-${{ env.ImageOS }}-newest
-        restore-keys: apt-archives-${{ env.ImageOS }}-
+        key: ${{ steps.package-sets.outputs.prefix }}newest
+        restore-keys: ${{ steps.package-sets.outputs.prefix }}
 
     - name: Install Linux system dependencies
       id: packages
       if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && inputs.lookup-only != 'true'
       shell: bash
       env:
+        KEY_PREFIX: ${{ steps.package-sets.outputs.prefix }}
         RESTORED_KEY: ${{ steps.saved-packages.outputs.cache-matched-key }}
       # A stalled Ubuntu mirror once hung apt-get update until the 45-minute job
       # timeout; bound each call and retry so a dead mirror fails in minutes.
@@ -116,9 +125,9 @@ runs:
       # names us-east-2.ec2.archive.ubuntu.com. It served these 26 MB at under
       # 150 kB/s, so the install ran out its five minutes up to three times on
       # that one mirror: 4 to 13 minutes of update and install, where every
-      # Azure runner took 17 to 40 seconds. The outside mirror served the same
-      # runner at 300 kB/s and the cache at 81 MB/s, so the package files come
-      # from the cache and a mirror serves only the ones that changed. That
+      # Azure runner took 17 to 40 seconds. The outside mirror served those
+      # runners at 300 to 750 kB/s and the cache at 81 MB/s, so the package files
+      # come from the cache and a mirror serves only the ones that changed. That
       # download is a call of its own, so its one-minute bound on the runner's
       # mirror only ever stops a download, never dpkg, before it moves to the
       # outside mirror. autoclean drops the files Ubuntu has replaced, so the
@@ -169,7 +178,7 @@ runs:
         rm -f "$saved"/*.deb
         if compgen -G "$archives/*.deb" > /dev/null; then
           cp "$archives"/*.deb "$saved"/
-          key="apt-archives-$ImageOS-$(cd "$saved" && LC_ALL=C ls | sha256sum | cut -c1-8)"
+          key="$KEY_PREFIX$(cd "$saved" && LC_ALL=C ls | sha256sum | cut -c1-8)"
           if [ "$key" != "$RESTORED_KEY" ] && { [ "$GITHUB_REF" = refs/heads/main ] || [ -z "$RESTORED_KEY" ]; }; then
             echo "save-key=$key" >> "$GITHUB_OUTPUT"
           fi

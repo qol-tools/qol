@@ -188,7 +188,7 @@ class BuildCacheSetupTests(unittest.TestCase):
                     "RUNNER_TEMP": str(saved.parent),
                     "GITHUB_OUTPUT": str(output),
                     "GITHUB_REF": ref,
-                    "ImageOS": "ubuntu24",
+                    "KEY_PREFIX": "apt-archives-ubuntu24-",
                     "RESTORED_KEY": restored_key,
                     "APT_MIRRORS": str(mirrors),
                     "APT_ARCHIVES": str(archives),
@@ -253,9 +253,24 @@ class BuildCacheSetupTests(unittest.TestCase):
         install = next(step for step in self.steps if step.startswith("name: Install Linux system dependencies"))
         save = next(step for step in self.steps if step.startswith("name: Save downloaded Linux system packages"))
         self.assertEqual(field(restore, "if"), field(install, "if"))
-        self.assertEqual(field(restore, "key"), "apt-archives-${{ env.ImageOS }}-newest")
-        self.assertEqual(field(restore, "restore-keys"), "apt-archives-${{ env.ImageOS }}-")
+        prefix = "${{ steps.package-sets.outputs.prefix }}"
+        self.assertEqual(field(restore, "key"), f"{prefix}newest")
+        self.assertEqual(field(restore, "restore-keys"), prefix)
+        self.assertEqual(field(install, "KEY_PREFIX"), prefix)
         self.assertEqual(field(install, "RESTORED_KEY"), "${{ steps.saved-packages.outputs.cache-matched-key }}")
+        naming = next(step for step in self.steps if "id: package-sets" in step)
+        self.assertEqual(field(naming, "if"), field(install, "if"))
+        self.assertLess(self.steps.index(naming), self.steps.index(restore))
+        for step in [naming, restore, install, save]:
+            self.assertNotIn("env.ImageOS", step)
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder, "output")
+            subprocess.run(
+                ["bash", "-e", "-c", field(naming, "run")],
+                check=True,
+                env={**os.environ, "ImageOS": "ubuntu24", "GITHUB_OUTPUT": str(output)},
+            )
+            self.assertEqual(output.read_text(), "prefix=apt-archives-ubuntu24-\n")
         self.assertEqual(field(save, "if"), "steps.packages.outputs.save-key != ''")
         self.assertEqual(field(save, "key"), "${{ steps.packages.outputs.save-key }}")
         self.assertEqual(field(install, "id"), "packages")
