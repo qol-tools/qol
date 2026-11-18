@@ -11,6 +11,7 @@ anyhow = "1"
 qol-apps.workspace = true
 qol-config.workspace = true
 qol-headless.workspace = true
+qol-log.workspace = true
 qol-platform.workspace = true
 serde.workspace = true
 workspace-hack.workspace = true

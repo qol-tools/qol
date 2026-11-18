@@ -150,7 +150,12 @@ impl Drop for BridgeOwner {
                 attaches.remove(&self.binding);
             }
         }
-        let _ = fs::write(&self.pid_path, "");
+        if let Err(error) = fs::write(&self.pid_path, "") {
+            log::warn!(
+                "failed to clear the bridge pid file {}: {error}",
+                self.pid_path.display()
+            );
+        }
         let _ = self.file.unlock();
     }
 }

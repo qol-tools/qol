@@ -25,6 +25,7 @@ pub(crate) fn markup_for(spec: &str, context: &PictureContext) -> Option<String>
         "qol-toasts" => qol_toasts(),
         "system-bubbles" => system_bubbles(),
         "both-notices" => both_notices(),
+        "no-bubbles" => no_bubbles(),
         "launch-app" => launch_app(),
         "open-url" => open_url(),
         "bundle-ref" => bundle_ref("com.example.App"),
@@ -187,6 +188,16 @@ fn system_bubbles() -> String {
 
 fn both_notices() -> String {
     svg::svg(&(svg::screen() + &svg::bubble(50.0, 10.0) + &svg::toast(50.0, 34.0)))
+}
+
+fn no_bubbles() -> String {
+    svg::svg(&svg::slashed(
+        &(svg::screen() + &svg::bubble(50.0, 10.0)),
+        52.0,
+        4.5,
+        78.0,
+        26.5,
+    ))
 }
 
 fn launch_app() -> String {

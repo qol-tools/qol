@@ -2416,12 +2416,8 @@ fn drain_all_queued(rx: &Receiver<Command>) {
 }
 
 pub fn run() -> Result<(), String> {
-    if std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_none() {
-        return Err(format!(
-            "{} is not set; run the daemon through qol-tray",
-            qol_conventions::ENV_DAEMON_SOCKET
-        ));
-    }
+    core_daemon::handed_socket()
+        .map_err(|error| format!("{error}; run the daemon through qol-tray"))?;
     let config_root = config::config_root();
     let (device, _origin) = config::load_with_origin(config_root.as_deref());
     let runtime = Arc::new(Mutex::new(build_runtime(config_root, &device)));

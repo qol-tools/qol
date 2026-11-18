@@ -7,7 +7,7 @@ import { withLocalModel } from "./local-model.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const gate = Object.freeze({ max_wrong_answers: 0, min_answer_coverage: 0.9, max_response_p95_ms: 200, max_verification_p95_ms: 10_000 });
-const inputs = ["src/verification/mod.rs", "src/verification/ollama.rs", "src/verification/service.rs", "src/verification/profile.json", "src/ask/semantic.rs", "tests/fixtures/answer-verification/development.json", "tests/fixtures/answer-verification/heldout.json"];
+const inputs = ["src/verification/mod.rs", "src/verification/ollama.rs", "src/verification/service/mod.rs", "src/verification/profile.json", "src/ask/semantic.rs", "tests/fixtures/answer-verification/development.json", "tests/fixtures/answer-verification/heldout.json"];
 
 function options(args) {
   const settings = { ...readJson(join(root, "plugins/memory/src/verification/profile.json")), repeats: 2 };

@@ -78,6 +78,12 @@ pub(crate) fn update_cached_version(plugin_id: &str, version: &str) {
     let Ok(content) = serde_json::to_string(&cache) else {
         return;
     };
-    let _ = std::fs::write(path, content);
+    if let Err(error) = std::fs::write(&path, content) {
+        log::warn!(
+            "Failed to update the plugin cache {}: {error}",
+            path.display()
+        );
+        return;
+    }
     log::info!("Updated cache version for {}: {}", plugin_id, version);
 }
