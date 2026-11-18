@@ -1818,6 +1818,9 @@ const refreshDetails = ($: EngineInterface, own: readonly Pull[], details: Recor
 
 const CLOSE = 'close-fork'
 const CLOSE_CHORD = 'ctrl+x ctrl+x'
+const INTERRUPT = 'interrupt-fork'
+const INTERRUPT_CHORD = 'ctrl+x ctrl+t'
+const INTERRUPTED = 'The user interrupted your last turn from the switchboard. That stopped every background command you had started, your hold and any pull request watcher included: start the ones you still need again.'
 const CLOSED_REASON = 'Closed by the user.'
 const RECENT_MAX = 5
 export const CLOSE_AGAIN_MS = 10_000
@@ -1825,15 +1828,32 @@ let closeArmed = { agentId: '', at: 0 }
 
 const subForksText = (count: number): string => `${count} sub-fork${count === 1 ? '' : 's'}`
 
+const stopTask = ($: EngineInterface, agentId: string): Promise<string | undefined> =>
+  $.tool
+    .call({ tool: 'TaskStop', task_id: agentId })
+    .then(one => one.deny ?? (one.isError === true ? (one.text ?? 'TaskStop failed') : undefined))
+    .catch((error: unknown) => String(error))
+
+const interrupted = new Set<string>()
+
+export const interruptFork = async ($: EngineInterface): Promise<string> => {
+  const agentId = viewedFork ?? (await read($, writingTo))
+  const entry = agentId === '' ? undefined : (await read($, board)).find(one => one.agentId === agentId)
+  if (entry === undefined) return 'No fork to interrupt: write to one or open its conversation first.'
+  const name = keyName(entry.name)
+  if (!entry.isWorking) return `${name} is not in a turn, so there is nothing to interrupt.`
+  const failed = await stopTask($, agentId)
+  if (failed !== undefined) return `${name} could not be interrupted: ${printable(failed)}`
+  interrupted.add(agentId)
+  return `Interrupted ${name}: its turn stopped, and its background commands with it. Your next message to it continues the conversation.`
+}
+
 const endFork = async ($: EngineInterface, entry: Entry): Promise<string | undefined> => {
   const { agentId } = entry
   closing.add(agentId)
   try {
     if (listedAgents(await $.agent.list().catch(() => [])).has(agentId)) {
-      const failed = await $.tool
-        .call({ tool: 'TaskStop', task_id: agentId })
-        .then(one => one.deny ?? (one.isError === true ? (one.text ?? 'TaskStop failed') : undefined))
-        .catch((error: unknown) => String(error))
+      const failed = await stopTask($, agentId)
       if (failed !== undefined) return `${keyName(entry.name)} could not be closed: ${printable(failed)}`
     }
     await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isWorking: false, isDismissed: true, isClosed: true, isDone: true } : one)))
@@ -2777,6 +2797,7 @@ export const register: Register = on => {
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
       await $.command.register({ name: CLOSE, description: `Close the fork you write to or have open, with the sub-forks it started (${CLOSE_CHORD} once bound): the board counts them under closed and they leave the agent list within half a minute`, immediate: true })
+      await $.command.register({ name: INTERRUPT, description: `Stop the running turn of the fork you write to or have open, as Esc does in a session of its own (${INTERRUPT_CHORD} once bound): the fork stays open and your next message to it continues the conversation`, immediate: true })
       void Promise.all([
         $.tool.register({
         name: TOOL,
@@ -2956,6 +2977,8 @@ export const register: Register = on => {
 
   on('command.run', { command: CLOSE }, async $ => ({ text: await closeFork($) })).catch(() => ({ text: 'The fork could not be closed.' }))
 
+  on('command.run', { command: INTERRUPT }, async $ => ({ text: await interruptFork($) })).catch(() => ({ text: 'The fork could not be interrupted.' }))
+
   for (const kind of ['model', 'effort'] as const) {
     on('command.run', { command: kind }, async ($, e, next) => {
       const text = await setByCommand($, kind, e.args)
@@ -3035,7 +3058,7 @@ export const register: Register = on => {
         forgetSent(at.entry.agentId, noted)
         void forgetSentLog($, key, note).catch(() => {})
       }
-      const said = withHookContext(fromUser(at.message), hooked.context)
+      const said = withHookContext(fromUser(at.message), interrupted.delete(at.entry.agentId) ? [...hooked.context, INTERRUPTED] : hooked.context)
       holdTyped(said)
       const sent = await sendTo($, at.entry, said, direct($)).catch(() => undefined)
       if (sent?.isDelivered !== true) {

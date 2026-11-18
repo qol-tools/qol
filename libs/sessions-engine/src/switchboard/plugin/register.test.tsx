@@ -2126,6 +2126,41 @@ test('a fork that reports or is stopped reads idle or stopped, on the board and 
   await ui.unmount()
 })
 
+test('interrupt-fork stops the running turn of the fork the prompt writes to and keeps it open, and the next message tells the fork what the stop took', async ($, on) => {
+  const sent: unknown[] = []
+  const stopped: string[] = []
+  engine(on, sent)
+  on('session.messages', () => ({ value: [] }))
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  on('tool.call', (_: unknown, e: { tool: string; task_id?: string }) => {
+    if (e.tool === 'TaskStop') stopped.push(String(e.task_id))
+    return { result: { success: true } }
+  })
+  const interrupt = async () => String((await $.command.run({ command: 'interrupt-fork', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })).text)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(await interrupt()).toContain('No fork to interrupt')
+  await spawn($, 'a1', 'one-fork: one')
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'one-fork hi' })
+  expect(await interrupt()).toContain('Interrupted one-fork: its turn stopped')
+  expect(stopped).toEqual(['a1'])
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('agent id a1')
+  await typed($, 'one-fork carry on')
+  await settle()
+  expect(JSON.stringify(sent.at(-1))).toContain('carry on')
+  expect(JSON.stringify(sent.at(-1))).toContain('The user interrupted your last turn from the switchboard')
+  await typed($, 'one-fork and again')
+  await settle()
+  expect(JSON.stringify(sent.at(-1))).toContain('and again')
+  expect(JSON.stringify(sent.at(-1))).not.toContain('The user interrupted your last turn')
+  await deliver($, notification('a1', 'one-fork: one', 'All finished.'))
+  await settle()
+  expect(await interrupt()).toContain('one-fork is not in a turn')
+  expect(stopped).toEqual(['a1'])
+})
+
 test('closing is the only end of a fork: a merge leaves it open, the close marks the record done and the board counts it as closed', async ($, on) => {
   const calls: string[][] = []
   engine(on)
