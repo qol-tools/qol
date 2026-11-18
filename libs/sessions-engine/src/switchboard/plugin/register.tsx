@@ -13,6 +13,13 @@ const TOOL = 'fork_board'
 const TOOL_NAME = 'mcp__qol-switchboard__fork_board'
 const RESUME = 'resume_session'
 const RESUME_NAME = 'mcp__qol-switchboard__resume_session'
+const TASK = 'fork_task'
+const TASK_NAME = 'mcp__qol-switchboard__fork_task'
+const TASK_TEXT = 200
+const TASK_INDENT = 7
+const NOT_STATED = 'not stated yet'
+const TASK_OWN = 'Only a fork states its own task: fork_task takes no fork to speak for.'
+const TASK_NEEDS = 'fork_task needs working_on and done_when, one plain sentence each.'
 const RESUME_TIMEOUT_MS = 60_000
 const RECORD_TIMEOUT_MS = 20_000
 const BACKFILL_MAX = 25
@@ -1004,6 +1011,13 @@ const TO_FORK = /^\s*([a-z0-9][a-z0-9-]*)(:?)(?:[ \t]+(\S[\s\S]*))?\s*$/
 
 export const keyOf = (entry: Entry): string => entry.key ?? keyName(entry.name)
 
+export const taskOf = (entry: Entry): string => {
+  const stated = entry.task?.trim() ?? ''
+  if (stated !== '') return stated
+  const friendly = friendlyName(entry.name)
+  return friendly === entry.name.trim() ? '' : friendly
+}
+
 export const recentlyClosed = (list: Entry[]): Entry[] => {
   const open = new Set(list.filter(entry => !entry.isDismissed && !isEnded(entry)).map(keyOf))
   const seen = new Set<string>()
@@ -1751,6 +1765,7 @@ export const pullDetailOf = (view: unknown, liveTitle: string, at: number): Pull
     ...(review === undefined || review === 'skipped' ? {} : { review }),
     ...(liveTest === undefined ? {} : { liveTest }),
     ...(merge === undefined ? {} : { merge }),
+    ...(typeof pull.title === 'string' && oneLine(pull.title) !== '' ? { title: oneLine(pull.title) } : {}),
   }
 }
 
@@ -1759,7 +1774,7 @@ const detailTried = new Map<string, number>()
 const fetchDetail = async ($: EngineInterface, url: string): Promise<void> => {
   const repo = PULL_REPO.exec(url)
   if (repo === null) return
-  const viewed = await $.process.run(['gh', 'pr', 'view', url, '--json', 'isDraft,state,headRefOid,statusCheckRollup,autoMergeRequest'], { timeoutMs: GH_TIMEOUT_MS })
+  const viewed = await $.process.run(['gh', 'pr', 'view', url, '--json', 'isDraft,state,headRefOid,statusCheckRollup,autoMergeRequest,title'], { timeoutMs: GH_TIMEOUT_MS })
   if (viewed.exitCode !== 0) return
   const view = JSON.parse(viewed.stdout) as Record<string, unknown>
   const queued =
@@ -2763,6 +2778,20 @@ export const register: Register = on => {
         isDeferred: false,
       }),
         $.tool.register({
+        name: TASK,
+        description:
+          "States what the calling fork works on and its definition of done; the fork board shows both beside the fork's row, so the user sees what every fork is for without asking. Only a fork calls it, and only for itself: before its first other tool call on a task, and again whenever the user changes or adds to that task. Each call replaces the last.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            working_on: { type: 'string', description: 'One plain sentence that names the thing itself: the bug, feature or file, and the pull request it lands in once there is one. Never `the task` or `the request`.' },
+            done_when: { type: 'string', description: 'The definition of done in one plain sentence: what must be true for the user to call this finished, such as the pull request merged and what the user then sees.' },
+          },
+          required: ['working_on', 'done_when'],
+        },
+        isDeferred: false,
+      }),
+        $.tool.register({
         name: RESUME,
         description:
           "Brings a terminal session back as a fork of the switchboard whose view shows that session's own conversation since its last compaction, so it continues with its history. It works on a closed session and on one still open in a terminal, whose tab keeps running on its own. Pass the transcript, cwd and title from its sessions_closed row, or from its sessions_list row when it is open, and a `<key-name>: <friendly description>` description. Pass message only when the user gave words meant for that session beyond asking to bring it back: the fork acts on them. With no message the fork does no work: it starts its hold, replies only Ready and waits for the user in its view. A session this switchboard already brought back goes to that same fork instead of a new one: it gets the message, and with no message nothing is sent. Fails when the transcript holds no answered prompt or is not a Claude Code conversation. To bring back a fork, pass fork: alone when the user only asks to open, show or bring it back, so it comes back to the agent list and no turn of its own runs; with continue true when the user asks to resume or continue it, so it carries on its work.",
@@ -3129,6 +3158,17 @@ export const register: Register = on => {
     return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
   }).catch(() => ({ deny: 'The session could not be brought back as a fork.' }))
 
+  on('tool.call', { tool: TASK_NAME }, async ($, e) => {
+    const agentId = e.agentId
+    if (agentId === undefined) return { deny: TASK_OWN }
+    const input = e as unknown as Record<string, unknown>
+    const task = textField(input.working_on)
+    const doneWhen = textField(input.done_when)
+    if (task === undefined || doneWhen === undefined) return { deny: TASK_NEEDS }
+    await change($, list => list.map(one => (one.agentId === agentId ? { ...one, task: clip(oneLine(task), TASK_TEXT), doneWhen: clip(oneLine(doneWhen), TASK_TEXT) } : one)))
+    return { result: 'The fork board shows it beside your row.' }
+  }).catch(() => ({ deny: 'The task could not be noted.' }))
+
   on('tool.call', { tool: SEND }, async ($, e, next) => {
     if (isForgedUser(e.message)) return { deny: NOT_THE_USER }
     if (e.agentId !== undefined || next.origin.plugin === NAME || typeof e.to !== 'string' || typeof e.message !== 'string') return next(e)
@@ -3262,7 +3302,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Select } = $.ui.resolve(e)
+    const { Box, Text, Button, Select, Link } = $.ui.resolve(e)
     await ensureLoaded($)
     const everyRow = await read($, board)
     const list = everyRow.filter(entry => !entry.isDismissed)
@@ -3438,7 +3478,7 @@ export const register: Register = on => {
       const live = own.filter(isOpen)
       const newest = own.find(pull => stateOfPull(pull) === 'merged')
       if (live.length === 0)
-        return newest === undefined ? undefined : <Text color="success" dimColor>#{newest.number ?? '?'} merged</Text>
+        return newest === undefined ? undefined : <Text color="success" dimColor><Link href={newest.pullRequest}>#{newest.number ?? '?'}</Link> merged</Text>
       return (
         <Text>
           {live.map((pull, index) => {
@@ -3446,7 +3486,7 @@ export const register: Register = on => {
             const state = merge === 'queued' ? 'in queue' : merge === 'auto' ? 'auto-merge' : stateOfPull(pull)
             return (
               <Text key={`cell-${pull.pullRequest}`} color={merge === undefined ? (state === 'draft' ? 'warning' : undefined) : 'suggestion'}>
-                {index === 0 ? '' : ' '}#{pull.number ?? '?'} {state}
+                {index === 0 ? '' : ' '}<Link href={pull.pullRequest}>#{pull.number ?? '?'}</Link> {state}
               </Text>
             )
           })}
@@ -3458,15 +3498,24 @@ export const register: Register = on => {
     const forkRow = (entry: Entry) => {
       const key: { hotkey?: string } = hotkey()
       return (
-        <Box key={`row-${entry.agentId}`} {...(entry.agentId === target?.agentId ? { backgroundColor: TARGET_BAND } : {})}>
-          <Button key={`open-${entry.agentId}`} plain {...key} onPress={open(entry)}>
-            {key.hotkey === undefined ? '   ' : ''}
-            {dot(entry)} {mark(entry)}
-            <Text bold={isLoud(entry)}>{cell(`${keyName(entry.name)}${badgeOf(entry)}`, nameWidth)}</Text>
-            {stateText(entry, cell(labelOf(entry), FORK_STATE_WIDTH))}
-            <Text dimColor>{cell(age(now - entry.at), SINCE_WIDTH)}</Text>
+        <Box key={`row-${entry.agentId}`} flexDirection="column" {...(entry.agentId === target?.agentId ? { backgroundColor: TARGET_BAND } : {})}>
+          <Box flexDirection="row">
+            <Button key={`open-${entry.agentId}`} plain {...key} onPress={open(entry)}>
+              {key.hotkey === undefined ? '   ' : ''}
+              {dot(entry)} {mark(entry)}
+              <Text bold={isLoud(entry)}>{cell(`${keyName(entry.name)}${badgeOf(entry)}`, nameWidth)}</Text>
+              {stateText(entry, cell(labelOf(entry), FORK_STATE_WIDTH))}
+              <Text dimColor>{cell(age(now - entry.at), SINCE_WIDTH)}</Text>
+            </Button>
             {pullCell(entry.agentId)}
-          </Button>
+          </Box>
+          {taskOf(entry) !== '' && (
+            <Box paddingLeft={TASK_INDENT}>
+              <Text dimColor wrap="truncate">
+                {taskOf(entry)}
+              </Text>
+            </Box>
+          )}
         </Box>
       )
     }
@@ -3558,9 +3607,9 @@ export const register: Register = on => {
       const merged = shown.filter(pull => stateOfPull(pull) === 'merged')
       const newest = merged[0]
       return [
-        ...shown.filter(isOpen).map(pull => (
+        ...shown.filter(isOpen).flatMap(pull => [
           <Text key={`pull-${pull.pullRequest}`} wrap="wrap">
-            #{pull.number ?? '?'}
+            <Link href={pull.pullRequest}>#{pull.number ?? '?'}</Link>
             {pullParts(pull, !withFork && isStopped).map((part, index) => (
               <Text key={`part-${index}`}>
                 {index === 0 ? ' ' : <Text dimColor> · </Text>}
@@ -3570,22 +3619,29 @@ export const register: Register = on => {
               </Text>
             ))}
             {withFork && <Text dimColor> · {nameOf(pull.agentId)}</Text>}
-          </Text>
-        )),
+          </Text>,
+          ...(details[pull.pullRequest]?.title === undefined
+            ? []
+            : [
+                <Text key={`title-${pull.pullRequest}`} dimColor wrap="truncate">
+                  {details[pull.pullRequest]?.title}
+                </Text>,
+              ]),
+        ]),
         ...(withFork
           ? []
           : shown
               .filter(pull => stateOfPull(pull) === 'closed')
               .map(pull => (
                 <Text key={`closed-${pull.pullRequest}`} dimColor>
-                  #{pull.number ?? '?'} closed, not merged
+                  <Link href={pull.pullRequest}>#{pull.number ?? '?'}</Link> closed, not merged
                 </Text>
               ))),
         ...(newest === undefined
           ? []
           : [
               <Text key="merged" color="success">
-                ✓ {merged.length} merged · newest #{newest.number ?? '?'}
+                ✓ {merged.length} merged · newest <Link href={newest.pullRequest}>#{newest.number ?? '?'}</Link>
                 {newest.mergeCommit === undefined ? '' : ` ${newest.mergeCommit.slice(0, 7)}`}
                 {withFork ? ` by ${nameOf(newest.agentId)}` : ''}
               </Text>,
@@ -3610,14 +3666,16 @@ export const register: Register = on => {
         ...shown.map((sub, index) => {
           const letter = SUB_FORK_KEYS[index]
           return (
-            <Button key={`sub-${sub.agentId}`} plain {...(letter === undefined ? {} : { hotkey: letter })} onPress={open(sub)}>
-              {letter === undefined ? '   ' : ''}
-              {dot(sub)} {mark(sub)}
-              <Text bold={isLoud(sub)}>{cell(keyName(sub.name), subWidth)}</Text>
-              {stateText(sub, cell(labelOf(sub), stateWidth))}
-              <Text dimColor>{cell(age(now - sub.at), SINCE_WIDTH)}</Text>
+            <Box key={`subrow-${sub.agentId}`} flexDirection="row">
+              <Button key={`sub-${sub.agentId}`} plain {...(letter === undefined ? {} : { hotkey: letter })} onPress={open(sub)}>
+                {letter === undefined ? '   ' : ''}
+                {dot(sub)} {mark(sub)}
+                <Text bold={isLoud(sub)}>{cell(keyName(sub.name), subWidth)}</Text>
+                {stateText(sub, cell(labelOf(sub), stateWidth))}
+                <Text dimColor>{cell(age(now - sub.at), SINCE_WIDTH)}</Text>
+              </Button>
               {pullCell(sub.agentId)}
-            </Button>
+            </Box>
           )
         }),
         ...(resting.length === 0
@@ -3651,6 +3709,8 @@ export const register: Register = on => {
         forkModel(keyOf(entry)),
         <Box flexDirection="column">
           {modelOf(keyOf(entry), undefined, true).isPending && <Text color="suggestion">applies at its next model call</Text>}
+          {labelled('working on', [taskOf(entry) === '' ? <Text dimColor>{NOT_STATED}</Text> : <Text wrap="wrap">{taskOf(entry)}</Text>])}
+          {labelled('done when', [entry.doneWhen === undefined ? <Text dimColor>{NOT_STATED}</Text> : <Text wrap="wrap">{entry.doneWhen}</Text>])}
           {labelled('sub-forks', subRows(entry))}
           {labelled('pull requests', pullLines(pullsOf(ledger, entry.agentId), false, isCut(entry) || entry.isStoppedByUser === true))}
         </Box>,
