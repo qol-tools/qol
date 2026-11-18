@@ -1863,6 +1863,7 @@ const INTERRUPT = 'interrupt-fork'
 const INTERRUPT_CHORD = 'ctrl+x ctrl+t'
 const CUT_NOTE = 'The user interrupted this turn from the switchboard: stop here and wait for their next message.'
 const CUT_REPLY = 'Interrupted from the switchboard.'
+const CUT_SAID = 'interrupted, waiting for you'
 const CLOSED_REASON = 'Closed by the user.'
 const RECENT_MAX = 5
 export const CLOSE_AGAIN_MS = 10_000
@@ -1902,6 +1903,7 @@ export const interruptFork = async ($: EngineInterface): Promise<string> => {
   if (!entry.isWorking) return `${name} is not in a turn, so there is nothing to interrupt.`
   cutting.add(agentId)
   for (const fire of cutWaits.get(agentId) ?? []) fire()
+  await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isWorking: false } : one)))
   return `Interrupted ${name}: its turn stops here and its background commands keep running. Your next message to it continues the conversation.`
 }
 
@@ -2562,7 +2564,7 @@ const once = (text: string, needle: string): boolean => text.indexOf(needle) !==
 
 export type Origin = 'peer' | 'task-notification'
 
-type Intake = { text: string; entry: Entry }
+type Intake = { text: string; entry: Entry; isInterrupt?: true }
 
 export const intake = async (
   $: EngineInterface,
@@ -2600,7 +2602,9 @@ export const intake = async (
   const report = result?.[2]?.trim() ?? ''
   if (HANDED_BACK.test(report)) return undefined
   if (report === RESTARTED_REPLY) keeping.delete(agentId)
+  const cut = report === CUT_REPLY ? (await read($, board)).find(one => one.agentId === agentId) : undefined
   const entry =
+    cut ??
     (report === RESTARTED_REPLY ? await rested($, agentId) : undefined) ??
     (await file($, { agentId, name, status, report, ...(report === RESTARTED_REPLY ? { filing: { kind: 'note' as Kind, headline: RESTARTED_REPLY } } : {}) }))
   if (isKept) void keep($, agentId)
@@ -2613,6 +2617,7 @@ export const intake = async (
     text: text.replace(block, () => filed),
     entry,
     ...(report === RESTARTED_REPLY ? { isRestart: true as const } : {}),
+    ...(cut === undefined ? {} : { isInterrupt: true as const }),
     ...(isKept ? { isKept: true as const } : {}),
   }
 }
@@ -2755,6 +2760,7 @@ const quietReport = async ($: EngineInterface, text: string, origin: string | un
     const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
     if (filed === undefined) return undefined
     if ('isKept' in filed) return { fork: keyName(filed.entry.name), said: KEPT_SAID }
+    if (filed.isInterrupt === true) return { fork: keyName(filed.entry.name), said: CUT_SAID }
     return { fork: keyName(filed.entry.name), said: filed.entry.headline.trim() === '' ? 'back in the agent list' : filed.entry.headline }
   } catch {
     return undefined

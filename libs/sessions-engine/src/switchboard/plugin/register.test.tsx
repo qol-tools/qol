@@ -2164,6 +2164,7 @@ test('interrupt-fork ends the running turn of the fork the prompt writes to and 
   await settle()
   expect(await interrupt()).toContain('Interrupted one-fork: its turn stops here and its background commands keep running')
   expect((await running).deny).toContain('The user interrupted this turn')
+  expect(await interrupt()).toContain('one-fork is not in a turn')
   expect((await $.tool.call({ tool: 'Bash', agentId: 'a1', command: 'ls', description: 'List' })).deny).toContain('The user interrupted this turn')
   expect(shown(await answered($, 'a1', 1, 'turn-1'))).toEqual(['Interrupted from the switchboard.', 'end_turn'])
   expect(shown(await answered($, 'a1', 2, 'turn-1'))).toEqual(['Interrupted from the switchboard.', 'end_turn'])
@@ -2188,6 +2189,9 @@ test('interrupt-fork ends the running turn of the fork the prompt writes to and 
   await settle()
   const row = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'one-fork' })).result)
   expect(row).toContain('(no report yet)')
+  await deliver($, `<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n<summary>Agent "one-fork: one" is waiting on its own background work</summary>\n<result>Interrupted from the switchboard.</result>\n</task-notification>`)
+  await settle()
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'one-fork' })).result)).toContain('(no report yet)')
 })
 
 test('closing is the only end of a fork: a merge leaves it open, the close marks the record done and the board counts it as closed', async ($, on) => {
