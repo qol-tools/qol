@@ -2638,6 +2638,7 @@ test('the fork chat shows the reply a fork gives while its key stays in the prom
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: asks')
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork ', cursor: 12 })
+  await settle()
   expect(await forkChat($, panes)).toEqual(['pick one'])
   said.push({ role: 'assistant', text: 'Amber or teal?' })
   await $.turn.complete({ turnId: 'reply-1', agentId: 'a8', answer: 'Amber or teal?', durationMs: 1, isAborted: false, reason: 'done' })
@@ -3970,6 +3971,7 @@ test("a fork Claude Code cannot read back shows its conversation from its transc
   await deliver($, notification('a8', 'asking-fork: asks', 'Which colour, amber or teal?'), 'task-notification')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
+  await settle()
   expect(await forkChat($, panes)).toEqual(['pick one', 'Amber or teal?'])
   expect(asked).toEqual([{ conversation: '/conv/switchboard-session.jsonl', id: 'a8', rows: 80 }])
   await $.turn.complete({ turnId: 'held-1', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
@@ -3979,6 +3981,69 @@ test("a fork Claude Code cannot read back shows its conversation from its transc
   await $.turn.complete({ turnId: 'held-2', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
   await settle()
   expect(asked).toHaveLength(2)
+  await ui.unmount()
+})
+
+test('typing or tabbing to a fork answers the prompt box before the fork\'s conversation has loaded, and an Enter on the key alone does not wait for it either', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  on('clock.after', () => ({ value: undefined }))
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  const env: Record<string, string> = { QOL_CLI_SESSIONS: '/bin/qol-cli-sessions', QOL_SWITCHBOARD_CONVERSATIONS: '/conv' }
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: env[e.name] }))
+  on('session.messages', () => ({ value: [] }))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  let size = 10
+  on('fs.stat', (_: unknown, e: { path: string }) => ({ value: /agent-a[89]\.jsonl$/.test(e.path) ? { size, mtimeMs: 5 } : { size: 0, mtimeMs: 0 } }))
+  const saved = (id: string) => [{ role: 'assistant', text: id === 'a8' ? 'Amber or teal?' : 'Merged.' }]
+  const loads: (() => void)[] = []
+  on('process.run', async (_: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
+    if (e.argv.slice(1).join(' ') !== 'sessions switchboard hook fork-said') return { value: NO_RECORD }
+    await new Promise<void>(resolve => loads.push(resolve))
+    return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify(saved(JSON.parse(e.init?.stdin ?? '{}').id)) } }
+  })
+  const answered = async (work: Promise<unknown>) => {
+    let isDone = false
+    void work.then(() => {
+      isDone = true
+    })
+    await settle()
+    return isDone
+  }
+  const loadAll = async () => {
+    while (loads.length > 0) {
+      loads.shift()?.()
+      await settle()
+    }
+  }
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await spawn($, 'a9', 'other-fork: merges')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  await typed($, 'qols board')
+  const entered = typed($, 'other-fork ')
+  expect(await answered(entered)).toBe(true)
+  expect((await entered).drop).toContain('Writing to other-fork')
+  await loadAll()
+  expect(await forkChat($, panes)).toEqual(['Merged.'])
+
+  expect(await answered($.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork ' }))).toBe(true)
+  await loadAll()
+  expect(await forkChat($, panes)).toEqual(['Amber or teal?'])
+
+  size = 20
+  expect(await answered($.prompt.edit({ origin: { kind: 'composer' }, text: 'asking-fork ', cursor: 12, start: 12, end: 12, inputText: '', key: { key: 'tab' } }))).toBe(true)
+  await loadAll()
+  expect(await forkChat($, panes)).toEqual(['Merged.'])
+
+  size = 30
+  expect(await answered($.prompt.change({ origin: { kind: 'history' }, text: 'asking-fork hi', cursor: 14 }))).toBe(true)
+  await loadAll()
+  expect(await forkChat($, panes)).toEqual(['Amber or teal?'])
   await ui.unmount()
 })
 
@@ -4005,6 +4070,7 @@ test('a fork whose live conversation starts after a compaction shows the earlier
   await deliver($, notification('a8', 'asking-fork: asks', 'Which colour, amber or teal?'), 'task-notification')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
+  await settle()
   expect(await forkChat($, panes)).toEqual(['pick one', 'Amber or teal?'])
   const reply = { role: 'assistant', text: 'Teal it is.' }
   held.push(reply)
@@ -4041,6 +4107,7 @@ test('a fork with a transcript on disk shows its tail, and Claude Code is never 
   await deliver($, notification('a8', 'asking-fork: asks', 'Which colour, amber or teal?'), 'task-notification')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
+  await settle()
   expect(await forkChat($, panes)).toEqual(['pick one', 'Amber or teal?'])
   saved.push({ role: 'assistant', text: 'Teal it is.' })
   size = 20

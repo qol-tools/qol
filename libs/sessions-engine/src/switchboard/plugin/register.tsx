@@ -409,17 +409,30 @@ const isPluginNote = (text: string): boolean => {
   return [BACK, REOPENED, WAIT_FOR_USER, CONTINUE, ...HARNESS_NOTES].some(note => said.startsWith(note))
 }
 
-const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<void> => {
+const pointAt = async ($: EngineInterface, entry: Entry | undefined): Promise<boolean> => {
   const agentId = entry?.agentId ?? ''
-  if ((await read($, writingTo)) === agentId) return
+  if ((await read($, writingTo)) === agentId) return false
   await update($, writingTo, () => agentId)
   await update($, writingSaid, () => [])
   await update($, focusActivity, () => '')
   await update($, freshReply, () => '')
   if (agentId === '') await update($, focusShown, () => ({ id: '', prevId: '', agentId: '', key: '', rows: [] }))
+  return true
+}
+
+const loadWriting = async ($: EngineInterface, entry: Entry | undefined): Promise<void> => {
+  const agentId = entry?.agentId ?? ''
   if (entry !== undefined && hasUnread(await read($, board), entry)) await seen($, agentId, true)
   await refreshWriting($, agentId)
-  if (agentId !== '') await placeFocus($)
+  if (agentId !== '' && (await read($, writingTo)) === agentId) await placeFocus($)
+}
+
+const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<void> => {
+  if (await pointAt($, entry)) await loadWriting($, entry)
+}
+
+const writeToSoon = async ($: EngineInterface, entry: Entry | undefined): Promise<void> => {
+  if (await pointAt($, entry)) void loadWriting($, entry).catch(() => {})
 }
 
 const seen = ($: EngineInterface, agentId: string, withSubForks = false): Promise<void> =>
@@ -452,10 +465,10 @@ const writeToTyped = async ($: EngineInterface, typed: Entry | undefined): Promi
   typedSeq += 1
   if (typedFork?.agentId !== typed?.agentId) $.ui.invalidate('ui.render')
   typedFork = typed
-  if (typed !== undefined) return writeTo($, typed)
+  if (typed !== undefined) return writeToSoon($, typed)
   const fallback = sending ?? (await currentOf($))
   const shown = await read($, writingTo)
-  if (shown === '' || shown === fallback?.agentId) return writeTo($, fallback)
+  if (shown === '' || shown === fallback?.agentId) return writeToSoon($, fallback)
   const seq = typedSeq
   $.clock.after(TYPED_SETTLE_MS, () => {
     if (seq === typedSeq) void (async () => writeTo($, sending ?? (await currentOf($))))().catch(() => {})
@@ -2947,7 +2960,7 @@ export const register: Register = on => {
       if (at.message === '') {
         await setCurrent($, at.entry).catch(() => undefined)
         if ((await read($, current)) !== keyOf(at.entry)) return next(e)
-        await writeTo($, at.entry)
+        await writeToSoon($, at.entry)
         clearBox($, typedSince(e.text))
         return dropAs(`Writing to ${keyOf(at.entry)}. Esc on an empty prompt leaves.`)
       }
@@ -3039,7 +3052,7 @@ export const register: Register = on => {
       const isKeyOnly = e.text === '' || (e.text === `${current} ` && reachable(list).some(entry => keyOf(entry) === current))
       const key = isKeyOnly ? nextKey(list, current, e.key?.shift === true ? -1 : 1) : undefined
       if (key !== undefined) {
-        if (isMain) await writeTo($, reachable(list).find(entry => keyOf(entry) === key))
+        if (isMain) await writeToSoon($, reachable(list).find(entry => keyOf(entry) === key))
         return { text: `${key} `, cursor: key.length + 1, decorations: [{ start: 0, end: key.length, bold: true }] }
       }
     }
