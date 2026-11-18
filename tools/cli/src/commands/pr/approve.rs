@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::io::IsTerminal;
+use std::process::Command;
 
 use super::download::gh;
 
@@ -17,25 +18,35 @@ struct Head {
 
 pub(super) fn run(repo: &str, number: Option<u64>) -> Result<String> {
     if !std::io::stdin().is_terminal() {
-        bail!("qol pr approve posts the owner's approval, so it runs only in a terminal you type into");
+        bail!("qol pr approve opens your browser for the owner's approval, so it runs only in a terminal you type into");
     }
     let head = head(repo, number)?;
     let line = approval(&head.head_ref_oid)?;
-    let posted = gh(&[
-        "pr",
-        "comment",
-        &head.number.to_string(),
-        "--repo",
-        repo,
-        "--body",
-        &line,
-    ])?;
+    crate::host_facade::copy_to_clipboard(&line)?;
+    open_comment_box(repo, head.number)?;
     Ok(format!(
-        "approved pull request #{} at {}: {}",
+        "copied the approval of pull request #{} at {}: paste it as a new comment on the page your browser opened",
         head.number,
-        super::short(&head.head_ref_oid),
-        posted.trim()
+        super::short(&head.head_ref_oid)
     ))
+}
+
+fn open_comment_box(repo: &str, number: u64) -> Result<()> {
+    let status = Command::new("gh")
+        .args([
+            "pr",
+            "comment",
+            &number.to_string(),
+            "--repo",
+            repo,
+            "--web",
+        ])
+        .status()
+        .context("could not run gh")?;
+    if !status.success() {
+        bail!("gh could not open pull request #{number} in your browser");
+    }
+    Ok(())
 }
 
 fn head(repo: &str, number: Option<u64>) -> Result<Head> {
