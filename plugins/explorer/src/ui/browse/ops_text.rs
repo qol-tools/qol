@@ -6,12 +6,23 @@ use qol_gpui::format_bytes;
 use super::ops::Held;
 use crate::ops::{Clash, NameProblem, Room, Survey, Verb};
 
-pub(super) fn held_note(held: Held, count: usize) -> String {
+pub(super) fn held_note(held: Held, count: usize, into: Option<&str>) -> String {
     let word = match held {
         Held::Cut => "cut",
         Held::Copied => "copied",
     };
-    format!("{count} {word}. Open a folder and press ctrl+v")
+    match into {
+        Some(folder) => format!("{count} {word}. Press ctrl+v to paste into {folder}"),
+        None => format!("{count} {word}. Open a folder and press ctrl+v"),
+    }
+}
+
+pub(super) fn already_in(into: &Path, here: &Path) -> String {
+    if into == here {
+        "Already in this folder".to_string()
+    } else {
+        format!("Already in {}", name_of(into))
+    }
 }
 
 pub(super) fn drop_hint(copy: bool) -> &'static str {

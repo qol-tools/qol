@@ -75,6 +75,7 @@ pub struct Note {
 pub struct Selection {
     picks: Picks,
     cursor: usize,
+    chosen: Option<PathBuf>,
 }
 
 pub struct Browser {
@@ -84,6 +85,7 @@ pub struct Browser {
     read: Option<ListingRead>,
     rows: Vec<usize>,
     cursor: usize,
+    chosen: Option<PathBuf>,
     picks: Picks,
     jump: Jump,
     show_hidden: bool,
@@ -120,6 +122,7 @@ impl Browser {
             read: None,
             rows: Vec::new(),
             cursor: 0,
+            chosen: None,
             picks: Picks::new(),
             jump: Jump::new(),
             show_hidden: show_hidden || hidden_file,
@@ -234,12 +237,14 @@ impl Browser {
         Selection {
             picks: self.picks.clone(),
             cursor: self.cursor,
+            chosen: self.chosen.clone(),
         }
     }
 
     pub fn restore(&mut self, selection: &Selection, scroll: f32) {
         self.picks = selection.picks.clone();
         self.place_cursor(selection.cursor, scroll);
+        self.chosen = selection.chosen.clone();
     }
 
     pub fn pick_boxed(&mut self, base: &Selection, touched: &[usize], additive: bool) {
@@ -251,8 +256,9 @@ impl Browser {
         self.picks.set(merged(kept, boxed, additive));
     }
 
-    pub fn clear_picks(&mut self) {
+    pub fn clear_selection(&mut self) {
         self.picks.clear();
+        self.chosen = None;
     }
 
     pub fn is_picked(&self, entry: &Entry) -> bool {
@@ -462,17 +468,26 @@ impl Browser {
         self.jump.reset();
         if let Some(spot) = self.arriving.as_mut() {
             spot.cursor = row;
-            spot.entry = Some(entry);
+            spot.entry = Some(entry.clone());
             spot.scroll = scroll;
             self.landing = None;
         }
         self.cursor = row;
+        self.chosen = Some(entry);
         true
     }
 
     pub fn move_cursor(&mut self, step: Step, page: usize, columns: usize) -> bool {
         self.jump.reset();
-        self.set_cursor(self.stepped(step, page, columns))
+        let moved = self.set_cursor(self.stepped(step, page, columns));
+        if moved {
+            self.choose_cursor();
+        }
+        moved
+    }
+
+    fn choose_cursor(&mut self) {
+        self.chosen = self.entry(self.cursor).map(|entry| entry.path.clone());
     }
 
     pub fn extend_range(&mut self, step: Step, page: usize, columns: usize) -> bool {
@@ -496,6 +511,7 @@ impl Browser {
         let rows = Self::shown_of(&self.rows, &self.listing);
         self.picks.extend_range(&rows, self.cursor, row);
         self.cursor = row;
+        self.choose_cursor();
         true
     }
 
@@ -568,6 +584,7 @@ impl Browser {
             });
         if let Some(row) = found {
             self.cursor = row;
+            self.choose_cursor();
         }
         true
     }
@@ -757,6 +774,7 @@ impl Browser {
         self.listing = Listing::new(spot.folder.clone());
         self.rows.clear();
         self.cursor = 0;
+        self.chosen = None;
         self.jump.reset();
         self.picks.end_range();
         self.failure = None;
@@ -864,10 +882,16 @@ impl Browser {
         let at = self
             .entry(self.cursor)
             .map(|entry| (entry.path.clone(), entry.id));
+        let was_chosen = at
+            .as_ref()
+            .is_some_and(|(path, _)| self.chosen.as_ref() == Some(path));
         let before = mem::replace(&mut self.listing, fresh);
         self.refresh_rows();
         if let Some(row) = at.and_then(|(path, id)| self.row_following(&path, id, &before)) {
             self.cursor = row;
+            if was_chosen {
+                self.choose_cursor();
+            }
         }
         let failed = matches!(self.listing.state(), ListingState::Failed(_));
         if !failed {

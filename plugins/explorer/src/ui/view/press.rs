@@ -181,7 +181,7 @@ impl ExplorerView {
             Release::Keep => {}
             Release::Clear => {
                 self.browser.close_path();
-                self.browser.clear_picks();
+                self.browser.clear_selection();
             }
             Release::Restore => {
                 self.restore_base(&press);

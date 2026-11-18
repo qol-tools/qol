@@ -9,6 +9,7 @@ use qol_gpui::text_edit::MemoryClipboard;
 use super::ops_text;
 use super::{Browser, Held, MoveState};
 use crate::ops::{Clash, CopyOnly, Resolve, Room, Stamp, Survey, Transfer, Verb};
+use crate::ui::keys::Step;
 
 fn key(name: &str, key_char: Option<&str>) -> Keystroke {
     Keystroke {
@@ -232,6 +233,212 @@ fn a_folder_cannot_be_pasted_into_itself() {
     browser.hold(Held::Copied);
     visit(&mut browser, &dest);
     assert!(browser.paste().is_none());
+}
+
+fn row(browser: &Browser, name: &str) -> usize {
+    browser.row_of(&browser.folder().join(name)).unwrap()
+}
+
+fn copy_a(browser: &mut Browser) {
+    browser.click_to(row(browser, "a.txt"), 0.0);
+    assert!(browser.hold(Held::Copied));
+}
+
+fn paste_folders() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    write(temp.path(), "a.txt", "a");
+    write(temp.path(), "b.txt", "b");
+    for folder in ["inbox", "inbox/nested", "outbox"] {
+        fs::create_dir(temp.path().join(folder)).unwrap();
+    }
+    temp
+}
+
+#[test]
+fn ctrl_v_pastes_into_the_folder_you_chose_or_else_where_you_are() {
+    type Choose = fn(&mut Browser);
+    let cases: [(&str, Choose, &str); 14] = [
+        (
+            "a clicked folder",
+            |browser| {
+                copy_a(browser);
+                browser.click_to(row(browser, "inbox"), 0.0);
+            },
+            "inbox",
+        ),
+        (
+            "a folder reached with the arrow keys",
+            |browser| {
+                copy_a(browser);
+                assert!(browser.move_cursor(Step::Up, 1, 1));
+            },
+            "outbox",
+        ),
+        (
+            "a folder reached by typing its name",
+            |browser| {
+                copy_a(browser);
+                browser.jump('o', Instant::now());
+            },
+            "outbox",
+        ),
+        (
+            "a folder picked on its own",
+            |browser| {
+                copy_a(browser);
+                browser.add_pick(row(browser, "inbox"));
+            },
+            "inbox",
+        ),
+        (
+            "two folders picked",
+            |browser| {
+                copy_a(browser);
+                browser.add_pick(row(browser, "inbox"));
+                browser.add_pick(row(browser, "outbox"));
+            },
+            "",
+        ),
+        (
+            "a file under the cursor",
+            |browser| {
+                copy_a(browser);
+                browser.click_to(row(browser, "b.txt"), 0.0);
+            },
+            "",
+        ),
+        (
+            "a file picked on its own",
+            |browser| {
+                copy_a(browser);
+                browser.add_pick(row(browser, "b.txt"));
+            },
+            "",
+        ),
+        (
+            "the copied folder itself, so the copy lands beside it",
+            |browser| {
+                browser.click_to(row(browser, "inbox"), 0.0);
+                assert!(browser.hold(Held::Copied));
+            },
+            "",
+        ),
+        (
+            "picked files cut, then the arrow keys onto a folder",
+            |browser| {
+                browser.add_pick(row(browser, "a.txt"));
+                browser.add_pick(row(browser, "b.txt"));
+                assert!(browser.hold(Held::Cut));
+                assert!(browser.move_cursor(Step::Down, 1, 1));
+            },
+            "outbox",
+        ),
+        (
+            "a click on empty space after choosing a folder",
+            |browser| {
+                copy_a(browser);
+                browser.click_to(row(browser, "inbox"), 0.0);
+                browser.clear_selection();
+            },
+            "",
+        ),
+        (
+            "a folder just opened, with a folder under the cursor",
+            |browser| {
+                copy_a(browser);
+                let inbox = browser.folder().join("inbox");
+                visit(browser, &inbox);
+                assert_eq!(browser.cursor(), row(browser, "nested"));
+            },
+            "inbox",
+        ),
+        (
+            "the parent, with the cursor on the folder you left",
+            |browser| {
+                copy_a(browser);
+                let parent = browser.folder().to_path_buf();
+                visit(browser, &parent.join("outbox"));
+                visit(browser, &parent);
+                assert_eq!(browser.cursor(), row(browser, "outbox"));
+            },
+            "",
+        ),
+        (
+            "a chosen folder renamed",
+            |browser| {
+                copy_a(browser);
+                browser.click_to(row(browser, "inbox"), 0.0);
+                assert!(browser.rename_open());
+                for letter in ["b", "o", "x"] {
+                    browser.rename_key(&key(letter, Some(letter)), &MemoryClipboard::default());
+                }
+                browser.rename_key(&key("enter", None), &MemoryClipboard::default());
+                let renamed = browser.folder().join("box");
+                wait_until(browser, "the renamed folder", |browser| {
+                    browser.row_of(&renamed) == Some(browser.cursor())
+                });
+            },
+            "box",
+        ),
+        (
+            "a new folder",
+            |browser| {
+                copy_a(browser);
+                assert!(browser.new_folder());
+                wait_until(browser, "the new folder", |browser| {
+                    browser.rename_field().is_some()
+                });
+                browser.rename_key(&key("enter", None), &MemoryClipboard::default());
+            },
+            "New folder",
+        ),
+    ];
+    for (what, choose, into) in cases {
+        let temp = paste_folders();
+        let mut browser = opened(temp.path());
+        choose(&mut browser);
+        let transfer = browser
+            .paste()
+            .unwrap_or_else(|| panic!("{what}: nothing pasted"));
+        assert_eq!(transfer.into, temp.path().join(into), "{what}");
+    }
+}
+
+#[test]
+fn the_note_names_the_folder_and_the_list_menu_pastes_where_you_are() {
+    let temp = paste_folders();
+    let mut browser = opened(temp.path());
+    browser.click_to(row(&browser, "a.txt"), 0.0);
+    assert!(browser.hold(Held::Cut));
+    assert_eq!(
+        browser.note().count,
+        "1 cut. Open a folder and press ctrl+v"
+    );
+
+    browser.click_to(row(&browser, "inbox"), 0.0);
+    assert_eq!(
+        browser.note().count,
+        "1 cut. Press ctrl+v to paste into inbox"
+    );
+    assert!(browser.paste_here().is_none());
+    assert_eq!(
+        browser.note().failure.as_deref(),
+        Some("Already in this folder")
+    );
+
+    let inbox = temp.path().join("inbox");
+    let moved = browser.paste().unwrap();
+    assert_eq!(moved.into, inbox);
+    browser.begin(moved);
+    wait_until(&mut browser, "the move", finished);
+
+    visit(&mut browser, &inbox);
+    browser.click_to(row(&browser, "a.txt"), 0.0);
+    assert!(browser.hold(Held::Cut));
+    visit(&mut browser, temp.path());
+    browser.click_to(row(&browser, "inbox"), 0.0);
+    assert!(browser.paste().is_none());
+    assert_eq!(browser.note().failure.as_deref(), Some("Already in inbox"));
 }
 
 #[test]
@@ -473,8 +680,12 @@ fn leaving_the_folder_closes_the_rename_field() {
 #[test]
 fn wording_matches_the_design() {
     assert_eq!(
-        ops_text::held_note(Held::Cut, 4),
+        ops_text::held_note(Held::Cut, 4, None),
         "4 cut. Open a folder and press ctrl+v"
+    );
+    assert_eq!(
+        ops_text::held_note(Held::Copied, 1, Some("Photos")),
+        "1 copied. Press ctrl+v to paste into Photos"
     );
     assert_eq!(
         ops_text::drop_hint(false),

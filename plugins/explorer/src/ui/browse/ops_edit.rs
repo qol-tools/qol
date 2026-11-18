@@ -264,6 +264,7 @@ impl Browser {
         };
         self.ops.rename_after = None;
         self.cursor = row;
+        self.choose_cursor();
         self.rename_open()
     }
 

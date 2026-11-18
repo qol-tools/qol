@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -35,7 +35,8 @@ pub struct MoveRecord {
 
 pub(super) struct Holding {
     pub held: Held,
-    pub paths: Vec<PathBuf>,
+    pub paths: BTreeSet<PathBuf>,
+    pub picks_version: u64,
 }
 
 pub(super) enum Work {
@@ -130,13 +131,17 @@ impl Ops {
 
 impl Browser {
     pub fn hold(&mut self, held: Held) -> bool {
-        let paths = self.operands();
+        let paths: BTreeSet<PathBuf> = self.operands().into_iter().collect();
         if paths.is_empty() {
             return false;
         }
         self.ops.notice = None;
         self.failure = None;
-        self.ops.holding = Some(Holding { held, paths });
+        self.ops.holding = Some(Holding {
+            held,
+            paths,
+            picks_version: self.picks.version(),
+        });
         true
     }
 
@@ -152,8 +157,17 @@ impl Browser {
     }
 
     pub fn paste(&mut self) -> Option<Transfer> {
-        let holding = self.ops.holding.as_ref()?;
+        let into = self.paste_target();
+        self.paste_into(into)
+    }
+
+    pub fn paste_here(&mut self) -> Option<Transfer> {
         let into = self.folder().to_path_buf();
+        self.paste_into(into)
+    }
+
+    fn paste_into(&mut self, into: PathBuf) -> Option<Transfer> {
+        let holding = self.ops.holding.as_ref()?;
         let verb = match holding.held {
             Held::Copied => Verb::Copy,
             Held::Cut => Verb::Move,
@@ -166,7 +180,7 @@ impl Browser {
             .cloned()
             .collect();
         if sources.is_empty() {
-            self.failure = Some("Already in this folder".to_string());
+            self.failure = Some(ops_text::already_in(&into, self.folder()));
             return None;
         }
         Some(Transfer {
@@ -174,6 +188,41 @@ impl Browser {
             sources,
             into,
         })
+    }
+
+    fn paste_target(&self) -> PathBuf {
+        let here = self.folder();
+        let Some(holding) = self.ops.holding.as_ref() else {
+            return here.to_path_buf();
+        };
+        let held = |path: &Path| holding.paths.contains(path);
+        let chosen = || {
+            self.entry(self.cursor)
+                .filter(|entry| self.chosen.as_deref() == Some(entry.path.as_path()))
+        };
+        let unchanged = self.picks.version() == holding.picks_version;
+        let target = if unchanged || self.picks.count_in(here) == 0 {
+            chosen()
+        } else {
+            let mut picked = self
+                .picks
+                .paths()
+                .filter(|&path| path.parent() == Some(here) && !held(path));
+            match (picked.next(), picked.next()) {
+                (None, _) => chosen(),
+                (Some(only), None) => self.entry_of(only),
+                (Some(_), Some(_)) => None,
+            }
+        };
+        target
+            .filter(|entry| entry.opens_as_folder && !held(entry.path.as_path()))
+            .map_or_else(|| here.to_path_buf(), |entry| entry.path.clone())
+    }
+
+    fn entry_of(&self, path: &Path) -> Option<&Entry> {
+        self.entry(self.cursor)
+            .filter(|entry| entry.path == path)
+            .or_else(|| self.row_of(path).and_then(|row| self.entry(row)))
     }
 
     pub fn drop_on(&self, sources: Vec<PathBuf>, into: PathBuf, copy: bool) -> Transfer {
@@ -360,7 +409,13 @@ impl Browser {
             return Some(notice.clone());
         }
         let holding = self.ops.holding.as_ref()?;
-        Some(ops_text::held_note(holding.held, holding.paths.len()))
+        let into = self.paste_target();
+        let target = (into.as_path() != self.folder()).then(|| ops_text::name_of(&into));
+        Some(ops_text::held_note(
+            holding.held,
+            holding.paths.len(),
+            target.as_deref(),
+        ))
     }
 
     pub(super) fn drain_ops(&mut self) -> bool {
