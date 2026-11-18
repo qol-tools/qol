@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use super::walk::{drain, files, listing, outcomes_of, snapshot, texts, write_at, Rig, Undid};
-use super::{start_undo, Action, Change, Outcome, Reason, Settled, Top, Undone};
+use super::{start, Action, Change, Direction, Outcome, Reason, Settled, Top, Undone};
 use crate::ops::print::{Print, TreePrint};
 use crate::ops::{Bin, BinError, Failure, FolderBin, Held, Resolve, Verb};
 
@@ -224,12 +224,14 @@ fn a_move_that_dies_halfway_keeps_its_first_item_undoable() {
 
     let outcomes = ran(rig.undo(|_, _| Resolve::Keep));
 
+    let home = from.join("a.txt");
     assert_eq!(
         outcomes,
         vec![(
             0,
             Outcome::Undone(Undone::MovedBack {
-                to: from.join("a.txt")
+                at: Print::read(&home).unwrap(),
+                to: home,
             })
         )]
     );
@@ -454,8 +456,8 @@ fn a_stopped_undo_keeps_its_unfinished_items_for_the_next_undo() {
         Ok(())
     });
     let id = rig.top_undo();
-    let plan = rig.history.plan(id).unwrap();
-    let undoing = start_undo(plan, None, rig.tools.clone(), None, || {});
+    let plan = rig.history.plan(id, Direction::Undo).unwrap();
+    let undoing = start(plan, Direction::Undo, None, rig.tools.clone(), None, || {});
     entered_rx.recv_timeout(WAIT).unwrap();
     undoing.stop.store(true, Ordering::SeqCst);
     release_tx.send(()).unwrap();
@@ -503,4 +505,260 @@ fn a_stopped_undo_keeps_its_unfinished_items_for_the_next_undo() {
     assert_eq!(texts(&rig.bin_root), vec!["text a", "text b", "text c"]);
     assert!(matches!(rig.history.top(), Top::Nothing));
     rig.keeps(&before, "a stopped undo");
+}
+
+fn is_redone(outcome: &Outcome) -> bool {
+    matches!(outcome, Outcome::Redone(_))
+}
+
+#[test]
+fn a_refused_trash_leaves_the_file_a_redo_would_bin() {
+    let (mut rig, hooks) = hooked();
+    let gone = rig.work.join("gone.txt");
+    write_at(&gone, "binned", 20);
+    let step = rig.trash(std::slice::from_ref(&gone));
+    ran(rig.undo(|_, _| Resolve::Keep));
+    let before = rig.held();
+    hooks.on_trash(refusing());
+
+    let first = ran(rig.redo(|_, _| Resolve::Keep));
+
+    assert_eq!(
+        first,
+        vec![(
+            0,
+            Outcome::Stays(Reason::Failed(gone.clone(), "the trash is full".into()))
+        )]
+    );
+    assert_eq!(files(&rig.work), listing(&[("gone.txt", "binned")]));
+    assert!(texts(&rig.bin_root).is_empty());
+    assert_eq!(rig.history.redo_top().map(|found| found.id), Some(step));
+
+    let second = ran(rig.redo(|_, _| Resolve::Keep));
+
+    assert_eq!(
+        second,
+        vec![(
+            0,
+            Outcome::Leaves(Reason::Failed(gone, "the trash is full".into()))
+        )]
+    );
+    assert_eq!(files(&rig.work), listing(&[("gone.txt", "binned")]));
+    assert!(texts(&rig.bin_root).is_empty());
+    assert!(rig.history.step(step).is_none());
+    assert!(rig.history.redo_top().is_none());
+    rig.keeps(&before, "a refused trash during a redo");
+}
+
+#[test]
+fn a_redo_leaves_a_trashed_file_that_was_edited_since_the_undo() {
+    let mut rig = Rig::new();
+    let gone = rig.work.join("gone.txt");
+    write_at(&gone, "binned", 20);
+    let step = rig.trash(std::slice::from_ref(&gone));
+    ran(rig.undo(|_, _| Resolve::Keep));
+    write_at(&gone, "edited since the undo", 77);
+    let before = rig.held();
+
+    let outcomes = ran(rig.redo(|_, _| Resolve::Keep));
+
+    assert_eq!(
+        outcomes,
+        vec![(0, Outcome::Leaves(Reason::Changed(gone.clone())))]
+    );
+    assert_eq!(
+        files(&rig.work),
+        listing(&[("gone.txt", "edited since the undo")])
+    );
+    assert!(texts(&rig.bin_root).is_empty());
+    assert!(rig.history.step(step).is_none());
+    rig.keeps(&before, "a redo of an edited file");
+}
+
+#[test]
+fn a_redo_leaves_a_moved_file_that_was_swapped_since_the_undo() {
+    let mut rig = Rig::new();
+    let path = rig.work.join("a.txt");
+    write_at(&path, "text", 20);
+    let renamed = rig.rename(&path, "b.txt").unwrap();
+    let step = rig.top_undo();
+    ran(rig.undo(|_, _| Resolve::Keep));
+    let swap = rig.work.join(".swap");
+    write_at(&swap, "another file", 99);
+    fs::rename(&swap, &path).unwrap();
+    let before = rig.held();
+
+    let outcomes = ran(rig.redo(|_, _| Resolve::Keep));
+
+    assert_eq!(
+        outcomes,
+        vec![(0, Outcome::Leaves(Reason::Changed(path.clone())))]
+    );
+    assert_eq!(files(&rig.work), listing(&[("a.txt", "another file")]));
+    assert!(!renamed.exists());
+    assert!(rig.history.step(step).is_none());
+    rig.keeps(&before, "a redo of a swapped file");
+}
+
+#[test]
+fn a_name_taken_in_the_middle_of_a_redo_is_not_replaced() {
+    let (mut rig, hooks) = hooked();
+    let from = rig.work.join("from");
+    let into = rig.work.join("into");
+    write_at(&from.join("a.txt"), "text a", 10);
+    write_at(&from.join("b.txt"), "text b", 20);
+    fs::create_dir_all(&into).unwrap();
+    let step = rig
+        .transfer(
+            Verb::Copy,
+            &[from.join("a.txt"), from.join("b.txt")],
+            &into,
+            |_| Resolve::Keep,
+        )
+        .step;
+    ran(rig.undo(|_, _| Resolve::Keep));
+    let before = rig.held();
+    let target = into.join("b.txt");
+    hooks.on_restore(move |path| {
+        if path == target.as_path() {
+            fs::write(path, "taken in the middle").unwrap();
+        }
+        Ok(())
+    });
+
+    let outcomes = ran(rig.redo(|_, _| Resolve::Keep));
+
+    assert_eq!(outcomes.len(), 2, "{outcomes:?}");
+    assert_eq!(outcomes[0].0, 0);
+    assert!(is_redone(&outcomes[0].1), "{outcomes:?}");
+    assert_eq!(
+        outcomes[1],
+        (1, Outcome::Leaves(Reason::Taken(into.join("b.txt"))))
+    );
+    assert_eq!(
+        files(&rig.work),
+        listing(&[
+            ("from/a.txt", "text a"),
+            ("from/b.txt", "text b"),
+            ("into/a.txt", "text a"),
+            ("into/b.txt", "taken in the middle"),
+        ])
+    );
+    assert_eq!(texts(&rig.bin_root), vec!["text b"]);
+    let kept = rig
+        .history
+        .step(step)
+        .expect("the step keeps its first item");
+    assert_eq!(kept.items.len(), 1);
+    assert!(rig.history.redo_top().is_none());
+    assert!(matches!(rig.history.top(), Top::Undo(top) if top.id == step));
+    rig.keeps(&before, "a name taken in the middle of a redo");
+}
+
+#[test]
+fn an_emptied_bin_leaves_a_redo_with_nothing_to_restore() {
+    let mut rig = Rig::new();
+    let from = rig.work.join("from");
+    let into = rig.work.join("into");
+    write_at(&from.join("a.txt"), "original", 10);
+    fs::create_dir_all(&into).unwrap();
+    let step = rig
+        .transfer(Verb::Copy, &[from.join("a.txt")], &into, |_| Resolve::Keep)
+        .step;
+    ran(rig.undo(|_, _| Resolve::Keep));
+    assert_eq!(texts(&rig.bin_root), vec!["original"]);
+    fs::remove_dir_all(&rig.bin_root).unwrap();
+    let work_before = snapshot(&rig.work);
+
+    let outcomes = ran(rig.redo(|_, _| Resolve::Keep));
+
+    assert_eq!(
+        outcomes,
+        vec![(0, Outcome::Leaves(Reason::NotInTrash(into.join("a.txt"))))]
+    );
+    assert_eq!(snapshot(&rig.work), work_before);
+    assert_eq!(files(&rig.work), listing(&[("from/a.txt", "original")]));
+    assert!(rig.history.step(step).is_none());
+    assert!(rig.history.redo_top().is_none());
+}
+
+#[test]
+fn a_replaced_file_goes_back_and_forth_with_both_files_where_the_step_had_them() {
+    for verb in [Verb::Copy, Verb::Move] {
+        let mut rig = Rig::new();
+        let from = rig.work.join("from");
+        let into = rig.work.join("into");
+        write_at(&from.join("a.txt"), "incoming", 20);
+        write_at(&into.join("a.txt"), "existing", 10);
+        rig.transfer(verb, &[from.join("a.txt")], &into, |_| Resolve::Replace);
+        let before = rig.held();
+        let (done, bin_when_undone) = match verb {
+            Verb::Move => (listing(&[("into/a.txt", "incoming")]), Vec::new()),
+            Verb::Copy | Verb::Duplicate => (
+                listing(&[("from/a.txt", "incoming"), ("into/a.txt", "incoming")]),
+                vec!["incoming"],
+            ),
+        };
+        let undone = listing(&[("from/a.txt", "incoming"), ("into/a.txt", "existing")]);
+        assert_eq!(files(&rig.work), done, "{verb:?}");
+
+        for round in 0..2 {
+            let back = ran(rig.undo(|_, _| Resolve::Keep));
+            assert_eq!(back.len(), 2, "{verb:?} round {round}: {back:?}");
+            assert!(
+                back.iter()
+                    .all(|(_, outcome)| matches!(outcome, Outcome::Undone(_))),
+                "{verb:?} round {round}: {back:?}"
+            );
+            assert_eq!(files(&rig.work), undone, "{verb:?} round {round}");
+            assert_eq!(
+                texts(&rig.bin_root),
+                bin_when_undone,
+                "{verb:?} round {round}"
+            );
+
+            let forth = ran(rig.redo(|_, _| Resolve::Keep));
+
+            assert_eq!(forth.len(), 2, "{verb:?} round {round}: {forth:?}");
+            assert_eq!(forth[0].0, 0, "{verb:?} round {round}");
+            assert_eq!(forth[1].0, 1, "{verb:?} round {round}");
+            assert!(
+                matches!(
+                    &forth[0].1,
+                    Outcome::Redone(Change::Replaced { at, held: Some(_) })
+                        if *at == into.join("a.txt")
+                ),
+                "{verb:?} round {round}: {forth:?}"
+            );
+            assert!(is_redone(&forth[1].1), "{verb:?} round {round}: {forth:?}");
+            assert_eq!(files(&rig.work), done, "{verb:?} round {round}");
+            assert_eq!(
+                texts(&rig.bin_root),
+                vec!["existing"],
+                "{verb:?} round {round}"
+            );
+            assert!(rig.history.redo_top().is_none(), "{verb:?} round {round}");
+        }
+        rig.keeps(&before, "a replaced file round trip");
+    }
+}
+
+#[test]
+fn a_new_action_after_an_undo_leaves_nothing_to_redo() {
+    let mut rig = Rig::new();
+    let gone = rig.work.join("gone.txt");
+    write_at(&gone, "binned", 20);
+    rig.trash(std::slice::from_ref(&gone));
+    ran(rig.undo(|_, _| Resolve::Keep));
+    assert!(rig.history.redo_top().is_some());
+    let work = rig.work.clone();
+    rig.make_file(&work, "new.txt").unwrap();
+
+    let redo = rig.redo(|_, _| Resolve::Keep);
+
+    assert!(matches!(redo, Undid::Nothing));
+    assert_eq!(
+        files(&rig.work),
+        listing(&[("gone.txt", "binned"), ("new.txt", "")])
+    );
 }

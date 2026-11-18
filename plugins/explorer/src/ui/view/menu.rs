@@ -9,6 +9,7 @@ use qol_gpui::Key;
 
 use super::ExplorerView;
 use crate::listing::{SortBy, SortOrder};
+use crate::ui::browse::Stepping;
 
 const WIDTH: f32 = 232.0;
 
@@ -32,6 +33,7 @@ pub(super) enum Command {
     Trash,
     NewFolder,
     Undo,
+    Redo,
     OpenWith(usize),
     ChooseApp,
     NewFile,
@@ -105,7 +107,14 @@ fn paste_line(command: Command, can_paste: bool) -> Item {
     entry(command, "Paste", secondary(Key::letter('v')), can_paste)
 }
 
-fn make_lines() -> [Item; 3] {
+fn stepped(verb: &str, word: Option<&str>) -> String {
+    match word {
+        Some(word) => format!("{verb} {word}"),
+        None => verb.to_string(),
+    }
+}
+
+fn make_lines(steps: Stepping) -> [Item; 4] {
     [
         entry(
             Command::NewFolder,
@@ -119,13 +128,24 @@ fn make_lines() -> [Item; 3] {
             secondary(Key::letter('n').alt()),
             true,
         ),
-        entry(Command::Undo, "Undo", secondary(Key::letter('z')), true),
+        entry(
+            Command::Undo,
+            &stepped("Undo", steps.undo),
+            secondary(Key::letter('z')),
+            steps.undo.is_some(),
+        ),
+        entry(
+            Command::Redo,
+            &stepped("Redo", steps.redo),
+            secondary(Key::letter('z').shift()),
+            steps.redo.is_some(),
+        ),
     ]
 }
 
-fn edit_lines(can_paste: bool) -> Vec<Item> {
+fn edit_lines(can_paste: bool, steps: Stepping) -> Vec<Item> {
     let mut lines = vec![paste_line(Command::PasteHere, can_paste)];
-    lines.extend(make_lines());
+    lines.extend(make_lines(steps));
     lines.push(entry(
         Command::OpenTerminal,
         "Open terminal here",
@@ -135,7 +155,7 @@ fn edit_lines(can_paste: bool) -> Vec<Item> {
     lines
 }
 
-fn item_lines(can_paste: bool, single: bool, file: bool) -> Vec<Item> {
+fn item_lines(can_paste: bool, single: bool, file: bool, steps: Stepping) -> Vec<Item> {
     let mut lines = vec![
         entry(Command::OpenItem, "Open", Some(Key::ENTER), true),
         entry(
@@ -178,7 +198,7 @@ fn item_lines(can_paste: bool, single: bool, file: bool) -> Vec<Item> {
         ),
         Item::Rule,
     ];
-    lines.extend(make_lines());
+    lines.extend(make_lines(steps));
     lines
 }
 
@@ -284,16 +304,23 @@ impl Menu {
         shows_hidden: bool,
         order: SortOrder,
         can_paste: bool,
+        steps: Stepping,
         at: Point<Pixels>,
     ) -> Self {
-        let mut items = edit_lines(can_paste);
+        let mut items = edit_lines(can_paste, steps);
         items.push(Item::Rule);
         items.extend(folder_lines(folder_name, pinned_as, shows_hidden, order));
         Self::new(Owner::Folder, at, items)
     }
 
-    pub(super) fn item(can_paste: bool, single: bool, file: bool, at: Point<Pixels>) -> Self {
-        Self::new(Owner::Item, at, item_lines(can_paste, single, file))
+    pub(super) fn item(
+        can_paste: bool,
+        single: bool,
+        file: bool,
+        steps: Stepping,
+        at: Point<Pixels>,
+    ) -> Self {
+        Self::new(Owner::Item, at, item_lines(can_paste, single, file, steps))
     }
 
     pub(super) fn open_with(handlers: &[OpenHandler], at: Point<Pixels>) -> Self {
@@ -401,8 +428,18 @@ mod tests {
 
     use qol_apps::desktop_integration::OpenHandler;
 
+    use qol_gpui::Key;
+
     use super::{Command, Item, Menu, Owner};
     use crate::listing::{SortBy, SortOrder};
+    use crate::ui::browse::Stepping;
+
+    fn undoable() -> Stepping {
+        Stepping {
+            undo: Some("copy"),
+            redo: None,
+        }
+    }
 
     fn at() -> gpui::Point<gpui::Pixels> {
         point(px(0.0), px(0.0))
@@ -573,7 +610,7 @@ mod tests {
             (false, false, false),
         ];
         for (can_paste, single, file) in cases {
-            let menu = Menu::item(can_paste, single, file, at());
+            let menu = Menu::item(can_paste, single, file, undoable(), at());
             assert_eq!(
                 lines(&menu),
                 vec![
@@ -591,6 +628,7 @@ mod tests {
                     (Command::NewFolder, true),
                     (Command::NewFile, true),
                     (Command::Undo, true),
+                    (Command::Redo, false),
                 ],
                 "{can_paste} {single} {file}"
             );
@@ -600,7 +638,7 @@ mod tests {
 
     #[test]
     fn an_item_menu_opens_on_open_and_steps_over_what_is_unavailable() {
-        let mut menu = Menu::item(false, false, false, at());
+        let mut menu = Menu::item(false, false, false, undoable(), at());
         let mut walked = vec![menu.selected_command()];
         for _ in 0..10 {
             menu.step(true);
@@ -628,7 +666,15 @@ mod tests {
 
     #[test]
     fn a_background_menu_puts_the_edit_lines_before_the_folder_lines() {
-        let menu = Menu::background("Docs", None, true, SortOrder::default(), false, at());
+        let menu = Menu::background(
+            "Docs",
+            None,
+            true,
+            SortOrder::default(),
+            false,
+            undoable(),
+            at(),
+        );
         assert_eq!(
             lines(&menu),
             vec![
@@ -636,6 +682,7 @@ mod tests {
                 (Command::NewFolder, true),
                 (Command::NewFile, true),
                 (Command::Undo, true),
+                (Command::Redo, false),
                 (Command::OpenTerminal, true),
                 (Command::TogglePin, true),
                 (Command::GoToPath, true),
@@ -649,7 +696,97 @@ mod tests {
         );
         assert_eq!(menu.selected_command(), Some(Command::NewFolder));
         assert_eq!(menu.owner(), Owner::Folder);
-        let held = Menu::background("Docs", None, true, SortOrder::default(), true, at());
+        let held = Menu::background(
+            "Docs",
+            None,
+            true,
+            SortOrder::default(),
+            true,
+            undoable(),
+            at(),
+        );
         assert_eq!(held.selected_command(), Some(Command::PasteHere));
+    }
+
+    fn history_lines(menu: &Menu) -> Vec<(Command, String, bool, String)> {
+        menu.items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Line(line) if matches!(line.command, Command::Undo | Command::Redo) => {
+                    Some((
+                        line.command,
+                        line.label.clone(),
+                        line.enabled,
+                        format!("{:?}", line.key),
+                    ))
+                }
+                Item::Line(_) | Item::Rule => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn undo_and_redo_name_what_they_act_on_and_grey_out_when_there_is_nothing() {
+        let undo_key = format!("{:?}", Some(Key::letter('z').secondary()));
+        let redo_key = format!("{:?}", Some(Key::letter('z').shift().secondary()));
+        assert_ne!(undo_key, redo_key);
+        let cases = [
+            (Stepping::default(), ("Undo", false), ("Redo", false)),
+            (undoable(), ("Undo copy", true), ("Redo", false)),
+            (
+                Stepping {
+                    undo: None,
+                    redo: Some("move"),
+                },
+                ("Undo", false),
+                ("Redo move", true),
+            ),
+            (
+                Stepping {
+                    undo: Some("move to trash"),
+                    redo: Some("rename"),
+                },
+                ("Undo move to trash", true),
+                ("Redo rename", true),
+            ),
+            (
+                Stepping {
+                    undo: Some("new folder"),
+                    redo: Some("duplicate"),
+                },
+                ("Undo new folder", true),
+                ("Redo duplicate", true),
+            ),
+        ];
+        for (steps, (undo, undo_on), (redo, redo_on)) in cases {
+            let menus = [
+                Menu::item(true, true, true, steps, at()),
+                Menu::background("Docs", None, true, SortOrder::default(), true, steps, at()),
+            ];
+            for menu in menus {
+                assert_eq!(
+                    history_lines(&menu),
+                    vec![
+                        (Command::Undo, undo.to_string(), undo_on, undo_key.clone()),
+                        (Command::Redo, redo.to_string(), redo_on, redo_key.clone()),
+                    ],
+                    "{steps:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_greyed_undo_or_redo_cannot_be_chosen_from_the_keyboard() {
+        let mut menu = Menu::item(false, false, false, Stepping::default(), at());
+        for _ in 0..14 {
+            menu.step(true);
+        }
+        assert_eq!(menu.selected_command(), Some(Command::NewFile));
+        let mut menu = Menu::item(false, false, false, undoable(), at());
+        for _ in 0..14 {
+            menu.step(true);
+        }
+        assert_eq!(menu.selected_command(), Some(Command::Undo));
     }
 }

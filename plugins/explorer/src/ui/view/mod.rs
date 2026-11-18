@@ -107,7 +107,7 @@ pub struct ExplorerView {
     slider_hovered: bool,
     slider_dragging: bool,
     waiting: VecDeque<Keystroke>,
-    undo_key: keys::Repeat,
+    history_key: keys::Repeat,
     drag_gesture: Rc<RefCell<DragGestureState>>,
     pressing: press::PressState,
     title: String,
@@ -160,7 +160,7 @@ impl ExplorerView {
             slider_hovered: false,
             slider_dragging: false,
             waiting: VecDeque::new(),
-            undo_key: keys::Repeat::default(),
+            history_key: keys::Repeat::default(),
             drag_gesture: Rc::new(RefCell::new(DragGestureState::new(DRAG_THRESHOLD))),
             pressing: press::PressState::new(),
             title: WINDOW_TITLE.to_string(),
@@ -326,6 +326,7 @@ impl ExplorerView {
                 shows_hidden,
                 order,
                 self.browser.holds(),
+                self.browser.stepping(),
                 at,
             )
         } else {
@@ -409,6 +410,9 @@ impl ExplorerView {
             }
             Command::Undo => {
                 self.browser.undo(!self.waiting.is_empty());
+            }
+            Command::Redo => {
+                self.browser.redo(!self.waiting.is_empty());
             }
             Command::OpenWith(index) => self.open_with_choice(index, cx),
             Command::ChooseApp => {
@@ -808,7 +812,9 @@ impl ExplorerView {
             return;
         }
         let action = keys::action(&event.keystroke, self.browser.path_open());
-        if action == Action::Undo && self.undo_key.down(event.is_held, Instant::now()) {
+        if matches!(action, Action::Undo | Action::Redo)
+            && self.history_key.down(event.is_held, Instant::now())
+        {
             cx.stop_propagation();
             return;
         }
@@ -842,8 +848,8 @@ impl ExplorerView {
     }
 
     fn on_key_up(&mut self, event: &KeyUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
-        if event.keystroke.key == "z" {
-            self.undo_key.up(Instant::now());
+        if matches!(event.keystroke.key.as_str(), "z" | "y") {
+            self.history_key.up(Instant::now());
         }
     }
 
@@ -920,6 +926,7 @@ impl ExplorerView {
             Action::OpenTerminal => self.open_terminal_here(),
             Action::CopyPath => self.copy_path(cx),
             Action::Undo => self.browser.undo(!self.waiting.is_empty()),
+            Action::Redo => self.browser.redo(!self.waiting.is_empty()),
             Action::Moves => self.browser.toggle_moves(),
             Action::ContextMenu => self.open_cursor_menu(cx),
             Action::Props => self.browser.toggle_props(),
@@ -1188,7 +1195,30 @@ impl Render for ExplorerView {
 
 #[cfg(test)]
 mod tests {
-    use super::{rail_width, MIN_WIDTH, RAIL, RAIL_MAX, RAIL_MIN, WINDOW_WIDTH};
+    use gpui::{Keystroke, Modifiers};
+
+    use super::{rail_width, ExplorerView, MIN_WIDTH, RAIL, RAIL_MAX, RAIL_MIN, WINDOW_WIDTH};
+
+    #[test]
+    fn the_filter_field_keeps_undo_and_redo_keys_for_its_own_text() {
+        let secondary_shift = Modifiers {
+            shift: true,
+            ..Modifiers::secondary_key()
+        };
+        let keystrokes = [
+            ("z", Modifiers::secondary_key(), "z"),
+            ("z", secondary_shift, "Z"),
+            ("y", Modifiers::secondary_key(), "y"),
+        ];
+        for (key, modifiers, key_char) in keystrokes {
+            let keystroke = Keystroke {
+                modifiers,
+                key: key.to_string(),
+                key_char: Some(key_char.to_string()),
+            };
+            assert!(!ExplorerView::filter_yields(&keystroke), "{keystroke:?}");
+        }
+    }
 
     #[test]
     fn the_rail_keeps_its_width_at_the_opening_size_and_follows_the_window() {

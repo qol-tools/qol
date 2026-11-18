@@ -85,6 +85,7 @@ pub enum Action {
     OpenTerminal,
     CopyPath,
     Undo,
+    Redo,
     Moves,
     ContextMenu,
     Props,
@@ -159,6 +160,7 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("t", (true, false, true)) => Action::OpenTerminal,
         ("c", (true, false, true)) => Action::CopyPath,
         ("z", (true, false, false)) => Action::Undo,
+        ("z", (true, false, true)) | ("y", (true, false, false)) => Action::Redo,
         ("j", (true, false, false)) => Action::Moves,
         ("menu", (false, false, false)) | ("f10", (false, false, true)) => Action::ContextMenu,
         _ => typed(keystroke).map_or(Action::Nothing, Action::Jump),
@@ -192,7 +194,7 @@ pub fn leaves(action: Action) -> bool {
 }
 
 pub fn waits(action: Action, arriving: bool, stalled: bool, queued: bool) -> bool {
-    if action == Action::Undo {
+    if matches!(action, Action::Undo | Action::Redo) {
         return false;
     }
     if stalled && leaves(action) {
@@ -382,6 +384,11 @@ mod tests {
                 key("z", Modifiers::secondary_key(), Some("z")),
                 Action::Undo,
             ),
+            (key("z", secondary_shift, Some("Z")), Action::Redo),
+            (
+                key("y", Modifiers::secondary_key(), Some("y")),
+                Action::Redo,
+            ),
             (
                 key("j", Modifiers::secondary_key(), Some("j")),
                 Action::Moves,
@@ -397,6 +404,14 @@ mod tests {
 
     #[test]
     fn file_operation_keys_with_the_wrong_modifiers_do_nothing_or_jump() {
+        let secondary_shift = || Modifiers {
+            shift: true,
+            ..Modifiers::secondary_key()
+        };
+        let secondary_alt = || Modifiers {
+            alt: true,
+            ..Modifiers::secondary_key()
+        };
         let cases = [
             (key("c", Modifiers::none(), Some("c")), Action::Jump('c')),
             (
@@ -407,12 +422,19 @@ mod tests {
             (plain("f10"), Action::Nothing),
             (key("menu", shift(), None), Action::Nothing),
             (key("z", alt(), Some("z")), Action::Nothing),
+            (key("y", Modifiers::none(), Some("y")), Action::Jump('y')),
+            (key("y", alt(), Some("y")), Action::Nothing),
+            (key("y", secondary_shift(), Some("Y")), Action::Nothing),
+            (key("z", secondary_alt(), Some("z")), Action::Nothing),
+            (key("z", shift(), Some("Z")), Action::Jump('Z')),
         ];
         for (keystroke, expected) in cases {
             assert_eq!(action(&keystroke, false), expected, "{keystroke:?}");
         }
         for keystroke in [
             key("c", Modifiers::secondary_key(), Some("c")),
+            key("y", Modifiers::secondary_key(), Some("y")),
+            key("z", secondary_shift(), Some("Z")),
             plain("delete"),
             plain("f2"),
         ] {
@@ -605,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_never_waits_for_a_folder_or_behind_queued_keys() {
+    fn undo_and_redo_never_wait_for_a_folder_or_behind_queued_keys() {
         for (arriving, stalled, queued) in [
             (false, false, false),
             (true, false, false),
@@ -614,10 +636,12 @@ mod tests {
             (true, false, true),
             (true, true, true),
         ] {
-            assert!(
-                !waits(Action::Undo, arriving, stalled, queued),
-                "{arriving} {stalled} {queued}"
-            );
+            for action in [Action::Undo, Action::Redo] {
+                assert!(
+                    !waits(action, arriving, stalled, queued),
+                    "{action:?} {arriving} {stalled} {queued}"
+                );
+            }
         }
     }
 

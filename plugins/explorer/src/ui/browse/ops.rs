@@ -9,7 +9,7 @@ use super::ops_job::{Running, Trip};
 use super::ops_text;
 use super::Browser;
 use crate::listing::Entry;
-use crate::ops::history::{Action, History, Outcome, StepId, Undoing};
+use crate::ops::history::{Action, Direction, History, Outcome, StepId, Undoing};
 use crate::ops::{self, Failure, Resolve, Room, Survey, Tools, Transfer, Trashing, Verb};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +34,12 @@ pub struct MoveRecord {
     pub state: MoveState,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Stepping {
+    pub undo: Option<&'static str>,
+    pub redo: Option<&'static str>,
+}
+
 pub(super) struct Holding {
     pub held: Held,
     pub paths: BTreeSet<PathBuf>,
@@ -54,12 +60,14 @@ struct Waiting {
 
 pub(super) struct UndoRun {
     pub undoing: Undoing,
+    pub direction: Direction,
     pub outcomes: Vec<(usize, Outcome)>,
     pub label: String,
 }
 
 pub(super) struct UndoAsk {
     pub step: StepId,
+    pub direction: Direction,
     pub indices: Vec<usize>,
     pub survey: Survey,
     pub lines: Vec<String>,
@@ -126,12 +134,12 @@ impl Ops {
             .or_else(|| self.queued.front().map(|(_, trip)| trip.verb))
     }
 
-    fn close_pending(&mut self) {
+    fn drop_pending(&mut self) {
         if let Some((_, step)) = self.awaiting.take() {
-            self.history.close(step);
+            self.history.drop_step(step);
         }
         if let Some(waiting) = self.sheet.take() {
-            self.history.close(waiting.step);
+            self.history.drop_step(waiting.step);
         }
     }
 
@@ -297,7 +305,7 @@ impl Browser {
         if transfer.sources.is_empty() {
             return;
         }
-        self.ops.close_pending();
+        self.ops.drop_pending();
         self.ops.asking = None;
         let step = self.ops.history.open(Action::Transfer {
             verb: transfer.verb,
@@ -387,7 +395,7 @@ impl Browser {
                 .copied()
                 .zip(asking.survey.clashes.iter().map(|clash| clash.choice))
                 .collect();
-            self.start_undo(asking.step, Some(choices));
+            self.start_step(asking.step, asking.direction, Some(choices));
             return true;
         }
         let short = self
@@ -406,8 +414,13 @@ impl Browser {
     }
 
     pub fn cancel_survey(&mut self) -> bool {
-        if self.ops.sheet.is_none() && self.ops.asking.take().is_some() {
-            self.ops.notice = Some("Nothing was undone. ctrl+z asks again.".to_string());
+        let asked = if self.ops.sheet.is_none() {
+            self.ops.asking.take()
+        } else {
+            None
+        };
+        if let Some(asking) = asked {
+            self.ops.notice = Some(ops_text::asked_off(asking.direction));
             return true;
         }
         let waiting = self.ops.sheet.take();
@@ -477,7 +490,7 @@ impl Browser {
 
     pub(super) fn ops_note(&self) -> Option<String> {
         if let Some(run) = &self.ops.undo {
-            return Some(ops_text::undoing_note(&run.label));
+            return Some(ops_text::undoing_note(run.direction, &run.label));
         }
         if let Some(running) = &self.ops.running {
             return Some(ops_text::running_progress(

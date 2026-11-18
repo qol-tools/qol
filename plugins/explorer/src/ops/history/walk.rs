@@ -9,7 +9,8 @@ use std::time::{Duration, UNIX_EPOCH};
 use tempfile::TempDir;
 
 use super::{
-    start_undo, Action, Change, Choices, History, Outcome, Plan, Reply, Settled, Step, StepId, Top,
+    start, Action, Change, Choices, Direction, History, Outcome, Plan, Reply, Settled, State, Step,
+    StepId, Top, Undone,
 };
 use crate::ops::print::Print;
 use crate::ops::{self, Clash, Done, NameProblem, Progress, Resolve, Tools, Transfer, Verb};
@@ -24,7 +25,7 @@ const RESOLVES: [Resolve; 4] = [
     Resolve::Merge,
     Resolve::KeepBoth,
 ];
-const MIX: [(Pick, usize); 14] = [
+const MIX: [(Pick, usize); 16] = [
     (Pick::Copy, 9),
     (Pick::Move, 9),
     (Pick::Duplicate, 5),
@@ -39,6 +40,8 @@ const MIX: [(Pick, usize); 14] = [
     (Pick::Remove, 4),
     (Pick::OutsideRename, 3),
     (Pick::EmptyBin, 3),
+    (Pick::Redo, 12),
+    (Pick::RoundTrip, 7),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,7 +224,7 @@ impl Rig {
         }
     }
 
-    pub(super) fn undo(&mut self, mut choose: impl FnMut(usize, &Clash) -> Resolve) -> Undid {
+    pub(super) fn undo(&mut self, choose: impl FnMut(usize, &Clash) -> Resolve) -> Undid {
         let (step, dropping) = match self.history.top() {
             Top::Nothing => return Undid::Nothing,
             Top::Empty(found) | Top::Erased(found) => (found.id, true),
@@ -231,12 +234,28 @@ impl Rig {
             self.history.drop_step(step);
             return Undid::Dropped(step);
         }
+        self.run(step, Direction::Undo, choose)
+    }
+
+    pub(super) fn redo(&mut self, choose: impl FnMut(usize, &Clash) -> Resolve) -> Undid {
+        let Some(step) = self.history.redo_top().map(|found| found.id) else {
+            return Undid::Nothing;
+        };
+        self.run(step, Direction::Redo, choose)
+    }
+
+    fn run(
+        &mut self,
+        step: StepId,
+        direction: Direction,
+        mut choose: impl FnMut(usize, &Clash) -> Resolve,
+    ) -> Undid {
         let plan = self
             .history
-            .plan(step)
-            .expect("the top step is in the history");
+            .plan(step, direction)
+            .expect("the step is in the history");
         let planned: Vec<usize> = plan.items.iter().map(|item| item.index).collect();
-        let mut replies = self.run_plan(&plan, None);
+        let mut replies = self.run_plan(&plan, direction, None);
         let mut asked = Vec::new();
         let rows = replies.iter().find_map(|reply| match reply {
             Reply::Asks(rows) => Some(rows.clone()),
@@ -248,7 +267,7 @@ impl Rig {
                 choices.insert(*index, choose(*index, clash));
                 asked.push(*index);
             }
-            replies = self.run_plan(&plan, Some(choices));
+            replies = self.run_plan(&plan, direction, Some(choices));
         }
         let outcomes = outcomes_of(replies);
         self.history.settle(&Settled {
@@ -263,8 +282,15 @@ impl Rig {
         }
     }
 
-    fn run_plan(&self, plan: &Plan, choices: Option<Choices>) -> Vec<Reply> {
-        let undoing = start_undo(plan.clone(), choices, self.tools.clone(), None, || {});
+    fn run_plan(&self, plan: &Plan, direction: Direction, choices: Option<Choices>) -> Vec<Reply> {
+        let undoing = start(
+            plan.clone(),
+            direction,
+            choices,
+            self.tools.clone(),
+            None,
+            || {},
+        );
         drain(&undoing.result)
     }
 }
@@ -402,8 +428,25 @@ fn own_paths(step: &Step) -> Vec<PathBuf> {
             Change::Emptied { folder, .. } => found.push(folder.clone()),
             Change::Made { path, .. } | Change::Erased { path } => found.push(path.clone()),
         }
+        match &item.state {
+            State::Undone(undone) => found.extend(undone_paths(undone)),
+            State::Done => {}
+        }
     }
     found
+}
+
+fn undone_paths(undone: &Undone) -> Vec<PathBuf> {
+    match undone {
+        Undone::MovedBack { to, .. } | Undone::Restored { to, .. } => vec![to.clone()],
+        Undone::CopiedBack { to, far, .. } => {
+            let mut found = vec![to.clone()];
+            found.extend(far.iter().map(|held| held.item.clone()));
+            found
+        }
+        Undone::Binned(held) => held.iter().map(|held| held.item.clone()).collect(),
+        Undone::Removed | Undone::Remade { .. } => Vec::new(),
+    }
 }
 
 fn belongs(path: &Path, own: &[PathBuf]) -> bool {
@@ -497,6 +540,34 @@ enum Pick {
     Remove,
     OutsideRename,
     EmptyBin,
+    Redo,
+    RoundTrip,
+}
+
+struct Reverted {
+    outcomes: Vec<(usize, Outcome)>,
+    asked: Vec<usize>,
+}
+
+fn opens(pick: Pick) -> bool {
+    match pick {
+        Pick::Copy
+        | Pick::Move
+        | Pick::Duplicate
+        | Pick::Rename
+        | Pick::CaseRename
+        | Pick::NewFile
+        | Pick::NewFolder
+        | Pick::Trash => true,
+        Pick::Undo
+        | Pick::Redo
+        | Pick::RoundTrip
+        | Pick::Rewrite
+        | Pick::Add
+        | Pick::Remove
+        | Pick::OutsideRename
+        | Pick::EmptyBin => false,
+    }
 }
 
 struct Walk {
@@ -547,7 +618,19 @@ impl Walk {
             let pick = self.pick();
             self.step(pick);
         }
-        self.steps.push("undo everything".into());
+        self.unwind("undo everything");
+        self.steps.push("redo everything".into());
+        for _ in 0..UNWIND_CAP {
+            if self.rig.history.redo_top().is_none() {
+                break;
+            }
+            self.revert(Direction::Redo);
+        }
+        self.unwind("undo everything again");
+    }
+
+    fn unwind(&mut self, label: &str) {
+        self.steps.push(label.into());
         for _ in 0..UNWIND_CAP {
             if matches!(self.rig.history.top(), Top::Nothing) {
                 break;
@@ -569,6 +652,18 @@ impl Walk {
     }
 
     fn step(&mut self, pick: Pick) {
+        let newest = self.rig.history.steps().last().map(|step| step.id);
+        self.act(pick);
+        let opened = self.rig.history.steps().last().map(|step| step.id) != newest;
+        if opens(pick) && opened {
+            assert!(
+                self.rig.history.redo_top().is_none(),
+                "a new action left something to redo"
+            );
+        }
+    }
+
+    fn act(&mut self, pick: Pick) {
         match pick {
             Pick::Copy => self.transfer(Verb::Copy),
             Pick::Move => self.transfer(Verb::Move),
@@ -589,6 +684,13 @@ impl Walk {
             Pick::Remove => self.remove(),
             Pick::OutsideRename => self.outside_rename(),
             Pick::EmptyBin => self.empty_bin(),
+            Pick::Redo => {
+                self.redo();
+                if self.rng.chance(35) {
+                    self.redo();
+                }
+            }
+            Pick::RoundTrip => self.round_trip(),
         }
     }
 
@@ -774,29 +876,45 @@ impl Walk {
     }
 
     fn undo(&mut self) {
+        self.revert(Direction::Undo);
+    }
+
+    fn redo(&mut self) {
+        self.revert(Direction::Redo);
+    }
+
+    fn revert(&mut self, direction: Direction) -> Option<Reverted> {
         let before = self.rig.held();
         let work_before = snapshot(&self.rig.work);
         let bin_before = snapshot(&self.rig.bin_root);
-        let top = match self.rig.history.top() {
-            Top::Undo(step) => Some(step.clone()),
-            Top::Nothing | Top::Empty(_) | Top::Erased(_) => None,
+        let top = match direction {
+            Direction::Undo => match self.rig.history.top() {
+                Top::Undo(step) => Some(step.clone()),
+                Top::Nothing | Top::Empty(_) | Top::Erased(_) => None,
+            },
+            Direction::Redo => self.rig.history.redo_top().cloned(),
         };
         self.steps.push(match &top {
-            Some(step) => format!("undo {:?}", step.action),
-            None => "undo with nothing to undo".into(),
+            Some(step) => format!("{direction:?} {:?}", step.action),
+            None => format!("{direction:?} with nothing to do"),
         });
         let rng = &mut self.rng;
-        let undid = self.rig.undo(|_, _| {
+        let choose = |_: usize, _: &Clash| {
             if rng.chance(50) {
                 Resolve::Keep
             } else {
                 Resolve::KeepBoth
             }
-        });
+        };
+        let undid = match direction {
+            Direction::Undo => self.rig.undo(choose),
+            Direction::Redo => self.rig.redo(choose),
+        };
         match undid {
             Undid::Nothing => {
                 self.steps.push("  no step".into());
                 self.unchanged(&work_before, &bin_before);
+                None
             }
             Undid::Dropped(step) => {
                 self.steps
@@ -806,6 +924,7 @@ impl Walk {
                     "a dropped step is still in the history"
                 );
                 self.unchanged(&work_before, &bin_before);
+                None
             }
             Undid::Ran {
                 step,
@@ -817,24 +936,89 @@ impl Walk {
                     .iter()
                     .map(|(index, outcome)| match outcome {
                         Outcome::Undone(undone) => format!("{index}: undone {undone:?}"),
+                        Outcome::Redone(change) => format!("{index}: redone {change:?}"),
                         Outcome::Stays(reason) => format!("{index}: stays {reason:?}"),
                         Outcome::Leaves(reason) => format!("{index}: leaves {reason:?}"),
                     })
                     .collect();
                 self.steps
                     .push(format!("  asked {asked:?}, ran {}", summary.join("; ")));
-                let top = top.expect("an undo ran on a step that was on top");
-                assert_eq!(step, top.id, "the undo ran on another step");
+                let top = top.expect("a step ran that was on top");
+                assert_eq!(step, top.id, "the {direction:?} ran on another step");
                 let replied: Vec<usize> = outcomes.iter().map(|(index, _)| *index).collect();
                 assert_eq!(planned, replied, "an item got no outcome");
                 let work_after = snapshot(&self.rig.work);
                 if let Some(path) = stray(&work_before, &work_after, &own_paths(&top)) {
-                    panic!("the undo changed {} outside its own step", self.rel(&path));
+                    panic!(
+                        "the {direction:?} changed {} outside its own step",
+                        self.rel(&path)
+                    );
                 }
-                self.rig.keeps(&before, "an undo");
+                self.rig.keeps(&before, "a step run");
                 self.settled();
+                Some(Reverted { outcomes, asked })
             }
         }
+    }
+
+    fn round_trip(&mut self) {
+        let top = match self.rig.history.top() {
+            Top::Undo(step) => Some(step.id),
+            Top::Nothing | Top::Empty(_) | Top::Erased(_) => None,
+        };
+        let Some(id) = top else {
+            self.steps.push("round trip: nothing to undo".into());
+            return;
+        };
+        self.steps.push("round trip".into());
+        let work_before = snapshot(&self.rig.work);
+        let bin_before = texts(&self.rig.bin_root);
+        let Some(undone) = self.revert(Direction::Undo) else {
+            return;
+        };
+        let fully = self.rig.history.step(id).is_some_and(|step| step.undone());
+        if !fully {
+            self.steps
+                .push("  not fully undone, nothing to redo".into());
+            return;
+        }
+        assert_eq!(
+            self.rig.history.redo_top().map(|step| step.id),
+            Some(id),
+            "a fully undone step is not first in line to redo"
+        );
+        let Some(redone) = self.revert(Direction::Redo) else {
+            panic!("a fully undone step could not be redone");
+        };
+        let clean = undone.asked.is_empty()
+            && redone.asked.is_empty()
+            && undone
+                .outcomes
+                .iter()
+                .all(|(_, outcome)| matches!(outcome, Outcome::Undone(_)))
+            && redone
+                .outcomes
+                .iter()
+                .all(|(_, outcome)| matches!(outcome, Outcome::Redone(_)));
+        if !clean {
+            return;
+        }
+        assert_eq!(
+            snapshot(&self.rig.work),
+            work_before,
+            "undo then redo did not give back the same files"
+        );
+        assert_eq!(
+            texts(&self.rig.bin_root),
+            bin_before,
+            "undo then redo did not give back the same trash"
+        );
+        let step = self.rig.history.step(id).expect("the redone step is kept");
+        assert_eq!(
+            step.waiting(),
+            step.items.len(),
+            "a redone item is not done"
+        );
     }
 
     fn unchanged(
@@ -863,6 +1047,12 @@ impl Walk {
                 );
             }
             Top::Nothing => {}
+        }
+        if let Some(step) = self.rig.history.redo_top() {
+            assert!(
+                step.pending() && !step.open,
+                "the step to redo has nothing to redo: {step:?}"
+            );
         }
     }
 

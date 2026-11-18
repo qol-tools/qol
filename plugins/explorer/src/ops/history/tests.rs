@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use tempfile::TempDir;
 
-use super::{start_undo, Action, Change, Choices, History, Outcome, Plan, Reply, Undoing};
+use super::{start, Action, Change, Choices, Direction, History, Outcome, Plan, Reply, Undoing};
 use crate::ops::bin::Held;
 use crate::ops::print::{Print, TreePrint};
 use crate::ops::{Clash, Resolve, Tools};
@@ -69,7 +69,7 @@ fn plan_of(changes: Vec<Change>) -> Plan {
     for change in changes {
         history.record(step, change);
     }
-    history.plan(step).unwrap()
+    history.plan(step, Direction::Undo).unwrap()
 }
 
 fn collect(undoing: Undoing) -> Vec<Reply> {
@@ -158,7 +158,23 @@ impl Lab {
     }
 
     fn run_plan(&self, plan: Plan, choices: Option<Choices>) -> Vec<Reply> {
-        collect(start_undo(plan, choices, self.tools.clone(), None, || {}))
+        self.run_plan_as(plan, Direction::Undo, choices)
+    }
+
+    fn run_plan_as(
+        &self,
+        plan: Plan,
+        direction: Direction,
+        choices: Option<Choices>,
+    ) -> Vec<Reply> {
+        collect(start(
+            plan,
+            direction,
+            choices,
+            self.tools.clone(),
+            None,
+            || {},
+        ))
     }
 
     fn undo(&self, change: Change) -> Outcome {
@@ -314,7 +330,7 @@ mod steps {
         let step = closed(&mut history, vec![erased("a"), erased("b"), erased("c")]);
         let failed = Outcome::Stays(Reason::Failed(PathBuf::from("b"), "busy".into()));
         settle(&mut history, step, vec![(1, failed)]);
-        let plan = history.plan(step).unwrap();
+        let plan = history.plan(step, Direction::Undo).unwrap();
         assert_eq!(plan.step, step);
         let listed: Vec<(usize, bool)> = plan
             .items
@@ -331,7 +347,7 @@ mod steps {
         let step = closed(&mut history, vec![erased("a"), erased("b"), erased("c")]);
         settle(&mut history, step, vec![(2, undone())]);
         let listed: Vec<usize> = history
-            .plan(step)
+            .plan(step, Direction::Undo)
             .unwrap()
             .items
             .iter()
@@ -345,7 +361,7 @@ mod steps {
         let mut history = History::default();
         let step = closed(&mut history, vec![erased("a")]);
         history.drop_step(step);
-        assert_eq!(history.plan(step), None);
+        assert_eq!(history.plan(step, Direction::Undo), None);
         assert!(history.step(step).is_none());
     }
 
@@ -454,7 +470,7 @@ mod steps {
         let step = closed(&mut history, vec![erased("a")]);
         let failed = || Outcome::Stays(Reason::Failed(PathBuf::from("a"), "busy".into()));
         settle(&mut history, step, vec![(0, failed())]);
-        assert!(history.plan(step).unwrap().items[0].retry);
+        assert!(history.plan(step, Direction::Undo).unwrap().items[0].retry);
         let leaves = Outcome::Leaves(Reason::Failed(PathBuf::from("a"), "busy".into()));
         settle(&mut history, step, vec![(0, leaves)]);
         assert!(history.step(step).is_none());
@@ -579,11 +595,305 @@ mod steps {
         let second = history.open(trash_action());
         assert_ne!(first, second);
     }
+
+    fn redone(name: &str) -> Outcome {
+        Outcome::Redone(erased(name))
+    }
+
+    fn undo_all(history: &mut History, step: StepId) {
+        let count = found(history, step).items.len();
+        let outcomes = (0..count).map(|index| (index, undone())).collect();
+        settle(history, step, outcomes);
+    }
+
+    fn undone_step(history: &mut History, names: &[&str]) -> StepId {
+        let step = closed(history, names.iter().map(|name| erased(name)).collect());
+        undo_all(history, step);
+        step
+    }
+
+    fn in_line(history: &History) -> Option<StepId> {
+        history.redo_top().map(|step| step.id)
+    }
+
+    fn states(history: &History, step: StepId) -> Vec<bool> {
+        found(history, step)
+            .items
+            .iter()
+            .map(|item| item.state == State::Done)
+            .collect()
+    }
+
+    #[test]
+    fn plan_takes_done_items_newest_first_for_undo_and_undone_items_oldest_first_for_redo() {
+        let mut history = History::default();
+        let step = closed(
+            &mut history,
+            vec![erased("a"), erased("b"), erased("c"), erased("d")],
+        );
+        settle(
+            &mut history,
+            step,
+            vec![(0, undone()), (2, undone()), (3, undone())],
+        );
+        let failed = Outcome::Stays(Reason::Failed(PathBuf::from("c"), "busy".into()));
+        settle(&mut history, step, vec![(2, failed)]);
+        let cases = [
+            (
+                Direction::Undo,
+                vec![(1, false, None)],
+                "undo takes what is still done",
+            ),
+            (
+                Direction::Redo,
+                vec![
+                    (0, false, Some(Undone::Removed)),
+                    (2, true, Some(Undone::Removed)),
+                    (3, false, Some(Undone::Removed)),
+                ],
+                "redo takes what was undone, oldest first, with what the undo recorded",
+            ),
+        ];
+        for (direction, expected, name) in cases {
+            let plan = history.plan(step, direction).unwrap();
+            assert_eq!(plan.step, step, "{name}");
+            let listed: Vec<(usize, bool, Option<Undone>)> = plan
+                .items
+                .iter()
+                .map(|planned| (planned.index, planned.retry, planned.undone.clone()))
+                .collect();
+            assert_eq!(listed, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn plan_for_redo_carries_each_change_with_its_item() {
+        let mut history = History::default();
+        let step = closed(&mut history, vec![erased("a"), erased("b")]);
+        settle(&mut history, step, vec![(0, undone()), (1, undone())]);
+        let plan = history.plan(step, Direction::Redo).unwrap();
+        let changes: Vec<Change> = plan
+            .items
+            .iter()
+            .map(|planned| planned.change.clone())
+            .collect();
+        assert_eq!(changes, vec![erased("a"), erased("b")]);
+        assert!(history
+            .plan(step, Direction::Undo)
+            .unwrap()
+            .items
+            .is_empty());
+    }
+
+    #[test]
+    fn plan_of_a_dropped_step_is_none_in_both_directions() {
+        let mut history = History::default();
+        let step = undone_step(&mut history, &["a"]);
+        history.drop_step(step);
+        for direction in [Direction::Undo, Direction::Redo] {
+            assert_eq!(history.plan(step, direction), None, "{direction:?}");
+        }
+    }
+
+    #[test]
+    fn nothing_is_in_line_to_redo_before_an_undo() {
+        let mut history = History::default();
+        assert_eq!(in_line(&history), None);
+        closed(&mut history, vec![erased("a")]);
+        assert_eq!(in_line(&history), None);
+    }
+
+    #[test]
+    fn a_fully_undone_step_is_in_line_to_redo() {
+        let mut history = History::default();
+        let step = undone_step(&mut history, &["a", "b"]);
+        assert_eq!(in_line(&history), Some(step));
+        assert!(matches!(history.top(), Top::Nothing));
+    }
+
+    #[test]
+    fn undoing_two_steps_redoes_the_one_undone_last_first() {
+        let mut history = History::default();
+        let older = closed(&mut history, vec![erased("a")]);
+        let newer = closed(&mut history, vec![erased("b")]);
+        settle(&mut history, newer, vec![(0, undone())]);
+        settle(&mut history, older, vec![(0, undone())]);
+        assert_eq!(in_line(&history), Some(older));
+        settle(&mut history, older, vec![(0, redone("a"))]);
+        assert_eq!(in_line(&history), Some(newer));
+        assert!(matches!(history.top(), Top::Undo(top) if top.id == older));
+        settle(&mut history, newer, vec![(0, redone("b"))]);
+        assert_eq!(in_line(&history), None);
+        assert!(matches!(history.top(), Top::Undo(top) if top.id == newer));
+    }
+
+    #[test]
+    fn the_step_undone_last_is_first_in_line_whatever_its_age() {
+        let mut history = History::default();
+        let older = closed(&mut history, vec![erased("a")]);
+        let newer = closed(&mut history, vec![erased("b")]);
+        settle(&mut history, older, vec![(0, undone())]);
+        settle(&mut history, newer, vec![(0, undone())]);
+        assert_eq!(in_line(&history), Some(newer));
+        settle(&mut history, newer, vec![(0, redone("b"))]);
+        assert_eq!(in_line(&history), Some(older));
+    }
+
+    #[test]
+    fn a_new_action_clears_everything_to_redo() {
+        let mut history = History::default();
+        let first = closed(&mut history, vec![erased("a")]);
+        let second = closed(&mut history, vec![erased("b")]);
+        undo_all(&mut history, first);
+        undo_all(&mut history, second);
+        assert_eq!(in_line(&history), Some(second));
+        history.open(trash_action());
+        assert_eq!(in_line(&history), None);
+        assert!(history.step(first).is_none());
+        assert!(history.step(second).is_none());
+    }
+
+    #[test]
+    fn a_partly_undone_step_is_not_in_line_and_stays_the_undo_top() {
+        let mut history = History::default();
+        let step = closed(&mut history, vec![erased("a"), erased("b")]);
+        settle(&mut history, step, vec![(1, undone())]);
+        assert_eq!(in_line(&history), None);
+        assert!(matches!(history.top(), Top::Undo(top) if top.id == step));
+        settle(&mut history, step, vec![(0, undone())]);
+        assert_eq!(in_line(&history), Some(step));
+        assert!(matches!(history.top(), Top::Nothing));
+    }
+
+    #[test]
+    fn a_step_whose_last_waiting_item_leaves_gets_in_line() {
+        let mut history = History::default();
+        let step = closed(&mut history, vec![erased("a"), erased("b")]);
+        settle(&mut history, step, vec![(0, undone())]);
+        assert_eq!(in_line(&history), None);
+        let leaves = Outcome::Leaves(Reason::CannotUndo(PathBuf::from("b")));
+        settle(&mut history, step, vec![(1, leaves)]);
+        assert_eq!(in_line(&history), Some(step));
+        assert_eq!(changes(&history, step), vec![erased("a")]);
+    }
+
+    #[test]
+    fn a_dropped_step_leaves_the_line() {
+        let mut history = History::default();
+        let older = closed(&mut history, vec![erased("a")]);
+        let newer = closed(&mut history, vec![erased("b")]);
+        undo_all(&mut history, older);
+        undo_all(&mut history, newer);
+        history.drop_step(newer);
+        assert_eq!(in_line(&history), Some(older));
+        history.drop_step(older);
+        assert_eq!(in_line(&history), None);
+    }
+
+    #[test]
+    fn a_redo_that_leaves_every_item_drops_the_step() {
+        let mut history = History::default();
+        let older = closed(&mut history, vec![erased("a")]);
+        let newer = closed(&mut history, vec![erased("b"), erased("c")]);
+        undo_all(&mut history, older);
+        undo_all(&mut history, newer);
+        let leaves = |name: &str| Outcome::Leaves(Reason::Changed(PathBuf::from(name)));
+        settle(
+            &mut history,
+            newer,
+            vec![(0, leaves("b")), (1, leaves("c"))],
+        );
+        assert!(history.step(newer).is_none());
+        assert_eq!(in_line(&history), Some(older));
+    }
+
+    #[test]
+    fn settle_redone_swaps_in_the_fresh_change_and_marks_the_item_done() {
+        let mut history = History::default();
+        let step = undone_step(&mut history, &["a", "b"]);
+        let failed = Outcome::Stays(Reason::Failed(PathBuf::from("a"), "busy".into()));
+        settle(&mut history, step, vec![(0, failed)]);
+        assert!(found(&history, step).items[0].tried);
+        settle(&mut history, step, vec![(0, redone("a2"))]);
+        let items = &found(&history, step).items;
+        assert_eq!(items[0].change, erased("a2"));
+        assert_eq!(items[0].state, State::Done);
+        assert!(!items[0].tried);
+        assert_eq!(items[1].change, erased("b"));
+        assert_eq!(items[1].state, State::Undone(Undone::Removed));
+    }
+
+    #[test]
+    fn a_partly_redone_step_can_be_redone_further_and_undone() {
+        let mut history = History::default();
+        let step = undone_step(&mut history, &["a", "b"]);
+        settle(&mut history, step, vec![(0, redone("a"))]);
+        assert_eq!(states(&history, step), vec![true, false]);
+        assert_eq!(in_line(&history), Some(step));
+        assert!(matches!(history.top(), Top::Undo(top) if top.id == step));
+        let plan = history.plan(step, Direction::Redo).unwrap();
+        assert_eq!(plan.items.len(), 1);
+        assert_eq!(plan.items[0].index, 1);
+        settle(&mut history, step, vec![(1, redone("b"))]);
+        assert_eq!(in_line(&history), None);
+        assert_eq!(states(&history, step), vec![true, true]);
+    }
+
+    #[test]
+    fn a_step_undone_again_after_a_redo_is_in_line_again() {
+        let mut history = History::default();
+        let step = undone_step(&mut history, &["a"]);
+        settle(&mut history, step, vec![(0, redone("a"))]);
+        assert_eq!(in_line(&history), None);
+        assert!(matches!(history.top(), Top::Undo(top) if top.id == step));
+        settle(&mut history, step, vec![(0, undone())]);
+        assert_eq!(in_line(&history), Some(step));
+    }
+
+    #[test]
+    fn a_redo_that_stays_keeps_the_step_in_line_and_marks_the_item_tried() {
+        let mut history = History::default();
+        let step = undone_step(&mut history, &["a"]);
+        let failed = Outcome::Stays(Reason::Failed(PathBuf::from("a"), "busy".into()));
+        settle(&mut history, step, vec![(0, failed)]);
+        assert_eq!(in_line(&history), Some(step));
+        assert_eq!(
+            found(&history, step).items[0].state,
+            State::Undone(Undone::Removed)
+        );
+        assert!(history.plan(step, Direction::Redo).unwrap().items[0].retry);
+    }
+
+    #[test]
+    fn a_stopped_redo_changes_nothing() {
+        let mut history = History::default();
+        let step = undone_step(&mut history, &["a", "b"]);
+        let before = found(&history, step).clone();
+        settle(
+            &mut history,
+            step,
+            vec![
+                (0, Outcome::Stays(Reason::Stopped)),
+                (1, Outcome::Stays(Reason::Stopped)),
+            ],
+        );
+        assert_eq!(found(&history, step), &before);
+        assert_eq!(in_line(&history), Some(step));
+    }
+
+    #[test]
+    fn a_step_still_open_is_never_in_line() {
+        let mut history = History::default();
+        let step = history.open(trash_action());
+        history.record(step, erased("a"));
+        settle(&mut history, step, vec![(0, undone())]);
+        assert_eq!(in_line(&history), None);
+    }
 }
 
 mod disk {
     use super::*;
-    use crate::ops::history::{Reason, Source, Undone};
+    use crate::ops::history::{Reason, Settled, Source, State, StepId, Undone};
 
     fn moved(from: &Path, to: &Path) -> Change {
         Change::Moved {
@@ -623,6 +933,20 @@ mod disk {
         Change::Made {
             path: path.to_path_buf(),
             at: print(path),
+        }
+    }
+
+    fn moved_back(to: &Path) -> Undone {
+        Undone::MovedBack {
+            to: to.to_path_buf(),
+            at: print(to),
+        }
+    }
+
+    fn restored(lab: &Lab, to: &Path) -> Undone {
+        Undone::Restored {
+            to: to.to_path_buf(),
+            tree: lab.tree(to),
         }
     }
 
@@ -678,10 +1002,7 @@ mod disk {
         fs::create_dir_all(from.parent().unwrap()).unwrap();
         write(&to, "hello");
         let outcome = lab.undo(moved(&from, &to));
-        assert_eq!(
-            outcome,
-            Outcome::Undone(Undone::MovedBack { to: from.clone() })
-        );
+        assert_eq!(outcome, Outcome::Undone(moved_back(&from)));
         assert_eq!(read(&from), "hello");
         assert!(!to.exists());
     }
@@ -693,10 +1014,7 @@ mod disk {
         let to = lab.path("new/a.txt");
         write(&to, "hello");
         let outcome = lab.undo(moved(&from, &to));
-        assert_eq!(
-            outcome,
-            Outcome::Undone(Undone::MovedBack { to: from.clone() })
-        );
+        assert_eq!(outcome, Outcome::Undone(moved_back(&from)));
         assert_eq!(read(&from), "hello");
     }
 
@@ -739,10 +1057,7 @@ mod disk {
         let change = moved(&from, &to);
         edit(&to, "after the edit");
         let outcome = lab.undo(change);
-        assert_eq!(
-            outcome,
-            Outcome::Undone(Undone::MovedBack { to: from.clone() })
-        );
+        assert_eq!(outcome, Outcome::Undone(moved_back(&from)));
         assert_eq!(read(&from), "after the edit");
         assert!(!to.exists());
     }
@@ -769,10 +1084,7 @@ mod disk {
         let (from, to) = taken_home(&lab);
         let outcome = lab.undo_choosing(moved(&from, &to), Resolve::KeepBoth);
         let landed = lab.path("old/a (2).txt");
-        assert_eq!(
-            outcome,
-            Outcome::Undone(Undone::MovedBack { to: landed.clone() })
-        );
+        assert_eq!(outcome, Outcome::Undone(moved_back(&landed)));
         assert_eq!(read(&landed), "moved");
         assert_eq!(read(&from), "occupant");
         assert!(!to.exists());
@@ -812,10 +1124,7 @@ mod disk {
         write(&to, "text");
         let replies = lab.run(vec![moved(&from, &to)], None);
         let outcome = only(replies);
-        assert_eq!(
-            outcome,
-            Outcome::Undone(Undone::MovedBack { to: from.clone() })
-        );
+        assert_eq!(outcome, Outcome::Undone(moved_back(&from)));
         assert_eq!(names(&lab.path("dir")), vec!["name.txt".to_string()]);
         assert_eq!(read(&from), "text");
     }
@@ -921,6 +1230,7 @@ mod disk {
             to: back,
             far: Some(held),
             kept: None,
+            ..
         }) = &outcome
         else {
             panic!("{outcome:?}");
@@ -945,6 +1255,7 @@ mod disk {
             to: back,
             far: Some(_),
             kept: None,
+            ..
         }) = &outcome
         else {
             panic!("{outcome:?}");
@@ -998,11 +1309,7 @@ mod disk {
             let held = lab.held(&home);
             assert!(!home.exists(), "{name}");
             let outcome = lab.undo(restore(home.clone(), Some(held.clone())));
-            assert_eq!(
-                outcome,
-                Outcome::Undone(Undone::Restored { to: home.clone() }),
-                "{name}"
-            );
+            assert_eq!(outcome, Outcome::Undone(restored(&lab, &home)), "{name}");
             assert_eq!(read(&home), "old", "{name}");
             assert!(!held.item.exists(), "{name}");
         }
@@ -1073,10 +1380,7 @@ mod disk {
             from: home.clone(),
             held: Some(first),
         });
-        assert_eq!(
-            outcome,
-            Outcome::Undone(Undone::Restored { to: home.clone() })
-        );
+        assert_eq!(outcome, Outcome::Undone(restored(&lab, &home)));
         assert_eq!(read(&home), "first");
         assert_eq!(read(&second.item), "second");
     }
@@ -1150,10 +1454,7 @@ mod disk {
             Resolve::KeepBoth,
         );
         let landed = lab.path("docs/a (2).txt");
-        assert_eq!(
-            outcome,
-            Outcome::Undone(Undone::Restored { to: landed.clone() })
-        );
+        assert_eq!(outcome, Outcome::Undone(restored(&lab, &landed)));
         assert_eq!(read(&landed), "old");
         assert_eq!(read(&home), "new");
     }
@@ -1169,10 +1470,7 @@ mod disk {
             from: home.clone(),
             held: Some(held),
         });
-        assert_eq!(
-            outcome,
-            Outcome::Undone(Undone::Restored { to: home.clone() })
-        );
+        assert_eq!(outcome, Outcome::Undone(restored(&lab, &home)));
         assert_eq!(read(&home), "old");
     }
 
@@ -1312,10 +1610,7 @@ mod disk {
             outcomes[0],
             (1, Outcome::Undone(Undone::Binned(Some(_))))
         ));
-        assert_eq!(
-            outcomes[1],
-            (0, Outcome::Undone(Undone::Restored { to: place.clone() }))
-        );
+        assert_eq!(outcomes[1], (0, Outcome::Undone(restored(&lab, &place))));
         assert_eq!(read(&place), "old");
         assert_eq!(read(&source), "new");
     }
@@ -1331,6 +1626,678 @@ mod disk {
         let outcome = lab.undo(change);
         assert_eq!(outcome, Outcome::Leaves(Reason::Changed(path.clone())));
         assert!(path.is_dir());
+    }
+
+    fn recorded(changes: Vec<Change>) -> (History, StepId) {
+        let mut history = History::default();
+        let step = history.open(Action::Trash(Vec::new()));
+        for change in changes {
+            history.record(step, change);
+        }
+        history.close(step);
+        (history, step)
+    }
+
+    fn drive(
+        lab: &Lab,
+        history: &mut History,
+        step: StepId,
+        direction: Direction,
+        choices: Option<Choices>,
+    ) -> Vec<(usize, Outcome)> {
+        let plan = history.plan(step, direction).unwrap();
+        let outcomes = settled(lab.run_plan_as(plan, direction, choices));
+        history.settle(&Settled {
+            step,
+            outcomes: outcomes.clone(),
+        });
+        outcomes
+    }
+
+    fn sole(mut outcomes: Vec<(usize, Outcome)>) -> Outcome {
+        assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+        let (index, outcome) = outcomes.remove(0);
+        assert_eq!(index, 0);
+        outcome
+    }
+
+    fn undo_one(lab: &Lab, history: &mut History, step: StepId) -> Outcome {
+        sole(drive(
+            lab,
+            history,
+            step,
+            Direction::Undo,
+            Some(Choices::new()),
+        ))
+    }
+
+    fn redo_one(lab: &Lab, history: &mut History, step: StepId) -> Outcome {
+        sole(drive(
+            lab,
+            history,
+            step,
+            Direction::Redo,
+            Some(Choices::new()),
+        ))
+    }
+
+    fn redo_asking(lab: &Lab, history: &History, step: StepId) -> Vec<Reply> {
+        let plan = history.plan(step, Direction::Redo).unwrap();
+        lab.run_plan_as(plan, Direction::Redo, None)
+    }
+
+    fn held_in(change: &Change) -> Option<&Held> {
+        match change {
+            Change::Replaced { held, .. }
+            | Change::Matched { held, .. }
+            | Change::Trashed { held, .. } => held.as_ref(),
+            Change::Moved { .. }
+            | Change::Copied { .. }
+            | Change::Crossed { .. }
+            | Change::Emptied { .. }
+            | Change::Made { .. }
+            | Change::Erased { .. } => None,
+        }
+    }
+
+    fn all_done(history: &History, step: StepId) -> bool {
+        let items = &history.step(step).unwrap().items;
+        items.iter().all(|item| item.state == State::Done)
+    }
+
+    #[test]
+    fn a_moved_item_goes_back_and_forward_again() {
+        let lab = Lab::new();
+        let from = lab.path("old/a.txt");
+        let to = lab.path("new/a.txt");
+        fs::create_dir_all(from.parent().unwrap()).unwrap();
+        write(&to, "hello");
+        let (mut history, step) = recorded(vec![moved(&from, &to)]);
+
+        let undone = undo_one(&lab, &mut history, step);
+
+        assert_eq!(undone, Outcome::Undone(moved_back(&from)));
+        assert_eq!(history.redo_top().map(|found| found.id), Some(step));
+        let redone = redo_one(&lab, &mut history, step);
+        assert_eq!(redone, Outcome::Redone(moved(&from, &to)));
+        assert_eq!(read(&to), "hello");
+        assert!(!from.exists());
+        assert!(history.redo_top().is_none());
+        assert!(all_done(&history, step));
+        let again = undo_one(&lab, &mut history, step);
+        assert_eq!(again, Outcome::Undone(moved_back(&from)));
+        assert_eq!(read(&from), "hello");
+    }
+
+    #[test]
+    fn a_moved_item_that_was_edited_since_the_undo_still_goes_forward() {
+        let lab = Lab::new();
+        let from = lab.path("old/a.txt");
+        let to = lab.path("new/a.txt");
+        fs::create_dir_all(from.parent().unwrap()).unwrap();
+        write(&to, "before");
+        let (mut history, step) = recorded(vec![moved(&from, &to)]);
+        undo_one(&lab, &mut history, step);
+        edit(&from, "after the edit");
+
+        let redone = redo_one(&lab, &mut history, step);
+
+        assert_eq!(redone, Outcome::Redone(moved(&from, &to)));
+        assert_eq!(read(&to), "after the edit");
+        assert!(!from.exists());
+    }
+
+    #[test]
+    fn a_moved_item_that_is_not_the_same_object_any_more_stays_where_it_is() {
+        let cases: [(&str, Mutate, Expect); 3] = [
+            (
+                "replaced by another file",
+                |home: &Path, _: &Path| replace(home, "other"),
+                |home: &Path, _: &Path| Outcome::Leaves(Reason::Changed(home.to_path_buf())),
+            ),
+            (
+                "removed",
+                |home: &Path, _: &Path| fs::remove_file(home).unwrap(),
+                |home: &Path, _: &Path| Outcome::Leaves(Reason::Gone(home.to_path_buf())),
+            ),
+            (
+                "a folder in its place",
+                |home: &Path, _: &Path| {
+                    fs::remove_file(home).unwrap();
+                    fs::create_dir(home).unwrap();
+                },
+                |home: &Path, _: &Path| Outcome::Leaves(Reason::Changed(home.to_path_buf())),
+            ),
+        ];
+        for (name, mutate, expect) in cases {
+            let lab = Lab::new();
+            let from = lab.path("old/a.txt");
+            let to = lab.path("new/a.txt");
+            fs::create_dir_all(from.parent().unwrap()).unwrap();
+            write(&to, "mine");
+            let (mut history, step) = recorded(vec![moved(&from, &to)]);
+            undo_one(&lab, &mut history, step);
+            mutate(&from, &to);
+
+            let redone = redo_one(&lab, &mut history, step);
+
+            assert_eq!(redone, expect(&from, &to), "{name}");
+            assert!(!to.exists(), "{name}");
+            assert!(history.step(step).is_none(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_redo_whose_name_is_taken_asks_first_and_touches_nothing() {
+        let lab = Lab::new();
+        let from = lab.path("old/a.txt");
+        let to = lab.path("new/a.txt");
+        fs::create_dir_all(from.parent().unwrap()).unwrap();
+        write(&to, "moved");
+        let (mut history, step) = recorded(vec![moved(&from, &to)]);
+        undo_one(&lab, &mut history, step);
+        write(&to, "occupant");
+
+        let replies = redo_asking(&lab, &history, step);
+
+        let clashes = asked(&replies);
+        assert_eq!(clashes.len(), 1);
+        let (index, clash) = &clashes[0];
+        assert_eq!(*index, 0);
+        assert_eq!(clash.existing, to);
+        assert_eq!(clash.source, from);
+        assert_eq!(clash.choice, Resolve::KeepBoth);
+        assert_eq!(read(&from), "moved");
+        assert_eq!(read(&to), "occupant");
+    }
+
+    #[test]
+    fn a_redo_whose_name_is_taken_keeps_both_or_leaves_the_item_by_choice() {
+        let landed = |lab: &Lab| lab.path("new/a (2).txt");
+        let cases = [
+            (Resolve::KeepBoth, true),
+            (Resolve::Keep, false),
+            (Resolve::Replace, false),
+            (Resolve::Merge, false),
+        ];
+        for (choice, keeps_both) in cases {
+            let lab = Lab::new();
+            let from = lab.path("old/a.txt");
+            let to = lab.path("new/a.txt");
+            fs::create_dir_all(from.parent().unwrap()).unwrap();
+            write(&to, "moved");
+            let (mut history, step) = recorded(vec![moved(&from, &to)]);
+            undo_one(&lab, &mut history, step);
+            write(&to, "occupant");
+
+            let outcomes = drive(
+                &lab,
+                &mut history,
+                step,
+                Direction::Redo,
+                Some(Choices::from([(0, choice)])),
+            );
+
+            let outcome = sole(outcomes);
+            assert_eq!(read(&to), "occupant", "{choice:?}");
+            if keeps_both {
+                let target = landed(&lab);
+                assert_eq!(
+                    outcome,
+                    Outcome::Redone(moved(&from, &target)),
+                    "{choice:?}"
+                );
+                assert_eq!(read(&target), "moved", "{choice:?}");
+                assert!(!from.exists(), "{choice:?}");
+                continue;
+            }
+            assert_eq!(
+                outcome,
+                Outcome::Leaves(Reason::Kept(to.clone())),
+                "{choice:?}"
+            );
+            assert_eq!(read(&from), "moved", "{choice:?}");
+            assert!(!landed(&lab).exists(), "{choice:?}");
+        }
+    }
+
+    #[test]
+    fn a_redo_whose_name_is_taken_with_no_choice_leaves_taken() {
+        let lab = Lab::new();
+        let from = lab.path("old/a.txt");
+        let to = lab.path("new/a.txt");
+        fs::create_dir_all(from.parent().unwrap()).unwrap();
+        write(&to, "moved");
+        let (mut history, step) = recorded(vec![moved(&from, &to)]);
+        undo_one(&lab, &mut history, step);
+        write(&to, "occupant");
+
+        let redone = redo_one(&lab, &mut history, step);
+
+        assert_eq!(redone, Outcome::Leaves(Reason::Taken(to.clone())));
+        assert_eq!(read(&from), "moved");
+        assert_eq!(read(&to), "occupant");
+    }
+
+    #[test]
+    fn a_copy_binned_by_the_undo_is_put_back_by_the_redo() {
+        let pairs: [(&str, fn(&Lab) -> (PathBuf, PathBuf)); 2] =
+            [("file", copy_pair), ("folder", copy_trees)];
+        for (name, pair) in pairs {
+            let lab = Lab::new();
+            let (from, to) = pair(&lab);
+            let (mut history, step) = recorded(vec![copied(&lab, &from, &to)]);
+
+            let undone = undo_one(&lab, &mut history, step);
+
+            assert!(
+                matches!(undone, Outcome::Undone(Undone::Binned(Some(_)))),
+                "{name}: {undone:?}"
+            );
+            assert!(!to.exists(), "{name}");
+            let redone = redo_one(&lab, &mut history, step);
+            assert_eq!(redone, Outcome::Redone(copied(&lab, &from, &to)), "{name}");
+            assert!(lab.binned().is_empty(), "{name}");
+            assert!(all_done(&history, step), "{name}");
+            let again = undo_one(&lab, &mut history, step);
+            assert!(
+                matches!(again, Outcome::Undone(Undone::Binned(Some(_)))),
+                "{name}: {again:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_copy_whose_bin_item_is_gone_leaves_not_in_trash() {
+        let lab = Lab::new();
+        let (from, to) = copy_pair(&lab);
+        let (mut history, step) = recorded(vec![copied(&lab, &from, &to)]);
+        let undone = undo_one(&lab, &mut history, step);
+        let Outcome::Undone(Undone::Binned(Some(held))) = &undone else {
+            panic!("{undone:?}");
+        };
+        fs::remove_file(&held.item).unwrap();
+
+        let redone = redo_one(&lab, &mut history, step);
+
+        assert_eq!(redone, Outcome::Leaves(Reason::NotInTrash(to.clone())));
+        assert!(!to.exists());
+        assert_eq!(read(&from), "contents");
+        assert!(history.step(step).is_none());
+    }
+
+    #[test]
+    fn an_undo_that_binned_nothing_leaves_not_in_trash() {
+        let lab = Lab::new();
+        let (from, to) = copy_pair(&lab);
+        let (mut history, step) = recorded(vec![copied(&lab, &from, &to), made(&to)]);
+        let nothing = Outcome::Undone(Undone::Binned(None));
+        history.settle(&Settled {
+            step,
+            outcomes: vec![(0, nothing.clone()), (1, nothing)],
+        });
+        fs::remove_file(&to).unwrap();
+
+        let outcomes = drive(
+            &lab,
+            &mut history,
+            step,
+            Direction::Redo,
+            Some(Choices::new()),
+        );
+
+        assert_eq!(
+            outcomes,
+            vec![
+                (0, Outcome::Leaves(Reason::NotInTrash(to.clone()))),
+                (1, Outcome::Leaves(Reason::NotInTrash(to.clone()))),
+            ]
+        );
+        assert!(history.step(step).is_none());
+    }
+
+    #[test]
+    fn a_copy_whose_place_is_taken_keeps_both_when_told_to() {
+        let lab = Lab::new();
+        let (from, to) = copy_pair(&lab);
+        let (mut history, step) = recorded(vec![copied(&lab, &from, &to)]);
+        undo_one(&lab, &mut history, step);
+        write(&to, "occupant");
+
+        let replies = redo_asking(&lab, &history, step);
+        let clashes = asked(&replies);
+        assert_eq!(clashes.len(), 1);
+        assert_eq!(clashes[0].1.existing, to);
+
+        let outcomes = drive(
+            &lab,
+            &mut history,
+            step,
+            Direction::Redo,
+            Some(Choices::from([(0, Resolve::KeepBoth)])),
+        );
+        let landed = lab.path("dst/a (2).txt");
+        assert_eq!(
+            sole(outcomes),
+            Outcome::Redone(copied(&lab, &from, &landed))
+        );
+        assert_eq!(read(&to), "occupant");
+        assert_eq!(read(&landed), "contents");
+    }
+
+    #[test]
+    fn a_new_file_binned_by_the_undo_is_put_back_by_the_redo() {
+        let lab = Lab::new();
+        let path = lab.path("docs/new.txt");
+        write(&path, "");
+        let (mut history, step) = recorded(vec![made(&path)]);
+
+        let undone = undo_one(&lab, &mut history, step);
+
+        assert!(matches!(undone, Outcome::Undone(Undone::Binned(Some(_)))));
+        assert!(!path.exists());
+        let redone = redo_one(&lab, &mut history, step);
+        assert_eq!(redone, Outcome::Redone(made(&path)));
+        assert_eq!(read(&path), "");
+        assert!(lab.binned().is_empty());
+    }
+
+    #[test]
+    fn a_new_folder_removed_by_the_undo_is_made_again_by_the_redo() {
+        let lab = Lab::new();
+        let path = lab.path("docs/new folder");
+        fs::create_dir_all(&path).unwrap();
+        let (mut history, step) = recorded(vec![made(&path)]);
+
+        let undone = undo_one(&lab, &mut history, step);
+
+        assert_eq!(undone, Outcome::Undone(Undone::Removed));
+        assert!(!path.exists());
+        let redone = redo_one(&lab, &mut history, step);
+        assert_eq!(redone, Outcome::Redone(made(&path)));
+        assert!(path.is_dir());
+        let again = undo_one(&lab, &mut history, step);
+        assert_eq!(again, Outcome::Undone(Undone::Removed));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_new_folder_name_taken_since_the_undo_leaves_taken() {
+        let lab = Lab::new();
+        let path = lab.path("docs/new folder");
+        fs::create_dir_all(&path).unwrap();
+        let (mut history, step) = recorded(vec![made(&path)]);
+        undo_one(&lab, &mut history, step);
+        write(&path, "a file now");
+
+        let redone = redo_one(&lab, &mut history, step);
+
+        assert_eq!(redone, Outcome::Leaves(Reason::Taken(path.clone())));
+        assert_eq!(read(&path), "a file now");
+    }
+
+    #[test]
+    fn a_restored_item_goes_to_the_bin_again_with_the_same_kind_of_change() {
+        for (name, restore) in restores() {
+            let lab = Lab::new();
+            let home = lab.path("docs/a.txt");
+            write(&home, "old");
+            let held = lab.held(&home);
+            let (mut history, step) = recorded(vec![restore(home.clone(), Some(held))]);
+
+            let undone = undo_one(&lab, &mut history, step);
+
+            assert!(
+                matches!(undone, Outcome::Undone(Undone::Restored { .. })),
+                "{name}"
+            );
+            assert_eq!(read(&home), "old", "{name}");
+            let redone = redo_one(&lab, &mut history, step);
+            let Outcome::Redone(change) = &redone else {
+                panic!("{name}: {redone:?}");
+            };
+            let fresh = held_in(change).cloned();
+            assert_eq!(change, &restore(home.clone(), fresh.clone()), "{name}");
+            let fresh = fresh.expect("the new hold");
+            assert!(!home.exists(), "{name}");
+            assert_eq!(read(&fresh.item), "old", "{name}");
+            let again = undo_one(&lab, &mut history, step);
+            assert!(
+                matches!(again, Outcome::Undone(Undone::Restored { .. })),
+                "{name}"
+            );
+            assert_eq!(read(&home), "old", "{name}");
+        }
+    }
+
+    #[test]
+    fn a_restored_item_that_changed_since_the_undo_is_not_binned() {
+        let cases: [(&str, Mutate, Expect); 3] = [
+            (
+                "edited",
+                |home: &Path, _: &Path| edit(home, "edited since"),
+                |home: &Path, _: &Path| Outcome::Leaves(Reason::Changed(home.to_path_buf())),
+            ),
+            (
+                "replaced by another file",
+                |home: &Path, _: &Path| replace(home, "other"),
+                |home: &Path, _: &Path| Outcome::Leaves(Reason::Changed(home.to_path_buf())),
+            ),
+            (
+                "removed",
+                |home: &Path, _: &Path| fs::remove_file(home).unwrap(),
+                |home: &Path, _: &Path| Outcome::Leaves(Reason::Gone(home.to_path_buf())),
+            ),
+        ];
+        for (restore_name, restore) in restores() {
+            for (name, mutate, expect) in cases {
+                let lab = Lab::new();
+                let home = lab.path("docs/a.txt");
+                write(&home, "old");
+                let held = lab.held(&home);
+                let (mut history, step) = recorded(vec![restore(home.clone(), Some(held))]);
+                undo_one(&lab, &mut history, step);
+                mutate(&home, &home);
+                let kept = home.exists().then(|| read(&home));
+
+                let redone = redo_one(&lab, &mut history, step);
+
+                assert_eq!(redone, expect(&home, &home), "{restore_name} {name}");
+                assert_eq!(
+                    home.exists().then(|| read(&home)),
+                    kept,
+                    "{restore_name} {name}"
+                );
+                assert!(lab.binned().is_empty(), "{restore_name} {name}");
+                assert!(history.step(step).is_none(), "{restore_name} {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_earlier_item_that_frees_the_place_spares_the_redo_its_ask() {
+        let lab = Lab::new();
+        let place = lab.path("dst/doc.txt");
+        let source = lab.path("src/doc.txt");
+        write(&place, "old");
+        let held = lab.held(&place);
+        write(&source, "new");
+        write(&place, "new");
+        let changes = vec![
+            Change::Replaced {
+                at: place.clone(),
+                held: Some(held),
+            },
+            copied(&lab, &source, &place),
+        ];
+        let (mut history, step) = recorded(changes);
+        let undone = drive(&lab, &mut history, step, Direction::Undo, None);
+        assert_eq!(undone.len(), 2, "{undone:?}");
+        assert_eq!(read(&place), "old");
+
+        let redone = drive(&lab, &mut history, step, Direction::Redo, None);
+
+        assert_eq!(redone.len(), 2, "{redone:?}");
+        assert_eq!(redone[0].0, 0);
+        assert_eq!(redone[1].0, 1);
+        let Outcome::Redone(first) = &redone[0].1 else {
+            panic!("{redone:?}");
+        };
+        let fresh = held_in(first).expect("the old file is held again");
+        assert_eq!(read(&fresh.item), "old");
+        assert_eq!(redone[1].1, Outcome::Redone(copied(&lab, &source, &place)));
+        assert_eq!(read(&place), "new");
+        assert_eq!(read(&source), "new");
+        assert!(all_done(&history, step));
+    }
+
+    #[test]
+    fn a_crossed_item_goes_back_across_and_across_again() {
+        let lab = Lab::new();
+        let from = lab.path("home/a.txt");
+        let to = lab.path("far/a.txt");
+        fs::create_dir_all(from.parent().unwrap()).unwrap();
+        write(&to, "far copy");
+        let (mut history, step) = recorded(vec![crossed(&lab, &from, &to, Source::Removed)]);
+
+        let undone = undo_one(&lab, &mut history, step);
+
+        let Outcome::Undone(Undone::CopiedBack { to: back, tree, .. }) = &undone else {
+            panic!("{undone:?}");
+        };
+        assert_eq!(back, &from);
+        assert_eq!(*tree, lab.tree(&from));
+        let redone = redo_one(&lab, &mut history, step);
+        assert_eq!(
+            redone,
+            Outcome::Redone(crossed(&lab, &from, &to, Source::Removed))
+        );
+        assert_eq!(read(&to), "far copy");
+        assert!(!from.exists());
+        assert_eq!(lab.binned().len(), 2);
+        let again = undo_one(&lab, &mut history, step);
+        assert!(matches!(again, Outcome::Undone(Undone::CopiedBack { .. })));
+        assert_eq!(read(&from), "far copy");
+        assert!(!to.exists());
+    }
+
+    #[test]
+    fn a_crossed_item_that_changed_since_the_undo_is_not_copied_across() {
+        let lab = Lab::new();
+        let from = lab.path("home/a.txt");
+        let to = lab.path("far/a.txt");
+        fs::create_dir_all(from.parent().unwrap()).unwrap();
+        write(&to, "far copy");
+        let (mut history, step) = recorded(vec![crossed(&lab, &from, &to, Source::Removed)]);
+        undo_one(&lab, &mut history, step);
+        edit(&from, "edited since");
+
+        let redone = redo_one(&lab, &mut history, step);
+
+        assert_eq!(redone, Outcome::Leaves(Reason::Changed(from.clone())));
+        assert_eq!(read(&from), "edited since");
+        assert!(!to.exists());
+    }
+
+    #[test]
+    fn a_crossed_item_whose_far_copy_stayed_leaves_partly() {
+        let lab = Lab::new();
+        let from = lab.path("home/a.txt");
+        let to = lab.path("far/a.txt");
+        write(&from, "home copy");
+        write(&to, "far copy");
+        let (mut history, step) = recorded(vec![crossed(&lab, &from, &to, Source::Removed)]);
+        let kept = Outcome::Undone(Undone::CopiedBack {
+            to: from.clone(),
+            far: None,
+            kept: Some("the trash is full".into()),
+            tree: lab.tree(&from),
+        });
+        history.settle(&Settled {
+            step,
+            outcomes: vec![(0, kept)],
+        });
+
+        let redone = redo_one(&lab, &mut history, step);
+
+        assert_eq!(redone, Outcome::Leaves(Reason::Partly(from.clone())));
+        assert_eq!(read(&from), "home copy");
+        assert_eq!(read(&to), "far copy");
+    }
+
+    #[test]
+    fn an_emptied_folder_is_removed_again_by_the_redo() {
+        let lab = Lab::new();
+        let folder = lab.path("docs/empty");
+        fs::create_dir_all(&folder).unwrap();
+        let change = emptied(&folder);
+        fs::remove_dir(&folder).unwrap();
+        let (mut history, step) = recorded(vec![change.clone()]);
+
+        let undone = undo_one(&lab, &mut history, step);
+
+        assert_eq!(undone, Outcome::Undone(Undone::Remade { made: true }));
+        assert!(folder.is_dir());
+        let redone = redo_one(&lab, &mut history, step);
+        assert_eq!(redone, Outcome::Redone(change));
+        assert!(!folder.exists());
+        assert!(all_done(&history, step));
+    }
+
+    #[test]
+    fn a_folder_that_was_never_remade_is_left_alone_by_the_redo() {
+        let lab = Lab::new();
+        let folder = lab.path("docs/empty");
+        fs::create_dir_all(&folder).unwrap();
+        write(&folder.join("kept.txt"), "kept");
+        let change = emptied(&folder);
+        let (mut history, step) = recorded(vec![change.clone()]);
+
+        let undone = undo_one(&lab, &mut history, step);
+
+        assert_eq!(undone, Outcome::Undone(Undone::Remade { made: false }));
+        let redone = redo_one(&lab, &mut history, step);
+        assert_eq!(redone, Outcome::Redone(change));
+        assert_eq!(read(&folder.join("kept.txt")), "kept");
+    }
+
+    #[test]
+    fn a_remade_folder_with_something_inside_is_not_removed_by_the_redo() {
+        let lab = Lab::new();
+        let folder = lab.path("docs/empty");
+        fs::create_dir_all(&folder).unwrap();
+        let change = emptied(&folder);
+        fs::remove_dir(&folder).unwrap();
+        let (mut history, step) = recorded(vec![change]);
+        undo_one(&lab, &mut history, step);
+        write(&folder.join("added.txt"), "added");
+
+        let redone = redo_one(&lab, &mut history, step);
+
+        assert_eq!(redone, Outcome::Leaves(Reason::Changed(folder.clone())));
+        assert_eq!(read(&folder.join("added.txt")), "added");
+    }
+
+    #[test]
+    fn a_redo_with_nothing_the_undo_recorded_for_an_item_stays_stopped() {
+        let lab = Lab::new();
+        let path = lab.path("docs/a.txt");
+        write(&path, "text");
+        let (history, step) = recorded(vec![made(&path)]);
+        let mut plan = history.plan(step, Direction::Redo).unwrap();
+        assert!(plan.items.is_empty());
+        plan.items.push(crate::ops::history::Planned {
+            index: 0,
+            change: made(&path),
+            retry: false,
+            undone: None,
+        });
+
+        let replies = lab.run_plan_as(plan, Direction::Redo, Some(Choices::new()));
+
+        let outcomes = settled(replies);
+        assert_eq!(outcomes, vec![(0, Outcome::Stays(Reason::Stopped))]);
+        assert_eq!(read(&path), "text");
     }
 
     #[cfg(unix)]
@@ -1367,7 +2334,10 @@ mod disk {
             let step = history.open(Action::Trash(Vec::new()));
             history.record(step, change);
 
-            let first = settled(lab.run_plan(history.plan(step).unwrap(), Some(Choices::new())));
+            let first = settled(lab.run_plan(
+                history.plan(step, Direction::Undo).unwrap(),
+                Some(Choices::new()),
+            ));
             assert!(
                 matches!(
                     first.as_slice(),
@@ -1379,7 +2349,7 @@ mod disk {
                 step,
                 outcomes: first,
             });
-            let retry = history.plan(step).unwrap();
+            let retry = history.plan(step, Direction::Undo).unwrap();
             assert!(retry.items[0].retry);
 
             let second = settled(lab.run_plan(retry, Some(Choices::new())));
