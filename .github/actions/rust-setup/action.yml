@@ -75,9 +75,15 @@ runs:
     # Every job that saves only compiles, so a failed or cancelled one would
     # save an incomplete entry under a key no later run replaces. It saves
     # nothing instead, and the next main run saves the whole entry.
+    # The pin names a release so Dependabot follows it. The toolchain above
+    # floats, and a release older than Cargo's build directory layout prunes
+    # most third-party artifacts before it saves: Rust 1.100 nested each
+    # package's hash in a folder, and the March 2026 pin then dropped every
+    # package with a hyphen in its name, so a workspace clippy recompiled 545
+    # third-party crates where it had recompiled 43.
     - name: Restore or save build cache
       id: build-cache
-      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
         workspaces: ${{ inputs.workspace }}
         shared-key: ${{ inputs.cache-key }}-${{ env.ImageOS }}
