@@ -279,7 +279,17 @@ impl Browser {
                 back,
                 renames,
                 restore,
+                recreate,
             } => {
+                for folder in &recreate {
+                    if let Err(error) = fs::create_dir_all(folder) {
+                        self.ops.notice = None;
+                        self.failure = Some(format!(
+                            "{} was not put back: {error}",
+                            ops_text::name_of(folder)
+                        ));
+                    }
+                }
                 self.ops.undoing = back;
                 self.ops.renaming = renames;
                 self.ops.restoring = restore;

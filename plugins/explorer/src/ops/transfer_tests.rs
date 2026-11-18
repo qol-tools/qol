@@ -399,6 +399,22 @@ fn move_merge_removes_the_source_folder_when_nothing_is_left() {
 }
 
 #[test]
+fn move_merge_lists_the_emptied_folders_it_removed() {
+    let (_root, from, into) = two_folders();
+    fs::create_dir_all(from.join("docs/empty")).unwrap();
+    fs::create_dir_all(into.join("docs/empty")).unwrap();
+    let found = survey(transfer(Verb::Move, &[&from.join("docs")], &into)).unwrap();
+    let (done, _) = run(found);
+    assert!(done.failures.is_empty());
+    assert!(!from.join("docs").exists());
+    assert!(into.join("docs/empty").is_dir());
+    assert_eq!(
+        done.merged,
+        vec![from.join("docs/empty"), from.join("docs")]
+    );
+}
+
+#[test]
 fn missing_source_is_reported_as_a_failure_with_a_reason() {
     let (_root, from, into) = two_folders();
     write(&from.join("a.txt"), "x", 10);

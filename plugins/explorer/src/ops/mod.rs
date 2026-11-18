@@ -104,6 +104,7 @@ pub struct Done {
     pub placed: Vec<(PathBuf, PathBuf)>,
     pub landed: Vec<(PathBuf, PathBuf)>,
     pub matched: Vec<(PathBuf, PathBuf)>,
+    pub merged: Vec<PathBuf>,
     pub trashed: bool,
     pub replaced: Vec<PathBuf>,
     pub kept_originals: Vec<PathBuf>,

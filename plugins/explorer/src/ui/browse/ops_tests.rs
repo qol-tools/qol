@@ -164,6 +164,33 @@ fn cut_then_paste_moves_the_file_and_undo_moves_it_back() {
 }
 
 #[test]
+fn undo_brings_back_an_empty_folder_that_a_move_merged_into_a_new_folder() {
+    let (temp, dest) = two_folders();
+    let moved = temp.path().join("New folder");
+    fs::create_dir(&moved).unwrap();
+    let mut browser = opened(temp.path());
+    visit(&mut browser, &dest);
+    assert!(browser.new_folder());
+    let made = dest.join("New folder");
+    assert!(made.is_dir());
+
+    visit(&mut browser, temp.path());
+    point_at(&mut browser, &moved);
+    assert!(browser.hold(Held::Cut));
+    visit(&mut browser, &dest);
+    let transfer = browser.paste().unwrap();
+    browser.begin(transfer);
+    wait_until(&mut browser, "the move", finished);
+    assert!(!moved.exists());
+
+    assert!(browser.undo());
+    assert!(moved.is_dir());
+    assert!(made.is_dir());
+    assert!(browser.undo());
+    assert!(!made.exists());
+}
+
+#[test]
 fn copy_then_paste_leaves_the_original_and_undo_has_a_journal_entry() {
     let (temp, dest) = two_folders();
     let file = write(temp.path(), "a.txt", "alpha");

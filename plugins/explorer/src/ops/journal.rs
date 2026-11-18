@@ -12,6 +12,7 @@ pub enum Undo {
         back: Vec<Transfer>,
         renames: Vec<(PathBuf, PathBuf)>,
         restore: Vec<PathBuf>,
+        recreate: Vec<PathBuf>,
     },
     Rename {
         from: PathBuf,
@@ -33,7 +34,7 @@ pub struct Journal {
 
 impl Journal {
     pub fn record(&mut self, done: &Done) {
-        if done.landed.is_empty() && done.matched.is_empty() {
+        if done.landed.is_empty() && done.matched.is_empty() && done.merged.is_empty() {
             return;
         }
         let arrived: Vec<PathBuf> = done.landed.iter().map(|(_, to)| to.clone()).collect();
@@ -52,6 +53,7 @@ impl Journal {
                 .concat(),
                 renames: renamed(&done.landed),
                 restore,
+                recreate: done.merged.clone(),
             }),
         }
     }
