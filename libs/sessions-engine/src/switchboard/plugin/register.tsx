@@ -19,6 +19,7 @@ const TASK_TEXT = 200
 const TASK_INDENT = 7
 const NOT_STATED = 'not stated yet'
 const TASK_OWN = 'Only a fork states its own task: fork_task takes no fork to speak for.'
+const TASK_NO_ROW = 'The fork board has no row for this fork yet, so nothing was noted: call fork_task again after your next tool call.'
 const TASK_NEEDS = 'fork_task needs working_on and done_when, one plain sentence each.'
 const RESUME_TIMEOUT_MS = 60_000
 const RECORD_TIMEOUT_MS = 20_000
@@ -429,7 +430,7 @@ const pointAt = async ($: EngineInterface, entry: Entry | undefined): Promise<bo
 
 const loadWriting = async ($: EngineInterface, entry: Entry | undefined): Promise<void> => {
   const agentId = entry?.agentId ?? ''
-  if (entry !== undefined && hasUnread(await read($, board), entry)) await seen($, agentId, true)
+  if (entry !== undefined && (await read($, writingTo)) === agentId && hasUnread(await read($, board), entry)) await seen($, agentId, true)
   await refreshWriting($, agentId)
   if (agentId !== '' && (await read($, writingTo)) === agentId) await placeFocus($)
 }
@@ -1515,9 +1516,17 @@ const subagentFile = async ($: EngineInterface, agentId: string, suffix: string)
   return (await $.fs.exists(path)) ? path : undefined
 }
 
+const statedOf = (entry: Entry | undefined): Pick<Entry, 'task' | 'doneWhen'> => ({
+  ...(entry?.task === undefined ? {} : { task: entry.task }),
+  ...(entry?.doneWhen === undefined ? {} : { doneWhen: entry.doneWhen }),
+})
+
 const succeed = async ($: EngineInterface, stopped: string, successor: string): Promise<void> => {
   if (stopped === successor) return
-  await change($, list => list.map(one => (one.agentId === stopped ? { ...one, successor, isDismissed: true } : one)))
+  await change($, list => {
+    const stated = statedOf(list.find(one => one.agentId === stopped))
+    return list.map(one => (one.agentId === stopped ? { ...one, successor, isDismissed: true } : one.agentId === successor ? { ...stated, ...one } : one))
+  })
 }
 
 export const adoptFork = async ($: EngineInterface, fork: string, isFresh: boolean): Promise<Adopted | undefined> => {
@@ -1607,7 +1616,8 @@ const isSent = (answer: { deny?: string; isError?: true; result?: unknown }): bo
   answer.isError !== true &&
   !(typeof answer.result === 'object' && answer.result !== null && (answer.result as { success?: unknown }).success === false)
 
-const placementOf = (entry: Entry | undefined): Pick<Entry, 'project' | 'successor' | 'launcher' | 'resumedFrom' | 'key' | 'isDone'> => ({
+const placementOf = (entry: Entry | undefined): Pick<Entry, 'project' | 'successor' | 'launcher' | 'resumedFrom' | 'key' | 'isDone' | 'task' | 'doneWhen'> => ({
+  ...statedOf(entry),
   ...(entry?.key === undefined ? {} : { key: entry.key }),
   ...(entry?.isDone === true ? { isDone: true } : {}),
   ...(entry?.project === undefined ? {} : { project: entry.project }),
@@ -3165,6 +3175,8 @@ export const register: Register = on => {
     const task = textField(input.working_on)
     const doneWhen = textField(input.done_when)
     if (task === undefined || doneWhen === undefined) return { deny: TASK_NEEDS }
+    await ensureLoaded($)
+    if (!(await read($, board)).some(one => one.agentId === agentId)) return { deny: TASK_NO_ROW }
     await change($, list => list.map(one => (one.agentId === agentId ? { ...one, task: clip(oneLine(task), TASK_TEXT), doneWhen: clip(oneLine(doneWhen), TASK_TEXT) } : one)))
     return { result: 'The fork board shows it beside your row.' }
   }).catch(() => ({ deny: 'The task could not be noted.' }))
@@ -3413,14 +3425,28 @@ export const register: Register = on => {
       const sent = await sendTo($, entry, text)
       $.ui.toast(sent.isDelivered ? `Sent to ${keyName(entry.name)}: ${text}` : `Not sent to ${keyName(entry.name)}: ${sent.reason}`)
     }
-    const title = (entry: Entry, label: string) => (
-      <Button key={`open-${entry.agentId}`} plain {...hotkey()} onPress={open(entry)}>
-        {dot(entry)} {mark(entry)}
-        <Text bold={entry.agentId === viewed || entry.agentId === target?.agentId}>{keyName(entry.name)}</Text>
-        <Text dimColor>{badgeOf(entry)}</Text>{' '}
-        {stateText(entry, label)}
-        <Text dimColor> · {age(now - entry.at)}</Text>
-      </Button>
+    const taskLine = (entry: Entry, isCompact: boolean) =>
+      taskOf(entry) === '' ? undefined : (
+        <Box paddingLeft={TASK_INDENT}>
+          <Text dimColor={isCompact} wrap={isCompact ? 'truncate' : 'wrap'}>
+            {taskOf(entry)}
+          </Text>
+        </Box>
+      )
+    const title = (entry: Entry, label: string, isCompact = false) => (
+      <Box key={`title-${entry.agentId}`} flexDirection="column">
+        <Box flexDirection="row" gap={2}>
+          <Button key={`open-${entry.agentId}`} plain {...hotkey()} onPress={open(entry)}>
+            {dot(entry)} {mark(entry)}
+            <Text bold={entry.agentId === viewed || entry.agentId === target?.agentId}>{keyName(entry.name)}</Text>
+            <Text dimColor>{badgeOf(entry)}</Text>{' '}
+            {stateText(entry, label)}
+            <Text dimColor> · {age(now - entry.at)}</Text>
+          </Button>
+          {pullCell(entry.agentId)}
+        </Box>
+        {taskLine(entry, isCompact)}
+      </Box>
     )
     const heading = (text: string) => (
       <Box marginTop={1}>
@@ -3509,13 +3535,7 @@ export const register: Register = on => {
             </Button>
             {pullCell(entry.agentId)}
           </Box>
-          {taskOf(entry) !== '' && (
-            <Box paddingLeft={TASK_INDENT}>
-              <Text dimColor wrap="truncate">
-                {taskOf(entry)}
-              </Text>
-            </Box>
-          )}
+          {taskLine(entry, true)}
         </Box>
       )
     }
@@ -3752,7 +3772,7 @@ export const register: Register = on => {
         {target === undefined && needs.length > 0 && heading('NEEDS YOU')}
         {target === undefined && needs.map(entry => (
           <Box key={`need-${entry.agentId}`} flexDirection="column">
-            {title(entry, labelOf(entry))}
+            {title(entry, labelOf(entry), true)}
             {askersOf(entry).map(one => (
               <Box key={`ask-${one.agentId}`} paddingLeft={7} flexDirection="column">
                 <Text wrap="wrap">
@@ -3847,7 +3867,7 @@ export const register: Register = on => {
         {target === undefined && closedRows.length > 0 && heading('CLOSED')}
         {target === undefined && closedRows.map(entry => (
           <Box key={`recent-${entry.agentId}`} flexDirection="column">
-            {title(entry, 'closed')}
+            {title(entry, 'closed', true)}
             <Box paddingLeft={7} flexDirection="column">
               <Text dimColor wrap="wrap">
                 {entry.headline}

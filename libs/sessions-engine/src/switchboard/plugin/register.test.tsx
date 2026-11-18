@@ -872,6 +872,7 @@ test('only a stopped fork is copied under a new id, once however many messages r
   const busy = await $.tool.call({ tool: 'SendMessage', to: 'c2', message: 'hello' })
   expect(JSON.stringify(busy.result)).toContain('Agent c2 is busy.')
   expect(runs.filter(argv => argv.includes('--fresh'))).toHaveLength(0)
+  await $.tool.call({ tool: 'mcp__qol-switchboard__fork_task', agentId: 'c1', working_on: 'Square corners on the launcher', done_when: 'Merged' } as any)
 
   const raced = await Promise.all([
     $.tool.call({ tool: 'SendMessage', to: 'c1', message: 'first' }),
@@ -880,6 +881,9 @@ test('only a stopped fork is copied under a new id, once however many messages r
   expect(raced.map(one => JSON.stringify(one.result)).every(text => text.includes('delivery to c1-copy'))).toBe(true)
   expect(runs.filter(argv => argv.includes('--fresh'))).toHaveLength(1)
   expect(reached.filter(to => to === 'c1-copy')).toHaveLength(2)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'Square corners on the launcher' })).toBeDefined()
+  await ui.unmount()
 })
 
 const resumeArgv = (transcript: string, ...rest: string[]) => [
@@ -3068,7 +3072,9 @@ test('open pull requests gather under PULL REQUESTS at the bottom of the board, 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: 'PULL REQUESTS' })).toBeDefined()
   expect((await ui.find({ type: 'Link', text: /#11$/ }))?.props.href).toBe('https://github.com/o/r/pull/11')
-  expect(await ui.find({ type: 'Text', text: /^\S*#1[02]\b/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /#11 open$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^\S*#12 merged$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^\S*#10\b/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /^✓ 2 merged · newest \S*#12 bbbbbbb by p2-fork$/ })).toBeDefined()
   await ui.unmount()
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'p2-fork ', cursor: 8 })
@@ -3087,6 +3093,9 @@ test("the board says what each fork works on: its description until the fork sta
   const tool = 'mcp__qol-switchboard__fork_task'
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: pick the accent colour')
+  const sections = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await sections.find({ type: 'Text', text: 'pick the accent colour' })).toBeDefined()
+  await sections.unmount()
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork ', cursor: 12 })
   await settle()
   const before = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -3097,6 +3106,8 @@ test("the board says what each fork works on: its description until the fork sta
   expect(String((await $.tool.call({ tool, agentId: 'a8', working_on: 'Amber' } as any)).deny)).toContain('needs working_on and done_when')
   const noted = await $.tool.call({ tool, agentId: 'a8', working_on: 'Amber accent on the launcher,\n pull request #12', done_when: 'Pull request #12 merged and the launcher shows amber' } as any)
   expect(String(noted.result)).toContain('The fork board shows it')
+  expect(String((await $.tool.call({ tool, agentId: 'zz', working_on: 'Amber', done_when: 'Merged' } as any)).deny)).toContain('has no row for this fork yet')
+  await deliver($, notification('a8', 'asking-fork: pick the accent colour', 'Amber or teal?'))
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /working on$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Amber accent on the launcher, pull request #12' })).toBeDefined()
