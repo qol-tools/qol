@@ -71,7 +71,12 @@ fn read_lines(path: &PathBuf) -> Result<Vec<String>, Option<String>> {
 
 fn write_lines(path: &PathBuf, lines: &[String]) {
     let content = lines.join("\n") + "\n";
-    let _ = fs::write(path, content.as_bytes());
+    if let Err(error) = fs::write(path, content.as_bytes()) {
+        log::warn!(
+            "Failed to write minimized window state to {}: {error}",
+            path.display()
+        );
+    }
 }
 
 fn serialize_record(record: &MinimizedWindowRecord) -> String {

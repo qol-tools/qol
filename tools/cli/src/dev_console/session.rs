@@ -1078,7 +1078,8 @@ mod tests {
             },
             &ScanLedger::new(),
             at_ms,
-        );
+        )
+        .expect("cache the disk report");
 
         apply_health(
             &mut dash,

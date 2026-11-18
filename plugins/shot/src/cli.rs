@@ -93,8 +93,8 @@ fn record_monitor_command(binary_name: &'static str) -> Command {
 }
 
 fn forward_host_fallback_to_daemon(action: &str) -> bool {
-    if std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_none()
-        || std::env::var_os(qol_conventions::ENV_DAEMON_REPLACE_EXISTING).is_some()
+    if qol_plugin_daemon::daemon::handed_socket().is_err()
+        || qol_plugin_daemon::daemon::asked_to_replace_existing()
     {
         return false;
     }

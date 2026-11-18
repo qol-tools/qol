@@ -13,6 +13,7 @@ pub const PICTURE_NAMES: &[&str] = &[
     "qol-toasts",
     "system-bubbles",
     "both-notices",
+    "no-bubbles",
     "launch-app",
     "open-url",
     "bundle-ref",

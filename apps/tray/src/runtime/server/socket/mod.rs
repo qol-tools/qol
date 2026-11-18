@@ -35,8 +35,11 @@ pub(crate) fn run_at(shared: Arc<SharedState>, path: &Path) {
 }
 
 pub(crate) fn bind_at(path: &Path) -> BindOutcome {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    if let Err(error) = path.parent().map_or(Ok(()), std::fs::create_dir_all) {
+        log::warn!(
+            "Failed to create the folder of runtime socket {}: {error}",
+            path.display()
+        );
     }
     let _ = std::fs::remove_file(path);
 

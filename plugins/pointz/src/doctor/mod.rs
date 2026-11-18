@@ -208,7 +208,7 @@ fn network_details(metadata: &crate::network::NetworkMetadata) -> serde_json::Va
 }
 
 fn runtime_endpoints_result() -> DoctorCheckResult {
-    let injected_socket = std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).map(PathBuf::from);
+    let injected_socket = qol_plugin_daemon::daemon::handed_socket().ok();
     let effective_socket = injected_socket
         .clone()
         .unwrap_or_else(|| PathBuf::from(ServerConfig::DAEMON_SOCKET));
