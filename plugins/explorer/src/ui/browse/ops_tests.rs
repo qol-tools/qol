@@ -17,7 +17,7 @@ use crate::ops::{Clash, CopyOnly, Resolve, Room, Stamp, Survey, Tools, Transfer,
 use crate::ui::keys::Step;
 
 thread_local! {
-    static BIN: RefCell<PathBuf> = RefCell::new(PathBuf::new());
+    static BIN: RefCell<PathBuf> = const { RefCell::new(PathBuf::new()) };
 }
 
 fn tools() -> Tools {
@@ -1421,7 +1421,13 @@ fn the_undo_note_names_what_came_back_what_stayed_and_what_to_press() {
         })
     };
     let next = "Nothing is left to undo.";
-    let cases: Vec<(Vec<(usize, Outcome)>, bool, Option<&str>, Option<&str>)> = vec![
+    type Case<'a> = (
+        Vec<(usize, Outcome)>,
+        bool,
+        Option<&'a str>,
+        Option<&'a str>,
+    );
+    let cases: Vec<Case<'_>> = vec![
         (
             vec![(1, back("b")), (0, back("a"))],
             false,

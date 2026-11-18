@@ -47,6 +47,7 @@ fn transfer(verb: Verb, sources: &[&Path], into: &Path) -> Transfer {
 }
 
 #[derive(Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 enum Event {
     Placed(Change),
     Amended { to: PathBuf, source: Source },

@@ -374,7 +374,7 @@ fn an_emptied_bin_leaves_a_trash_step_with_nothing_to_restore() {
     let gone = rig.work.join("gone.txt");
     write_at(&kept, "kept", 10);
     write_at(&gone, "binned", 20);
-    let step = rig.trash(&[gone.clone()]);
+    let step = rig.trash(std::slice::from_ref(&gone));
     assert!(rig.bin_root.exists());
     fs::remove_dir_all(&rig.bin_root).unwrap();
     let work_before = snapshot(&rig.work);
@@ -397,7 +397,7 @@ fn a_refused_restore_keeps_the_item_in_the_bin() {
     let (mut rig, hooks) = hooked();
     let gone = rig.work.join("gone.txt");
     write_at(&gone, "binned", 20);
-    let step = rig.trash(&[gone.clone()]);
+    let step = rig.trash(std::slice::from_ref(&gone));
     let before = rig.held();
     hooks.on_restore(|_| Err(BinError::Failed("the trash is jammed".into())));
 
