@@ -4,9 +4,13 @@ use super::bin::Held;
 use super::print::{Print, TreePrint};
 use super::Verb;
 
+#[cfg(test)]
+mod faults;
 mod inverse;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod walk;
 
 pub use inverse::{start_undo, Choices, Reply, Undoing};
 
