@@ -364,10 +364,14 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         for contract in [
             "if: github.event_name != 'merge_group'",
             "QOL_AFFECTED_OUTPUT: ${{ runner.temp }}/affected.json",
-            "run: python3 .github/scripts/affected_crates.py",
+            "BASE_SHA: ${{ github.event.before }}",
+            'if [ "$GITHUB_EVENT_NAME" = pull_request ]; then',
+            'BASE_SHA="$(git rev-parse --verify --quiet HEAD^1 || true)"',
+            "python3 .github/scripts/affected_crates.py",
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, affected)
+        self.assertNotIn("pull_request.base.sha", plan)
         record = named_step(plan, "Record what this run tests", "      ")
         for contract in [
             "if: github.event_name == 'pull_request'",
