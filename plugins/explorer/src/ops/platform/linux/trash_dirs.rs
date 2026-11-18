@@ -14,6 +14,16 @@ const HOME_TRASH: &str = "Trash";
 pub(super) struct Root {
     pub(super) files: PathBuf,
     pub(super) info: PathBuf,
+    pub(super) top: Option<PathBuf>,
+}
+
+impl Root {
+    pub(super) fn recorded<'a>(&self, original: &'a Path) -> &'a Path {
+        self.top
+            .as_deref()
+            .and_then(|top| original.strip_prefix(top).ok())
+            .unwrap_or(original)
+    }
 }
 
 pub(super) fn system_home() -> Option<PathBuf> {
@@ -25,19 +35,19 @@ pub(super) fn system_home() -> Option<PathBuf> {
 }
 
 pub(super) fn open_root(home: Option<&Path>, path: &Path) -> Result<Root, String> {
-    let root = root_for(home, path)?;
-    prepare(root)
+    let (root, top) = root_for(home, path)?;
+    prepare(root, top)
 }
 
-fn root_for(home: Option<&Path>, path: &Path) -> Result<PathBuf, String> {
+fn root_for(home: Option<&Path>, path: &Path) -> Result<(PathBuf, Option<PathBuf>), String> {
     let device = device_of(path).ok_or_else(|| "its drive could not be found".to_string())?;
     if let Some(home) = home.filter(|home| device_of(home) == Some(device)) {
-        return Ok(home.to_path_buf());
+        return Ok((home.to_path_buf(), None));
     }
     let top = topdir(path, device)
         .filter(|top| top != path)
         .ok_or_else(|| "the top of a drive cannot go to the Trash".to_string())?;
-    Ok(shared_root(&top))
+    Ok((shared_root(&top), Some(top)))
 }
 
 pub(super) fn shared_root(top: &Path) -> PathBuf {
@@ -52,7 +62,7 @@ pub(super) fn shared_root(top: &Path) -> PathBuf {
     }
 }
 
-fn prepare(root: PathBuf) -> Result<Root, String> {
+fn prepare(root: PathBuf, top: Option<PathBuf>) -> Result<Root, String> {
     if let Some(parent) = root.parent() {
         fs::create_dir_all(parent).map_err(|error| plain(&error))?;
     }
@@ -61,7 +71,7 @@ fn prepare(root: PathBuf) -> Result<Root, String> {
     for folder in [&root, &files, &info] {
         made(folder)?;
     }
-    Ok(Root { files, info })
+    Ok(Root { files, info, top })
 }
 
 fn made(folder: &Path) -> Result<(), String> {

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use chrono::NaiveDateTime;
 use tempfile::TempDir;
 
-use super::trash_dirs::shared_root;
+use super::trash_dirs::{shared_root, Root};
 use super::trash_info::encoded;
 use super::trasher::{candidate, Trasher};
 use crate::ops::bin::{Bin, BinError};
@@ -113,7 +113,7 @@ fn trashing_a_file_writes_the_item_and_its_info() {
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 3);
     assert_eq!(lines[0], "[Trash Info]");
-    let folder = encoded(&dir.path().join("work"));
+    let folder = encoded(&fs::canonicalize(dir.path().join("work")).unwrap());
     assert_eq!(lines[1], format!("Path={folder}/a%20b.txt"));
     let date = lines[2].strip_prefix("DeletionDate=").unwrap();
     assert!(NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%M:%S").is_ok());
@@ -299,6 +299,45 @@ fn trashing_something_missing_fails_plainly() {
     let (dir, trasher) = yard();
     let result = trasher.trash(&work(&dir, "missing"));
     assert!(matches!(result, Err(BinError::Failed(_))));
+}
+
+#[test]
+fn an_item_reached_through_a_link_or_dots_records_its_real_place() {
+    let (dir, trasher) = yard();
+    let real = work(&dir, "real");
+    fs::create_dir(&real).unwrap();
+    symlink(&real, work(&dir, "link")).unwrap();
+    let place = fs::canonicalize(&real).unwrap();
+    for (name, through) in [
+        ("a.txt", work(&dir, "link/a.txt")),
+        ("b.txt", work(&dir, "real/../real/b.txt")),
+    ] {
+        fs::write(real.join(name), "text").unwrap();
+        let held = trasher.trash(&through).unwrap().unwrap();
+        let text = fs::read_to_string(held.sidecar.unwrap()).unwrap();
+        let path = format!("Path={}", encoded(&place.join(name)));
+        assert!(text.lines().any(|line| line == path), "{text}");
+        assert!(!real.join(name).exists());
+    }
+}
+
+#[test]
+fn a_drive_trash_records_the_path_from_the_top_of_the_drive() {
+    let root = |top: Option<&str>| Root {
+        files: PathBuf::new(),
+        info: PathBuf::new(),
+        top: top.map(PathBuf::from),
+    };
+    let drive = root(Some("/media/usb"));
+    assert_eq!(
+        drive.recorded(Path::new("/media/usb/dir/a.txt")),
+        Path::new("dir/a.txt")
+    );
+    let home = root(None);
+    assert_eq!(
+        home.recorded(Path::new("/home/me/a.txt")),
+        Path::new("/home/me/a.txt")
+    );
 }
 
 #[test]

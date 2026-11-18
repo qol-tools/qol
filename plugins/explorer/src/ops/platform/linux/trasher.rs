@@ -35,12 +35,12 @@ impl Trasher {
 impl Bin for Trasher {
     fn trash(&self, path: &Path) -> Result<Option<Held>, BinError> {
         let before = Print::read(path).map_err(|error| BinError::failed(&error))?;
-        let original = std::path::absolute(path).map_err(|error| BinError::failed(&error))?;
+        let original = real_place(path)?;
         let name = original
             .file_name()
             .ok_or_else(|| BinError::Failed("it has no name".into()))?;
         let root = open_root(self.home.as_deref(), &original).map_err(BinError::NoTrash)?;
-        let text = contents(&original);
+        let text = contents(root.recorded(&original));
         for attempt in 1..=MAX_TRIES {
             let item_name = candidate(name.as_bytes(), attempt);
             let mut info_name = item_name.clone();
@@ -75,6 +75,16 @@ impl Bin for Trasher {
 
     fn restore(&self, held: &Held, to: &Path) -> Result<(), BinError> {
         restore_exact(held, to)
+    }
+}
+
+fn real_place(path: &Path) -> Result<PathBuf, BinError> {
+    let absolute = std::path::absolute(path).map_err(|error| BinError::failed(&error))?;
+    match (absolute.parent(), absolute.file_name()) {
+        (Some(parent), Some(name)) => fs::canonicalize(parent)
+            .map(|parent| parent.join(name))
+            .map_err(|error| BinError::failed(&error)),
+        _ => Ok(absolute),
     }
 }
 
