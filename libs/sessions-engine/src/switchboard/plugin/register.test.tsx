@@ -2131,7 +2131,8 @@ test('interrupt-fork ends the running turn of the fork the prompt writes to and 
   const stopped: string[] = []
   const steps: string[] = []
   engine(on)
-  on('clock.after', () => new Promise(() => {}))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
   on('session.messages', () => ({ value: [] }))
   on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
@@ -2182,6 +2183,11 @@ test('interrupt-fork ends the running turn of the fork the prompt writes to and 
   expect(shown(await thinking)).toEqual(['model', 'end_turn'])
   expect(shown(await answered($, 'a1', 1, 'turn-3'))).toEqual(['Interrupted from the switchboard.', 'end_turn'])
   expect(steps).toEqual(['turn-2:0', 'turn-3:0'])
+  await $.turn.complete({ turnId: 'turn-3', agentId: 'a1', answer: 'Interrupted from the switchboard.', durationMs: 1, isAborted: false, reason: 'answer' })
+  for (const fire of timers.splice(0)) fire()
+  await settle()
+  const row = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'one-fork' })).result)
+  expect(row).toContain('(no report yet)')
 })
 
 test('closing is the only end of a fork: a merge leaves it open, the close marks the record done and the board counts it as closed', async ($, on) => {

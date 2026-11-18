@@ -411,7 +411,7 @@ const COMPACTED = 'This session is being continued from a previous conversation'
 
 const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', COMPACTED, '[SYSTEM NOTIFICATION']
 
-const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY].includes(text.trim())
+const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY, CUT_REPLY].includes(text.trim())
 
 const isPluginNote = (text: string): boolean => {
   const said = text.replace(MID_TURN_NOTE, '').trim()
@@ -3393,6 +3393,7 @@ export const register: Register = on => {
         }
       } finally {
         drop()
+        if (isCut) void Promise.resolve().then(() => live.return?.(undefined)).catch(() => undefined)
       }
     }
     const base = { turnId: e.turnId, index: e.index, usage: null }
@@ -3415,7 +3416,7 @@ export const register: Register = on => {
     const done = await next(e)
     const ended = e.agentId
     if (ended !== undefined) await change($, list => list.map(one => (one.agentId === ended && one.isWorking ? { ...one, isRunOver: true } : one)))
-    if (ended !== undefined) lastTurns.set(ended, { turnId: e.turnId, ...(typeof e.answer === 'string' && e.answer.trim() !== '' && !e.isAborted ? { answer: e.answer } : {}) })
+    if (ended !== undefined) lastTurns.set(ended, { turnId: e.turnId, ...(typeof e.answer === 'string' && e.answer.trim() !== '' && !isHeldReply(e.answer) && !e.isAborted ? { answer: e.answer } : {}) })
     if (ended !== undefined) $.clock.after(RUN_OVER_MS, () => void settleRun($, ended, e.turnId).catch(() => undefined))
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
