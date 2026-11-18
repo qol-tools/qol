@@ -33,9 +33,9 @@ use futures::channel::oneshot;
 use futures::StreamExt;
 use gpui::{
     div, point, px, rgb, AnyElement, AsyncApp, ClickEvent, Context, ElementId, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollDelta, ScrollHandle,
-    Styled, Subscription, UniformListScrollHandle, WeakEntity, Window,
+    Focusable, InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render,
+    ScrollDelta, ScrollHandle, Styled, Subscription, UniformListScrollHandle, WeakEntity, Window,
 };
 use qol_gpui::icon::icon;
 use qol_gpui::kit::kit;
@@ -107,6 +107,7 @@ pub struct ExplorerView {
     slider_hovered: bool,
     slider_dragging: bool,
     waiting: VecDeque<Keystroke>,
+    undo_key: keys::Repeat,
     drag_gesture: Rc<RefCell<DragGestureState>>,
     pressing: press::PressState,
     title: String,
@@ -159,6 +160,7 @@ impl ExplorerView {
             slider_hovered: false,
             slider_dragging: false,
             waiting: VecDeque::new(),
+            undo_key: keys::Repeat::default(),
             drag_gesture: Rc::new(RefCell::new(DragGestureState::new(DRAG_THRESHOLD))),
             pressing: press::PressState::new(),
             title: WINDOW_TITLE.to_string(),
@@ -406,7 +408,7 @@ impl ExplorerView {
                 self.revealed(Browser::new_folder);
             }
             Command::Undo => {
-                self.browser.undo();
+                self.browser.undo(!self.waiting.is_empty());
             }
             Command::OpenWith(index) => self.open_with_choice(index, cx),
             Command::ChooseApp => {
@@ -769,6 +771,11 @@ impl ExplorerView {
             cx.stop_propagation();
             return;
         }
+        if event.keystroke.key == "escape" && self.browser.stop_undo() {
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self.menu.is_some() {
             self.menu_key(&event.keystroke, cx);
             return;
@@ -801,6 +808,10 @@ impl ExplorerView {
             return;
         }
         let action = keys::action(&event.keystroke, self.browser.path_open());
+        if action == Action::Undo && self.undo_key.down(event.is_held, Instant::now()) {
+            cx.stop_propagation();
+            return;
+        }
         if self.browser.props_open() && !matches!(action, Action::Unpick | Action::Props) {
             cx.stop_propagation();
             return;
@@ -828,6 +839,12 @@ impl ExplorerView {
         }
         cx.stop_propagation();
         cx.notify();
+    }
+
+    fn on_key_up(&mut self, event: &KeyUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        if event.keystroke.key == "z" {
+            self.undo_key.up(Instant::now());
+        }
     }
 
     fn replay(&mut self, cx: &mut Context<Self>) {
@@ -902,7 +919,7 @@ impl ExplorerView {
             Action::OpenWith => self.open_with(cx),
             Action::OpenTerminal => self.open_terminal_here(),
             Action::CopyPath => self.copy_path(cx),
-            Action::Undo => self.browser.undo(),
+            Action::Undo => self.browser.undo(!self.waiting.is_empty()),
             Action::Moves => self.browser.toggle_moves(),
             Action::ContextMenu => self.open_cursor_menu(cx),
             Action::Props => self.browser.toggle_props(),
@@ -1145,6 +1162,7 @@ impl Render for ExplorerView {
         kit.window()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
+            .on_key_up(cx.listener(Self::on_key_up))
             .on_modifiers_changed(cx.listener(
                 |view, event: &ModifiersChangedEvent, _window, cx| {
                     view.drop_modifiers_changed(event.modifiers.control, cx);

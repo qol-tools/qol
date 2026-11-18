@@ -39,6 +39,10 @@ pub(crate) fn keep_mode(file: &File, source: &Metadata) -> io::Result<()> {
     file.set_permissions(Permissions::from_mode(mode))
 }
 
+pub(crate) fn changed_at(meta: &Metadata) -> Option<(i64, i64)> {
+    Some((meta.ctime(), meta.ctime_nsec()))
+}
+
 pub(super) fn euid() -> u32 {
     // SAFETY: geteuid has no preconditions and cannot fail.
     unsafe { libc::geteuid() }

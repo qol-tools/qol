@@ -60,7 +60,7 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Ctrl+Shift+N | Make a new folder and rename it |
 | Ctrl+Shift+T | Open your terminal in the folder you are in |
 | Ctrl+Shift+C | Copy the full path of each pick, or of the row under the cursor, one per line |
-| Ctrl+Z | Undo the last copy, duplicate, move, rename, trash, new file or new folder, putting back anything a copy replaced |
+| Ctrl+Z | Undo your last step in this window, one step per press: a copy, duplicate, move, rename, move to trash, new file or new folder |
 | Ctrl+J | Show or hide today's moves |
 | Menu key, Shift+F10 | Open the row menu at the cursor row; with other rows picked it acts on them all, otherwise it picks the cursor row first |
 | Alt+Enter | Show or hide properties for the row under the cursor, or a count and total size for the picks: kind, path, size (a folder's total is counted in the background), dates, permissions and owner on Linux and macOS or attributes on Windows, the link target, and a preview of png, jpg, gif, webp and svg images; Escape also closes it |
@@ -85,6 +85,8 @@ Right-click a row or icon to pick it and open a menu with Open, Cut, Copy, Paste
 Press anywhere in the list and move at once to draw a selection box: every row or icon it touches is picked while you drag, Ctrl or Shift keeps the picks you had, Esc puts them back, and the list scrolls when you pull past its top or bottom edge. A click on empty space drops the picks. Press a row and hold still for half a second and a circle grows beside the pointer, then the files lift and you can drag them. Drag rows onto a folder, a place in the sidebar or a folder in the path to move them there; hold Ctrl to copy instead. Rows dragged to another drive, and files dropped in from another app, are copied. The target says "move here" or "copy here", or "no room" or "copy only" when the drive is too full or the files cannot be removed from where they are.
 
 When a paste or a drop meets a name that is already there, file or folder, a sheet asks first and nothing moves until you apply it. Left and Right choose Keep this, Replace or Keep both for a file, or Keep this, Merge or Keep both for a folder, with Shift for every row; Up and Down move between rows; Enter applies and Esc cancels. A folder starts on Keep both, which puts it beside the one already there with (2) after its name, as in hello (2). Merge puts its contents into the folder that is there instead, and the files inside that differ get rows of their own, faded until you choose Merge. A replaced file goes to the trash.
+
+Undo never replaces or deletes anything. What it takes away goes to the trash, and an empty new folder is removed. A copy goes only while it and its original are unchanged; anything that changed since stays where it is, and the note says so. When the name an item goes back to is taken, the same sheet asks with only Keep this, which leaves the item where it is, and Keep both, which puts it back with (2) after its name; Keep both is chosen to start with, and Esc leaves the step for the next Ctrl+Z. A step that changed nothing, such as Keep this, and Delete permanently say so and touch nothing. While a copy, move, trash or delete runs in any Explorer window, Ctrl+Z says so and does nothing, and Esc stops an undo that runs. There is no redo.
 
 ## License
 

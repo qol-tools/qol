@@ -5,6 +5,7 @@ use std::time::Instant;
 use super::ops::{Held, MoveRecord, MoveState};
 use super::ops_text::{self, Outcome};
 use super::Browser;
+use crate::ops::history::StepId;
 use crate::ops::{self, Done, Job, Progress, Survey, Verb};
 
 pub(super) struct Trip {
@@ -16,7 +17,7 @@ pub(super) struct Trip {
     pub from_folder: String,
     pub from_volume: String,
     pub kept: String,
-    pub journaled: bool,
+    pub step: StepId,
     pub slot: usize,
 }
 
@@ -30,7 +31,7 @@ pub(super) struct Running {
 }
 
 impl Browser {
-    pub(super) fn enqueue(&mut self, survey: Survey, journaled: bool) {
+    pub(super) fn enqueue(&mut self, survey: Survey, step: StepId) {
         let transfer = &survey.transfer;
         let label = ops_text::label_of(&transfer.sources);
         let first = transfer.sources.first();
@@ -67,7 +68,7 @@ impl Browser {
             from_folder,
             from_volume,
             kept: ops_text::kept_sentence(&survey.clashes, survey.same_inside),
-            journaled,
+            step,
             slot,
         };
         if queued {
@@ -79,7 +80,7 @@ impl Browser {
 
     fn run(&mut self, survey: Survey, trip: Trip) {
         let total = survey.bytes;
-        let job = ops::start(survey, self.waker());
+        let job = ops::start(survey, self.ops.tools.clone(), self.waker());
         self.ops.notice = None;
         if let Some(record) = self.ops.record_at(trip.slot) {
             record.state = MoveState::Running;
@@ -118,6 +119,16 @@ impl Browser {
                 Ok(Progress::Arriving(path)) => {
                     running.arriving = Some(path);
                     changed = true;
+                }
+                Ok(Progress::Placed(change)) => {
+                    self.ops.history.record(running.trip.step, *change);
+                    changed = true;
+                }
+                Ok(Progress::Amended { to, source }) => {
+                    self.ops.history.amend(running.trip.step, &to, source);
+                }
+                Ok(Progress::Retracted(at)) => {
+                    self.ops.history.retract(running.trip.step, &at);
                 }
                 Ok(Progress::Finished(done)) => {
                     finished = Some(done);
@@ -160,27 +171,27 @@ impl Browser {
             return;
         };
         let trip = running.trip;
+        self.ops.history.close(trip.step);
+        let recorded = self
+            .ops
+            .history
+            .step(trip.step)
+            .map_or(0, |step| step.items.len());
         let Some(done) = done else {
+            let arrived = self
+                .ops
+                .history
+                .step(trip.step)
+                .map_or(0, ops_text::arrived_items);
             if let Some(record) = self.ops.record_at(trip.slot) {
                 record.state = MoveState::Failed;
-                record.detail = "Stopped before it finished. Nothing was removed.".to_string();
+                record.detail = ops_text::stopped_detail(arrived);
             }
             self.failure = Some(format!("{} stopped before it finished", trip.label));
-            if !trip.journaled {
-                self.ops.stop_undo();
-            }
             self.reload();
             self.start_next();
             return;
         };
-        if trip.journaled && !done.placed.is_empty() {
-            self.ops.journal.record(&done);
-        }
-        if !trip.journaled {
-            self.ops
-                .returned
-                .extend(done.landed.iter().map(|(_, to)| to.clone()));
-        }
         let outcome = Outcome {
             verb: trip.verb,
             bytes: trip.bytes,
@@ -202,24 +213,23 @@ impl Browser {
             record.detail = detail;
             record.bytes = Some(trip.bytes);
         }
-        if !done.placed.is_empty() {
-            let here = trip.into == self.folder();
+        let here = trip.into == self.folder();
+        if recorded == 0 && done.failures.is_empty() {
+            self.ops.notice = Some(ops_text::nothing_changed(&trip.into, self.folder()));
+        } else if !done.placed.is_empty() {
             self.ops.notice = Some(ops_text::arrived_note(
                 trip.verb,
                 done.placed.len(),
                 here,
                 &ops_text::name_of(&trip.into),
                 &trip.from_folder,
-                trip.journaled,
+                recorded > 0,
             ));
         }
         self.failure = ops_text::failure_text(&done.failures);
         self.release_cut(&done);
         self.reload();
         self.start_next();
-        if !trip.journaled {
-            self.continue_undo();
-        }
     }
 
     fn release_cut(&mut self, done: &Done) {

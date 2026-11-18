@@ -1,5 +1,8 @@
+use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -8,8 +11,36 @@ use qol_gpui::text_edit::MemoryClipboard;
 
 use super::ops_text;
 use super::{Browser, Held, MoveState};
-use crate::ops::{Clash, CopyOnly, Resolve, Room, Stamp, Survey, Transfer, Verb};
+use crate::ops::history::{Action, Change, History, Outcome, Reason, Undone};
+use crate::ops::print::{Kind, Print};
+use crate::ops::{Clash, CopyOnly, Resolve, Room, Stamp, Survey, Tools, Transfer, Verb};
 use crate::ui::keys::Step;
+
+thread_local! {
+    static BIN: RefCell<PathBuf> = RefCell::new(PathBuf::new());
+}
+
+fn tools() -> Tools {
+    static ROOT: OnceLock<tempfile::TempDir> = OnceLock::new();
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
+    let root = ROOT.get_or_init(|| tempfile::tempdir().unwrap());
+    let at = root
+        .path()
+        .join(COUNT.fetch_add(1, Ordering::Relaxed).to_string());
+    BIN.with(|bin| *bin.borrow_mut() = at.join("bin"));
+    Tools::at(&at)
+}
+
+fn binned() -> Vec<PathBuf> {
+    let bin = BIN.with(|bin| bin.borrow().clone());
+    fs::read_dir(bin)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| Some(entry.ok()?.path()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 fn key(name: &str, key_char: Option<&str>) -> Keystroke {
     Keystroke {
@@ -33,8 +64,19 @@ fn wait_until(browser: &mut Browser, what: &str, done: impl Fn(&Browser) -> bool
 
 fn opened(folder: &Path) -> Browser {
     let mut browser = Browser::new(folder.to_path_buf(), folder.to_path_buf(), false);
+    browser.ops.tools = tools();
     wait_until(&mut browser, "the listing", |browser| !browser.reading());
     browser
+}
+
+fn undo(browser: &mut Browser) -> bool {
+    let started = browser.undo(false);
+    wait_until(browser, "the undo", |browser| !browser.undo_running());
+    started
+}
+
+fn failure(browser: &Browser) -> Option<String> {
+    browser.note().failure
 }
 
 fn visit(browser: &mut Browser, folder: &Path) {
@@ -159,9 +201,10 @@ fn cut_then_paste_moves_the_file_and_undo_moves_it_back() {
     assert!(browser.note().count.ends_with("ctrl+z undoes it."));
     assert!(browser.paste().is_none());
 
-    assert!(browser.undo());
-    wait_until(&mut browser, "the undo", |_| file.exists());
+    assert!(undo(&mut browser));
+    assert!(file.exists());
     assert!(!dest.join("a.txt").exists());
+    assert!(browser.note().count.starts_with("Undid the move of a.txt."));
 }
 
 #[test]
@@ -189,10 +232,10 @@ fn undo_brings_back_an_empty_folder_that_a_move_merged_into_a_new_folder() {
     wait_until(&mut browser, "the move", finished);
     assert!(!moved.exists());
 
-    assert!(browser.undo());
+    assert!(undo(&mut browser));
     assert!(moved.is_dir());
     assert!(made.is_dir());
-    assert!(browser.undo());
+    assert!(undo(&mut browser));
     assert!(!made.exists());
 }
 
@@ -234,15 +277,15 @@ fn a_folder_moved_onto_one_with_its_name_asks_and_keeps_both_unless_you_merge() 
     assert!(dest.join("hello").is_dir());
     assert!(dest.join("hello (2)").is_dir());
 
-    assert!(browser.undo());
-    wait_until(&mut browser, "the undo", |_| hello.is_dir());
+    assert!(undo(&mut browser));
+    assert!(hello.is_dir());
     assert!(dest.join("hello").is_dir());
     assert!(!dest.join("hello (2)").exists());
     assert!(!temp.path().join("hello (2)").exists());
 }
 
 #[test]
-fn copy_then_paste_leaves_the_original_and_undo_has_a_journal_entry() {
+fn copy_then_paste_leaves_the_original_and_undo_trashes_the_copy() {
     let (temp, dest) = two_folders();
     let file = write(temp.path(), "a.txt", "alpha");
     let mut browser = opened(temp.path());
@@ -258,7 +301,17 @@ fn copy_then_paste_leaves_the_original_and_undo_has_a_journal_entry() {
     assert!(file.exists());
     assert_eq!(fs::read_to_string(dest.join("a.txt")).unwrap(), "alpha");
     assert!(browser.note().count.starts_with("1 copied here from "));
+    assert!(browser.note().count.ends_with("ctrl+z undoes it."));
     assert!(browser.paste().is_some());
+
+    assert!(undo(&mut browser));
+    assert!(!dest.join("a.txt").exists());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "alpha");
+    assert_eq!(binned().len(), 1);
+    assert_eq!(
+        browser.note().count,
+        "Undid the copy of a.txt. The copy went to the trash."
+    );
 }
 
 #[test]
@@ -628,9 +681,10 @@ fn rename_selects_the_stem_and_enter_renames_the_file() {
     assert!(temp.path().join("b.txt").exists());
     assert!(!file.exists());
 
-    assert!(browser.undo());
+    assert!(undo(&mut browser));
     assert!(file.exists());
     assert!(!temp.path().join("b.txt").exists());
+    assert_eq!(browser.note().count, "Renamed back to a.txt.");
 }
 
 #[test]
@@ -705,15 +759,21 @@ fn a_new_folder_appears_named_and_opens_for_rename() {
 }
 
 #[test]
-fn undo_removes_an_empty_new_folder_and_says_so_when_there_is_nothing_to_undo() {
+fn undo_removes_an_empty_new_folder_and_then_says_there_is_nothing_to_undo() {
     let temp = tempfile::tempdir().unwrap();
     let mut browser = opened(temp.path());
-    assert!(!browser.undo());
-    assert_eq!(browser.note().failure.as_deref(), Some("Nothing to undo"));
+    assert!(!undo(&mut browser));
+    assert_eq!(failure(&browser).as_deref(), Some("Nothing to undo"));
 
     browser.new_folder();
-    assert!(browser.undo());
+    assert!(undo(&mut browser));
     assert!(!temp.path().join("New folder").exists());
+    assert_eq!(
+        browser.note().count,
+        "Removed the new folder New folder, which was empty."
+    );
+    assert!(!undo(&mut browser));
+    assert_eq!(failure(&browser).as_deref(), Some("Nothing to undo"));
 }
 
 #[test]
@@ -763,6 +823,47 @@ fn wording_matches_the_design() {
     assert_eq!(
         ops_text::arrived_note(Verb::Move, 4, true, "dest", "plans", true),
         "4 moved here from plans. ctrl+z undoes it."
+    );
+    assert_eq!(
+        ops_text::arrived_note(Verb::Copy, 2, false, "dest", "plans", false),
+        "2 copied to dest from plans."
+    );
+    assert_eq!(
+        ops_text::trashed_note(3, true),
+        "3 moved to the trash. ctrl+z puts them back."
+    );
+    assert_eq!(
+        ops_text::trashed_note(1, true),
+        "1 moved to the trash. ctrl+z puts it back."
+    );
+    assert_eq!(ops_text::trashed_note(2, false), "2 moved to the trash.");
+    assert_eq!(
+        ops_text::nothing_changed(Path::new("/a"), Path::new("/a")),
+        "Nothing changed here."
+    );
+    assert_eq!(
+        ops_text::nothing_changed(Path::new("/a/dest"), Path::new("/a")),
+        "Nothing changed in dest."
+    );
+    assert_eq!(
+        ops_text::stopped_detail(0),
+        "Stopped before it finished. Nothing was placed."
+    );
+    assert_eq!(
+        ops_text::stopped_detail(1),
+        "Stopped before it finished. 1 item arrived, and ctrl+z undoes it."
+    );
+    assert_eq!(
+        ops_text::stopped_detail(3),
+        "Stopped before it finished. 3 items arrived, and ctrl+z undoes them."
+    );
+    assert_eq!(
+        ops_text::refused("when the copy ends"),
+        "Nothing was undone. Press ctrl+z again when the copy ends."
+    );
+    assert_eq!(
+        ops_text::undoing_note("copy of a.txt"),
+        "Undoing the copy of a.txt. Esc stops it."
     );
 }
 
@@ -909,7 +1010,7 @@ fn the_kept_sentence_counts_newer_files_and_identical_ones() {
 }
 
 #[test]
-fn a_new_file_appears_empty_opens_for_rename_and_undo_removes_it() {
+fn a_new_file_appears_empty_opens_for_rename_and_undo_sends_it_to_the_trash() {
     let temp = tempfile::tempdir().unwrap();
     let mut browser = opened(temp.path());
 
@@ -923,8 +1024,13 @@ fn a_new_file_appears_empty_opens_for_rename_and_undo_removes_it() {
     assert_eq!(browser.rename_field().unwrap().text(), "New file");
 
     browser.rename_key(&key("escape", None), &MemoryClipboard::default());
-    assert!(browser.undo());
+    assert!(undo(&mut browser));
     assert!(!made.exists());
+    assert_eq!(binned().len(), 1);
+    assert_eq!(
+        browser.note().count,
+        "The new file New file went to the trash."
+    );
 }
 
 #[test]
@@ -950,7 +1056,7 @@ fn duplicating_copies_beside_the_original_and_counts_up() {
 }
 
 #[test]
-fn deleting_permanently_asks_first_and_cancelling_keeps_the_file() {
+fn deleting_permanently_asks_first_and_undo_says_it_cannot_be_undone() {
     let temp = tempfile::tempdir().unwrap();
     let file = write(temp.path(), "a.txt", "text");
     let mut browser = opened(temp.path());
@@ -968,7 +1074,21 @@ fn deleting_permanently_asks_first_and_cancelling_keeps_the_file() {
     wait_until(&mut browser, "the note", |browser| {
         browser.note().count == "1 item deleted for good."
     });
-    assert!(!browser.undo());
+
+    assert!(undo(&mut browser));
+    assert_eq!(
+        failure(&browser).as_deref(),
+        Some(
+            "Delete permanently cannot be undone. Next is the permanent delete of a.txt, which changed nothing."
+        )
+    );
+    assert!(undo(&mut browser));
+    assert_eq!(
+        failure(&browser).as_deref(),
+        Some("The permanent delete of a.txt changed nothing. Nothing is left to undo.")
+    );
+    assert!(!undo(&mut browser));
+    assert_eq!(failure(&browser).as_deref(), Some("Nothing to undo"));
 }
 
 #[test]
@@ -1008,4 +1128,416 @@ fn the_delete_question_names_the_count_and_says_it_cannot_be_undone() {
     let many = ops_text::erase_lines(&[PathBuf::from("/x/a"), PathBuf::from("/x/b")]);
     assert_eq!(many[0], "Delete 2 items permanently?");
     assert!(many[1].contains("cannot be undone"));
+}
+
+fn copy_into(browser: &mut Browser, file: &Path, dest: &Path) {
+    browser.begin(Transfer {
+        verb: Verb::Copy,
+        sources: vec![file.to_path_buf()],
+        into: dest.to_path_buf(),
+    });
+    wait_until(browser, "the copy", finished);
+}
+
+#[test]
+fn keep_this_changes_nothing_and_undo_does_not_reach_past_it_to_trash_a_visible_file() {
+    let (temp, dest) = two_folders();
+    let hello = write(temp.path(), "hello", "hello");
+    let mut browser = opened(temp.path());
+    copy_into(&mut browser, &hello, &dest);
+    assert_eq!(fs::read_to_string(dest.join("hello")).unwrap(), "hello");
+
+    browser.begin(Transfer {
+        verb: Verb::Move,
+        sources: vec![hello.clone()],
+        into: dest.clone(),
+    });
+    wait_until(&mut browser, "the sheet", |browser| {
+        browser.surveyed().is_some()
+    });
+    assert!(browser.choose(0, Resolve::Keep));
+    assert!(browser.confirm());
+    wait_until(&mut browser, "the move", |browser| {
+        browser.note().count == "Nothing changed in dest."
+    });
+    assert!(hello.exists());
+    assert!(dest.join("hello").exists());
+
+    assert!(undo(&mut browser));
+    assert_eq!(
+        failure(&browser).as_deref(),
+        Some(
+            "The move of hello into dest changed nothing. Next, ctrl+z undoes the copy of hello into dest."
+        )
+    );
+    assert!(hello.exists());
+    assert!(dest.join("hello").exists());
+    assert!(binned().is_empty());
+
+    assert!(undo(&mut browser));
+    assert!(hello.exists());
+    assert!(!dest.join("hello").exists());
+    assert_eq!(binned().len(), 1);
+    assert_eq!(
+        browser.note().count,
+        "Undid the copy of hello into dest. The copy went to the trash."
+    );
+}
+
+#[test]
+fn escape_on_the_paste_sheet_leaves_an_empty_step_that_undo_reports() {
+    let (temp, dest) = two_folders();
+    let file = write(temp.path(), "a.txt", "incoming");
+    write(&dest, "a.txt", "existing");
+    let mut browser = opened(temp.path());
+    browser.begin(Transfer {
+        verb: Verb::Copy,
+        sources: vec![file],
+        into: dest.clone(),
+    });
+    wait_until(&mut browser, "the sheet", |browser| {
+        browser.surveyed().is_some()
+    });
+    assert!(browser.cancel_survey());
+
+    assert!(undo(&mut browser));
+    assert_eq!(
+        failure(&browser).as_deref(),
+        Some("The copy of a.txt into dest changed nothing. Nothing is left to undo.")
+    );
+    assert_eq!(fs::read_to_string(dest.join("a.txt")).unwrap(), "existing");
+    assert!(!undo(&mut browser));
+    assert_eq!(failure(&browser).as_deref(), Some("Nothing to undo"));
+}
+
+#[test]
+fn a_copy_edited_after_it_landed_stays() {
+    let (temp, dest) = two_folders();
+    let file = write(temp.path(), "a.txt", "alpha");
+    let mut browser = opened(temp.path());
+    copy_into(&mut browser, &file, &dest);
+    fs::write(dest.join("a.txt"), "alpha, then edited").unwrap();
+
+    assert!(undo(&mut browser));
+    assert_eq!(
+        failure(&browser).as_deref(),
+        Some("Nothing was undone: a.txt changed, so it stays. Nothing is left to undo.")
+    );
+    assert_eq!(
+        fs::read_to_string(dest.join("a.txt")).unwrap(),
+        "alpha, then edited"
+    );
+    assert!(binned().is_empty());
+}
+
+fn moved_away_and_replaced() -> (tempfile::TempDir, PathBuf, Browser) {
+    let (temp, dest) = two_folders();
+    let file = write(temp.path(), "a.txt", "old");
+    let mut browser = opened(temp.path());
+    browser.begin(Transfer {
+        verb: Verb::Move,
+        sources: vec![file],
+        into: dest.clone(),
+    });
+    wait_until(&mut browser, "the move", finished);
+    write(temp.path(), "a.txt", "new");
+    (temp, dest, browser)
+}
+
+fn asked(browser: &mut Browser) {
+    assert!(browser.undo(false));
+    wait_until(browser, "the undo sheet", |browser| browser.undo_asking());
+}
+
+#[test]
+fn undo_never_replaces_so_it_asks_and_keep_both_adds_a_number() {
+    let (temp, dest, mut browser) = moved_away_and_replaced();
+
+    asked(&mut browser);
+    assert_eq!(
+        browser.undo_lines().unwrap(),
+        [
+            "Undo: a.txt is already here.",
+            "Undo never replaces anything. Keep both puts it back as a (2).txt."
+        ]
+    );
+    assert_eq!(
+        browser.surveyed().unwrap().clashes[0].choice,
+        Resolve::KeepBoth
+    );
+    assert!(!browser.choose(0, Resolve::Replace));
+    assert!(!browser.choose_all(Resolve::Merge));
+    assert!(browser.undo(false));
+
+    assert!(browser.cancel_survey());
+    assert!(!browser.undo_asking());
+    assert_eq!(
+        browser.note().count,
+        "Nothing was undone. ctrl+z asks again."
+    );
+    assert_eq!(fs::read_to_string(dest.join("a.txt")).unwrap(), "old");
+    assert_eq!(
+        fs::read_to_string(temp.path().join("a.txt")).unwrap(),
+        "new"
+    );
+
+    asked(&mut browser);
+    assert!(browser.confirm());
+    wait_until(&mut browser, "the undo", |browser| !browser.undo_running());
+    assert!(!dest.join("a.txt").exists());
+    assert_eq!(
+        fs::read_to_string(temp.path().join("a.txt")).unwrap(),
+        "new"
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("a (2).txt")).unwrap(),
+        "old"
+    );
+    assert_eq!(
+        browser.note().count,
+        "Undid the move of a.txt into dest. It is back here."
+    );
+}
+
+#[test]
+fn keep_this_on_the_undo_sheet_leaves_the_item_and_drops_the_step() {
+    let (temp, dest, mut browser) = moved_away_and_replaced();
+
+    asked(&mut browser);
+    assert!(browser.choose(0, Resolve::Keep));
+    assert!(browser.confirm());
+    wait_until(&mut browser, "the undo", |browser| !browser.undo_running());
+    assert_eq!(fs::read_to_string(dest.join("a.txt")).unwrap(), "old");
+    assert_eq!(
+        fs::read_to_string(temp.path().join("a.txt")).unwrap(),
+        "new"
+    );
+    assert!(!temp.path().join("a (2).txt").exists());
+    assert_eq!(
+        failure(&browser).as_deref(),
+        Some("Nothing was undone: a.txt stays where it is, as you chose. Nothing is left to undo.")
+    );
+    assert!(!undo(&mut browser));
+    assert_eq!(failure(&browser).as_deref(), Some("Nothing to undo"));
+}
+
+#[test]
+fn trash_then_undo_puts_the_exact_item_back_from_the_bin() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = write(temp.path(), "a.txt", "text");
+    let mut browser = opened(temp.path());
+    point_at(&mut browser, &file);
+
+    assert!(browser.trash_picks());
+    wait_until(&mut browser, "the trash", |browser| {
+        browser.note().count == "1 moved to the trash. ctrl+z puts it back."
+    });
+    assert!(!file.exists());
+    assert_eq!(binned().len(), 1);
+
+    assert!(undo(&mut browser));
+    assert_eq!(fs::read_to_string(&file).unwrap(), "text");
+    assert_eq!(browser.note().count, "Put a.txt back here.");
+}
+
+#[test]
+fn another_windows_job_refuses_the_undo_and_touches_nothing() {
+    let (temp, dest) = two_folders();
+    let file = write(temp.path(), "a.txt", "text");
+    let mut browser = opened(temp.path());
+    copy_into(&mut browser, &file, &dest);
+
+    let other_window = browser.ops.tools.gate.share();
+    assert!(other_window.is_some());
+    assert!(browser.undo(false));
+    assert!(!browser.undo_running());
+    assert_eq!(
+        failure(&browser).as_deref(),
+        Some("Nothing was undone. Press ctrl+z again when the move in another window ends.")
+    );
+    assert!(dest.join("a.txt").exists());
+    assert!(binned().is_empty());
+
+    drop(other_window);
+    assert!(undo(&mut browser));
+    assert!(!dest.join("a.txt").exists());
+}
+
+#[test]
+fn undo_waits_for_the_folder_to_load_and_never_queues() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut browser = opened(temp.path());
+    assert!(browser.new_folder());
+    let made = temp.path().join("New folder");
+
+    assert!(browser.undo(true));
+    assert_eq!(
+        failure(&browser).as_deref(),
+        Some("Nothing was undone. Press ctrl+z again once the folder has loaded.")
+    );
+    assert!(!browser.undo_running());
+    assert!(made.is_dir());
+}
+
+fn print() -> Print {
+    Print {
+        id: None,
+        kind: Kind::File,
+        len: 0,
+        modified: None,
+        born: None,
+    }
+}
+
+fn moved_pair() -> (History, crate::ops::history::Step) {
+    let mut history = History::default();
+    let id = history.open(Action::Transfer {
+        verb: Verb::Move,
+        sources: vec![PathBuf::from("/d/a"), PathBuf::from("/d/b")],
+        into: PathBuf::from("/x/dest"),
+    });
+    for name in ["a", "b"] {
+        history.record(
+            id,
+            Change::Moved {
+                from: PathBuf::from("/d").join(name),
+                to: PathBuf::from("/x/dest").join(name),
+                at: print(),
+            },
+        );
+    }
+    history.close(id);
+    let step = history.step(id).cloned().unwrap();
+    (history, step)
+}
+
+#[test]
+fn the_undo_note_names_what_came_back_what_stayed_and_what_to_press() {
+    let (_history, step) = moved_pair();
+    let here = Path::new("/d");
+    let back = |name: &str| {
+        Outcome::Undone(Undone::MovedBack {
+            to: PathBuf::from("/d").join(name),
+        })
+    };
+    let next = "Nothing is left to undo.";
+    let cases: Vec<(Vec<(usize, Outcome)>, bool, Option<&str>, Option<&str>)> = vec![
+        (
+            vec![(1, back("b")), (0, back("a"))],
+            false,
+            Some("Undid the move of 2 items into dest. They are back here."),
+            None,
+        ),
+        (
+            vec![
+                (1, back("b")),
+                (0, Outcome::Leaves(Reason::Changed(PathBuf::from("/x/dest/a")))),
+            ],
+            false,
+            Some("Undid the move of 2 items into dest. It is back here. a changed, so it stays."),
+            None,
+        ),
+        (
+            vec![
+                (1, back("b")),
+                (
+                    0,
+                    Outcome::Stays(Reason::Failed(
+                        PathBuf::from("/x/dest/a"),
+                        "it is open in another app".to_string(),
+                    )),
+                ),
+            ],
+            false,
+            Some(
+                "Undid the move of 2 items into dest. It is back here. a stays where it is: it is open in another app. ctrl+z tries again.",
+            ),
+            None,
+        ),
+        (
+            vec![
+                (1, back("b")),
+                (0, Outcome::Leaves(Reason::Taken(PathBuf::from("/d/a")))),
+            ],
+            false,
+            Some(
+                "Undid the move of 2 items into dest. It is back here. The name a is taken, so it stays where it is.",
+            ),
+            None,
+        ),
+        (
+            vec![(1, back("b")), (0, Outcome::Stays(Reason::Stopped))],
+            false,
+            Some(
+                "Undid the move of 2 items into dest. It is back here. The undo stopped before it finished. ctrl+z undoes the rest.",
+            ),
+            None,
+        ),
+        (
+            vec![(
+                1,
+                Outcome::Leaves(Reason::OriginalGone(PathBuf::from("/d/b"))),
+            )],
+            false,
+            None,
+            Some("Nothing was undone: the original b is gone, so the copy stays. Nothing is left to undo."),
+        ),
+        (
+            vec![
+                (1, Outcome::Leaves(Reason::Gone(PathBuf::from("/x/dest/b")))),
+                (0, Outcome::Leaves(Reason::Gone(PathBuf::from("/x/dest/a")))),
+            ],
+            false,
+            None,
+            Some("Nothing was undone: b is gone. 1 more stays as it is. Nothing is left to undo."),
+        ),
+        (
+            Vec::new(),
+            true,
+            None,
+            Some(
+                "Nothing was undone. The undo stopped before it finished. ctrl+z undoes the rest.",
+            ),
+        ),
+    ];
+    for (outcomes, stopped, notice, failed) in cases {
+        let (notice_now, failure_now) =
+            ops_text::undone_note(&step, &outcomes, stopped, here, next);
+        assert_eq!(notice_now.as_deref(), notice, "{outcomes:?}");
+        assert_eq!(failure_now.as_deref(), failed, "{outcomes:?}");
+    }
+}
+
+#[test]
+fn step_labels_and_the_next_line_name_the_folder_only_when_it_is_not_this_one() {
+    let (mut history, step) = moved_pair();
+    assert_eq!(
+        ops_text::step_label(&step.action, Path::new("/x/dest")),
+        "move of 2 items"
+    );
+    assert_eq!(
+        ops_text::step_label(&step.action, Path::new("/d")),
+        "move of 2 items into dest"
+    );
+    assert_eq!(
+        ops_text::next_text(history.top(), Path::new("/d")),
+        "Next, ctrl+z undoes the move of 2 items into dest."
+    );
+    history.drop_step(step.id);
+    assert_eq!(
+        ops_text::next_text(history.top(), Path::new("/d")),
+        "Nothing is left to undo."
+    );
+    let rename = Action::Rename {
+        from: PathBuf::from("/d/a"),
+        to: PathBuf::from("/d/b"),
+    };
+    assert_eq!(
+        ops_text::step_label(&rename, Path::new("/d")),
+        "rename to b"
+    );
+    assert_eq!(
+        ops_text::step_label(&Action::Trash(vec![PathBuf::from("/d/a")]), Path::new("/d")),
+        "move of a to the trash"
+    );
 }

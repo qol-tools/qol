@@ -1,11 +1,16 @@
-use std::path::PathBuf;
+use std::collections::hash_map::RandomState;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::time::SystemTime;
 
+pub mod bin;
 mod copy;
-mod journal;
+pub mod gate;
+pub mod history;
 mod platform;
+pub mod print;
 mod run;
 mod simple;
 mod transfer;
@@ -13,12 +18,37 @@ mod transfer;
 #[cfg(test)]
 mod transfer_tests;
 
-pub use journal::{Journal, Undo};
+pub use bin::{Bin, BinError, FolderBin, Held};
+pub use gate::Gate;
+pub use history::{Change, Source};
 pub use run::{partial_name, partial_of, start};
-pub use simple::{
-    copy_name, delete, free_name, new_file, new_folder, rename, restore, trash, NameProblem,
-};
+pub use simple::{copy_name, delete, free_name, new_file, new_folder, rename, trash, NameProblem};
 pub use transfer::{crosses, survey};
+
+#[derive(Clone)]
+pub struct Tools {
+    pub bin: Arc<dyn Bin>,
+    pub key: RandomState,
+    pub gate: Gate,
+}
+
+impl Tools {
+    pub fn system() -> Self {
+        Self {
+            bin: bin::system(),
+            key: RandomState::new(),
+            gate: Gate::system(),
+        }
+    }
+
+    pub fn at(root: &Path) -> Self {
+        Self {
+            bin: Arc::new(FolderBin::new(root.join("bin"))),
+            key: RandomState::new(),
+            gate: Gate::at(root.join("gate.lock")),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verb {
@@ -112,6 +142,9 @@ pub struct JobId(pub u64);
 pub enum Progress {
     Bytes { done: u64, total: u64 },
     Arriving(PathBuf),
+    Placed(Box<Change>),
+    Amended { to: PathBuf, source: Source },
+    Retracted(PathBuf),
     Finished(Done),
 }
 
@@ -126,12 +159,13 @@ pub struct Done {
     pub id: JobId,
     pub verb: Verb,
     pub placed: Vec<(PathBuf, PathBuf)>,
-    pub landed: Vec<(PathBuf, PathBuf)>,
-    pub matched: Vec<(PathBuf, PathBuf)>,
-    pub merged: Vec<PathBuf>,
-    pub trashed: bool,
-    pub replaced: Vec<PathBuf>,
     pub kept_originals: Vec<PathBuf>,
+    pub failures: Vec<Failure>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Trashing {
+    pub trashed: Vec<(PathBuf, Option<Held>)>,
     pub failures: Vec<Failure>,
 }
 

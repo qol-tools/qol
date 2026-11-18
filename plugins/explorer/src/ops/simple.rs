@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::copy::remove_all;
-use super::{next_job_id, platform, Done, Failure, Verb};
+use super::{platform, Bin, Failure, Trashing};
 
 #[cfg(test)]
 #[path = "simple_tests.rs"]
@@ -13,6 +13,7 @@ mod tests;
 const OS_ERROR_SUFFIX: &str = " (os error";
 const SCRATCH_PREFIX: &str = ".";
 const SCRATCH_SUFFIX: &str = ".qol-rename";
+const SCRATCH_VARIANTS: u32 = 99;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NameProblem {
@@ -23,45 +24,19 @@ pub enum NameProblem {
     Io(String),
 }
 
-pub fn trash(paths: &[PathBuf]) -> Done {
+pub fn trash(bin: &dyn Bin, paths: &[PathBuf]) -> Trashing {
     let mut trashed = Vec::new();
     let mut failures = Vec::new();
     for path in paths {
-        match platform::trash_one(path) {
-            Ok(()) => trashed.push(path.clone()),
-            Err(reason) => failures.push(Failure {
+        match bin.trash(path) {
+            Ok(held) => trashed.push((path.clone(), held)),
+            Err(error) => failures.push(Failure {
                 path: path.clone(),
-                reason,
+                reason: error.reason(),
             }),
         }
     }
-    let located = platform::trash_locations(&trashed);
-    let placed: Vec<(PathBuf, PathBuf)> = trashed
-        .into_iter()
-        .map(|from| {
-            let to = located
-                .iter()
-                .find(|(original, _)| *original == from)
-                .map_or_else(|| from.clone(), |(_, to)| to.clone());
-            (from, to)
-        })
-        .collect();
-    Done {
-        id: next_job_id(),
-        verb: Verb::Move,
-        landed: placed.clone(),
-        matched: Vec::new(),
-        merged: Vec::new(),
-        trashed: true,
-        placed,
-        replaced: Vec::new(),
-        kept_originals: Vec::new(),
-        failures,
-    }
-}
-
-pub fn restore(trashed: &[PathBuf]) -> Vec<Failure> {
-    platform::restore_trashed(trashed)
+    Trashing { trashed, failures }
 }
 
 pub fn rename(path: &Path, name: &str) -> Result<PathBuf, NameProblem> {
@@ -75,12 +50,18 @@ pub fn rename(path: &Path, name: &str) -> Result<PathBuf, NameProblem> {
     if target == path {
         return Ok(target);
     }
-    if differs_by_case_only(path, &target) {
-        rename_case(path, &target)?;
-    } else {
-        qol_fs::rename_noreplace(path, &target).map_err(problem)?;
-    }
+    move_noreplace(path, &target).map_err(problem)?;
     Ok(target)
+}
+
+pub(in crate::ops) fn move_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    if from.parent() == to.parent() && differs_by_case_only(from, to) && occupied(to) {
+        if has_sibling_named(to) {
+            return Err(io::ErrorKind::AlreadyExists.into());
+        }
+        return move_through_scratch(from, to);
+    }
+    qol_fs::rename_noreplace(from, to)
 }
 
 pub fn new_folder(into: &Path, name: &str) -> Result<PathBuf, NameProblem> {
@@ -222,31 +203,40 @@ fn differs_by_case_only(path: &Path, target: &Path) -> bool {
     old != new && old.to_string_lossy().to_lowercase() == new.to_string_lossy().to_lowercase()
 }
 
-fn rename_case(path: &Path, target: &Path) -> Result<(), NameProblem> {
-    if !occupied(target) {
-        return fs::rename(path, target).map_err(problem);
-    }
-    if has_sibling_named(target) {
-        return Err(NameProblem::Taken);
-    }
-    let parent = target.parent().unwrap_or(Path::new(""));
-    let old = path.file_name().unwrap_or_default();
-    let mut scratch = OsString::from(SCRATCH_PREFIX);
-    scratch.push(old);
-    scratch.push(SCRATCH_SUFFIX);
-    let scratch = free_name(parent, &scratch);
-    fs::rename(path, &scratch).map_err(problem)?;
-    let Err(error) = fs::rename(&scratch, target) else {
+fn move_through_scratch(from: &Path, to: &Path) -> io::Result<()> {
+    let parent = to.parent().unwrap_or(Path::new(""));
+    let old = from.file_name().unwrap_or_default();
+    let mut base = OsString::from(SCRATCH_PREFIX);
+    base.push(old);
+    base.push(SCRATCH_SUFFIX);
+    let scratch = park(from, parent, &base)?;
+    let Err(error) = qol_fs::rename_noreplace(&scratch, to) else {
         return Ok(());
     };
-    if let Err(restore_error) = fs::rename(&scratch, path) {
+    if let Err(restore_error) = qol_fs::rename_noreplace(&scratch, from) {
         log::error!(
             "could not move {} back to {}: {restore_error}",
             scratch.display(),
-            path.display()
+            from.display()
         );
     }
-    Err(problem(error))
+    Err(error)
+}
+
+fn park(from: &Path, parent: &Path, base: &OsStr) -> io::Result<PathBuf> {
+    for number in 1..=SCRATCH_VARIANTS {
+        let mut name = base.to_os_string();
+        if number > 1 {
+            name.push(format!(" ({number})"));
+        }
+        let scratch = parent.join(name);
+        match qol_fs::rename_noreplace(from, &scratch) {
+            Ok(()) => return Ok(scratch),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::ErrorKind::AlreadyExists.into())
 }
 
 fn has_sibling_named(target: &Path) -> bool {
