@@ -19,6 +19,7 @@ ignore = [
   { id = "RUSTSEC-2026-0192", reason = "ttf-parser: unmaintained font parser pinned by cosmic-text and usvg under gpui; no fixed fork exists yet (security review T12)" },
   { id = "RUSTSEC-2026-0370", reason = "zvariant: folded into zbus, which still ships it (security review T12)" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: folded into zbus, which still ships it (security review T12)" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono: unmaintained, and 11 workspace crates use it directly; moving them to jiff is a change of its own (#569)" },
 ]
 
 [bans]

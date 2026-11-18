@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -947,9 +948,11 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("[advisories]", config)
         self.assertIn('yanked = "deny"', config)
         self.assertIn('unknown-git = "deny"', config)
-        for ignored in re.findall(r'\{ id = "(RUSTSEC-[0-9-]+)", reason = "([^"]*)"', config):
-            with self.subTest(advisory=ignored[0]):
-                self.assertIn("T12", ignored[1])
+        for ignored in tomllib.loads(config)["advisories"]["ignore"]:
+            with self.subTest(advisory=ignored):
+                self.assertIsInstance(ignored, dict)
+                self.assertEqual(sorted(ignored), ["id", "reason"])
+                self.assertRegex(ignored["reason"], r"\((?:security review T12|#[0-9]+)\)$")
         self.assertNotIn('"vendor/**"', codeql)
         self.assertIn('"vendor/ravif/**"', codeql)
 

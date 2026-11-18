@@ -92,6 +92,7 @@ export const pic = {
   qolToasts: () => svg(screen() + toast(50, 34)),
   systemBubbles: () => svg(screen() + bubble(50, 10)),
   bothNotices: () => svg(screen() + bubble(50, 10) + toast(50, 34)),
+  noBubbles: () => svg(slashed(screen() + bubble(50, 10), 52, 4.5, 78, 26.5)),
   launchApp: () => svg([[26, 14], [44, 14], [26, 32], [44, 32]].map(([x, y], i) => (i === 0 ? wash(x, y, 14, 14, 3, 0.35) : '') + rect(x, y, 14, 14, 3)).join('') + path('M66 36 L80 22 M72 22 H80 V30')),
   openUrl: () => svg(rect(10, 8, 76, 44, 4) + line(10, 18, 86, 18) + rect(22, 10.5, 52, 5, 2.5, SOFT) + text(48, 38, 'https://', 10)),
   bundleRef: (t) => svg(path('M10 20 H74 L84 30 L74 40 H10 Z') + text(43, 32.5, t, 7)),
