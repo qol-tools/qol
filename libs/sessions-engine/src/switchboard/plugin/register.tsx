@@ -377,11 +377,22 @@ const withUnseen = (agentId: string, all: Said[], now: number): Said[] => {
   return placed
 }
 
+const HANDBACK_TOOL = 'SubagentHandback'
+
+const handedBack = (toolUses: unknown): string[] => {
+  if (!Array.isArray(toolUses)) return []
+  return toolUses.flatMap((one): string[] => {
+    const { tool, input } = (one ?? {}) as { tool?: unknown; input?: { message?: unknown } | null }
+    const message = tool === HANDBACK_TOOL ? input?.message : undefined
+    return typeof message === 'string' ? [message] : []
+  })
+}
+
 export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
   if (!Array.isArray(messages)) return []
   const said = messages.flatMap((one): Said[] => {
     if (typeof one !== 'object' || one === null) return []
-    const { role, text } = one as { role?: unknown; text?: unknown }
+    const { role, text, toolUses } = one as { role?: unknown; text?: unknown; toolUses?: unknown }
     if (typeof text !== 'string' || (role !== 'user' && role !== 'assistant')) return []
     const queued = role === 'user' ? [...text.matchAll(QUEUED_NOTE)].map(match => match[1] ?? '').filter(note => MID_TURN_NOTE.test(note.trim())) : []
     if (queued.length > 0) {
@@ -390,7 +401,7 @@ export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
         return shown === '' || isPluginNote(shown) ? [] : [{ isUser: true, text: clipSaid(shown) }]
       })
     }
-    const words = role === 'user' ? userWords(text) : text
+    const words = role === 'user' ? userWords(text) : [text, ...handedBack(toolUses)].filter(part => part.trim() !== '').join('\n\n')
     const shown = plainText(words)
     if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown))) || (role === 'assistant' && isHeldReply(shown))) return []
     return [{ isUser: role === 'user', text: clipSaid(shown) }]

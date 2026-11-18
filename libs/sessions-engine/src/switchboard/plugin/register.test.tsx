@@ -1367,6 +1367,16 @@ test('recentWords drops markdown marks and extra blank lines', () => {
   expect(recentWords([{ role: 'assistant', text: '1. **Restart:** run `qols board`\n\n\n\nDone.' }])).toEqual([{ isUser: false, text: '1. Restart: run qols board\n\nDone.' }])
 })
 
+test('recentWords shows the report a fork hands back through a tool as its own words', () => {
+  const handed = { tool_use_id: 'toolu_1', tool: 'SubagentHandback', input: { message: 'Try it now.\nIt stays a draft.' } }
+  expect(recentWords([{ role: 'user', text: 'so what now?' }, { role: 'assistant', text: '', toolUses: [handed] }])).toEqual([
+    { isUser: true, text: 'so what now?' },
+    { isUser: false, text: 'Try it now.\nIt stays a draft.' },
+  ])
+  expect(recentWords([{ role: 'assistant', text: 'Checked.', toolUses: [{ tool_use_id: 'toolu_2', tool: 'Bash', input: { command: 'ls' } }, handed] }])).toEqual([{ isUser: false, text: 'Checked.\n\nTry it now.\nIt stays a draft.' }])
+  expect(recentWords([{ role: 'assistant', text: '', toolUses: [{ tool_use_id: 'toolu_3', tool: 'SubagentHandback', input: {} }] }])).toEqual([])
+})
+
 test('a resumed switchboard conversation puts its own forks a restart cut off back without continuing them', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
