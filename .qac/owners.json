@@ -112,6 +112,20 @@
     ],
     "allow": []
   },
+  "process liveness": {
+    "owner": "libs/process/src/",
+    "use": "qol_process::is_pid_gone, which counts a zombie as gone; a check with another meaning becomes a function in libs/process",
+    "scope": "production",
+    "paths": ["is_pid_alive", "is_pid_zombie"],
+    "allow": []
+  },
+  "temp folder": {
+    "owner": "libs/config/src/",
+    "use": "qol_config::runtime_dir() or qol_config::data_subdir(), the per-user qol-tray folders; another local account can plant or read a fixed name in the shared temp folder",
+    "scope": "production",
+    "paths": ["env::temp_dir"],
+    "allow": []
+  },
   "daemon launch env": {
     "owner": ["libs/plugin-daemon/src/", "libs/conventions/src/", "apps/tray/src/plugins/daemon_lifecycle/"],
     "use": "qol_plugin_daemon::daemon::launched_as_daemon, which a plugin asks before it runs its daemon, or qol_plugin_daemon::daemon::handed_socket and qol_plugin_daemon::daemon::asked_to_replace_existing; qol-tray's daemon spawn sets the variables and plugin-daemon reads them",
