@@ -1292,6 +1292,27 @@ test('recentWords shows the words of a message relayed mid-turn without the rela
   expect(recentWords([{ role: 'user', text: 'The coordinator sent a message while you were working:\nBack in the agent list.\n\nAddress this before completing your current task.' }])).toEqual([])
 })
 
+test('recentWords shows what the user typed in the fork view mid-turn without the note around it', () => {
+  const tail = 'This is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn.'
+  const typed = `The user sent a new message while you were working:\nwhat about the items?\n\n${tail}`
+  expect(recentWords([{ role: 'user', text: typed }])).toEqual([{ isUser: true, text: 'what about the items?' }])
+  expect(recentWords([{ role: 'user', text: `tests pass\n<system-reminder>\n${typed}\n</system-reminder>` }])).toEqual([{ isUser: true, text: 'what about the items?' }])
+})
+
+test('recentWords leaves out the rows Claude Code hides: a loaded skill, an image note and stop hook feedback', () => {
+  const messages = [
+    { role: 'user', text: fromUser('commit it') },
+    { role: 'user', text: 'Base directory for this skill: /skills/commit\n\nqol-tools commit conventions' },
+    { role: 'user', text: '[Image: original 2560x1440, displayed at 2000x1125. Multiply coordinates by 1.28 to map to original image.]' },
+    { role: 'user', text: 'Stop hook feedback:\nThe pull request you opened is not being watched yet.' },
+    { role: 'assistant', text: 'Base directory for this skill: is how a loaded skill starts.' },
+  ]
+  expect(recentWords(messages)).toEqual([
+    { isUser: true, text: 'commit it' },
+    { isUser: false, text: 'Base directory for this skill: is how a loaded skill starts.' },
+  ])
+})
+
 test('recentWords drops markdown marks and extra blank lines', () => {
   expect(recentWords([{ role: 'assistant', text: '1. **Restart:** run `qols board`\n\n\n\nDone.' }])).toEqual([{ isUser: false, text: '1. Restart: run qols board\n\nDone.' }])
 })

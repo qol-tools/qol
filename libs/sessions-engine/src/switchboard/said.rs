@@ -14,6 +14,8 @@ const USER: &str = "user";
 const ASSISTANT: &str = "assistant";
 const USER_TAG: &str = "\"type\":\"user\"";
 const ASSISTANT_TAG: &str = "\"type\":\"assistant\"";
+const IS_META: &str = "isMeta";
+const ORIGIN: &str = "origin";
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub(super) struct Said {
@@ -41,12 +43,18 @@ fn text_of(row: &Value) -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
+fn is_hidden(row: &Value) -> bool {
+    row.get(IS_META).and_then(Value::as_bool) == Some(true)
+        && !row.get(ORIGIN).is_some_and(Value::is_object)
+}
+
 fn said_of(line: &str) -> Option<Said> {
     if !line.contains(USER_TAG) && !line.contains(ASSISTANT_TAG) {
         return None;
     }
     let row: Value = serde_json::from_str(line).ok()?;
     let role = match row.get("type").and_then(Value::as_str)? {
+        USER if is_hidden(&row) => return None,
         USER => USER,
         ASSISTANT => ASSISTANT,
         _ => return None,
@@ -163,6 +171,60 @@ mod tests {
         );
         assert_eq!(newest(&path, 0), vec![said(USER, "teal")]);
         assert_eq!(newest(Path::new("/missing/agent-a1.jsonl"), 5), Vec::new());
+    }
+
+    #[test]
+    fn a_row_claude_code_hides_is_left_out_unless_someone_sent_it() {
+        let meta = |content: &str, origin: Option<Value>| {
+            let mut row = json!({"type": "user", "isMeta": true, "message": {"content": content}});
+            if let Some(origin) = origin {
+                row["origin"] = origin;
+            }
+            row.to_string()
+        };
+        let (_root, path) = written(&[
+            row("user", json!("load the commit skill")),
+            meta("Base directory for this skill: /skills/commit", None),
+            meta("[Image: original 2560x1440, displayed at 2000x1125]", None),
+            meta("Stop hook feedback:\nWatch the pull request.", None),
+            meta(
+                "The coordinator sent a message while you were working:\nteal",
+                Some(json!({"kind": "coordinator"})),
+            ),
+            meta(
+                "The user sent a new message while you were working:\namber",
+                Some(json!({"kind": "human"})),
+            ),
+            meta("origin is not an object", Some(json!(null))),
+            json!({"type": "assistant", "isMeta": true, "message": {"content": "Loaded."}})
+                .to_string(),
+        ]);
+
+        assert_eq!(
+            newest(&path, 10),
+            vec![
+                said(USER, "load the commit skill"),
+                said(
+                    USER,
+                    "The coordinator sent a message while you were working:\nteal"
+                ),
+                said(
+                    USER,
+                    "The user sent a new message while you were working:\namber"
+                ),
+                said(ASSISTANT, "Loaded."),
+            ]
+        );
+        assert_eq!(
+            newest(&path, 2),
+            vec![
+                said(
+                    USER,
+                    "The user sent a new message while you were working:\namber"
+                ),
+                said(ASSISTANT, "Loaded."),
+            ]
+        );
     }
 
     #[test]

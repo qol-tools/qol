@@ -287,10 +287,10 @@ const plainText = (text: string): string =>
 export type Said = { isUser: boolean; text: string }
 
 const QUEUED_NOTE = /<system-reminder[^>]*>([\s\S]*?)<\/system-reminder[^>]*>/g
-const ADDRESS_NOTE = /\n+Address this before completing your current task\.\s*$/
+const MID_TURN_TAIL = /\n+(?:Address this before completing your current task\.|This is how Claude Code surfaces messages the user sends mid-turn[^\n]*)\s*$/
 
 const userWords = (text: string): string => {
-  const relayed = text.replace(COORDINATOR_NOTE, '').replace(ADDRESS_NOTE, '')
+  const relayed = text.replace(MID_TURN_NOTE, '').replace(MID_TURN_TAIL, '')
   return typedByUser(relayed) ?? relayed
 }
 
@@ -374,7 +374,7 @@ export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
     if (typeof one !== 'object' || one === null) return []
     const { role, text } = one as { role?: unknown; text?: unknown }
     if (typeof text !== 'string' || (role !== 'user' && role !== 'assistant')) return []
-    const queued = role === 'user' ? [...text.matchAll(QUEUED_NOTE)].map(match => match[1] ?? '').filter(note => COORDINATOR_NOTE.test(note.trim())) : []
+    const queued = role === 'user' ? [...text.matchAll(QUEUED_NOTE)].map(match => match[1] ?? '').filter(note => MID_TURN_NOTE.test(note.trim())) : []
     if (queued.length > 0) {
       return queued.flatMap(note => {
         const shown = plainText(userWords(note.trim()))
@@ -396,16 +396,18 @@ const typedTarget = (list: Entry[], text: string): Entry | undefined => {
   return word === undefined ? undefined : reachable(list).find(entry => keyOf(entry) === word)
 }
 
-const COORDINATOR_NOTE = /^The coordinator sent a message while you were working:\n+/
+const MID_TURN_NOTE = /^The (?:coordinator sent a message|user sent a new message) while you were working:\n+/
 
 const COMPACTED = 'This session is being continued from a previous conversation'
 
-const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', COMPACTED, '[SYSTEM NOTIFICATION']
+const HIDDEN_ROWS = ['Base directory for this skill:', '[Image: original ', 'Stop hook feedback:']
+
+const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', COMPACTED, '[SYSTEM NOTIFICATION', ...HIDDEN_ROWS]
 
 const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY].includes(text.trim())
 
 const isPluginNote = (text: string): boolean => {
-  const said = text.replace(COORDINATOR_NOTE, '').trim()
+  const said = text.replace(MID_TURN_NOTE, '').trim()
   return [BACK, REOPENED, WAIT_FOR_USER, CONTINUE, ...HARNESS_NOTES].some(note => said.startsWith(note))
 }
 
