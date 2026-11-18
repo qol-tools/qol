@@ -4,6 +4,7 @@ use std::ops::Range;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::OnceLock;
 use std::time::{Duration, UNIX_EPOCH};
 
 use tempfile::TempDir;
@@ -446,10 +447,28 @@ fn stray(
             touched.insert(path);
         }
     }
+    let own: Vec<PathBuf> = own.iter().map(|path| folded(path)).collect();
     touched
         .into_iter()
-        .find(|path| !belongs(path, own))
+        .find(|path| !belongs(&folded(path), &own))
         .cloned()
+}
+
+fn folded(path: &Path) -> PathBuf {
+    if folds_case() {
+        PathBuf::from(path.to_string_lossy().to_lowercase())
+    } else {
+        path.to_path_buf()
+    }
+}
+
+fn folds_case() -> bool {
+    static FOLDS: OnceLock<bool> = OnceLock::new();
+    *FOLDS.get_or_init(|| {
+        let probe = tempfile::tempdir().unwrap();
+        File::create(probe.path().join("case")).unwrap();
+        probe.path().join("CASE").exists()
+    })
 }
 
 fn children(folder: &Path) -> Vec<PathBuf> {

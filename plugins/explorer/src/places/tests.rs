@@ -3,7 +3,6 @@ use std::fs;
 use std::path::Path;
 
 use super::*;
-use crate::config::default_pins;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn names(places: &[Place]) -> Vec<&str> {
@@ -51,7 +50,7 @@ fn places_list_home_and_the_user_folders_that_exist() {
         fs::create_dir(home.path().join(folder)).unwrap();
     }
 
-    let places = places_in(home.path(), &default_pins());
+    let places = places_in(home.path(), &crate::config::default_pins());
 
     assert_eq!(names(&places), ["Home", "Documents", "Videos"]);
     assert_eq!(places[0].path, home.path());
@@ -80,7 +79,7 @@ fn places_follow_user_dirs_and_skip_folders_set_to_home() {
         fs::create_dir(home.path().join(folder)).unwrap();
     }
 
-    let places = places_in(home.path(), &default_pins());
+    let places = places_in(home.path(), &crate::config::default_pins());
 
     assert_eq!(names(&places), ["Home", "Music", "Pictures"]);
     assert_eq!(places[1].path, home.path().join("Muzak"));
