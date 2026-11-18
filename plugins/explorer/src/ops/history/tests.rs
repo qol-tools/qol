@@ -89,7 +89,7 @@ fn settled(replies: Vec<Reply>) -> Vec<(usize, Outcome)> {
     let mut done = false;
     for reply in replies {
         match reply {
-            Reply::Item(index, outcome) => outcomes.push((index, outcome)),
+            Reply::Item(index, outcome) => outcomes.push((index, *outcome)),
             Reply::Done => done = true,
             Reply::Asks(clashes) => panic!("it asked instead of undoing: {clashes:?}"),
         }
@@ -372,7 +372,7 @@ mod steps {
         settle(&mut history, step, vec![(1, undone())]);
         let items = &found(&history, step).items;
         assert_eq!(items[0].state, State::Done);
-        assert_eq!(items[1].state, State::Undone(Undone::Removed));
+        assert_eq!(items[1].state, State::Undone(Box::new(Undone::Removed)));
         assert_eq!(found(&history, step).waiting(), 1);
     }
 
@@ -820,7 +820,7 @@ mod steps {
         assert_eq!(items[0].state, State::Done);
         assert!(!items[0].tried);
         assert_eq!(items[1].change, erased("b"));
-        assert_eq!(items[1].state, State::Undone(Undone::Removed));
+        assert_eq!(items[1].state, State::Undone(Box::new(Undone::Removed)));
     }
 
     #[test]
@@ -859,7 +859,7 @@ mod steps {
         assert_eq!(in_line(&history), Some(step));
         assert_eq!(
             found(&history, step).items[0].state,
-            State::Undone(Undone::Removed)
+            State::Undone(Box::new(Undone::Removed))
         );
         assert!(history.plan(step, Direction::Redo).unwrap().items[0].retry);
     }
@@ -1881,8 +1881,8 @@ mod disk {
 
     #[test]
     fn a_copy_binned_by_the_undo_is_put_back_by_the_redo() {
-        let pairs: [(&str, fn(&Lab) -> (PathBuf, PathBuf)); 2] =
-            [("file", copy_pair), ("folder", copy_trees)];
+        type Pair = fn(&Lab) -> (PathBuf, PathBuf);
+        let pairs: [(&str, Pair); 2] = [("file", copy_pair), ("folder", copy_trees)];
         for (name, pair) in pairs {
             let lab = Lab::new();
             let (from, to) = pair(&lab);

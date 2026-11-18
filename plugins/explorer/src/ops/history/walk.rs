@@ -299,7 +299,7 @@ pub(super) fn outcomes_of(replies: Vec<Reply>) -> Vec<(usize, Outcome)> {
     replies
         .into_iter()
         .filter_map(|reply| match reply {
-            Reply::Item(index, outcome) => Some((index, outcome)),
+            Reply::Item(index, outcome) => Some((index, *outcome)),
             Reply::Asks(_) | Reply::Done => None,
         })
         .collect()

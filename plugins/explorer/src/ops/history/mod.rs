@@ -121,7 +121,7 @@ pub enum Undone {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
     Done,
-    Undone(Undone),
+    Undone(Box<Undone>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -335,7 +335,7 @@ impl History {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, item)| match &item.state {
-                    State::Undone(undone) => Some(planned(index, item, Some(undone.clone()))),
+                    State::Undone(undone) => Some(planned(index, item, Some((**undone).clone()))),
                     State::Done => None,
                 })
                 .collect(),
@@ -354,7 +354,7 @@ impl History {
             };
             match outcome {
                 Outcome::Undone(undone) => {
-                    item.state = State::Undone(undone.clone());
+                    item.state = State::Undone(Box::new(undone.clone()));
                     item.tried = false;
                 }
                 Outcome::Redone(change) => {

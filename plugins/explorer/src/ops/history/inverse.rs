@@ -23,7 +23,7 @@ pub type Choices = HashMap<usize, Resolve>;
 #[derive(Debug, Clone)]
 pub enum Reply {
     Asks(Vec<(usize, Clash)>),
-    Item(usize, Outcome),
+    Item(usize, Box<Outcome>),
     Done,
 }
 
@@ -81,7 +81,7 @@ pub fn start(
                 }
             };
             halted |= matches!(outcome, Outcome::Stays(_));
-            send(Reply::Item(planned.index, outcome));
+            send(Reply::Item(planned.index, Box::new(outcome)));
         }
         drop(lock);
         send(Reply::Done);

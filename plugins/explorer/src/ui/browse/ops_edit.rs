@@ -490,7 +490,7 @@ impl Browser {
         loop {
             match run.undoing.result.try_recv() {
                 Ok(Reply::Item(index, outcome)) => {
-                    run.outcomes.push((index, outcome));
+                    run.outcomes.push((index, *outcome));
                     changed = true;
                 }
                 Ok(Reply::Asks(clashes)) => {
