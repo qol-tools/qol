@@ -2287,6 +2287,8 @@ fn dropping_a_step_that_changed_nothing_and_a_delete_that_cannot_be_undone_leave
     let mut browser = opened(temp.path());
     point_at(&mut browser, &file);
     assert!(browser.erase_ask());
+    assert!(browser.erase_cancel());
+    assert!(browser.erase_ask());
     assert!(browser.erase_confirm());
     wait_until(&mut browser, "the delete", |_| !file.exists());
     wait_until(&mut browser, "the note", |browser| {
