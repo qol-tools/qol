@@ -163,6 +163,8 @@ pub struct BuildInfo {
     pub commit: Option<String>,
     #[serde(default)]
     pub features: Vec<String>,
+    #[serde(default)]
+    pub test_platforms: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
