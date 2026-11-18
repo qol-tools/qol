@@ -805,6 +805,13 @@ impl RegionSelector {
             qol_runtime::probe!("SHOT_SELECT_CANCEL_INPUT", "source=global-escape");
             return self.finish_from_poll(None);
         }
+        if self.global_pointer.is_some() && self.state.borrow().drag_in_progress() {
+            let step = hover_poll_during_drag(self.cancel_signal.is_some());
+            if matches!(step, SelectorPollResult::Stop) {
+                self.state.borrow_mut().active_monitor_polling = false;
+            }
+            return step;
+        }
         let hover_changed = self.sync_hover_target_from_pointer();
         if self.sync_active_bounds_for_render() || hover_changed {
             self.notify_all(cx);
@@ -842,10 +849,9 @@ impl RegionSelector {
             return SelectorPollResult::Stop;
         }
         let tracked = position.map(|cg| self.tracked_point(cg));
-        let active_changed = self.sync_active_bounds_for_render();
         let moved =
             tracked.is_some_and(|tracked| self.state.borrow_mut().follow_global_pointer(tracked));
-        if moved || active_changed {
+        if moved {
             self.notify_all(cx);
         }
         if pressed {
@@ -1079,6 +1085,13 @@ impl RegionSelector {
             let _ = peer.update(cx, |_view, _window, cx| cx.notify());
         }
     }
+}
+
+fn hover_poll_during_drag(watches_cancel: bool) -> SelectorPollResult {
+    if watches_cancel {
+        return SelectorPollResult::Continue;
+    }
+    SelectorPollResult::Stop
 }
 
 fn top_stack_area(monitor: Bounds<Pixels>, zones: &[DeadZone]) -> Bounds<Pixels> {
@@ -1945,6 +1958,18 @@ mod tests {
         );
         assert!(!state.follow_global_pointer(point(px(300.0), px(300.0))));
         assert_eq!(state.drag_current, Some(point(px(140.0), px(160.0))));
+    }
+
+    #[test]
+    fn the_hover_poll_keeps_running_during_a_drag_only_to_watch_for_cancel() {
+        assert!(
+            matches!(hover_poll_during_drag(true), SelectorPollResult::Continue),
+            "a platform with a global cancel signal still has to see Escape mid-drag"
+        );
+        assert!(
+            matches!(hover_poll_during_drag(false), SelectorPollResult::Stop),
+            "with nothing to watch the poll stops waking the app: a press always ends the selection"
+        );
     }
 
     #[test]
