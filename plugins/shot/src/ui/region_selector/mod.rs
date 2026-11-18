@@ -438,6 +438,19 @@ impl SelectionState {
         self.drag_current = Some(position);
         true
     }
+
+    fn drag_in_progress(&self) -> bool {
+        self.tx.is_some() && self.drag_start.is_some()
+    }
+
+    fn follow_global_pointer(&mut self, tracked: Point<Pixels>) -> bool {
+        if !self.drag_in_progress() || self.drag_current == Some(tracked) {
+            return false;
+        }
+        self.drag_current = Some(tracked);
+        self.set_active_bounds_for_point(tracked);
+        true
+    }
 }
 
 enum SelectorPollResult {
@@ -609,7 +622,7 @@ impl RegionSelector {
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let position = self.global_point(event.position);
@@ -629,6 +642,38 @@ impl RegionSelector {
         trace_drag_anchor(&self.title, event.position, position, cg, monitor, guide);
         self.notify_all(cx);
         self.start_global_drag(cx);
+        self.follow_pointer_each_frame(window, cx);
+    }
+
+    fn follow_pointer_each_frame(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pointer) = self.global_pointer.clone() else {
+            return;
+        };
+        let this = cx.weak_entity();
+        window.on_next_frame(move |window, cx| {
+            let _ = this.update(cx, |view, cx| {
+                if view.apply_frame_pointer_sample(pointer.position(), cx) {
+                    view.follow_pointer_each_frame(window, cx);
+                }
+            });
+        });
+    }
+
+    fn apply_frame_pointer_sample(
+        &mut self,
+        position: Option<Point<Pixels>>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.state.borrow().drag_in_progress() {
+            return false;
+        }
+        let tracked = position.map(|cg| self.tracked_point(cg));
+        let moved =
+            tracked.is_some_and(|tracked| self.state.borrow_mut().follow_global_pointer(tracked));
+        if moved {
+            self.notify_all(cx);
+        }
+        true
     }
 
     fn on_mouse_move(
@@ -798,14 +843,9 @@ impl RegionSelector {
         }
         let tracked = position.map(|cg| self.tracked_point(cg));
         let active_changed = self.sync_active_bounds_for_render();
-        if let Some(tracked) = tracked {
-            {
-                let mut state = self.state.borrow_mut();
-                state.drag_current = Some(tracked);
-                state.set_active_bounds_for_point(tracked);
-            }
-            self.notify_all(cx);
-        } else if active_changed {
+        let moved =
+            tracked.is_some_and(|tracked| self.state.borrow_mut().follow_global_pointer(tracked));
+        if moved || active_changed {
             self.notify_all(cx);
         }
         if pressed {
@@ -1864,6 +1904,47 @@ mod tests {
             state.drag_start = None;
             assert!(state.shows_overlays(), "{kind:?} after the drag");
         }
+    }
+
+    #[test]
+    fn a_frame_sample_moves_the_drag_only_while_one_is_in_progress() {
+        let (tx, _rx) = mpsc::channel();
+        let screen = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        let mut state = SelectionState::new(
+            tx,
+            Some(screen),
+            None,
+            vec![screen],
+            Vec::new(),
+            CaptureKind::Screenshot,
+        );
+
+        assert!(
+            !state.follow_global_pointer(point(px(10.0), px(10.0))),
+            "before a press there is no drag for a display frame to move"
+        );
+        assert!(!state.drag_in_progress());
+
+        state.drag_start = Some(point(px(100.0), px(100.0)));
+        state.drag_current = state.drag_start;
+        assert!(state.drag_in_progress());
+        assert!(
+            state.follow_global_pointer(point(px(140.0), px(160.0))),
+            "a pointer that moved since the last frame moves the selection"
+        );
+        assert_eq!(state.drag_current, Some(point(px(140.0), px(160.0))));
+        assert!(
+            !state.follow_global_pointer(point(px(140.0), px(160.0))),
+            "a pointer that stayed put asks for no redraw"
+        );
+
+        state.tx = None;
+        assert!(
+            !state.drag_in_progress(),
+            "a finished selection ends the per-frame follow"
+        );
+        assert!(!state.follow_global_pointer(point(px(300.0), px(300.0))));
+        assert_eq!(state.drag_current, Some(point(px(140.0), px(160.0))));
     }
 
     #[test]
