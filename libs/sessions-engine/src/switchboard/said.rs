@@ -14,6 +14,15 @@ const USER: &str = "user";
 const ASSISTANT: &str = "assistant";
 const USER_TAG: &str = "\"type\":\"user\"";
 const ASSISTANT_TAG: &str = "\"type\":\"assistant\"";
+const ATTACHMENT: &str = "attachment";
+const QUEUED: &str = "queued_command";
+const QUEUED_TAG: &str = "\"type\":\"queued_command\"";
+const TYPED_BY: [&str; 2] = ["human", "coordinator"];
+const TEXT: &str = "text";
+const THINKING: &str = "thinking";
+const THINKING_DISPLAY: &str = "thinkingDisplay";
+const UPDATES: &str = "updates";
+const CONTENT: &str = "/message/content";
 const IS_META: &str = "isMeta";
 const ORIGIN: &str = "origin";
 
@@ -30,17 +39,40 @@ fn clipped(text: String) -> String {
     }
 }
 
-fn text_of(row: &Value) -> Option<String> {
-    let text = match row.pointer("/message/content")? {
+fn words_of(content: &Value, kind: &str) -> Option<String> {
+    let text = match content {
         Value::String(text) => text.clone(),
         Value::Array(blocks) => blocks
             .iter()
-            .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some(kind))
+            .filter_map(|block| block.get(kind).and_then(Value::as_str))
             .collect(),
         _ => return None,
     };
     (!text.trim().is_empty()).then_some(text)
+}
+
+fn text_of(row: &Value) -> Option<String> {
+    words_of(row.pointer(CONTENT)?, TEXT)
+}
+
+fn update_of(row: &Value) -> Option<String> {
+    if row.get(THINKING_DISPLAY).and_then(Value::as_str) != Some(UPDATES) {
+        return None;
+    }
+    words_of(row.pointer(CONTENT)?, THINKING)
+}
+
+fn typed_mid_turn(row: &Value) -> Option<String> {
+    let queued = row.get(ATTACHMENT)?;
+    if queued.get("type").and_then(Value::as_str) != Some(QUEUED) {
+        return None;
+    }
+    let sender = queued.pointer("/origin/kind").and_then(Value::as_str)?;
+    if !TYPED_BY.contains(&sender) {
+        return None;
+    }
+    words_of(queued.get("prompt")?, TEXT)
 }
 
 fn is_hidden(row: &Value) -> bool {
@@ -49,19 +81,23 @@ fn is_hidden(row: &Value) -> bool {
 }
 
 fn said_of(line: &str) -> Option<Said> {
-    if !line.contains(USER_TAG) && !line.contains(ASSISTANT_TAG) {
+    if ![USER_TAG, ASSISTANT_TAG, QUEUED_TAG]
+        .iter()
+        .any(|tag| line.contains(tag))
+    {
         return None;
     }
     let row: Value = serde_json::from_str(line).ok()?;
-    let role = match row.get("type").and_then(Value::as_str)? {
+    let (role, text) = match row.get("type").and_then(Value::as_str)? {
         USER if is_hidden(&row) => return None,
-        USER => USER,
-        ASSISTANT => ASSISTANT,
+        USER => (USER, text_of(&row)?),
+        ASSISTANT => (ASSISTANT, text_of(&row).or_else(|| update_of(&row))?),
+        ATTACHMENT => (USER, typed_mid_turn(&row)?),
         _ => return None,
     };
     Some(Said {
         role,
-        text: clipped(text_of(&row)?),
+        text: clipped(text),
     })
 }
 
@@ -223,6 +259,61 @@ mod tests {
                     "The user sent a new message while you were working:\namber"
                 ),
                 said(ASSISTANT, "Loaded."),
+            ]
+        );
+    }
+
+    #[test]
+    fn words_typed_mid_turn_and_the_updates_claude_code_shows_are_kept() {
+        let queued = |sender: Option<&str>, prompt: Value| {
+            let mut attachment = json!({"type": "queued_command", "prompt": prompt});
+            if let Some(sender) = sender {
+                attachment["origin"] = json!({"kind": sender});
+            }
+            json!({"type": "attachment", "attachment": attachment}).to_string()
+        };
+        let thought = |display: Option<&str>, thinking: &str| {
+            let mut row = json!({
+                "type": "assistant",
+                "message": {"content": [{"type": "thinking", "thinking": thinking}]},
+            });
+            if let Some(display) = display {
+                row["thinkingDisplay"] = json!(display);
+            }
+            row.to_string()
+        };
+        let (_root, path) = written(&[
+            row("user", json!("fix the jolt")),
+            thought(Some("updates"), ""),
+            queued(Some("human"), json!("what are you doing ??")),
+            queued(
+                Some("task-notification"),
+                json!("<task-notification>\nthe build ended"),
+            ),
+            queued(None, json!("3 background agents were stopped by the user")),
+            json!({"type": "attachment", "attachment": {
+                "type": "hook_additional_context",
+                "prompt": "not typed by anyone",
+                "origin": {"kind": "human"},
+            }})
+            .to_string(),
+            thought(Some("updates"), "I stopped using the window."),
+            thought(Some("omitted"), "kept to itself"),
+            thought(None, "kept to itself"),
+            queued(
+                Some("coordinator"),
+                json!([{"type": "text", "text": "go "}, {"type": "text", "text": "on"}]),
+            ),
+            queued(Some("human"), json!("  ")),
+        ]);
+
+        assert_eq!(
+            newest(&path, 10),
+            vec![
+                said(USER, "fix the jolt"),
+                said(USER, "what are you doing ??"),
+                said(ASSISTANT, "I stopped using the window."),
+                said(USER, "go on"),
             ]
         );
     }
