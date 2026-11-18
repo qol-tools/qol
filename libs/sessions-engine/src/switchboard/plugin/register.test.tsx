@@ -2127,45 +2127,61 @@ test('a fork that reports or is stopped reads idle or stopped, on the board and 
   await ui.unmount()
 })
 
-test('interrupt-fork stops the running turn of the fork the prompt writes to and keeps it open, and only the message that continues it tells the fork what the stop took', async ($, on) => {
-  const sent: unknown[] = []
+test('interrupt-fork ends the running turn of the fork the prompt writes to and never stops the fork: its command is cut, its model answer too, and its next turn runs as usual', async ($, on) => {
   const stopped: string[] = []
-  engine(on, sent)
+  const steps: string[] = []
+  engine(on)
+  on('clock.after', () => new Promise(() => {}))
   on('session.messages', () => ({ value: [] }))
   on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
     cursor: e.start + e.inputText.length,
   }))
-  on('tool.call', (_: unknown, e: { tool: string; task_id?: string }) => {
+  on('tool.call', (_: unknown, e: { tool: string; task_id?: string; command?: string }) => {
     if (e.tool === 'TaskStop') stopped.push(String(e.task_id))
-    return { result: { success: true } }
+    return e.command === 'bun test' ? new Promise(() => {}) : { result: { success: true } }
+  })
+  on('turn.step', async function* (_: unknown, e: { turnId: string; index: number }, next: { signal: AbortSignal }) {
+    steps.push(`${e.turnId}:${e.index}`)
+    yield { kind: 'text', index: 0, text: 'model' }
+    if (e.turnId === 'turn-3') await new Promise(resolve => next.signal.addEventListener('abort', resolve))
+    return { turnId: e.turnId, index: e.index, answer: 'model', toolUses: [], stopReason: 'end_turn', usage: null }
   })
   const interrupt = async () => String((await $.command.run({ command: 'interrupt-fork', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })).text)
+  const shown = (chunks: any[]) => chunks.map(one => one.text ?? one.stopReason)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   expect(await interrupt()).toContain('No fork to interrupt')
+  await spawn($, 'b1', 'idle-fork: idle')
+  await deliver($, notification('b1', 'idle-fork: idle', 'All finished.'))
+  await settle()
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'idle-fork hi' })
+  expect(await interrupt()).toContain('idle-fork is not in a turn')
   await spawn($, 'a1', 'one-fork: one')
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'one-fork hi' })
-  expect(await interrupt()).toContain('Interrupted one-fork: its turn stopped')
-  expect(stopped).toEqual(['a1'])
+  await $.turn.start({ text: 'Run the tests.', turnId: 'turn-1', agentId: 'a1' })
+  const running = $.tool.call({ tool: 'Bash', agentId: 'a1', command: 'bun test', description: 'Run the tests' })
+  await settle()
+  expect(await interrupt()).toContain('Interrupted one-fork: its turn stops here and its background commands keep running')
+  expect((await running).deny).toContain('The user interrupted this turn')
+  expect((await $.tool.call({ tool: 'Bash', agentId: 'a1', command: 'ls', description: 'List' })).deny).toContain('The user interrupted this turn')
+  expect(shown(await answered($, 'a1', 1, 'turn-1'))).toEqual(['Interrupted from the switchboard.', 'end_turn'])
+  expect(shown(await answered($, 'a1', 2, 'turn-1'))).toEqual(['Interrupted from the switchboard.', 'end_turn'])
+  expect(steps).toEqual([])
+  await $.turn.complete({ turnId: 'turn-1', agentId: 'a1', answer: 'Interrupted from the switchboard.', durationMs: 1, isAborted: false, reason: 'answer' })
+  await $.turn.start({ text: 'carry on', turnId: 'turn-2', agentId: 'a1' })
+  expect((await $.tool.call({ tool: 'Bash', agentId: 'a1', command: 'ls', description: 'List' })).deny).toBeUndefined()
+  expect(shown(await answered($, 'a1', 0, 'turn-2'))).toEqual(['model'])
+  await $.turn.complete({ turnId: 'turn-2', agentId: 'a1', answer: 'model', durationMs: 1, isAborted: false, reason: 'answer' })
+  expect(steps).toEqual(['turn-2:0'])
+  expect(stopped).toEqual([])
   expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('agent id a1')
-  await typed($, 'one-fork carry on')
+  await $.turn.start({ text: 'think it over', turnId: 'turn-3', agentId: 'a1' })
+  const thinking = answered($, 'a1', 0, 'turn-3')
   await settle()
-  expect(JSON.stringify(sent.at(-1))).toContain('carry on')
-  expect(JSON.stringify(sent.at(-1))).toContain('The user interrupted your last turn from the switchboard')
-  await typed($, 'one-fork and again')
-  await settle()
-  expect(JSON.stringify(sent.at(-1))).toContain('and again')
-  expect(JSON.stringify(sent.at(-1))).not.toContain('The user interrupted your last turn')
-  expect(await interrupt()).toContain('Interrupted one-fork: its turn stopped')
-  await $.tool.call({ tool: 'SendMessage', to: 'one-fork', message: 'the switchboard got there first' })
-  await typed($, 'one-fork after that')
-  await settle()
-  expect(JSON.stringify(sent.at(-1))).toContain('after that')
-  expect(JSON.stringify(sent.at(-1))).not.toContain('The user interrupted your last turn')
-  await deliver($, notification('a1', 'one-fork: one', 'All finished.'))
-  await settle()
-  expect(await interrupt()).toContain('one-fork is not in a turn')
-  expect(stopped).toEqual(['a1', 'a1'])
+  expect(await interrupt()).toContain('Interrupted one-fork')
+  expect(shown(await thinking)).toEqual(['model', 'end_turn'])
+  expect(shown(await answered($, 'a1', 1, 'turn-3'))).toEqual(['Interrupted from the switchboard.', 'end_turn'])
+  expect(steps).toEqual(['turn-2:0', 'turn-3:0'])
 })
 
 test('closing is the only end of a fork: a merge leaves it open, the close marks the record done and the board counts it as closed', async ($, on) => {

@@ -1861,7 +1861,8 @@ const CLOSE = 'close-fork'
 const CLOSE_CHORD = 'ctrl+x ctrl+x'
 const INTERRUPT = 'interrupt-fork'
 const INTERRUPT_CHORD = 'ctrl+x ctrl+t'
-const INTERRUPTED = 'The user interrupted your last turn from the switchboard. That stopped every background command you had started, your hold and any pull request watcher included: start the ones you still need again.'
+const CUT_NOTE = 'The user interrupted this turn from the switchboard: stop here and wait for their next message.'
+const CUT_REPLY = 'Interrupted from the switchboard.'
 const CLOSED_REASON = 'Closed by the user.'
 const RECENT_MAX = 5
 export const CLOSE_AGAIN_MS = 10_000
@@ -1875,7 +1876,23 @@ const stopTask = ($: EngineInterface, agentId: string): Promise<string | undefin
     .then(one => one.deny ?? (one.isError === true ? (one.text ?? 'TaskStop failed') : undefined))
     .catch((error: unknown) => String(error))
 
-const interrupted = new Set<string>()
+const CUT = Symbol('cut')
+const cutting = new Set<string>()
+const cutWaits = new Map<string, Set<() => void>>()
+
+const cutOf = (agentId: string): { cut: Promise<typeof CUT>; drop: () => void } => {
+  const waits = cutWaits.get(agentId) ?? new Set<() => void>()
+  cutWaits.set(agentId, waits)
+  let fire = (): void => {}
+  const cut = new Promise<typeof CUT>(resolve => {
+    fire = () => resolve(CUT)
+  })
+  waits.add(fire)
+  if (cutting.has(agentId)) fire()
+  return { cut, drop: () => void waits.delete(fire) }
+}
+
+const cutReply = (e: { turnId: string; index: number }, answer: string) => ({ turnId: e.turnId, index: e.index, usage: null, answer, toolUses: [], stopReason: 'end_turn' as const })
 
 export const interruptFork = async ($: EngineInterface): Promise<string> => {
   const agentId = viewedFork ?? (await read($, writingTo))
@@ -1883,15 +1900,13 @@ export const interruptFork = async ($: EngineInterface): Promise<string> => {
   if (entry === undefined) return 'No fork to interrupt: write to one or open its conversation first.'
   const name = keyName(entry.name)
   if (!entry.isWorking) return `${name} is not in a turn, so there is nothing to interrupt.`
-  const failed = await stopTask($, agentId)
-  if (failed !== undefined) return `${name} could not be interrupted: ${printable(failed)}`
-  interrupted.add(agentId)
-  return `Interrupted ${name}: its turn stopped, and its background commands with it. Your next message to it continues the conversation.`
+  cutting.add(agentId)
+  for (const fire of cutWaits.get(agentId) ?? []) fire()
+  return `Interrupted ${name}: its turn stops here and its background commands keep running. Your next message to it continues the conversation.`
 }
 
 const endFork = async ($: EngineInterface, entry: Entry): Promise<string | undefined> => {
   const { agentId } = entry
-  interrupted.delete(agentId)
   closing.add(agentId)
   try {
     if (listedAgents(await $.agent.list().catch(() => [])).has(agentId)) {
@@ -2304,7 +2319,6 @@ export const drainOutbox = async ($: EngineInterface): Promise<void> => {
 }
 
 export const sendTo = async ($: EngineInterface, target: Entry, text: string, send: Sender = direct($)): Promise<Sent> => {
-  interrupted.delete(target.agentId)
   await bringBack($, target.agentId)
   const sent = await send(target.agentId, text)
   const isQuiet = quiet.has(send)
@@ -3117,7 +3131,7 @@ export const register: Register = on => {
         forgetSent(at.entry.agentId, noted)
         void forgetSentLog($, key, note).catch(() => {})
       }
-      const said = withHookContext(fromUser(at.message), interrupted.delete(at.entry.agentId) ? [...hooked.context, INTERRUPTED] : hooked.context)
+      const said = withHookContext(fromUser(at.message), hooked.context)
       holdTyped(said)
       const sent = await sendTo($, at.entry, said, direct($)).catch(() => undefined)
       if (sent?.isDelivered !== true) {
@@ -3275,8 +3289,7 @@ export const register: Register = on => {
     } else {
       await bringBack($, target.agentId)
     }
-    interrupted.delete(target.agentId)
-    const answer = await next(target.agentId === e.to ? e : { ...e, to: target.agentId })
+      const answer = await next(target.agentId === e.to ? e : { ...e, to: target.agentId })
     if (!isUndelivered(answer)) return answer
     const revived = await revive($, target)
     if (revived === undefined) return answer
@@ -3303,18 +3316,24 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     if (e.agentId !== undefined && CROSS_SESSION.test(e.tool)) return { deny: FORK_RESUME }
-    if (e.agentId !== undefined) {
-      const agentId = e.agentId
-      if ((e as unknown as Record<string, unknown>).run_in_background === true) noteForkCall(e.tool_use_id)
-      try {
-        const label = toolLabel(e.tool, e as unknown as Record<string, unknown>)
-        void noteActivity($, agentId, label).catch(() => {})
-      } catch {}
-    }
-    return next(MESSAGING.test(e.tool) ? asFork(e) : e)
+    if (e.agentId === undefined) return next(MESSAGING.test(e.tool) ? asFork(e) : e)
+    const agentId = e.agentId
+    if (cutting.has(agentId)) return { deny: CUT_NOTE }
+    if ((e as unknown as Record<string, unknown>).run_in_background === true) noteForkCall(e.tool_use_id)
+    try {
+      const label = toolLabel(e.tool, e as unknown as Record<string, unknown>)
+      void noteActivity($, agentId, label).catch(() => {})
+    } catch {}
+    const { cut, drop } = cutOf(agentId)
+    const ran = next(MESSAGING.test(e.tool) ? asFork(e) : e)
+    const first = await Promise.race([ran, cut]).finally(drop)
+    if (first !== CUT) return first
+    void ran.catch(() => undefined)
+    return { deny: CUT_NOTE }
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { deny: FORK_RESUME }))
 
   on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) cutting.delete(e.agentId)
     const isHeld = await claimHold($, e.agentId, e.turnId, e.text)
     if (e.agentId !== undefined && !isHeld) {
       const forkId = e.agentId
@@ -3341,10 +3360,40 @@ export const register: Register = on => {
       yield { kind: 'stop', stopReason: 'end_turn', usage: null }
       return { turnId: e.turnId, index: e.index, usage: null, answer: RESTARTED_REPLY, toolUses: [], stopReason: 'end_turn' }
     }
+    const agentId = e.agentId
+    if (agentId !== undefined && cutting.has(agentId)) {
+      yield { kind: 'text', index: 0, text: CUT_REPLY }
+      yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+      return cutReply(e, CUT_REPLY)
+    }
     const reply = await heldReply($, e.agentId, e.turnId)
     if (reply === undefined || e.index > 1) {
-      if (reply !== undefined && e.agentId !== undefined) await finishHold($, e.agentId)
-      return yield* next(await withChoice($, e).catch(() => e))
+      if (reply !== undefined && agentId !== undefined) await finishHold($, agentId)
+      const stream = next(await withChoice($, e).catch(() => e))
+      if (agentId === undefined) return yield* stream
+      const live = stream[Symbol.asyncIterator]()
+      const { cut, drop } = cutOf(agentId)
+      let pending = live.next()
+      let isCut = false
+      let hasTool = false
+      try {
+        while (true) {
+          const step = isCut ? await pending : await Promise.race([pending, cut])
+          if (step === CUT) {
+            isCut = true
+            if (hasTool) continue
+            void pending.catch(() => undefined)
+            yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+            return cutReply(e, '')
+          }
+          if (step.done === true) return step.value
+          if (step.value.kind === 'tool') hasTool = true
+          yield step.value
+          pending = live.next()
+        }
+      } finally {
+        drop()
+      }
     }
     const base = { turnId: e.turnId, index: e.index, usage: null }
     if (e.index === 0) {
@@ -3361,6 +3410,7 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     quietTurns.delete(e.turnId)
+    if (e.agentId !== undefined) cutting.delete(e.agentId)
     if (e.agentId !== undefined && (await holdOf($, e.agentId))?.turnId === e.turnId) await finishHold($, e.agentId)
     const done = await next(e)
     const ended = e.agentId

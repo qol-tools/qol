@@ -165,7 +165,7 @@ mod tests {
             "on('prompt.autocomplete', async ($, e, next) => {",
             "on('prompt.edit', async ($, e, next) => {",
             "return dropAs(`→ ${keyOf(at.entry)}`)",
-            "const said = withHookContext(fromUser(at.message), interrupted.delete(at.entry.agentId) ? [...hooked.context, INTERRUPTED] : hooked.context)",
+            "const said = withHookContext(fromUser(at.message), hooked.context)",
             "const sent = await sendTo($, at.entry, said, direct($))",
             "const hooked = await promptHooks($, at.entry, at.message)",
             "return next({ ...e, text, ...(hooked.context.length === 0 ? {} : { context: [...(e.context ?? []), ...hooked.context] }) })",
