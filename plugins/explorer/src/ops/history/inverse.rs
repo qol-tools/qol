@@ -65,8 +65,9 @@ pub fn start(
                 Choices::new()
             }
         };
+        let mut halted = false;
         for planned in &plan.items {
-            let outcome = if stopped.load(Ordering::Relaxed) {
+            let outcome = if halted || stopped.load(Ordering::Relaxed) {
                 Outcome::Stays(Reason::Stopped)
             } else {
                 let work = Undo {
@@ -79,6 +80,7 @@ pub fn start(
                     Direction::Redo => work.again(&planned.change, planned.undone.as_ref()),
                 }
             };
+            halted |= matches!(outcome, Outcome::Stays(_));
             send(Reply::Item(planned.index, outcome));
         }
         drop(lock);

@@ -762,3 +762,82 @@ fn a_new_action_after_an_undo_leaves_nothing_to_redo() {
         listing(&[("gone.txt", "binned"), ("new.txt", "")])
     );
 }
+
+#[test]
+fn a_redo_that_cannot_bin_the_replaced_file_holds_back_the_move_in() {
+    let (mut rig, hooks) = hooked();
+    let from = rig.work.join("from");
+    let into = rig.work.join("into");
+    write_at(&from.join("a.txt"), "incoming", 20);
+    write_at(&into.join("a.txt"), "existing", 10);
+    let step = rig
+        .transfer(Verb::Move, &[from.join("a.txt")], &into, |_| {
+            Resolve::Replace
+        })
+        .step;
+    ran(rig.undo(|_, _| Resolve::Keep));
+    let undone = listing(&[("from/a.txt", "incoming"), ("into/a.txt", "existing")]);
+    assert_eq!(files(&rig.work), undone);
+    let before = rig.held();
+    hooks.on_trash(refusing());
+
+    let first = ran(rig.redo(|_, _| Resolve::Keep));
+
+    let refused = Reason::Failed(into.join("a.txt"), "the trash is full".into());
+    assert_eq!(
+        first,
+        vec![
+            (0, Outcome::Stays(refused)),
+            (1, Outcome::Stays(Reason::Stopped)),
+        ]
+    );
+    assert_eq!(files(&rig.work), undone);
+    assert!(texts(&rig.bin_root).is_empty());
+    assert_eq!(rig.history.redo_top().map(|found| found.id), Some(step));
+    hooks.disarm();
+
+    let second = ran(rig.redo(|_, _| Resolve::Keep));
+
+    assert_eq!(second.len(), 2, "{second:?}");
+    assert!(
+        second.iter().all(|(_, outcome)| is_redone(outcome)),
+        "{second:?}"
+    );
+    assert_eq!(files(&rig.work), listing(&[("into/a.txt", "incoming")]));
+    assert_eq!(texts(&rig.bin_root), vec!["existing"]);
+    rig.keeps(&before, "a redo held back by a refused trash");
+}
+
+#[test]
+fn a_copy_whose_name_is_taken_before_its_redo_asks_and_keeps_both() {
+    let mut rig = Rig::new();
+    let from = rig.work.join("from");
+    let into = rig.work.join("into");
+    write_at(&from.join("a.txt"), "original", 10);
+    fs::create_dir_all(&into).unwrap();
+    rig.transfer(Verb::Copy, &[from.join("a.txt")], &into, |_| Resolve::Keep);
+    ran(rig.undo(|_, _| Resolve::Keep));
+    write_at(&into.join("a.txt"), "taken", 20);
+    let before = rig.held();
+
+    let Undid::Ran {
+        outcomes, asked, ..
+    } = rig.redo(|_, _| Resolve::KeepBoth)
+    else {
+        panic!("the redo did not run");
+    };
+
+    assert_eq!(asked, vec![0]);
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    assert!(is_redone(&outcomes[0].1), "{outcomes:?}");
+    assert_eq!(
+        files(&rig.work),
+        listing(&[
+            ("from/a.txt", "original"),
+            ("into/a (2).txt", "original"),
+            ("into/a.txt", "taken"),
+        ])
+    );
+    assert!(texts(&rig.bin_root).is_empty());
+    rig.keeps(&before, "a copy name taken before its redo");
+}
