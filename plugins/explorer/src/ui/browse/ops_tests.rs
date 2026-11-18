@@ -11,7 +11,7 @@ use qol_gpui::text_edit::MemoryClipboard;
 
 use super::ops_text;
 use super::{Browser, Held, MoveState, Stepping};
-use crate::ops::history::{Action, Change, Direction, History, Outcome, Reason, Undone};
+use crate::ops::history::{Action, Change, Direction, History, Outcome, Reason, Source, Undone};
 use crate::ops::print::{Kind, Print};
 use crate::ops::{Clash, CopyOnly, Resolve, Room, Stamp, Survey, Tools, Transfer, Verb};
 use crate::ui::keys::Step;
@@ -1740,6 +1740,23 @@ fn a_redo_names_each_kind_of_step_in_plain_words() {
                 copy("hello"),
             ),
             "Redid the copy of hello into dest. The copy is in dest again. ctrl+z undoes it.",
+        ),
+        (
+            one(
+                Action::Transfer {
+                    verb: Verb::Move,
+                    sources: vec![at("hello")],
+                    into: PathBuf::from("/x/dest"),
+                },
+                Change::Crossed {
+                    from: at("hello"),
+                    to: PathBuf::from("/x/dest/hello"),
+                    tree: tree(),
+                    source: Source::Partly,
+                    from_device: None,
+                },
+            ),
+            "Redid the move of hello into dest. It is in dest again. The original hello in d stays too, so it is in both places. ctrl+z undoes it.",
         ),
         (
             one(

@@ -5,7 +5,7 @@ use qol_gpui::format_bytes;
 
 use super::ops::{Held, MoveState};
 use crate::ops::history::{
-    Action, Change, Direction, Outcome as Verdict, Reason, Step, Top, Undone,
+    Action, Change, Direction, Outcome as Verdict, Reason, Source, Step, Top, Undone,
 };
 use crate::ops::{free_name, Clash, NameProblem, Room, Survey, Verb};
 
@@ -496,6 +496,22 @@ fn kept_copy(change: &Change, undone: &Undone) -> Option<Problem> {
     )))
 }
 
+fn kept_source(change: &Change) -> Option<Problem> {
+    let Change::Crossed {
+        from,
+        source: Source::Partly,
+        ..
+    } = change
+    else {
+        return None;
+    };
+    let folder = from.parent().map(name_of).unwrap_or_default();
+    Some(Problem::worded(format!(
+        "the original {} in {folder} stays too, so it is in both places.",
+        name_of(from)
+    )))
+}
+
 fn back_to(undone: &Undone) -> Option<&Path> {
     match undone {
         Undone::MovedBack { to, .. } | Undone::CopiedBack { to, .. } => Some(to),
@@ -681,7 +697,10 @@ pub(super) fn report_note(
                 undone.push((&item.change, done));
                 problems.extend(kept_copy(&item.change, done));
             }
-            Verdict::Redone(change) => redone.push(change),
+            Verdict::Redone(change) => {
+                redone.push(change);
+                problems.extend(kept_source(change));
+            }
             Verdict::Stays(Reason::Stopped) => stopped = true,
             Verdict::Stays(reason) => {
                 retry = true;
