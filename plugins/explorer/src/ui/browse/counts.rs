@@ -229,15 +229,18 @@ fn same_folders(folders: &[PathBuf]) -> HashMap<PathBuf, Vec<PathBuf>> {
             by_id.entry(id).or_default().push(folder.clone());
         }
     }
-    by_id
-        .into_values()
-        .filter(|same| same.len() > 1)
-        .flat_map(|same| {
-            same.clone()
-                .into_iter()
-                .map(move |folder| (folder, same.clone()))
-        })
-        .collect()
+    let mut found = HashMap::new();
+    for same in by_id.into_values() {
+        for folder in &same {
+            if same.len() > 1 {
+                found.insert(folder.clone(), same.clone());
+            }
+            if let Some(real) = fs::canonicalize(folder).ok().filter(|real| real != folder) {
+                found.insert(real, same.clone());
+            }
+        }
+    }
+    found
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
