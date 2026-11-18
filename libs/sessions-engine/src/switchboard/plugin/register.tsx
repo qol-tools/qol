@@ -1850,6 +1850,7 @@ export const interruptFork = async ($: EngineInterface): Promise<string> => {
 
 const endFork = async ($: EngineInterface, entry: Entry): Promise<string | undefined> => {
   const { agentId } = entry
+  interrupted.delete(agentId)
   closing.add(agentId)
   try {
     if (listedAgents(await $.agent.list().catch(() => [])).has(agentId)) {
@@ -2262,6 +2263,7 @@ export const drainOutbox = async ($: EngineInterface): Promise<void> => {
 }
 
 export const sendTo = async ($: EngineInterface, target: Entry, text: string, send: Sender = direct($)): Promise<Sent> => {
+  interrupted.delete(target.agentId)
   await bringBack($, target.agentId)
   const sent = await send(target.agentId, text)
   const isQuiet = quiet.has(send)
@@ -3216,6 +3218,7 @@ export const register: Register = on => {
     } else {
       await bringBack($, target.agentId)
     }
+    interrupted.delete(target.agentId)
     const answer = await next(target.agentId === e.to ? e : { ...e, to: target.agentId })
     if (!isUndelivered(answer)) return answer
     const revived = await revive($, target)

@@ -2126,7 +2126,7 @@ test('a fork that reports or is stopped reads idle or stopped, on the board and 
   await ui.unmount()
 })
 
-test('interrupt-fork stops the running turn of the fork the prompt writes to and keeps it open, and the next message tells the fork what the stop took', async ($, on) => {
+test('interrupt-fork stops the running turn of the fork the prompt writes to and keeps it open, and only the message that continues it tells the fork what the stop took', async ($, on) => {
   const sent: unknown[] = []
   const stopped: string[] = []
   engine(on, sent)
@@ -2155,10 +2155,16 @@ test('interrupt-fork stops the running turn of the fork the prompt writes to and
   await settle()
   expect(JSON.stringify(sent.at(-1))).toContain('and again')
   expect(JSON.stringify(sent.at(-1))).not.toContain('The user interrupted your last turn')
+  expect(await interrupt()).toContain('Interrupted one-fork: its turn stopped')
+  await $.tool.call({ tool: 'SendMessage', to: 'one-fork', message: 'the switchboard got there first' })
+  await typed($, 'one-fork after that')
+  await settle()
+  expect(JSON.stringify(sent.at(-1))).toContain('after that')
+  expect(JSON.stringify(sent.at(-1))).not.toContain('The user interrupted your last turn')
   await deliver($, notification('a1', 'one-fork: one', 'All finished.'))
   await settle()
   expect(await interrupt()).toContain('one-fork is not in a turn')
-  expect(stopped).toEqual(['a1'])
+  expect(stopped).toEqual(['a1', 'a1'])
 })
 
 test('closing is the only end of a fork: a merge leaves it open, the close marks the record done and the board counts it as closed', async ($, on) => {
