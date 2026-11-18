@@ -2,7 +2,10 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
-use gpui::{div, px, rgb, AnyElement, Context, IntoElement, ParentElement, Styled, Window};
+use gpui::{
+    div, px, rgb, AnyElement, Context, InteractiveElement, IntoElement, MouseButton,
+    MouseDownEvent, ParentElement, Styled, Window,
+};
 use qol_gpui::crumb_trail::CRUMB_MAX_WIDTH;
 use qol_gpui::kit::{kit, Kit};
 use qol_gpui::settings_panel::components::settings_band_bar;
@@ -125,16 +128,25 @@ pub(super) fn render(
     };
     let trail = targets::trail(div().flex_1().min_w_0(), spans, cx);
     let filter_field = filtering.map(|field| filter::render(field, window));
-    band.child(trail.child(crumb_trail))
-        .children(filter_field)
-        .when(note_width > 0.0, |band| band.child(note))
-        .child(slider::render(view, cx))
-        .child(more_button(
-            "explorer-folder-more",
-            kit.grounds.rail,
-            |view, event, cx| view.toggle_folder_menu(event.position, cx),
-            cx,
-        ))
+    let browsing = editing.is_none();
+    band.when(browsing, |band| {
+        band.on_mouse_down(
+            MouseButton::Right,
+            cx.listener(|view, event: &MouseDownEvent, _window, cx| {
+                view.open_folder_menu(event.position, false, cx);
+            }),
+        )
+    })
+    .child(trail.child(crumb_trail))
+    .children(filter_field)
+    .when(note_width > 0.0, |band| band.child(note))
+    .child(slider::render(view, cx))
+    .child(more_button(
+        "explorer-folder-more",
+        kit.grounds.rail,
+        |view, event, cx| view.toggle_folder_menu(event.position, cx),
+        cx,
+    ))
 }
 
 fn crumb_spans(crumbs: &[Crumb], width: f32, window: &mut Window) -> Vec<Span> {

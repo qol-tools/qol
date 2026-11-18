@@ -9,7 +9,7 @@ use gpui::{
 };
 use qol_gpui::kit::{kit, Chip, Kit};
 use qol_gpui::scrollbar::{ScrollGrip, ScrollSource};
-use qol_gpui::text::{baseline, line_height, TextStyled};
+use qol_gpui::text::{baseline, laid_out_width, line_height, TextStyled};
 use qol_gpui::theme::{
     translucent, Alpha, Ground, TextStyle, HEIGHT_INLINE, LINE, OPACITY_DISABLED, OPACITY_REST,
     SPACE_CELL, SPACE_GUTTER, SPACE_INSET, SPACE_STACK,
@@ -20,7 +20,6 @@ use super::grid::{Layout, ACROSS};
 use super::moves::progress_label;
 use super::pictogram::entry_pictogram;
 use super::press;
-use super::previews;
 use super::rename::row_name_room;
 use super::targets::{self, Zone};
 use super::{ExplorerView, HEAD, ICON};
@@ -59,7 +58,9 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
         .child(wheel_resize(cx))
         .on_mouse_down(
             MouseButton::Right,
-            cx.listener(|view, event: &MouseDownEvent, _window, cx| view.context_down(event, cx)),
+            cx.listener(|view, event: &MouseDownEvent, window, cx| {
+                view.context_down(event, window, cx);
+            }),
         )
         .on_drop(cx.listener(|view, paths: &ExternalPaths, _window, cx| {
             view.drop_here(paths.paths().to_vec(), cx);
@@ -178,8 +179,8 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
 
 struct Shown<'a> {
     entry: &'a Entry,
-    picked: bool,
-    cursor: bool,
+    lit: bool,
+    washed: bool,
     ground: Ground,
     typed: Option<usize>,
     size: String,
@@ -187,18 +188,28 @@ struct Shown<'a> {
     arriving: bool,
 }
 
-fn shown(view: &ExplorerView, row: usize, now: Instant) -> Option<Shown<'_>> {
+fn rows_in_focus(view: &ExplorerView, window: &Window) -> bool {
+    window.is_window_active()
+        && view
+            .menu
+            .as_ref()
+            .is_none_or(|menu| menu.owner().acts_on_rows())
+}
+
+fn shown(view: &ExplorerView, row: usize, now: Instant, active: bool) -> Option<Shown<'_>> {
     let browser = &view.browser;
     let entry = browser.entry(row)?;
-    let picked = browser.is_picked(entry);
+    let selected = browser.selects(row);
+    let lit = selected && active;
     let cursor = row == browser.cursor();
     let typed = cursor
         .then(|| typed_split(&entry.display, browser.jump_run(now)))
         .flatten();
     let arriving = browser.arriving_bytes(entry);
+    let hovered = view.hovered(Zone::Row(row));
     let size = match arriving {
         Some((done, total)) => progress_label(done, total),
-        None if view.hovered(Zone::Row(row)) => String::new(),
+        None if hovered => String::new(),
         None => size_label(
             entry,
             browser.listing().item_count(&entry.path),
@@ -207,14 +218,41 @@ fn shown(view: &ExplorerView, row: usize, now: Instant) -> Option<Shown<'_>> {
     };
     Some(Shown {
         entry,
-        picked,
-        cursor,
-        ground: kit().highlight_ground(picked),
+        lit,
+        washed: if selected { !active } else { cursor || hovered },
+        ground: kit().highlight_ground(lit),
         typed,
         size,
         cut: browser.is_cut(entry),
         arriving: arriving.is_some(),
     })
+}
+
+pub(super) fn row_reach(view: &ExplorerView, row: usize, window: &mut Window) -> Option<f32> {
+    let stop = view.stop;
+    if stop.is_grid() {
+        return None;
+    }
+    let lead = SPACE_GUTTER + ICON + SPACE_CELL;
+    if stop.shows_columns() {
+        return Some(lead + row_name_room(view, true) + COLUMNS_WIDTH);
+    }
+    let shown = shown(view, row, Instant::now(), true)?;
+    let name = laid_out_width(
+        window,
+        &left_to_right(&shown.entry.display),
+        stop.name_style(),
+    );
+    let detail = if stop.two_lines() {
+        laid_out_width(
+            window,
+            &second_line(shown.entry, &shown.size),
+            TextStyle::Detail,
+        )
+    } else {
+        0.0
+    };
+    Some(lead + name.max(detail).min(row_name_room(view, false)))
 }
 
 fn fade(element: gpui::Stateful<Div>, cut: bool, arriving: bool) -> gpui::Stateful<Div> {
@@ -249,7 +287,7 @@ fn render_row(
 ) -> Option<AnyElement> {
     let kit = kit();
     let stop = layout.stop;
-    let shown = shown(view, row, now)?;
+    let shown = shown(view, row, now, rows_in_focus(view, window))?;
     let entry = shown.entry;
     let ground = shown.ground;
     let path = entry.path.clone();
@@ -272,7 +310,6 @@ fn render_row(
         .flatten()
         .unwrap_or_else(|| name.into_any_element());
     let (cut, arriving) = (shown.cut, shown.arriving);
-    let hovered = view.hovered(Zone::Row(row));
     let tag = view.drop_overlay(Zone::Row(row), ground);
     let element = div()
         .id(("explorer-row", row))
@@ -284,16 +321,14 @@ fn render_row(
         .items_center()
         .gap(px(SPACE_CELL))
         .px(px(SPACE_GUTTER))
-        .when(shown.cursor || hovered, |element| {
-            element.child(cursor_wash(ground))
-        })
+        .when(shown.washed, |element| element.child(cursor_wash(ground)))
         .children(tag)
         .child(
             div().flex_none().w(px(ICON)).child(
                 view.previews
                     .of(entry, ICON * window.scale_factor())
-                    .map(|(shot, _)| previews::square(shot, ICON))
-                    .unwrap_or_else(|| entry_pictogram(entry, stop.pictogram(), shown.picked)),
+                    .map(|(shot, _)| view.previews.square(shot, ICON))
+                    .unwrap_or_else(|| entry_pictogram(entry, stop.pictogram(), shown.lit)),
             ),
         )
         .map(|element| {
@@ -342,7 +377,7 @@ fn render_row(
             view.click_row(&path, event, cx);
         }));
     let element = folder_target(fade(element, cut, arriving), entry, row, cx);
-    Some(kit.highlight(element, shown.picked).into_any_element())
+    Some(kit.highlight(element, shown.lit).into_any_element())
 }
 
 fn render_line(
@@ -379,7 +414,7 @@ fn render_cell(
     let stop = layout.stop;
     let (width, height) = stop.cell()?;
     let room = preview_room(width, height, stop.name_style());
-    let shown = shown(view, row, now)?;
+    let shown = shown(view, row, now, rows_in_focus(view, window))?;
     let entry = shown.entry;
     let ground = shown.ground;
     let path = entry.path.clone();
@@ -401,7 +436,6 @@ fn render_cell(
         .flatten()
         .unwrap_or_else(|| name.into_any_element());
     let (cut, arriving) = (shown.cut, shown.arriving);
-    let hovered = view.hovered(Zone::Row(row));
     let tag = view.drop_overlay(Zone::Row(row), ground);
     let element = div()
         .id(("explorer-cell", row))
@@ -415,15 +449,13 @@ fn render_cell(
         .justify_center()
         .gap(px(SPACE_INSET))
         .p(px(SPACE_INSET))
-        .when(shown.cursor || hovered, |element| {
-            element.child(cursor_wash(ground))
-        })
+        .when(shown.washed, |element| element.child(cursor_wash(ground)))
         .children(tag)
         .child(
             view.previews
                 .of(entry, room.0.max(room.1) * window.scale_factor())
-                .map(|(shot, video)| previews::framed(shot, video, room))
-                .unwrap_or_else(|| entry_pictogram(entry, stop.pictogram(), shown.picked)),
+                .map(|(shot, video)| view.previews.framed(shot, video, room))
+                .unwrap_or_else(|| entry_pictogram(entry, stop.pictogram(), shown.lit)),
         )
         .child(
             div()
@@ -444,7 +476,7 @@ fn render_cell(
             view.click_row(&path, event, cx);
         }));
     let element = folder_target(fade(element, cut, arriving), entry, row, cx);
-    Some(kit.highlight(element, shown.picked).into_any_element())
+    Some(kit.highlight(element, shown.lit).into_any_element())
 }
 
 fn preview_room(width: f32, height: f32, name: TextStyle) -> (f32, f32) {

@@ -8,12 +8,14 @@ use std::time::SystemTime;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, img, px, rgb, AnyElement, IntoElement, ObjectFit, ParentElement, Styled, StyledImage,
+    div, img, px, rgb, AnyElement, App, Entity, IntoElement, ObjectFit, ParentElement, Styled,
+    StyledImage,
 };
 use qol_gpui::kit::kit;
 use qol_gpui::theme::{SPACE_STACK, SPACE_TIGHT};
 
 use super::pictogram::play;
+use super::preview_images::PreviewImages;
 use crate::listing::Entry;
 use crate::thumbs::{self, Flavor};
 use crate::ui::kind::{kind_of, FileKind};
@@ -57,14 +59,16 @@ struct Shared {
 pub(super) struct Previews {
     shared: Arc<Mutex<Shared>>,
     ready: UnboundedSender<()>,
+    images: Entity<PreviewImages>,
 }
 
 impl Previews {
-    pub(super) fn new() -> (Self, UnboundedReceiver<()>) {
+    pub(super) fn new(cx: &mut App) -> (Self, UnboundedReceiver<()>) {
         let (ready, readies) = unbounded();
         let previews = Self {
             shared: Arc::default(),
             ready,
+            images: PreviewImages::new(cx),
         };
         (previews, readies)
     }
@@ -122,6 +126,51 @@ impl Previews {
         }
         None
     }
+
+    pub(super) fn framed(&self, shot: Shot, video: bool, room: (f32, f32)) -> AnyElement {
+        let (width, height) = fit((shot.width, shot.height), room);
+        let small = width.min(height) < SMALL_FRAME;
+        let (mark, glyph, inset) = if small {
+            (PLAY_MARK_SMALL, PLAY_GLYPH_SMALL, SPACE_STACK)
+        } else {
+            (PLAY_MARK, PLAY_GLYPH, SPACE_TIGHT)
+        };
+        div()
+            .relative()
+            .flex_none()
+            .w(px(width))
+            .h(px(height))
+            .child(img(shot.image).image_cache(&self.images).size_full())
+            .when(video, |frame| {
+                frame.child(
+                    div()
+                        .absolute()
+                        .right(px(inset))
+                        .bottom(px(inset))
+                        .size(px(mark))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(rgb(kit().grounds.pane.bg))
+                        .child(play(glyph)),
+                )
+            })
+            .into_any_element()
+    }
+
+    pub(super) fn square(&self, shot: Shot, size: f32) -> AnyElement {
+        div()
+            .flex_none()
+            .size(px(size))
+            .overflow_hidden()
+            .child(
+                img(shot.image)
+                    .image_cache(&self.images)
+                    .size_full()
+                    .object_fit(ObjectFit::Cover),
+            )
+            .into_any_element()
+    }
 }
 
 fn work(shared: &Mutex<Shared>, ready: &UnboundedSender<()>) {
@@ -176,45 +225,6 @@ fn forget_older(shared: &mut Shared, key: &Key) {
     shared
         .queue
         .retain(|queued| queued.path != key.path || queued.flavor != key.flavor);
-}
-
-pub(super) fn framed(shot: Shot, video: bool, room: (f32, f32)) -> AnyElement {
-    let (width, height) = fit((shot.width, shot.height), room);
-    let small = width.min(height) < SMALL_FRAME;
-    let (mark, glyph, inset) = if small {
-        (PLAY_MARK_SMALL, PLAY_GLYPH_SMALL, SPACE_STACK)
-    } else {
-        (PLAY_MARK, PLAY_GLYPH, SPACE_TIGHT)
-    };
-    div()
-        .relative()
-        .flex_none()
-        .w(px(width))
-        .h(px(height))
-        .child(img(shot.image).size_full())
-        .when(video, |frame| {
-            frame.child(
-                div()
-                    .absolute()
-                    .right(px(inset))
-                    .bottom(px(inset))
-                    .size(px(mark))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(rgb(kit().grounds.pane.bg))
-                    .child(play(glyph)),
-            )
-        })
-        .into_any_element()
-}
-
-pub(super) fn square(shot: Shot, size: f32) -> AnyElement {
-    div()
-        .flex_none()
-        .size(px(size))
-        .child(img(shot.image).size_full().object_fit(ObjectFit::Cover))
-        .into_any_element()
 }
 
 fn fit((width, height): (f32, f32), (room_width, room_height): (f32, f32)) -> (f32, f32) {

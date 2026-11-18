@@ -255,10 +255,6 @@ impl Browser {
         self.picks.clear();
     }
 
-    pub fn is_picked(&self, entry: &Entry) -> bool {
-        self.picks.is_picked(&entry.path)
-    }
-
     pub fn jump_run(&self, now: Instant) -> &str {
         self.jump.run(now)
     }
