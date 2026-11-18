@@ -137,6 +137,7 @@ const current = atom({ plugin: 'qol-switchboard', key: 'current' } as const, '')
 const focusActivity = atom({ plugin: 'qol-switchboard', key: 'focusActivity' } as const, '')
 const freshReply = atom({ plugin: 'qol-switchboard', key: 'freshReply' } as const, '')
 const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', prevId: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
+const rowsCapped = atom({ plugin: 'qol-switchboard', key: 'rowsCapped' } as const, false)
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
 const pullDetails = atom({ plugin: 'qol-switchboard', key: 'pullDetails' } as const, {} as Record<string, PullDetail>)
@@ -579,6 +580,36 @@ let swapFor = ''
 const FOCUS_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment', 'queue']
 
 let focusRows: { agentId: string; rows: Said[] } = { agentId: '', rows: [] }
+
+const BAND_SPARE = 4
+const BAND_MIN_COLUMNS = 20
+
+export const chatTail = (said: Said[], rows: number, columns: number): Said[] => {
+  const width = Math.max(columns, BAND_MIN_COLUMNS)
+  const tail: Said[] = []
+  let left = rows
+  for (const one of [...said].reverse()) {
+    const lines = one.text.split('\n')
+    const kept: string[] = []
+    let used = 2
+    for (const line of [...lines].reverse()) {
+      const tall = Math.max(1, Math.ceil(line.length / width))
+      if (used + tall > left) break
+      kept.unshift(line)
+      used += tall
+    }
+    if (kept.length === lines.length) {
+      tail.unshift(one)
+      left -= used
+      continue
+    }
+    const cut = lines[lines.length - kept.length - 1] ?? ''
+    const room = (left - used - 1) * width
+    if (kept.length > 0 || (tail.length === 0 && room > 0)) tail.unshift({ ...one, text: [`…${kept.length > 0 ? '' : cut.slice(-room)}`, ...kept].join('\n') })
+    break
+  }
+  return tail
+}
 let focusPlaced = 0
 let focusWait = 0
 let isPlacingFocus = false
@@ -593,7 +624,13 @@ const placeFocus = async ($: EngineInterface): Promise<void> => {
   const placed = await $.ui.place({ id }).catch(() => undefined).finally(() => {
     isPlacingFocus = false
   })
-  if (placed?.isPlaced !== true || (await read($, writingTo)) !== target) return
+  if ((await read($, writingTo)) !== target) return
+  const isCapped = placed?.isPlaced !== true
+  if ((await read($, rowsCapped)) !== isCapped) await update($, rowsCapped, () => isCapped)
+  if (isCapped) {
+    if ((await read($, focusShown)).id !== '') await update($, focusShown, () => ({ id: '', prevId: '', agentId: '', key: '', rows: [] }))
+    return
+  }
   const rows = focusRows.agentId === target ? focusRows.rows : []
   await update($, focusShown, shown => ({ id, prevId: shown.agentId === target ? shown.id : '', agentId: target, key: keyOf(entry), rows }))
 }
@@ -1084,7 +1121,7 @@ export const nextKey = (list: Entry[], current: string, step: 1 | -1 = 1): strin
   return keys[(from + step + keys.length) % keys.length]
 }
 
-export const toFork = (list: Entry[], text: string): { entry: Entry; message: string } | undefined => {
+export const toFork = (list: Entry[], text: string, fromSwitchboard = true): { entry: Entry; message: string } | undefined => {
   const match = TO_FORK.exec(text)
   if (match === null) return undefined
   const [, word = '', colon, message = ''] = match
@@ -1092,7 +1129,7 @@ export const toFork = (list: Entry[], text: string): { entry: Entry; message: st
   const exact = rows.find(entry => keyOf(entry) === word)
   if (exact !== undefined) return { entry: exact, message: message.trim() }
   if (colon !== ':') {
-    const tabbed = message === '' && word.length > 1 ? keyCompletions(list, word)[0]?.label : undefined
+    const tabbed = fromSwitchboard && message === '' && word.length > 1 ? keyCompletions(list, word)[0]?.label : undefined
     const entry = tabbed === undefined ? undefined : rows.find(one => keyOf(one) === tabbed)
     return entry === undefined ? undefined : { entry, message: '' }
   }
@@ -2887,13 +2924,29 @@ export const register: Register = on => {
       $.clock.after(0, () => void seenInView($, viewing).catch(() => undefined))
     }
     if ((loading === '' && key === '') || e.props.hasSurvey) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Text, Markdown } = $.ui.resolve(e)
     if (loading === '') {
-      return (
+      const writing = (
         <Box marginTop={1}>
           <Text dimColor>writing to </Text>
           <Text bold color="claude">{key}</Text>
           <Text dimColor> · esc on an empty prompt leaves</Text>
+        </Box>
+      )
+      const isChatHere = (await read($, rowsCapped)) && (await read($, writingTo)) === shown?.agentId
+      const said = isChatHere ? chatTail(await read($, writingSaid), e.props.maxRows - BAND_SPARE, e.props.bodyColumns) : []
+      if (said.length === 0) return writing
+      return (
+        <Box flexDirection="column">
+          {said.map((one, index) => (
+            <Box key={`band-${index}`} flexDirection="column" marginTop={1}>
+              <Text bold color={one.isUser ? 'suggestion' : 'claude'}>
+                {one.isUser ? 'you' : key}
+              </Text>
+              <Markdown text={one.text} />
+            </Box>
+          ))}
+          {writing}
         </Box>
       )
     }
@@ -3006,7 +3059,7 @@ export const register: Register = on => {
       }
     }
     const typed = await ensureLoaded($)
-      .then(async () => toFork(await read($, board), e.text))
+      .then(async () => toFork(await read($, board), e.text, viewing === undefined))
       .catch(() => undefined)
     if (TYPED_TOGGLE.test(e.text)) {
       isAutoOpenPending = false
@@ -3107,7 +3160,7 @@ export const register: Register = on => {
       const rows = sbCompletions(one.commands, e.text, e.start, e.token, one.lead)
       if (rows.length > 0) return { suggestions: [...own.suggestions, ...rows] }
     }
-    if (e.text.slice(0, e.start).trim() !== '') return own
+    if (viewedFork !== undefined || e.text.slice(0, e.start).trim() !== '') return own
     try {
       await ensureLoaded($)
       const mine = keyCompletions(await read($, board), e.token)
@@ -3130,9 +3183,9 @@ export const register: Register = on => {
       const list = await read($, board)
       const current = e.text.trim()
       const isKeyOnly = e.text === '' || (e.text === `${current} ` && reachable(list).some(entry => keyOf(entry) === current))
-      const key = isKeyOnly ? nextKey(list, current, e.key?.shift === true ? -1 : 1) : undefined
+      const key = isKeyOnly && isMain ? nextKey(list, current, e.key?.shift === true ? -1 : 1) : undefined
       if (key !== undefined) {
-        if (isMain) await writeToSoon($, reachable(list).find(entry => keyOf(entry) === key))
+        await writeToSoon($, reachable(list).find(entry => keyOf(entry) === key))
         return { text: `${key} `, cursor: key.length + 1, decorations: [{ start: 0, end: key.length, bold: true }] }
       }
     }

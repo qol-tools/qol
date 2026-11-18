@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { claimsUser, echoesOnly, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withSent } from '../hooks/register'
+import { chatTail, claimsUser, echoesOnly, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -67,7 +67,7 @@ type Spawned = { prompt: string; description: string; model?: string }
 
 type Answer = (e: any) => { isDelivered: boolean; reason?: string }
 
-const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Spawned[] = [], store = new Map<string, unknown>(), answer: Answer = () => ({ isDelivered: true }), hidden = new Set<string>()) => {
+const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Spawned[] = [], store = new Map<string, unknown>(), answer: Answer = () => ({ isDelivered: true }), hidden = new Set<string>(), rows = { isCapped: false }) => {
   on('agent.spawn', (_: unknown, e: Spawned) => {
     spawned.push({ prompt: e.prompt, description: e.description, ...(e.model === undefined ? {} : { model: e.model }) })
     const fork = /^Project: \/work\nLauncher: [^\n]*\nfork (\S+)$/.exec(e.prompt)
@@ -91,6 +91,7 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Sp
     return { value: undefined }
   })
   on('ui.place', (_: unknown, e: { id: string }) => {
+    if (rows.isCapped) return { value: { isPlaced: false, reason: 'a plugin holds at most 500 placed rows' } }
     panes.push(`place ${e.id}`)
     return { value: { isPlaced: true, requestId: `placed-${e.id}` } }
   })
@@ -3355,6 +3356,82 @@ test('writing to a fork shows its whole conversation in the chat, the old block 
   const old = await $.ui.mount(placedRow(first as string))
   expect(await old.find({ type: 'Text', text: /^── asking-fork / })).toBeUndefined()
   await old.unmount()
+})
+
+test('past the cap on placed rows the fork conversation moves into the band above the prompt and follows the fork written to', async ($, on) => {
+  const panes: string[] = []
+  const rows = { isCapped: false }
+  engine(on, [], panes, [], new Map(), () => ({ isDelivered: true }), new Set(), rows)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', (_: unknown, e: { agentId?: string }) => ({ value: [{ role: 'assistant', text: e.agentId === 'a8' ? 'Amber or teal?' : 'Build is green.' }] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await spawn($, 'a9', 'build-fork: builds')
+  await typed($, 'qols board')
+  await typed($, 'asking-fork')
+  await settle()
+  const first = focusIds(panes).at(-1) as string
+  const before = await $.ui.mount(placedRow(first))
+  expect(await before.find({ type: 'Text', text: /^── asking-fork / })).toBeDefined()
+  await before.unmount()
+  rows.isCapped = true
+  expect((await typed($, 'build-fork')).drop).toContain('Writing to build-fork')
+  await settle()
+  const stale = await $.ui.mount(placedRow(first))
+  expect(await stale.find({ type: 'Text', text: /^── / })).toBeUndefined()
+  await stale.unmount()
+  const tall = { ...promptBand(true), props: { ...promptBand(true).props, maxRows: 24 } }
+  const band = await $.ui.mount(tall)
+  await settle()
+  expect((await band.findAll({ type: 'Markdown' })).map((one: any) => one.props?.text ?? one.text)).toEqual(['Build is green.'])
+  expect(await band.find({ type: 'Text', text: 'build-fork' })).toBeDefined()
+  await band.unmount()
+  rows.isCapped = false
+  expect((await typed($, 'asking-fork')).drop).toContain('Writing to asking-fork')
+  await settle()
+  const back = await $.ui.mount(tall)
+  await settle()
+  expect(await back.findAll({ type: 'Markdown' })).toEqual([])
+  await back.unmount()
+})
+
+test('the chat tail keeps the newest messages that fit the band and cuts the oldest one it shows from its start', () => {
+  const said = [
+    { isUser: false, text: 'one\ntwo\nthree\nfour' },
+    { isUser: true, text: 'go on' },
+    { isUser: false, text: 'x'.repeat(100) },
+  ]
+  expect(chatTail(said, 40, 50)).toEqual(said)
+  expect(chatTail(said, 10, 50)).toEqual([{ isUser: false, text: '…\nfour' }, said[1], said[2]])
+  expect(chatTail(said, 4, 50)).toEqual([said[2]])
+  expect(chatTail(said, 3, 50)).toEqual([])
+  expect(chatTail([{ isUser: false, text: 'y'.repeat(500) }], 6, 50)).toEqual([{ isUser: false, text: `…${'y'.repeat(150)}` }])
+})
+
+test('in a fork\'s own view no fork key is offered or cycled, and the start of a key is sent as the message it is', async ($, on) => {
+  const sent: any[] = []
+  engine(on, sent)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  on('prompt.autocomplete', () => ({ suggestions: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await spawn($, 'a9', 'qol-ci-build-speed: speeds up the build')
+  const inMain = await $.prompt.autocomplete({ text: 'qo', cursor: 2, token: 'qo', start: 0 })
+  expect(inMain.suggestions.map((one: any) => one.text)).toEqual(['qol-ci-build-speed '])
+  const inFork = { ...promptBand(false), props: { ...promptBand(false).props, view: { agentId: 'a8' } } }
+  const band = await $.ui.mount(inFork)
+  await settle()
+  const offered = await $.prompt.autocomplete({ text: 'qo', cursor: 2, token: 'qo', start: 0 })
+  expect(offered.suggestions).toEqual([])
+  const tabbed = await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: '', key: { key: 'tab' } })
+  expect(tabbed.text).toBe('')
+  expect((await typed($, 'qo')).drop).toBeUndefined()
+  await band.unmount()
 })
 
 test('a notice in the chat moves the fork conversation below it once things settle', async ($, on) => {
