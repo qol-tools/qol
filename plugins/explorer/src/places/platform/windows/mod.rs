@@ -58,6 +58,17 @@ pub(crate) fn is_hidden_item(item: &DirEntry) -> bool {
         .is_ok_and(|metadata| metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
 }
 
+#[cfg(test)]
+pub(crate) fn hide(path: &Path) {
+    let attributes = std::fs::metadata(path).unwrap().file_attributes() | FILE_ATTRIBUTE_HIDDEN;
+    let wide = qol_platform::native::wide::wide_nul(path.as_os_str());
+    // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the call.
+    let set = unsafe {
+        windows_sys::Win32::Storage::FileSystem::SetFileAttributesW(wide.as_ptr(), attributes)
+    };
+    assert_ne!(set, 0, "{path:?}: {}", io::Error::last_os_error());
+}
+
 pub(crate) fn file_id(_metadata: &Metadata) -> Option<(u64, u64)> {
     None
 }

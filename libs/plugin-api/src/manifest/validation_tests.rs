@@ -66,6 +66,36 @@ mod manifest_rules {
 
         assert!(validate_toml(toml).is_err());
     }
+
+    #[test]
+    fn validate_checks_each_test_platform_name() {
+        let cases = [
+            ("[]", true),
+            (r#"["macos", "windows"]"#, true),
+            (r#"["linux"]"#, true),
+            (r#"["mac"]"#, false),
+            (r#"["macos", "Windows"]"#, false),
+        ];
+        for (platforms, valid) in cases {
+            let toml = format!(
+                r#"
+                [plugin]
+                id = "test-plugin"
+                name = "P"
+                description = ""
+                version = "0.0.1"
+
+                [build]
+                test_platforms = {platforms}
+
+                [menu]
+                label = "M"
+                items = []
+            "#
+            );
+            assert_eq!(validate_toml(&toml).is_ok(), valid, "{platforms}");
+        }
+    }
 }
 
 mod continuous_action_rules {

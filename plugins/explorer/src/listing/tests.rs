@@ -152,6 +152,7 @@ fn folder_counts_say_how_many_items_are_hidden() {
     for name in [".dot", "plain", "other"] {
         touch(&temp.path().join("mixed"), name);
     }
+    crate::places::hide(&temp.path().join("mixed").join(".dot"));
 
     let listing = listing_of(temp.path());
 

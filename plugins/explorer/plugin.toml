@@ -8,6 +8,9 @@ version = "0.32.2"
 author = "KMRH47"
 platforms = ["linux"]
 
+[build]
+test_platforms = ["macos", "windows"]
+
 [config.scope]
 view_size = "core"
 show_hidden = "core"

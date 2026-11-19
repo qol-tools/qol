@@ -27,6 +27,8 @@ class PlatformExcludeDerivation(unittest.TestCase):
             ("qol-keyremap", macos, False),
             ("qol-alt-tab", ubuntu, False),
             ("qol-alt-tab", macos, False),
+            ("qol-explorer", ubuntu, False),
+            ("qol-explorer", macos, False),
         ]
         for package, excluded, expected in cases:
             self.assertEqual(
@@ -77,6 +79,32 @@ class PlatformExcludeDerivation(unittest.TestCase):
                 excluded = ac.windows_excludes()
         for package, _, expected in cases:
             self.assertEqual(package in excluded, expected, package)
+
+    def test_build_test_platforms_join_the_declared_platforms(self):
+        cases = [
+            ("qol-tested", '["linux"]', '["macos", "windows"]', (False, False, False)),
+            ("qol-mac-tested", '["linux"]', '["macos"]', (False, False, True)),
+            ("qol-linux-only", '["linux"]', None, (False, True, True)),
+            ("qol-undeclared-tested", None, '["windows"]', (False, True, False)),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for package, platforms, tested, _ in cases:
+                plugin = root / "plugins" / package
+                plugin.mkdir(parents=True)
+                declared = f"platforms = {platforms}\n" if platforms else ""
+                build = f"\n[build]\ntest_platforms = {tested}\n" if tested else ""
+                (plugin / "plugin.toml").write_text(f"[plugin]\n{declared}{build}")
+                (plugin / "Cargo.toml").write_text(f'[package]\nname = "{package}"\n')
+            with patch.object(ac, "REPO_ROOT", root):
+                ubuntu, macos = ac.platform_sets()
+                windows = ac.windows_excludes()
+        for package, _, _, expected in cases:
+            self.assertEqual(
+                (package in ubuntu, package in macos, package in windows),
+                expected,
+                package,
+            )
 
     def test_exclude_flags_sorted_and_spaced(self):
         self.assertEqual(ac.exclude_flags(set()), "")
