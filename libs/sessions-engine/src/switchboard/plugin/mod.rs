@@ -224,6 +224,7 @@ mod tests {
             "$.env.get('QOL_SWITCHBOARD_MODELS')",
             "$.env.get('QOL_SWITCHBOARD_CHORDS')",
             "[program, 'sessions', 'switchboard', 'hook', 'release-chords', launch]",
+            "[program, 'sessions', 'switchboard', 'hook', 'admit-model', id]",
             "if (e.reason !== 'clear' && e.reason !== 'resume') await releaseChords($).catch(() => undefined)",
             "[program, 'sessions', 'switchboard', 'hook', 'fork-states']",
             "if (result.exit_code === MERGED_EXIT && (await fileMerged($, result, fork).then(() => true, () => false))) return true",

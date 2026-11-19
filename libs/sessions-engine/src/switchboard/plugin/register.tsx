@@ -5,6 +5,8 @@ import type { CheckResult, Entry, Kind, ModelChoice, ModelSeen, Pull, PullDetail
 
 const PROJECT = /^\s*Project:\s*(.+?)\s*$/
 const MODEL_LINE = /^\s*Model:\s*([A-Za-z0-9][\w.[\]-]*)\s*$/
+const MODEL_ID = /^[A-Za-z0-9][\w.[\]-]*$/
+const ADMIT_MODEL_TIMEOUT_MS = 5_000
 const FORK = 'project-fork'
 const NAME = 'qol-switchboard'
 const PANE = 'board'
@@ -1790,6 +1792,25 @@ const typedName = (models: string[], id: string): string => (models.filter(one =
 
 const modelsOf = async ($: EngineInterface): Promise<string[]> => forkModels(await $.env.get('QOL_SWITCHBOARD_MODELS').catch(() => undefined))
 
+type Admitted = { model: string } | { refused: string }
+
+export const admittedOf = (text: string): Admitted | undefined => {
+  try {
+    const parsed = JSON.parse(text) as { model?: unknown; refused?: unknown } | null
+    if (typeof parsed?.model === 'string' && MODEL_ID.test(parsed.model)) return { model: parsed.model }
+    return typeof parsed?.refused === 'string' ? { refused: parsed.refused } : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const admitModel = async ($: EngineInterface, id: string): Promise<Admitted | undefined> => {
+  const program = await recordProgram($)
+  if (program === undefined) return undefined
+  const ran = await $.process.run([program, 'sessions', 'switchboard', 'hook', 'admit-model', id], { cwd: folderOf(program), timeoutMs: ADMIT_MODEL_TIMEOUT_MS }).catch(() => undefined)
+  return ran === undefined || ran.exitCode !== 0 ? undefined : admittedOf(ran.stdout)
+}
+
 const listedAs = (models: string[], model: string | undefined): string | undefined => {
   if (model === undefined) return undefined
   const word = wordOf(model)
@@ -2083,16 +2104,21 @@ const setByCommand = async ($: EngineInterface, kind: 'model' | 'effort', args: 
   const models = await modelsOf($)
   const model = kind === 'model' ? models.find(id => words.includes(id) || words.includes(typedName(models, id))) : undefined
   const effort = EFFORTS.find(one => words.includes(one))
-  if (words.length > 0 && words.length === (model === undefined ? 0 : 1) + (effort === undefined ? 0 : 1)) {
+  const typed = kind === 'model' && model === undefined ? words.filter(word => word !== effort) : []
+  const id = typed.length === 1 && words.length === 1 + (effort === undefined ? 0 : 1) ? typed[0] : undefined
+  const exact = id !== undefined && MODEL_ID.test(id) ? await admitModel($, id) : undefined
+  if (exact !== undefined && 'refused' in exact) return `${key} keeps its model: ${oneLine(exact.refused)}`
+  if (words.length > 0 && words.length === (model === undefined && exact === undefined ? 0 : 1) + (effort === undefined ? 0 : 1)) {
     if (model !== undefined) await pickSetting($, 'model', key, model)
+    if (exact !== undefined) await choose($, key, { model: exact.model })
     if (effort !== undefined) await pickSetting($, 'effort', key, effort)
-    const picked = [model === undefined ? '' : modelName(model), effort === undefined ? '' : `${effort} effort`].filter(part => part !== '')
+    const picked = [model !== undefined ? modelName(model) : (exact?.model ?? ''), effort === undefined ? '' : `${effort} effort`].filter(part => part !== '')
     return `${key} uses ${picked.join(' at ')} from its next model call.`
   }
   const now = await settingOf($, key)
   if (kind === 'effort') return `${key} effort: ${now.effort ?? 'shows at its next model call'}. /effort ${EFFORTS.join('|')} changes it; with no fork picked, /effort changes the switchboard.`
   const names = models.map(id => typedName(models, id))
-  const how = names.length === 0 ? 'sessions.toml lets a fork run no model, so /model has none to set' : `/model ${names.join('|')} and a level, such as /model ${names[0]} max, changes it`
+  const how = names.length === 0 ? 'sessions.toml lets a fork run no model, so /model has none to set' : `/model ${names.join('|')} and a level, such as /model ${names[0]} max, changes it, and so does a full model id that sessions.toml admits`
   return `${key} model: ${now.model === undefined ? 'shows at its next model call' : modelName(now.model)}${now.effort === undefined ? '' : ` at ${now.effort} effort`}. ${how}; with no fork picked, /model changes the switchboard.`
 }
 
@@ -3751,8 +3777,8 @@ export const register: Register = on => {
           {models.length > 0 && (
             <Select
               key={`model-${key}`}
-              options={models.map(id => ({ value: id, label: modelName(id === listed && one.model !== undefined ? one.model : id) }))}
-              {...(listed === undefined ? {} : { value: listed })}
+              options={[...models.map(id => ({ value: id, label: modelName(id === listed && one.model !== undefined ? one.model : id) })), ...(listed === undefined && one.model !== undefined ? [{ value: one.model, label: modelName(one.model) }] : [])]}
+              {...(one.model === undefined ? {} : { value: listed ?? one.model })}
               onSelect={value => void pickSetting($, 'model', key, value)}
             />
           )}

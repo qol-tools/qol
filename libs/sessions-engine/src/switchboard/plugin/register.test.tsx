@@ -3987,6 +3987,14 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   on('session.messages', () => ({ value: [] }))
   on('prompt.autocomplete', () => ({ suggestions: [] }))
   on('command.run', { command: 'model' }, () => ({ text: 'the switchboard model picker' }))
+  const asked: string[] = []
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    const id = e.argv[4] === 'admit-model' ? (e.argv[5] ?? '') : undefined
+    if (id === undefined) return { value: { exitCode: 1, stdout: '', stderr: '' } }
+    if (id === 'claude-mythos-5-2') asked.push(id)
+    const verdict = id === 'opus-5.5' ? { model: 'claude-opus-5-5' } : id.startsWith('claude-') ? { model: id } : { refused: `model ${id} is not one this host may launch` }
+    return { value: { exitCode: 0, stdout: JSON.stringify(verdict), stderr: '' } }
+  })
   on('turn.step', async function* (_: unknown, e: { agentId?: string; turnId: string; index: number; model: string; effort?: unknown }) {
     steps.push({ ...(e.agentId === undefined ? {} : { agentId: e.agentId }), model: e.model, effort: e.effort })
     yield { kind: 'text', index: 0, text: 'ok' }
@@ -4055,7 +4063,7 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   expect(await ui.find({ type: 'Text', text: /applies at its next model call/ })).toBeUndefined()
   expect(await command('model', 'haiku')).toBe('asking-fork uses Haiku from its next model call.')
   expect(await command('effort', ' MAX ')).toBe('asking-fork uses max effort from its next model call.')
-  expect(await command('model', '')).toBe('asking-fork model: Haiku at max effort. /model opus|mythos|sonnet|haiku|fable and a level, such as /model opus max, changes it; with no fork picked, /model changes the switchboard.')
+  expect(await command('model', '')).toBe('asking-fork model: Haiku at max effort. /model opus|mythos|sonnet|haiku|fable and a level, such as /model opus max, changes it, and so does a full model id that sessions.toml admits; with no fork picked, /model changes the switchboard.')
   expect(await command('effort', 'loud')).toMatch(/^asking-fork effort: max\. \/effort low\|medium\|high\|xhigh\|max changes it/)
   for (const wrong of ['haiku loud', 'haiku sonnet', 'max max', 'max haiku extra']) expect(await command('model', wrong)).toMatch(/^asking-fork model: Haiku at max effort\./)
   expect(await command('effort', 'haiku max')).toMatch(/^asking-fork effort: max\./)
@@ -4071,6 +4079,20 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   expect(await command('model', 'fable high')).toBe('asking-fork uses Fable at high effort from its next model call.')
   await step('a8', 'claude-opus-5-5', 'medium')
   expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'fable', effort: 'high' })
+  expect(await command('model', 'claude-mythos-5-2')).toMatch(/^asking-fork model: Fable at high effort\./)
+  env.QOL_CLI_SESSIONS = '/bin/qol-cli-sessions'
+  expect(await command('model', 'claude-mythos-5-2 xhigh')).toBe('asking-fork uses claude-mythos-5-2 at xhigh effort from its next model call.')
+  expect(asked).toEqual(['claude-mythos-5-2'])
+  await step('a8', 'claude-opus-5-5', 'medium')
+  expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'claude-mythos-5-2', effort: 'xhigh' })
+  const unlisted = await ui.find({ type: 'Select', key: 'model-asking-fork' })
+  expect(unlisted).toMatchObject({ props: { value: 'claude-mythos-5-2' } })
+  expect((unlisted?.props as { options: { label?: string }[] }).options.map(one => one.label)).toEqual(['Opus 5.5', 'Mythos 5.1', 'Sonnet', 'Haiku', 'Fable', 'Mythos 5.2'])
+  expect(await command('model', 'opus-5.5')).toBe('asking-fork uses claude-opus-5-5 from its next model call.')
+  expect(await command('model', 'gpt-9-turbo')).toBe('asking-fork keeps its model: model gpt-9-turbo is not one this host may launch')
+  await step('a8', 'claude-opus-5-5', 'medium')
+  expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'claude-opus-5-5', effort: 'xhigh' })
+  delete env.QOL_CLI_SESSIONS
   expect(await command('model', 'max haiku')).toBe('asking-fork uses Haiku at max effort from its next model call.')
   env.QOL_SWITCHBOARD_MODELS = '["claude-opus-4-6","claude-opus-5-5","haiku"]'
   expect(await command('model', 'opus')).toMatch(/\/model claude-opus-4-6\|claude-opus-5-5\|haiku and a level, such as \/model claude-opus-4-6 max, changes it/)

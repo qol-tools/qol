@@ -100,6 +100,13 @@ pub(super) fn admit_model(model: &str) -> anyhow::Result<()> {
     admit(model, &defaults, &policy)
 }
 
+pub(super) fn model_admitted_as(model: &str) -> anyhow::Result<String> {
+    let defaults = crate::spawn::config_launch_defaults()?;
+    let policy = crate::spawn::config_dispatch_policy()?;
+    admit(model, &defaults, &policy)?;
+    Ok(defaults.alias(Some(model.to_owned())).unwrap_or_default())
+}
+
 fn definitions(fork: &ForkAgent) -> Map<String, Value> {
     let mut lead = Map::new();
     lead.insert(
