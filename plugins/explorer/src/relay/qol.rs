@@ -1,4 +1,4 @@
-use qol_plugin_daemon::notification::{self, Notification, NotificationLevel};
+use qol_plugin_daemon::notification::{self, Notification, NotificationLayout, NotificationLevel};
 
 use super::{Level, Message, Relay};
 
@@ -10,10 +10,11 @@ impl Relay for QolNotifications {
     }
 }
 
-fn notification_of(message: &Message) -> Notification {
+pub(super) fn notification_of(message: &Message) -> Notification {
     Notification::new(message.title.clone(), message.body.clone())
         .level(level_of(message.level))
         .key(key_of(message.level))
+        .layout(NotificationLayout::banner(None))
 }
 
 fn level_of(level: Level) -> NotificationLevel {

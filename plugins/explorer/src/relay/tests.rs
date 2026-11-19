@@ -1,7 +1,9 @@
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::time::Duration;
 
-use super::qol::key_of;
+use qol_plugin_daemon::notification::NotificationLayout;
+
+use super::qol::{key_of, notification_of};
 use super::{start, Level, Message, Relay};
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -82,4 +84,22 @@ fn a_line_joins_the_title_and_the_body_only_when_there_is_a_body() {
 fn a_problem_never_shares_a_card_with_a_success() {
     assert_ne!(key_of(Level::Info), key_of(Level::Warn));
     assert_eq!(key_of(Level::Warn), key_of(Level::Error));
+}
+
+#[test]
+fn every_note_asks_for_the_top_banner() {
+    for message in [
+        Message::info("1 copied here from Home", ""),
+        Message::warn("Already in this folder", ""),
+        Message::error("Could not open a.txt", ""),
+    ] {
+        let style = notification_of(&message)
+            .layout
+            .and_then(|layout| layout.style);
+        assert_eq!(
+            style.as_deref(),
+            Some(NotificationLayout::BANNER),
+            "{message:?}"
+        );
+    }
 }

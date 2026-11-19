@@ -1,10 +1,10 @@
 pub mod gate;
 pub mod platform;
 
-pub use qol_runtime::protocol::{NotificationLevel, NotificationMeta};
+pub use qol_runtime::protocol::{NotificationLayout, NotificationLevel, NotificationMeta};
 pub use qol_runtime::Notification;
 
-use qol_runtime::protocol::{DaemonRequest, NotificationLayout};
+use qol_runtime::protocol::DaemonRequest;
 use qol_runtime::PlatformStateClient;
 
 /// Delivers a notification through [`send`]: the tray host over the runtime
