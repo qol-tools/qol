@@ -3,7 +3,7 @@ mod platform;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use qol_runtime::protocol::{DaemonRequest, NotificationLayout};
+use qol_runtime::protocol::{DaemonRequest, NotificationLayout, NotificationMeta};
 
 const HOST_ARGUMENT: &str = "__qol-settings-surface-host";
 
@@ -140,12 +140,13 @@ pub fn show_toast(
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
     activate: Option<ToastActivate<'_>>,
+    meta: NotificationMeta,
 ) -> anyhow::Result<bool> {
     if crate::headless_mode::active() {
         return Ok(false);
     }
     platform::show_toast(
-        source, title, body, level, action, artifact, layout, activate,
+        source, title, body, level, action, artifact, layout, activate, meta,
     )
 }
 

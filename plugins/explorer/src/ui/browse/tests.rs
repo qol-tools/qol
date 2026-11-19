@@ -10,6 +10,7 @@ use qol_gpui::text_edit::MemoryClipboard;
 use super::counts::{self, LiveCounts};
 use super::{Browser, Drained, Opening, PathStep, REFRESH_QUIET, STALLED_AFTER};
 use crate::listing::{ItemCount, ListingState, SortBy, SortOrder};
+use crate::relay::Message;
 use crate::ui::keys::Step;
 
 fn touch(folder: &Path, name: &str) {
@@ -62,6 +63,14 @@ fn wait_within(
         assert!(Instant::now() < deadline, "{what} never happened");
         thread::sleep(drained.wake_in.unwrap_or(Duration::from_millis(2)));
     }
+}
+
+fn unshown(browser: &mut Browser, message: Message) {
+    let sink = browser.unshown_sink();
+    sink(message);
+    wait_until(browser, "the unshown message", |browser| {
+        browser.note().failure.is_some()
+    });
 }
 
 fn opened(folder: &Path) -> Browser {
@@ -554,16 +563,33 @@ fn space_toggles_ctrl_click_adds_ctrl_a_picks_all_and_esc_clears() {
 }
 
 #[test]
+fn a_message_no_notifier_showed_lands_in_the_failure_slot() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    assert_eq!(browser.note().failure, None);
+
+    unshown(
+        &mut browser,
+        Message::error("Could not open a.txt", "No app opens it."),
+    );
+
+    assert_eq!(
+        browser.note().failure.as_deref(),
+        Some("Could not open a.txt. No app opens it.")
+    );
+}
+
+#[test]
 fn escape_and_the_next_file_opened_drop_the_red_note() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
 
-    browser.fail("Could not open a.txt".into());
+    unshown(&mut browser, Message::error("Could not open a.txt", ""));
     assert!(browser.dismiss());
     assert_eq!(browser.note().failure, None);
     assert!(!browser.dismiss());
 
-    browser.fail("Could not open a.txt".into());
+    unshown(&mut browser, Message::error("Could not open a.txt", ""));
     browser.set_cursor(1);
     assert_eq!(browser.open(0.0), Opening::File(temp.path().join("b.txt")));
     assert_eq!(browser.note().failure, None);

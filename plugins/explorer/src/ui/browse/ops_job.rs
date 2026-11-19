@@ -81,7 +81,6 @@ impl Browser {
     fn run(&mut self, survey: Survey, trip: Trip) {
         let total = survey.bytes;
         let job = ops::start(survey, self.ops.tools.clone(), self.waker());
-        self.ops.notice = None;
         if let Some(record) = self.ops.record_at(trip.slot) {
             record.state = MoveState::Running;
             record.detail = ops_text::running_detail(
@@ -187,7 +186,7 @@ impl Browser {
                 record.state = MoveState::Failed;
                 record.detail = ops_text::stopped_detail(arrived);
             }
-            self.failure = Some(format!("{} stopped before it finished", trip.label));
+            self.post(ops_text::stopped_before_the_end(&trip.label));
             self.reload();
             self.start_next();
             return;
@@ -215,9 +214,9 @@ impl Browser {
         }
         let here = trip.into == self.folder();
         if recorded == 0 && done.failures.is_empty() {
-            self.ops.notice = Some(ops_text::nothing_changed(&trip.into, self.folder()));
+            self.post(ops_text::nothing_changed(&trip.into, self.folder()));
         } else if !done.placed.is_empty() {
-            self.ops.notice = Some(ops_text::arrived_note(
+            self.post(ops_text::arrived_note(
                 trip.verb,
                 done.placed.len(),
                 here,
@@ -226,7 +225,11 @@ impl Browser {
                 recorded > 0,
             ));
         }
-        self.failure = ops_text::failure_text(&done.failures);
+        self.failure = None;
+        let verb = ops_text::verb_noun(trip.verb);
+        if let Some(message) = ops_text::failure_text(verb, "", &done.failures) {
+            self.post(message);
+        }
         self.release_cut(&done);
         self.reload();
         self.start_next();

@@ -11,6 +11,7 @@ use qol_gpui::theme::{Ground, StatusTone, HEIGHT_CONTROL, SPACE_GUTTER};
 
 use super::ExplorerView;
 use crate::ops::{self, Transfer, Verb};
+use crate::relay::Message;
 use crate::ui::browse::{copy_only_note, short_note, Browser};
 
 const PREFLIGHT_AFTER: Duration = Duration::from_millis(120);
@@ -614,7 +615,7 @@ impl ExplorerView {
             .map_or(Fit::Fine, |hover| hover.fit);
         if let Fit::NoRoom(_) = fit {
             self.browser
-                .fail("There is no room for that here".to_string());
+                .post(Message::warn("There is no room for that here", ""));
             return;
         }
         let copy = ctrl || external || matches!(fit, Fit::CopyOnly(_));

@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::TryRecvError;
+use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -32,7 +32,9 @@ use crate::listing::{
 };
 use crate::nav::{merged, History, Jump, Picks, Spot};
 use crate::props::Props;
+use crate::relay::{Level, Message};
 use counts::LiveCounts;
+use ops::Work;
 pub use ops::{Held, MoveRecord, MoveState, Stepping};
 pub(crate) use ops_text::{copy_only_note, erase_lines, label_of, short_note};
 use pace::Pace;
@@ -107,6 +109,8 @@ pub struct Browser {
     watch: FolderWatch,
     wake: UnboundedSender<()>,
     wakes: Option<UnboundedReceiver<()>>,
+    outbox: Sender<Message>,
+    messages: Option<Receiver<Message>>,
     ops: ops::Ops,
     props: Option<Props>,
 }
@@ -115,6 +119,7 @@ impl Browser {
     pub fn new(start: PathBuf, home: PathBuf, show_hidden: bool) -> Self {
         let (start, landing, hidden_file) = folder_showing(start);
         let (wake, wakes) = mpsc::unbounded();
+        let (outbox, messages) = std::sync::mpsc::channel();
         let mut browser = Self {
             home,
             history: History::new(start.clone()),
@@ -144,6 +149,8 @@ impl Browser {
             watch: FolderWatch::default(),
             wake,
             wakes: Some(wakes),
+            outbox,
+            messages: Some(messages),
             ops: ops::Ops::new(),
             props: None,
         };
@@ -158,6 +165,36 @@ impl Browser {
 
     pub fn waker(&self) -> impl Fn() + Send + Clone + 'static {
         waker(&self.wake)
+    }
+
+    pub fn take_messages(&mut self) -> Option<Receiver<Message>> {
+        self.messages.take()
+    }
+
+    pub fn post(&mut self, message: Message) {
+        let Err(SendError(message)) = self.outbox.send(message) else {
+            return;
+        };
+        if message.level != Level::Info {
+            self.failure = Some(message.line());
+        }
+    }
+
+    pub fn unshown_sink(&self) -> impl Fn(Message) + Send + 'static {
+        let sender = self.ops.sender();
+        let wake = self.waker();
+        move |message| {
+            let _ = sender.send(Work::Unshown(message));
+            wake();
+        }
+    }
+
+    #[cfg(test)]
+    pub fn posted(&self) -> Vec<Message> {
+        self.messages
+            .as_ref()
+            .map(|messages| messages.try_iter().collect())
+            .unwrap_or_default()
     }
 
     pub fn home(&self) -> &Path {
@@ -346,8 +383,8 @@ impl Browser {
         }
     }
 
-    pub fn fail(&mut self, message: String) {
-        self.failure = Some(message);
+    pub fn fail(&mut self, title: String) {
+        self.post(Message::error(title, ""));
     }
 
     pub fn drain(&mut self, now: Instant) -> Drained {

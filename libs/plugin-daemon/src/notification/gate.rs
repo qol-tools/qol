@@ -19,13 +19,8 @@ fn stored_config() -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-pub fn native_allowed(handler: NativeHandler) -> bool {
-    !matches!(handler, NativeHandler::Qol)
-}
-
-pub fn native_allowed_now() -> bool {
-    stored_config()
-        .is_some_and(|contents| parse_enabled(&contents) && native_allowed(parse_config(&contents)))
+pub fn enabled_now() -> bool {
+    stored_config().is_none_or(|contents| parse_enabled(&contents))
 }
 
 fn parse_enabled(contents: &str) -> bool {
@@ -81,17 +76,6 @@ mod tests {
     }
 
     #[test]
-    fn qol_handler_blocks_native() {
-        assert!(!native_allowed(NativeHandler::Qol));
-    }
-
-    #[test]
-    fn os_and_both_handlers_allow_native() {
-        assert!(native_allowed(NativeHandler::Os));
-        assert!(native_allowed(NativeHandler::Both));
-    }
-
-    #[test]
     fn parses_handler_key() {
         let path = write_temp_config(r#"{"handler": "os"}"#);
         assert_eq!(parse_file(&path), NativeHandler::Os);
@@ -123,10 +107,19 @@ mod tests {
 
     #[test]
     fn notifications_stay_on_unless_turned_off() {
-        assert!(parse_enabled(r#"{"handler": "os"}"#));
-        assert!(parse_enabled(r#"{"enabled": true}"#));
-        assert!(parse_enabled(r#"{not json"#));
-        assert!(!parse_enabled(r#"{"handler": "both", "enabled": false}"#));
+        let cases = [
+            (r#"{}"#, true),
+            (r#"{"handler": "os"}"#, true),
+            (r#"{"enabled": true}"#, true),
+            (r#"{"enabled": false}"#, false),
+            (r#"{"handler": "both", "enabled": false}"#, false),
+            (r#"{"enabled": "no"}"#, true),
+            (r#"{not json"#, true),
+            ("", true),
+        ];
+        for (contents, expected) in cases {
+            assert_eq!(parse_enabled(contents), expected, "{contents}");
+        }
     }
 
     #[test]

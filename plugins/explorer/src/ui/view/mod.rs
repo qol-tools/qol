@@ -51,6 +51,7 @@ use crate::config::{ConfigSaver, ExplorerConfig, Pin, ViewSize};
 use crate::listing::{ListingState, SortBy, SortOrder};
 use crate::ops::Transfer;
 use crate::places::{self, Device, Place};
+use crate::relay::{self, QolNotifications};
 use crate::ui::trail::{self, Crumb};
 use crate::ui::PLUGIN_ID;
 use grid::Layout;
@@ -132,6 +133,7 @@ impl ExplorerView {
             browser: {
                 let mut browser = Browser::new(start, home, config.show_hidden);
                 browser.resort(SortOrder::new(config.sort_by, config.sort_descending));
+                start_relay(&mut browser);
                 browser
             },
             pins: config.pins.clone(),
@@ -1124,6 +1126,12 @@ pub(super) fn more_button(
             }),
         )
         .into_any_element()
+}
+
+fn start_relay(browser: &mut Browser) {
+    if let Some(messages) = browser.take_messages() {
+        relay::start(messages, QolNotifications, browser.unshown_sink());
+    }
 }
 
 fn rail_width(window_width: f32) -> f32 {

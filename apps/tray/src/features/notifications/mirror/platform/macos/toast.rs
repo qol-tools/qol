@@ -30,6 +30,7 @@ pub(super) fn show(app_name: &str, notification: &Mirrored, mirror_banner_id: Op
             ..Default::default()
         }),
         activate,
+        qol_runtime::protocol::NotificationMeta::default(),
     );
     match shown {
         Ok(true) => {}

@@ -9,7 +9,10 @@ use windows_sys::Win32::UI::Shell::{
     SHQueryUserNotificationState, QUERY_USER_NOTIFICATION_STATE, QUNS_ACCEPTS_NOTIFICATIONS,
 };
 
+use qol_runtime::Notification;
+
 use super::toast_identity::{self, IdentityKey, RECORD_FILE};
+use super::toast_xml;
 use super::NotificationPlatform;
 
 const TOAST_APP_ID: &str = "QolTools.QolTray";
@@ -32,11 +35,11 @@ extern "system" {
 pub(super) struct Platform;
 
 impl NotificationPlatform for Platform {
-    fn send_notification(&self, title: &str, message: &str) -> bool {
+    fn send(&self, notification: &Notification) -> bool {
         if !register_app_id() {
             log::warn!("[notifications] could not register the {TOAST_APP_ID} toast identity");
         }
-        match show_toast(title, message) {
+        match show_toast(notification) {
             Ok(()) => true,
             Err(error) => {
                 log::warn!("[notifications] Windows toast failed: {error}");
@@ -111,36 +114,17 @@ fn identity_record() -> std::io::Result<PathBuf> {
         .ok_or_else(|| std::io::Error::other("no data directory to record the toast identity in"))
 }
 
-fn show_toast(title: &str, message: &str) -> windows::core::Result<()> {
+fn show_toast(notification: &Notification) -> windows::core::Result<()> {
     let document = XmlDocument::new()?;
-    document.LoadXml(&HSTRING::from(toast_xml(title, message)))?;
+    document.LoadXml(&HSTRING::from(toast_xml::toast_xml(notification)))?;
     let toast = ToastNotification::CreateToastNotification(&document)?;
-    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(TOAST_APP_ID))?.Show(&toast)
-}
-
-fn toast_xml(title: &str, message: &str) -> String {
-    format!(
-        "<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>",
-        xml_escape(title),
-        xml_escape(message)
-    )
-}
-
-fn xml_escape(input: &str) -> String {
-    let mut escaped = String::with_capacity(input.len());
-    for character in input.chars() {
-        match character {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&apos;"),
-            '\t' | '\n' | '\r' => escaped.push(character),
-            '\u{0}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}' => {}
-            other => escaped.push(other),
-        }
+    if let Some(tag) = toast_xml::toast_tag(notification) {
+        toast.SetTag(&HSTRING::from(tag))?;
+        toast.SetGroup(&HSTRING::from(toast_xml::toast_group(
+            std::env::var(qol_conventions::ENV_PLUGIN_ID).ok(),
+        )))?;
     }
-    escaped
+    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(TOAST_APP_ID))?.Show(&toast)
 }
 
 fn focus_assist_profile() -> Option<u32> {
@@ -212,37 +196,17 @@ mod tests {
     }
 
     #[test]
-    fn toast_xml_escapes_markup_in_title_and_body() {
+    fn toast_xml_loads_as_a_document_with_every_field() {
         let cases = [
-            ("plain", "body", "<text>plain</text><text>body</text>"),
-            (
-                "a & b",
-                "<tag> \"q\" 'a'",
-                "<text>a &amp; b</text><text>&lt;tag&gt; &quot;q&quot; &apos;a&apos;</text>",
-            ),
+            Notification::new("Pad\u{1}", "tab\tline\nreturn\r"),
+            Notification::new("\u{0}\u{b}", "a\u{fffe}b\u{ffff}c\u{7f}"),
+            Notification::new("a & b", "<tag> \"q\" 'a'").image(r"C:\Users\me\a b.png"),
+            Notification::new("t", "b")
+                .image(r"\\server\share\a.png")
+                .key("copy"),
         ];
-        for (title, body, fragment) in cases {
-            assert!(toast_xml(title, body).contains(fragment), "{title} {body}");
-        }
-    }
-
-    #[test]
-    fn toast_xml_drops_the_characters_xml_forbids_and_still_loads() {
-        let cases = [
-            (
-                "Pad\u{1}",
-                "tab\tline\nreturn\r",
-                "<text>Pad</text><text>tab\tline\nreturn\r</text>",
-            ),
-            (
-                "\u{0}\u{b}\u{c}\u{1f}",
-                "a\u{fffe}b\u{ffff}c\u{7f}",
-                "<text></text><text>abc\u{7f}</text>",
-            ),
-        ];
-        for (title, body, fragment) in cases {
-            let xml = toast_xml(title, body);
-            assert!(xml.contains(fragment), "{xml:?}");
+        for notification in cases {
+            let xml = toast_xml::toast_xml(&notification);
             let document = XmlDocument::new().unwrap();
             document
                 .LoadXml(&HSTRING::from(xml.as_str()))

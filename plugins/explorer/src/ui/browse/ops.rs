@@ -11,6 +11,7 @@ use super::Browser;
 use crate::listing::Entry;
 use crate::ops::history::{Action, Direction, History, Outcome, StepId, Undoing};
 use crate::ops::{self, Failure, Resolve, Room, Survey, Tools, Transfer, Trashing, Verb};
+use crate::relay::Message;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Held {
@@ -50,6 +51,7 @@ pub(super) enum Work {
     Surveyed(u64, io::Result<Survey>),
     Trashed(StepId, Trashing),
     Erased(StepId, Vec<PathBuf>, Vec<Failure>),
+    Unshown(Message),
 }
 
 struct Waiting {
@@ -79,7 +81,6 @@ pub(super) struct Ops {
     pub tools: Tools,
     pub records: Vec<MoveRecord>,
     pub moves_open: bool,
-    pub notice: Option<String>,
     pub rename: Option<super::ops_edit::Renaming>,
     pub rename_after: Option<PathBuf>,
     pub erasing: Option<Vec<PathBuf>>,
@@ -105,7 +106,6 @@ impl Ops {
             tools: Tools::system(),
             records: Vec::new(),
             moves_open: false,
-            notice: None,
             rename: None,
             rename_after: None,
             erasing: None,
@@ -148,7 +148,6 @@ impl Ops {
     }
 
     pub(super) fn leave_folder(&mut self) {
-        self.notice = None;
         self.rename = None;
         self.rename_after = None;
         self.erasing = None;
@@ -171,7 +170,6 @@ impl Browser {
         if paths.is_empty() {
             return false;
         }
-        self.ops.notice = None;
         self.failure = None;
         self.ops.holding = Some(Holding {
             held,
@@ -216,7 +214,7 @@ impl Browser {
             .cloned()
             .collect();
         if sources.is_empty() {
-            self.failure = Some(ops_text::already_in(&into, self.folder()));
+            self.post(ops_text::already_in(&into, self.folder()));
             return None;
         }
         Some(Transfer {
@@ -288,7 +286,6 @@ impl Browser {
         if sources.is_empty() {
             return false;
         }
-        self.ops.notice = None;
         self.begin(Transfer {
             verb: Verb::Duplicate,
             sources,
@@ -420,7 +417,7 @@ impl Browser {
             None
         };
         if let Some(asking) = asked {
-            self.ops.notice = Some(ops_text::asked_off(asking.direction));
+            self.post(ops_text::asked_off(asking.direction));
             return true;
         }
         let waiting = self.ops.sheet.take();
@@ -509,9 +506,6 @@ impl Browser {
                 return note;
             }
         }
-        if let Some(notice) = &self.ops.notice {
-            return Some(notice.clone());
-        }
         let holding = self.ops.holding.as_ref()?;
         let into = self.paste_target();
         let target = (into.as_path() != self.folder()).then(|| ops_text::name_of(&into));
@@ -548,12 +542,16 @@ impl Browser {
                     Ok(survey) => self.surveyed_in(survey, step),
                     Err(error) => {
                         self.ops.history.close(step);
-                        self.failure = Some(format!("Could not read the files: {error}"));
+                        self.post(Message::error(
+                            "Could not read the files",
+                            error.to_string(),
+                        ));
                     }
                 }
             }
             Work::Trashed(step, trashing) => self.trashed(step, trashing),
             Work::Erased(step, removed, failures) => self.erased(step, removed, failures),
+            Work::Unshown(message) => self.failure = Some(message.line()),
         }
     }
 
@@ -576,10 +574,8 @@ impl Browser {
     }
 
     pub(super) fn dismiss_ops(&mut self) -> bool {
-        let changed =
-            self.ops.holding.is_some() || self.ops.notice.is_some() || self.ops.moves_open;
+        let changed = self.ops.holding.is_some() || self.ops.moves_open;
         self.ops.holding = None;
-        self.ops.notice = None;
         self.ops.moves_open = false;
         changed
     }

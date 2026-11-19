@@ -1,7 +1,9 @@
 pub mod native_notifications;
 
 use qol_plugin_daemon::notification::gate::NativeHandler;
-use qol_runtime::protocol::{DaemonRequest, NotificationLayout, NotificationLevel};
+use qol_runtime::protocol::{
+    DaemonRequest, NotificationLayout, NotificationLevel, NotificationMeta,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub fn show_plugin_notification(
@@ -13,6 +15,7 @@ pub fn show_plugin_notification(
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
     activate: Option<&DaemonRequest>,
+    meta: NotificationMeta,
 ) {
     if crate::headless_mode::active() {
         log::info!("[surfaces] headless, not shown: {title}: {body}");
@@ -43,6 +46,7 @@ pub fn show_plugin_notification(
             plugin_id.zip(activate).map(|(plugin, request)| {
                 crate::settings_surface::ToastActivate::Plugin { plugin, request }
             }),
+            meta,
         )
         .unwrap_or(false)
     };

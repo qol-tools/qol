@@ -24,6 +24,7 @@ use slab::SlabPresenter;
 
 const POINTER_POLL: Duration = Duration::from_millis(60);
 const AGE_TICK: Duration = Duration::from_secs(30);
+const LONGEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const WINDOW_ROOM: f32 = 4096.0;
 
 static TOAST_HOST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -200,7 +201,7 @@ impl Toast {
     }
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
+        self.timeout = Some(timeout.min(LONGEST_TIMEOUT));
         self.timeout_explicit = true;
         self
     }
@@ -300,6 +301,12 @@ impl Toast {
         toast
             .on_preview(move |_| crate::artifact::open_artifact(&open))
             .on_activate(move |_| crate::artifact::reveal_artifact(&reveal))
+    }
+
+    pub fn image(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        let path: Arc<std::path::Path> = path.into().into();
+        self.preview = Some(Rc::new(crate::artifact::ImagePreview::new(path)));
+        self
     }
 
     pub fn element(&self) -> Div {
@@ -500,7 +507,7 @@ impl ToastHost {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN};
 
@@ -700,12 +707,41 @@ mod tests {
     }
 
     #[test]
+    fn a_timeout_longer_than_a_day_stays_a_day() {
+        let day = Duration::from_secs(24 * 60 * 60);
+        let cases = [
+            (day, day),
+            (day + Duration::from_secs(1), day),
+            (Duration::from_millis(u64::MAX), day),
+            (Duration::MAX, day),
+        ];
+        for (asked, kept) in cases {
+            let toast = Toast::new("t", "m", ToastLayout::status()).timeout(asked);
+            assert_eq!(toast.effective_timeout(), Some(kept), "{asked:?}");
+            assert!(Instant::now().checked_add(kept).is_some());
+        }
+    }
+
+    #[test]
     fn persistent_calls_drop_any_timeout_including_later_ones() {
         let persistent_info = Toast::new("t", "m", ToastLayout::status()).persistent();
         assert_eq!(persistent_info.effective_timeout(), None);
         assert!(persistent_info.timeout_explicit);
         let reinstated = persistent_info.timeout(Duration::from_secs(9));
         assert_eq!(reinstated.effective_timeout(), Some(Duration::from_secs(9)));
+    }
+
+    #[test]
+    fn an_image_fills_the_preview_slot_and_leaves_the_rest_of_the_card_alone() {
+        let plain = Toast::new("t", "m", ToastLayout::default());
+        let pictured = Toast::new("t", "m", ToastLayout::default()).image("/tmp/missing.png");
+        assert!(plain.preview.is_none());
+        assert!(pictured.preview.is_some());
+        assert_eq!(pictured.message, plain.message);
+        assert!(!pictured.message_is_path);
+        assert!(pictured.preview_action.is_none());
+        assert!(pictured.activation.is_none());
+        assert!(pictured.actions.is_empty());
     }
 
     #[test]
