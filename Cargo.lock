@@ -6736,7 +6736,7 @@ dependencies = [
 
 [[package]]
 name = "qol-explorer"
-version = "0.32.3"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "chrono",
