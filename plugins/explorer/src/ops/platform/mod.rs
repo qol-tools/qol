@@ -22,12 +22,13 @@ pub(crate) use linux::system_bin;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{name_problem, system_bin};
 #[cfg(not(unix))]
-pub(crate) use portable::{changed_at, keep_mode, new_dir, new_file, open_dir};
+pub(crate) use portable::{born_at, changed_at, keep_mode, new_dir, new_file, open_dir};
 #[cfg(target_os = "linux")]
 pub(crate) use unix::name_problem;
 #[cfg(unix)]
 pub(crate) use unix::{
-    changed_at, copy_link, free_bytes, keep_mode, new_dir, new_file, open_dir, removable, volume_of,
+    born_at, changed_at, copy_link, free_bytes, keep_mode, new_dir, new_file, open_dir, removable,
+    volume_of,
 };
 #[cfg(target_os = "windows")]
 pub(crate) use windows::{copy_link, free_bytes, name_problem, removable, system_bin, volume_of};
