@@ -40,12 +40,43 @@ fn str_const_values(source: &str) -> Vec<&str> {
         .collect()
 }
 
+const INT_TYPES: [&str; 12] = [
+    "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
+];
+
+fn int_const_values(source: &str) -> Vec<String> {
+    source
+        .match_indices("pub const ")
+        .filter_map(|(at, prefix)| {
+            let (_, rest) = source[at + prefix.len()..].split_once(':')?;
+            let rest = rest.trim_start();
+            let kind = INT_TYPES.iter().find(|kind| rest.starts_with(**kind))?;
+            let rest = rest[kind.len()..].trim_start().strip_prefix('=')?;
+            let (literal, _) = rest.split_once(';')?;
+            let literal = literal.trim().replace('_', "");
+            let digits = literal
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(literal.len());
+            let (number, suffix) = literal.split_at(digits);
+            if number.is_empty() || !(suffix.is_empty() || INT_TYPES.contains(&suffix)) {
+                return None;
+            }
+            let trimmed = number.trim_start_matches('0');
+            Some(match trimmed {
+                "" => "0".to_string(),
+                _ => trimmed.to_string(),
+            })
+        })
+        .collect()
+}
+
 fn owner_values() -> BTreeSet<String> {
     let mut sources = Vec::new();
     rust_sources(&workspace().join("libs/conventions/src"), &mut sources);
     let mut values = BTreeSet::new();
     for source in &sources {
         values.extend(str_const_values(source).into_iter().map(str::to_string));
+        values.extend(int_const_values(source));
     }
     values
 }
@@ -65,6 +96,7 @@ fn rulebook_owner_is_the_conventions_crate() {
     assert_eq!(owner, "libs/conventions/src/");
     assert!(workspace().join(owner).join("lib.rs").is_file());
     assert_eq!(entry["const_texts"], Value::Bool(true));
+    assert_eq!(entry["const_numbers"], Value::Bool(true));
 }
 
 #[test]
