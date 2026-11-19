@@ -21,10 +21,6 @@ pub(super) struct Bound {
 }
 
 impl Bound {
-    pub(super) fn launch(&self) -> &str {
-        &self.launch
-    }
-
     pub(super) fn handoff(&self) -> String {
         let chords = self
             .chords
@@ -80,7 +76,7 @@ fn bind(
 ) -> Result<Binding> {
     let wanted = wanted();
     let _lock = host.lock()?;
-    let mut warnings = host.recover();
+    let mut warnings = host.take_over(launch);
     let file = binder.file(home);
     let current = journal::read(&file)?;
     let planned = binder
@@ -134,7 +130,7 @@ fn bind(
         file.display(),
         spelled(&planned.added)
     ));
-    warnings.extend(host.release(launch));
+    warnings.extend(host.hand_back(launch));
     Ok(Binding {
         bound: held(&planned.added),
         warnings,
@@ -204,10 +200,21 @@ pub(super) fn pass(terminals: &TerminalSessionService, bound: &Bound) {
     }
 }
 
-fn release_on_this_host(launch: &str) -> Result<Vec<String>> {
-    let host = Host::system()?;
-    let _lock = host.lock()?;
-    Ok(host.release(launch))
+fn settle_on_this_host(settle: impl Fn(&Host) -> Vec<String>) {
+    let settled = Host::system().and_then(|host| {
+        let _lock = host.lock()?;
+        Ok(settle(&host))
+    });
+    match settled {
+        Ok(warnings) => {
+            for warning in warnings {
+                crate::cli::warn(warning);
+            }
+        }
+        Err(error) => crate::cli::warn(format!(
+            "the switchboard's key chords stay bound: {error:#}"
+        )),
+    }
 }
 
 pub(super) struct ReleaseAtExit(String);
@@ -225,16 +232,11 @@ impl Drop for ReleaseAtExit {
 }
 
 pub(super) fn release(launch: &str) {
-    match release_on_this_host(launch) {
-        Ok(warnings) => {
-            for warning in warnings {
-                crate::cli::warn(warning);
-            }
-        }
-        Err(error) => crate::cli::warn(format!(
-            "the switchboard's key chords stay bound: {error:#}"
-        )),
-    }
+    settle_on_this_host(|host| host.release(launch));
+}
+
+pub(super) fn hand_back(bound: &Bound) {
+    settle_on_this_host(|host| host.hand_back(&bound.launch));
 }
 
 pub(super) fn run_release(args: &[OsString]) -> Result<()> {
@@ -388,6 +390,32 @@ mod tests {
         assert_eq!(rig.chat().as_object().unwrap().len(), 2);
 
         assert!(host.release("second").is_empty());
+        assert!(!rig.file().exists());
+    }
+
+    #[test]
+    fn a_launch_that_fails_hands_the_chords_back_to_the_switchboard_it_took_them_from() {
+        let rig = Rig::new();
+        let host = rig.host(Residency::Portable);
+        rig.bind(&host, "live");
+        rig.bind(&host, "failed");
+
+        assert!(host.hand_back("failed").is_empty());
+        assert!(host.release("failed").is_empty());
+        assert_eq!(rig.chat().as_object().unwrap().len(), 2);
+
+        assert!(host.release("live").is_empty());
+        assert!(!rig.file().exists());
+    }
+
+    #[test]
+    fn a_launch_that_fails_takes_out_the_chords_it_added_itself() {
+        let rig = Rig::new();
+        let host = rig.host(Residency::Portable);
+        rig.bind(&host, "failed");
+
+        assert!(host.hand_back("failed").is_empty());
+
         assert!(!rig.file().exists());
     }
 

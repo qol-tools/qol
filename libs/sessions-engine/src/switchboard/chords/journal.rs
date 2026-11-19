@@ -22,6 +22,8 @@ pub(super) struct Record {
     schema_version: u32,
     id: String,
     launch: String,
+    #[serde(default)]
+    taken_from: Option<String>,
     tool: String,
     file: PathBuf,
     file_was_missing: bool,
@@ -45,6 +47,7 @@ impl Record {
                 bound.chord.letters()
             ),
             launch: launch.to_owned(),
+            taken_from: None,
             tool: tool.to_string(),
             file: file.to_path_buf(),
             file_was_missing,
@@ -146,17 +149,52 @@ impl Host {
         self.store.claim(&Claim(record))
     }
 
-    pub(super) fn recover(&self) -> Vec<String> {
-        let report = self.store.recover::<Claim>(OWNER, self.residency);
-        match report.failed + report.unreadable {
-            0 => Vec::new(),
-            left => vec![format!(
-                "{left} key chords an earlier switchboard added could not be taken out again"
-            )],
-        }
+    pub(super) fn take_over(&self, launch: &str) -> Vec<String> {
+        self.settle(
+            "a key chord an earlier switchboard added stays with it",
+            |records, record| {
+                if record.launch == launch {
+                    return Ok(());
+                }
+                records.write(&Record {
+                    taken_from: Some(record.launch.clone()),
+                    launch: launch.to_owned(),
+                    ..record
+                })
+            },
+        )
+    }
+
+    pub(super) fn hand_back(&self, launch: &str) -> Vec<String> {
+        self.settle("a key chord stays bound", |records, record| {
+            if record.launch != launch {
+                return Ok(());
+            }
+            match record.taken_from.clone() {
+                Some(earlier) => records.write(&Record {
+                    launch: earlier,
+                    taken_from: None,
+                    ..record
+                }),
+                None => take_out(records, record),
+            }
+        })
     }
 
     pub(super) fn release(&self, launch: &str) -> Vec<String> {
+        self.settle("a key chord stays bound", |records, record| {
+            if record.launch != launch {
+                return Ok(());
+            }
+            take_out(records, record)
+        })
+    }
+
+    fn settle(
+        &self,
+        failure: &str,
+        step: impl Fn(&SessionStore, Record) -> Result<()>,
+    ) -> Vec<String> {
         if self.residency.is_resident() {
             return Vec::new();
         }
@@ -166,21 +204,27 @@ impl Host {
             Err(error) => return vec![format!("the key chords record is unreadable: {error:#}")],
         };
         ids.iter()
-            .filter_map(|id| release_one(&records, id, launch).err())
-            .map(|error| format!("a key chord stays bound: {error:#}"))
+            .filter_map(|id| settle_one(&records, id, &step).err())
+            .map(|error| format!("{failure}: {error:#}"))
             .collect()
     }
 }
 
-fn release_one(records: &SessionStore, id: &str, launch: &str) -> Result<()> {
-    let Some(record) = records.load::<Record>(id)? else {
-        return Ok(());
-    };
-    if record.launch != launch {
-        return Ok(());
+fn settle_one(
+    records: &SessionStore,
+    id: &str,
+    step: &impl Fn(&SessionStore, Record) -> Result<()>,
+) -> Result<()> {
+    match records.load::<Record>(id)? {
+        Some(record) => step(records, record),
+        None => Ok(()),
     }
+}
+
+fn take_out(records: &SessionStore, record: Record) -> Result<()> {
+    let id = record.id.clone();
     Claim::restore(record)?;
-    records.delete(id)
+    records.delete(&id)
 }
 
 fn real(file: &Path) -> PathBuf {
