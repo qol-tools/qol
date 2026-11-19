@@ -302,6 +302,12 @@ impl Toast {
             .on_activate(move |_| crate::artifact::reveal_artifact(&reveal))
     }
 
+    pub fn image(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        let path: Arc<std::path::Path> = path.into().into();
+        self.preview = Some(Rc::new(crate::artifact::ImagePreview::new(path)));
+        self
+    }
+
     pub fn element(&self) -> Div {
         let now = Instant::now();
         let row = SlabSnapshotRow {
@@ -706,6 +712,19 @@ mod tests {
         assert!(persistent_info.timeout_explicit);
         let reinstated = persistent_info.timeout(Duration::from_secs(9));
         assert_eq!(reinstated.effective_timeout(), Some(Duration::from_secs(9)));
+    }
+
+    #[test]
+    fn an_image_fills_the_preview_slot_and_leaves_the_rest_of_the_card_alone() {
+        let plain = Toast::new("t", "m", ToastLayout::default());
+        let pictured = Toast::new("t", "m", ToastLayout::default()).image("/tmp/missing.png");
+        assert!(plain.preview.is_none());
+        assert!(pictured.preview.is_some());
+        assert_eq!(pictured.message, plain.message);
+        assert!(!pictured.message_is_path);
+        assert!(pictured.preview_action.is_none());
+        assert!(pictured.activation.is_none());
+        assert!(pictured.actions.is_empty());
     }
 
     #[test]

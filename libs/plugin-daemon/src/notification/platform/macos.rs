@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use qol_runtime::Notification;
+
 use super::NotificationPlatform;
 
 const ASSERTIONS_PATH: &str = "Library/DoNotDisturb/DB/Assertions.json";
@@ -10,8 +12,8 @@ const LEGACY_DND_KEY: &str = "doNotDisturb";
 pub(super) struct Platform;
 
 impl NotificationPlatform for Platform {
-    fn send_notification(&self, title: &str, message: &str) -> bool {
-        send_osascript_notification(title, message)
+    fn send(&self, notification: &Notification) -> bool {
+        send_osascript_notification(&notification.title, &notification.body)
     }
 
     fn os_do_not_disturb(&self) -> Option<bool> {

@@ -8,6 +8,7 @@ use crate::ops::history::{
     Action, Change, Direction, Outcome as Verdict, Reason, Source, Step, Top, Undone,
 };
 use crate::ops::{free_name, Clash, NameProblem, Room, Survey, Verb};
+use crate::relay::Message;
 
 pub(super) fn held_note(held: Held, count: usize, into: Option<&str>) -> String {
     let word = match held {
@@ -20,11 +21,11 @@ pub(super) fn held_note(held: Held, count: usize, into: Option<&str>) -> String 
     }
 }
 
-pub(super) fn already_in(into: &Path, here: &Path) -> String {
+pub(super) fn already_in(into: &Path, here: &Path) -> Message {
     if into == here {
-        "Already in this folder".to_string()
+        Message::warn("Already in this folder", "")
     } else {
-        format!("Already in {}", name_of(into))
+        Message::warn(format!("Already in {}", name_of(into)), "")
     }
 }
 
@@ -130,30 +131,35 @@ pub(super) fn arrived_note(
     into: &str,
     from: &str,
     undoable: bool,
-) -> String {
+) -> Message {
     let place = if here {
         "here".to_string()
     } else {
         format!("to {into}")
     };
-    let undo = if undoable { " ctrl+z undoes it." } else { "" };
-    format!("{count} {} {place} from {from}.{undo}", past(verb))
+    let undo = if undoable { "ctrl+z undoes it." } else { "" };
+    Message::info(format!("{count} {} {place} from {from}", past(verb)), undo)
 }
 
-pub(super) fn trashed_note(count: usize, undoable: bool) -> String {
+pub(super) fn trashed_note(count: usize, undoable: bool) -> Message {
+    let title = format!("{count} moved to the trash");
     match (undoable, count) {
-        (false, _) => format!("{count} moved to the trash."),
-        (true, 1) => "1 moved to the trash. ctrl+z puts it back.".to_string(),
-        (true, _) => format!("{count} moved to the trash. ctrl+z puts them back."),
+        (false, _) => Message::info(title, ""),
+        (true, 1) => Message::info(title, "ctrl+z puts it back."),
+        (true, _) => Message::info(title, "ctrl+z puts them back."),
     }
 }
 
-pub(super) fn nothing_changed(into: &Path, here: &Path) -> String {
+pub(super) fn nothing_changed(into: &Path, here: &Path) -> Message {
     if into == here {
-        "Nothing changed here.".to_string()
+        Message::info("Nothing changed here", "")
     } else {
-        format!("Nothing changed in {}.", name_of(into))
+        Message::info(format!("Nothing changed in {}", name_of(into)), "")
     }
+}
+
+pub(super) fn stopped_before_the_end(label: &str) -> Message {
+    Message::error(format!("{label} stopped before it finished"), "")
 }
 
 pub(super) fn stopped_detail(arrived: usize) -> String {
@@ -233,23 +239,21 @@ fn closing(direction: Direction) -> String {
     format!("{} {} it.", key_of(other), acts(other))
 }
 
-pub(super) fn nothing_to(direction: Direction) -> String {
-    format!("Nothing to {}", word(direction))
+pub(super) fn nothing_to(direction: Direction) -> Message {
+    Message::info(format!("Nothing to {}", word(direction)), "")
 }
 
-pub(super) fn refused(direction: Direction, when: &str) -> String {
-    format!(
-        "Nothing was {}. Press {} again {when}.",
-        done_word(direction),
-        key_of(direction)
+pub(super) fn refused(direction: Direction, when: &str) -> Message {
+    Message::warn(
+        format!("Nothing was {}", done_word(direction)),
+        format!("Press {} again {when}.", key_of(direction)),
     )
 }
 
-pub(super) fn asked_off(direction: Direction) -> String {
-    format!(
-        "Nothing was {}. {} asks again.",
-        done_word(direction),
-        key_of(direction)
+pub(super) fn asked_off(direction: Direction) -> Message {
+    Message::info(
+        format!("Nothing was {}", done_word(direction)),
+        format!("{} asks again.", key_of(direction)),
     )
 }
 
@@ -285,6 +289,25 @@ pub(super) struct Spent {
     pub text: String,
     pub title: String,
     pub state: MoveState,
+}
+
+impl Spent {
+    pub(super) fn message(&self, next: &str) -> Message {
+        match self.state {
+            MoveState::Failed => Message::warn(self.title.clone(), format!("{} {next}", self.text)),
+            MoveState::Running | MoveState::Done | MoveState::NotStarted => {
+                Message::info(self.title.clone(), next)
+            }
+        }
+    }
+}
+
+pub(super) fn step_message(title: &str, body: &str, did: bool) -> Message {
+    if did {
+        Message::info(title, body)
+    } else {
+        Message::warn(title, body)
+    }
 }
 
 pub(super) fn spent(action: &Action, here: &Path, cannot: bool) -> Spent {
@@ -528,9 +551,7 @@ fn binned(undone: &Undone) -> bool {
 fn undo_success_text(action: &Action, undone: &[(&Change, &Undone)], here: &Path) -> String {
     let lead = format!("Undid the {}.", step_label(action, here));
     let main = match action {
-        Action::Transfer { verb, .. } => {
-            transfer_text(*verb, undone, here).map(|text| format!("{lead} {text}"))
-        }
+        Action::Transfer { verb, .. } => transfer_text(*verb, undone, here),
         Action::Rename { .. } => undone
             .iter()
             .find_map(|(_, done)| back_to(done))
@@ -656,11 +677,7 @@ fn redo_success_text(action: &Action, redone: &[&Change], here: &Path) -> String
         Action::NewFile(path) => made.then(|| format!("The new file {} is back.", name_of(path))),
         Action::Erase(_) => None,
     };
-    let mut text = lead;
-    if let Some(main) = main {
-        text.push(' ');
-        text.push_str(&main);
-    }
+    let mut text = main.unwrap_or(lead);
     for change in redone {
         if let Change::Replaced { at, .. } = change {
             text.push_str(&format!(" The old {} went to the trash.", name_of(at)));
@@ -755,10 +772,13 @@ pub(super) fn report_note(
     text
 }
 
-pub(super) fn erased_note(count: usize) -> String {
-    format!(
-        "{} deleted for good.",
-        qol_gpui::plural(count, "item", "items")
+pub(super) fn erased_note(count: usize) -> Message {
+    Message::info(
+        format!(
+            "{} deleted for good",
+            qol_gpui::plural(count, "item", "items")
+        ),
+        "",
     )
 }
 
@@ -774,9 +794,11 @@ pub(crate) fn erase_lines(paths: &[std::path::PathBuf]) -> Vec<String> {
     ]
 }
 
-pub(crate) fn erase_elsewhere_note() -> String {
-    "Delete permanently only takes items in this folder, so open the folder that holds them first."
-        .to_string()
+pub(crate) fn erase_elsewhere_note() -> Message {
+    Message::warn(
+        "Delete permanently only takes items in this folder",
+        "Open the folder that holds them first.",
+    )
 }
 
 pub(crate) fn short_note(survey: &Survey, volume: &str) -> Option<String> {
@@ -893,7 +915,11 @@ pub(super) fn done_detail(outcome: &Outcome) -> String {
     text
 }
 
-pub(super) fn failure_text(failures: &[crate::ops::Failure]) -> Option<String> {
+pub(super) fn failure_text(
+    verb: &str,
+    after: &str,
+    failures: &[crate::ops::Failure],
+) -> Option<Message> {
     let first = failures.first()?;
     let more = failures.len() - 1;
     let tail = if more > 0 {
@@ -901,7 +927,11 @@ pub(super) fn failure_text(failures: &[crate::ops::Failure]) -> Option<String> {
     } else {
         String::new()
     };
-    Some(format!("{}: {}{tail}", name_of(&first.path), first.reason))
+    let items = qol_gpui::plural(failures.len(), "item", "items");
+    Some(Message::error(
+        format!("Could not {verb} {items}{after}"),
+        format!("{}: {}{tail}", name_of(&first.path), first.reason),
+    ))
 }
 
 pub(super) fn problem_text(problem: &NameProblem, name: &str) -> String {
@@ -911,5 +941,17 @@ pub(super) fn problem_text(problem: &NameProblem, name: &str) -> String {
         NameProblem::Forbidden(reason) => reason.clone(),
         NameProblem::TooLong => "That name is too long".to_string(),
         NameProblem::Io(reason) => reason.clone(),
+    }
+}
+
+pub(super) fn name_problem(problem: &NameProblem, name: &str, what: &str) -> Message {
+    let title = format!("Could not {what} {name}");
+    let body = problem_text(problem, name);
+    match problem {
+        NameProblem::Io(_) => Message::error(title, body),
+        NameProblem::Empty
+        | NameProblem::Taken
+        | NameProblem::Forbidden(_)
+        | NameProblem::TooLong => Message::warn(title, body),
     }
 }

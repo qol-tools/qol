@@ -58,10 +58,10 @@ watchdog + wire protocol), `libs/gpui` (gpui plugin building blocks), and
 | Action dispatch | host to plugin | daemon socket OR runtime spawn | `apps/tray/src/plugins/action_executor/` |
 | Platform state | host to plugin | `QOL_TRAY_STATE_SOCKET` UDS, `get_state` / `subscribe` | `libs/runtime/src/client.rs`, `.../protocol.rs` |
 | `set_focus` | plugin to host | state socket, fire-and-forget | `runtime/server/socket/requests.rs` |
-| Notification / status push | plugin to host | state socket, `push_notification` / `push_status` | `libs/runtime/src/protocol.rs`, `runtime/server/socket/requests.rs` |
+| Notification / status push | plugin to host | state socket, `push_notification` / `push_status`; the notification may carry a duration, a replace key and an image | `libs/runtime/src/protocol.rs`, `runtime/server/socket/requests.rs` |
 | Lifeline (watchdog) | plugin and host | state socket, held open until EOF | `libs/runtime/src/watchdog.rs` + `requests.rs` |
 | Logging | plugin to host | piped stderr/stdout relay | `apps/tray/src/logging/relay.rs` |
-| OS notification (fallback) | plugin to OS | `osascript` / `notify-send`, only when the tray is unreachable | each plugin (e.g. `qol-cli-sessions/src/notify.rs`) |
+| OS notification (fallback) | plugin to OS | `osascript` / `notify-send` / a Windows toast, used by `qol_plugin_daemon::notification::send` when no tray takes the push, unless notifications are switched off | `libs/plugin-daemon/src/notification/` |
 | Inter-plugin event bus | plugin to plugin | broker UDS, publish/subscribe (same socket as the pane-field pull API) | `libs/runtime/src/broker/{bus,client,protocol,topic}.rs` |
 
 ---
@@ -803,6 +803,34 @@ stays host-authoritative for state.
   the action. A half-specified action (one field missing) renders as plain.
   Old senders without the fields stay wire-compatible (`#[serde(default)]`),
   and old hosts ignore the extra fields.
+- `push_notification` also takes three optional fields after `activate`, each
+  omitted from the packet when unset:
+  `duration_ms` is how long the card stays, in milliseconds. `0` keeps it
+  until dismissed, and an absent value leaves it to the level (about 4 s for
+  `info`, 8 s for `warn`, 10 s for `error`).
+  `key` makes a later notification from the same plugin with the same key
+  replace the card on screen instead of stacking a new one.
+  `image` is the absolute path of a picture the card shows.
+  The Rust client builds these with `qol_runtime::Notification`
+  (`Notification::new(title, body)` then `.level()`, `.stay(duration)`,
+  `.until_dismissed()`, `.key()`, `.image()`, `.action()`, `.artifact()`,
+  `.layout()`, `.activate()`) and sends it with
+  `PlatformStateClient::push(&notification)`.
+- A plugin's notification goes through `qol_plugin_daemon::notification::send`,
+  which returns `true` when something showed it. It shows nothing and returns
+  `false` while notifications are switched off in the qol notification
+  settings. Otherwise it pushes to the tray. When no tray takes the push, the
+  OS notifier shows it, whatever the `qol`, `os` or `both` handler setting
+  says, and only when that fails too is it written to the log.
+  The OS notifier keeps what it can: on Linux, `notify-send` gets
+  `-u low|normal|critical` for the level, `-t <ms>` for `duration_ms` (`0`
+  never expires), `-i <path>` for `image`, and for `key` it asks for the new
+  id with `-p` and replaces the earlier card with `-r <id>`; a `notify-send`
+  that lacks `-p` or `-r` is run again without them. On Windows the image is
+  the toast's `appLogoOverride` picture, and a `key` of at most 64 characters
+  is the toast tag, with the plugin id (or `qol` when unset) as its group, so
+  a later toast with the same key replaces it. macOS shows the title and body
+  and ignores the three fields.
 - `push_status {plugin_id, status}` - the tray logs the free-form `status` JSON
   and shows a low-urgency toast. There is no per-plugin status badge in the
   tray UI yet; V1 is log + toast.

@@ -13,7 +13,8 @@ use super::ops_text;
 use super::{Browser, Held, MoveState, Stepping};
 use crate::ops::history::{Action, Change, Direction, History, Outcome, Reason, Source, Undone};
 use crate::ops::print::{Kind, Print};
-use crate::ops::{Clash, CopyOnly, Resolve, Room, Stamp, Survey, Tools, Transfer, Verb};
+use crate::ops::{Clash, CopyOnly, Failure, Resolve, Room, Stamp, Survey, Tools, Transfer, Verb};
+use crate::relay::{Level, Message};
 use crate::ui::keys::Step;
 
 thread_local! {
@@ -81,17 +82,28 @@ fn redo(browser: &mut Browser) -> bool {
     started
 }
 
-fn failure(browser: &Browser) -> Option<String> {
-    browser.note().failure
+fn notice(browser: &Browser) -> String {
+    browser
+        .posted()
+        .last()
+        .map(Message::line)
+        .unwrap_or_default()
 }
 
-fn notice(browser: &Browser) -> String {
-    assert_eq!(
-        failure(browser),
-        None,
-        "undo and redo never use the red slot"
-    );
-    browser.note().count
+fn wait_notice(browser: &mut Browser, what: &str, wanted: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let drained = browser.drain(Instant::now());
+        if browser
+            .posted()
+            .iter()
+            .any(|message| message.line() == wanted)
+        {
+            return;
+        }
+        assert!(Instant::now() < deadline, "{what} never happened");
+        thread::sleep(drained.wake_in.unwrap_or(Duration::from_millis(2)));
+    }
 }
 
 fn visit(browser: &mut Browser, folder: &Path) {
@@ -212,14 +224,15 @@ fn cut_then_paste_moves_the_file_and_undo_moves_it_back() {
     assert!(!file.exists());
     let record = &browser.moves()[0];
     assert_eq!(record.title, "a.txt to dest");
-    assert!(browser.note().count.starts_with("1 moved here from "));
-    assert!(browser.note().count.ends_with("ctrl+z undoes it."));
+    let arrived = notice(&browser);
+    assert!(arrived.starts_with("1 moved here from "));
+    assert!(arrived.ends_with("ctrl+z undoes it."));
     assert!(browser.paste().is_none());
 
     assert!(undo(&mut browser));
     assert!(file.exists());
     assert!(!dest.join("a.txt").exists());
-    assert!(browser.note().count.starts_with("Undid the move of a.txt."));
+    assert!(notice(&browser).starts_with("Undid the move of a.txt into dest. It is back in "));
 }
 
 #[test]
@@ -315,8 +328,9 @@ fn copy_then_paste_leaves_the_original_and_undo_trashes_the_copy() {
 
     assert!(file.exists());
     assert_eq!(fs::read_to_string(dest.join("a.txt")).unwrap(), "alpha");
-    assert!(browser.note().count.starts_with("1 copied here from "));
-    assert!(browser.note().count.ends_with("ctrl+z undoes it."));
+    let arrived = notice(&browser);
+    assert!(arrived.starts_with("1 copied here from "));
+    assert!(arrived.ends_with("ctrl+z undoes it."));
     assert!(browser.paste().is_some());
 
     assert!(undo(&mut browser));
@@ -325,7 +339,7 @@ fn copy_then_paste_leaves_the_original_and_undo_trashes_the_copy() {
     assert_eq!(binned().len(), 1);
     assert_eq!(
         notice(&browser),
-        "Undid the copy of a.txt. The copy went to the trash. ctrl+shift+z redoes it."
+        "Undid the copy of a.txt into dest. The copy went to the trash. ctrl+shift+z redoes it."
     );
 }
 
@@ -338,8 +352,8 @@ fn pasting_a_cut_into_its_own_folder_does_nothing_and_says_so() {
     browser.hold(Held::Cut);
     assert!(browser.paste().is_none());
     assert_eq!(
-        browser.note().failure.as_deref(),
-        Some("Already in this folder")
+        browser.posted(),
+        [Message::warn("Already in this folder", "")]
     );
 }
 
@@ -549,8 +563,8 @@ fn the_note_names_the_folder_and_the_list_menu_pastes_where_you_are() {
     );
     assert!(browser.paste_here().is_none());
     assert_eq!(
-        browser.note().failure.as_deref(),
-        Some("Already in this folder")
+        browser.posted(),
+        [Message::warn("Already in this folder", "")]
     );
 
     let inbox = temp.path().join("inbox");
@@ -558,6 +572,7 @@ fn the_note_names_the_folder_and_the_list_menu_pastes_where_you_are() {
     assert_eq!(moved.into, inbox);
     browser.begin(moved);
     wait_until(&mut browser, "the move", finished);
+    assert_eq!(browser.posted().len(), 1);
 
     visit(&mut browser, &inbox);
     browser.click_to(row(&browser, "a.txt"), 0.0);
@@ -565,7 +580,7 @@ fn the_note_names_the_folder_and_the_list_menu_pastes_where_you_are() {
     visit(&mut browser, temp.path());
     browser.click_to(row(&browser, "inbox"), 0.0);
     assert!(browser.paste().is_none());
-    assert_eq!(browser.note().failure.as_deref(), Some("Already in inbox"));
+    assert_eq!(browser.posted(), [Message::warn("Already in inbox", "")]);
 }
 
 #[test]
@@ -710,7 +725,7 @@ fn rename_selects_the_stem_and_enter_renames_the_file() {
     assert!(!temp.path().join("b.txt").exists());
     assert_eq!(
         notice(&browser),
-        "Renamed back to a.txt. ctrl+shift+z redoes it."
+        "Undid the rename to b.txt. Renamed back to a.txt. ctrl+shift+z redoes it."
     );
 }
 
@@ -740,10 +755,13 @@ fn a_taken_name_keeps_the_field_open_and_says_why() {
     browser.rename_key(&key("enter", None), &MemoryClipboard::default());
 
     assert!(browser.rename_field().is_some());
-    assert!(browser
-        .note()
-        .failure
-        .is_some_and(|failure| failure.contains("already exists")));
+    assert_eq!(
+        browser.posted(),
+        [Message::warn(
+            "Could not rename to b.txt",
+            "b.txt already exists here"
+        )]
+    );
     assert!(file.exists());
 }
 
@@ -797,7 +815,7 @@ fn undo_removes_an_empty_new_folder_and_then_says_there_is_nothing_to_undo() {
     assert!(!temp.path().join("New folder").exists());
     assert_eq!(
         notice(&browser),
-        "Removed the new folder New folder, which was empty. ctrl+shift+z redoes it."
+        "Undid the new folder New folder. Removed the new folder New folder, which was empty. ctrl+shift+z redoes it."
     );
     assert!(!undo(&mut browser));
     assert_eq!(notice(&browser), "Nothing to undo");
@@ -848,29 +866,32 @@ fn wording_matches_the_design() {
         "Moving virtualbox from WD_SN850X · 3.1 of 8.5 GB · 54 s left"
     );
     assert_eq!(
-        ops_text::arrived_note(Verb::Move, 4, true, "dest", "plans", true),
+        ops_text::arrived_note(Verb::Move, 4, true, "dest", "plans", true).line(),
         "4 moved here from plans. ctrl+z undoes it."
     );
     assert_eq!(
-        ops_text::arrived_note(Verb::Copy, 2, false, "dest", "plans", false),
-        "2 copied to dest from plans."
+        ops_text::arrived_note(Verb::Copy, 2, false, "dest", "plans", false).line(),
+        "2 copied to dest from plans"
     );
     assert_eq!(
-        ops_text::trashed_note(3, true),
+        ops_text::trashed_note(3, true).line(),
         "3 moved to the trash. ctrl+z puts them back."
     );
     assert_eq!(
-        ops_text::trashed_note(1, true),
+        ops_text::trashed_note(1, true).line(),
         "1 moved to the trash. ctrl+z puts it back."
     );
-    assert_eq!(ops_text::trashed_note(2, false), "2 moved to the trash.");
     assert_eq!(
-        ops_text::nothing_changed(Path::new("/a"), Path::new("/a")),
-        "Nothing changed here."
+        ops_text::trashed_note(2, false).line(),
+        "2 moved to the trash"
     );
     assert_eq!(
-        ops_text::nothing_changed(Path::new("/a/dest"), Path::new("/a")),
-        "Nothing changed in dest."
+        ops_text::nothing_changed(Path::new("/a"), Path::new("/a")).line(),
+        "Nothing changed here"
+    );
+    assert_eq!(
+        ops_text::nothing_changed(Path::new("/a/dest"), Path::new("/a")).line(),
+        "Nothing changed in dest"
     );
     assert_eq!(
         ops_text::stopped_detail(0),
@@ -902,7 +923,9 @@ fn wording_matches_the_design() {
         ),
     ];
     for (direction, when, expected) in refusals {
-        assert_eq!(ops_text::refused(direction, when), expected);
+        let refused = ops_text::refused(direction, when);
+        assert_eq!(refused.line(), expected);
+        assert_eq!(refused.level, Level::Warn);
     }
     assert_eq!(
         ops_text::undoing_note(Direction::Undo, "copy of a.txt"),
@@ -912,16 +935,56 @@ fn wording_matches_the_design() {
         ops_text::undoing_note(Direction::Redo, "copy of a.txt"),
         "Redoing the copy of a.txt. Esc stops it."
     );
-    assert_eq!(ops_text::nothing_to(Direction::Undo), "Nothing to undo");
-    assert_eq!(ops_text::nothing_to(Direction::Redo), "Nothing to redo");
+    assert_eq!(
+        ops_text::nothing_to(Direction::Undo),
+        Message::info("Nothing to undo", "")
+    );
+    assert_eq!(
+        ops_text::nothing_to(Direction::Redo),
+        Message::info("Nothing to redo", "")
+    );
     assert_eq!(
         ops_text::asked_off(Direction::Undo),
-        "Nothing was undone. ctrl+z asks again."
+        Message::info("Nothing was undone", "ctrl+z asks again.")
     );
     assert_eq!(
         ops_text::asked_off(Direction::Redo),
-        "Nothing was redone. ctrl+shift+z asks again."
+        Message::info("Nothing was redone", "ctrl+shift+z asks again.")
     );
+}
+
+#[test]
+fn a_failure_names_what_could_not_happen_with_the_count_and_the_first_reason() {
+    let failure = |name: &str| Failure {
+        path: PathBuf::from("/d").join(name),
+        reason: "it is busy".to_string(),
+    };
+    let cases = [
+        (
+            "move",
+            " to the trash",
+            vec![failure("a")],
+            "Could not move 1 item to the trash. a: it is busy",
+        ),
+        (
+            "delete",
+            "",
+            vec![failure("a"), failure("b")],
+            "Could not delete 2 items. a: it is busy (1 more)",
+        ),
+        (
+            "copy",
+            "",
+            vec![failure("a"), failure("b"), failure("c")],
+            "Could not copy 3 items. a: it is busy (2 more)",
+        ),
+    ];
+    for (verb, after, failures, expected) in cases {
+        let message = ops_text::failure_text(verb, after, &failures).unwrap();
+        assert_eq!(message.line(), expected);
+        assert_eq!(message.level, Level::Error);
+    }
+    assert_eq!(ops_text::failure_text("copy", "", &[]), None);
 }
 
 #[test]
@@ -1086,7 +1149,7 @@ fn a_new_file_appears_empty_opens_for_rename_and_undo_sends_it_to_the_trash() {
     assert_eq!(binned().len(), 1);
     assert_eq!(
         notice(&browser),
-        "The new file New file went to the trash. ctrl+shift+z redoes it."
+        "Undid the new file New file. The new file New file went to the trash. ctrl+shift+z redoes it."
     );
 }
 
@@ -1128,14 +1191,12 @@ fn deleting_permanently_asks_first_and_undo_says_it_cannot_be_undone() {
     assert!(browser.erase_ask());
     assert!(browser.erase_confirm());
     wait_until(&mut browser, "the delete", |_| !file.exists());
-    wait_until(&mut browser, "the note", |browser| {
-        browser.note().count == "1 item deleted for good."
-    });
+    wait_notice(&mut browser, "the note", "1 item deleted for good");
 
     assert!(undo(&mut browser));
     assert_eq!(
         notice(&browser),
-        "Delete permanently cannot be undone. Next is the permanent delete of a.txt, which changed nothing."
+        "Cannot undo the permanent delete of a.txt. Delete permanently cannot be undone. Next is the permanent delete of a.txt, which changed nothing."
     );
     assert!(undo(&mut browser));
     assert_eq!(
@@ -1160,7 +1221,7 @@ fn deleting_permanently_skips_picks_held_in_another_folder() {
 
     assert!(browser.erase_ask());
     assert!(browser.erasing().is_none());
-    assert_eq!(browser.note().count, ops_text::erase_elsewhere_note());
+    assert_eq!(browser.posted(), [ops_text::erase_elsewhere_note()]);
     assert!(far.exists());
 }
 
@@ -1212,9 +1273,7 @@ fn keep_this_changes_nothing_and_undo_does_not_reach_past_it_to_trash_a_visible_
     });
     assert!(browser.choose(0, Resolve::Keep));
     assert!(browser.confirm());
-    wait_until(&mut browser, "the move", |browser| {
-        browser.note().count == "Nothing changed in dest."
-    });
+    wait_notice(&mut browser, "the move", "Nothing changed in dest");
     assert!(hello.exists());
     assert!(dest.join("hello").exists());
 
@@ -1274,7 +1333,7 @@ fn a_copy_edited_after_it_landed_stays() {
     assert!(undo(&mut browser));
     assert_eq!(
         notice(&browser),
-        "Nothing was undone: a.txt changed, so it stays. Nothing is left to undo."
+        "Could not undo the copy of a.txt into dest. Nothing was undone: a.txt changed, so it stays. Nothing is left to undo."
     );
     assert_eq!(
         fs::read_to_string(dest.join("a.txt")).unwrap(),
@@ -1365,7 +1424,7 @@ fn keep_this_on_the_undo_sheet_leaves_the_item_and_drops_the_step() {
     assert!(!temp.path().join("a (2).txt").exists());
     assert_eq!(
         notice(&browser),
-        "Nothing was undone: a.txt stays where it is, as you chose. Nothing is left to undo."
+        "Could not undo the move of a.txt into dest. Nothing was undone: a.txt stays where it is, as you chose. Nothing is left to undo."
     );
     assert!(!undo(&mut browser));
     assert_eq!(notice(&browser), "Nothing to undo");
@@ -1379,9 +1438,11 @@ fn trash_then_undo_puts_the_exact_item_back_from_the_bin() {
     point_at(&mut browser, &file);
 
     assert!(browser.trash_picks());
-    wait_until(&mut browser, "the trash", |browser| {
-        browser.note().count == "1 moved to the trash. ctrl+z puts it back."
-    });
+    wait_notice(
+        &mut browser,
+        "the trash",
+        "1 moved to the trash. ctrl+z puts it back.",
+    );
     assert!(!file.exists());
     assert_eq!(binned().len(), 1);
 
@@ -1389,7 +1450,7 @@ fn trash_then_undo_puts_the_exact_item_back_from_the_bin() {
     assert_eq!(fs::read_to_string(&file).unwrap(), "text");
     assert_eq!(
         notice(&browser),
-        "Put a.txt back here. ctrl+shift+z redoes it."
+        "Undid the move of a.txt to the trash. Put a.txt back here. ctrl+shift+z redoes it."
     );
 }
 
@@ -1503,13 +1564,13 @@ fn the_undo_note_names_what_came_back_what_stayed_and_what_to_press() {
             vec![(1, back("b")), (0, back("a"))],
             false,
             true,
-            "Undid the move of 2 items into dest. They are back here. ctrl+shift+z redoes it.",
+            "They are back here. ctrl+shift+z redoes it.",
         ),
         (
             vec![(1, back("b")), (0, back("a"))],
             false,
             false,
-            "Undid the move of 2 items into dest. They are back here.",
+            "They are back here.",
         ),
         (
             vec![
@@ -1518,7 +1579,7 @@ fn the_undo_note_names_what_came_back_what_stayed_and_what_to_press() {
             ],
             false,
             true,
-            "Undid the move of 2 items into dest. It is back here. a changed, so it stays. ctrl+shift+z redoes it.",
+            "It is back here. a changed, so it stays. ctrl+shift+z redoes it.",
         ),
         (
             vec![
@@ -1533,7 +1594,7 @@ fn the_undo_note_names_what_came_back_what_stayed_and_what_to_press() {
             ],
             false,
             false,
-            "Undid the move of 2 items into dest. It is back here. a stays where it is: it is open in another app. ctrl+z tries again.",
+            "It is back here. a stays where it is: it is open in another app. ctrl+z tries again.",
         ),
         (
             vec![
@@ -1542,13 +1603,13 @@ fn the_undo_note_names_what_came_back_what_stayed_and_what_to_press() {
             ],
             false,
             false,
-            "Undid the move of 2 items into dest. It is back here. The name a is taken, so it stays where it is.",
+            "It is back here. The name a is taken, so it stays where it is.",
         ),
         (
             vec![(1, back("b")), (0, Outcome::Stays(Reason::Stopped))],
             false,
             false,
-            "Undid the move of 2 items into dest. It is back here. The undo stopped before it finished. ctrl+z undoes the rest.",
+            "It is back here. The undo stopped before it finished. ctrl+z undoes the rest.",
         ),
         (
             vec![(
@@ -1626,7 +1687,7 @@ fn undoing_a_copy_names_the_trash_the_stragglers_and_the_redo_key() {
     let one = [(0, binned.clone())];
     assert_eq!(
         note_of(&step, &one, Direction::Undo, false, true),
-        "Undid the copy of 3 items into dest. The copy went to the trash. ctrl+shift+z redoes it."
+        "The copy went to the trash. ctrl+shift+z redoes it."
     );
     let two_of_three = [
         (
@@ -1638,7 +1699,7 @@ fn undoing_a_copy_names_the_trash_the_stragglers_and_the_redo_key() {
     ];
     assert_eq!(
         note_of(&step, &two_of_three, Direction::Undo, false, true),
-        "Undid the copy of 3 items into dest. The copies went to the trash. notes.txt changed, so it stays. ctrl+shift+z redoes it."
+        "The copies went to the trash. notes.txt changed, so it stays. ctrl+shift+z redoes it."
     );
 }
 
@@ -1659,19 +1720,19 @@ fn the_redo_note_says_where_it_landed_what_stayed_and_what_undoes_it() {
             vec![(0, moved_again("a"))],
             false,
             true,
-            "Redid the move of 2 items into dest. It is in dest again. ctrl+z undoes it.",
+            "It is in dest again. ctrl+z undoes it.",
         ),
         (
             vec![(0, moved_again("a")), (1, moved_again("b"))],
             false,
             true,
-            "Redid the move of 2 items into dest. They are in dest again. ctrl+z undoes it.",
+            "They are in dest again. ctrl+z undoes it.",
         ),
         (
             vec![(0, moved_again("a")), (1, moved_again("b"))],
             false,
             false,
-            "Redid the move of 2 items into dest. They are in dest again.",
+            "They are in dest again.",
         ),
         (
             vec![
@@ -1680,7 +1741,7 @@ fn the_redo_note_says_where_it_landed_what_stayed_and_what_undoes_it() {
             ],
             false,
             true,
-            "Redid the move of 2 items into dest. It is in dest again. b changed, so it stays. ctrl+z undoes it.",
+            "It is in dest again. b changed, so it stays. ctrl+z undoes it.",
         ),
         (
             vec![
@@ -1689,13 +1750,13 @@ fn the_redo_note_says_where_it_landed_what_stayed_and_what_undoes_it() {
             ],
             false,
             false,
-            "Redid the move of 2 items into dest. It is in dest again. The drive of b is not plugged in, so it stays for now. ctrl+shift+z tries again.",
+            "It is in dest again. The drive of b is not plugged in, so it stays for now. ctrl+shift+z tries again.",
         ),
         (
             vec![(0, moved_again("a")), (1, Outcome::Stays(Reason::Stopped))],
             false,
             false,
-            "Redid the move of 2 items into dest. It is in dest again. The redo stopped before it finished. ctrl+shift+z redoes the rest.",
+            "It is in dest again. The redo stopped before it finished. ctrl+shift+z redoes the rest.",
         ),
         (
             vec![(0, Outcome::Leaves(Reason::Taken(PathBuf::from("/x/dest/a"))))],
@@ -1748,7 +1809,7 @@ fn a_redo_names_each_kind_of_step_in_plain_words() {
                 },
                 copy("hello"),
             ),
-            "Redid the copy of hello into dest. The copy is in dest again. ctrl+z undoes it.",
+            "The copy is in dest again. ctrl+z undoes it.",
         ),
         (
             one(
@@ -1765,7 +1826,7 @@ fn a_redo_names_each_kind_of_step_in_plain_words() {
                     from_device: None,
                 },
             ),
-            "Redid the move of hello into dest. It is in dest again. The original hello in d stays too, so it is in both places. ctrl+z undoes it.",
+            "It is in dest again. The original hello in d stays too, so it is in both places. ctrl+z undoes it.",
         ),
         (
             one(
@@ -1781,7 +1842,7 @@ fn a_redo_names_each_kind_of_step_in_plain_words() {
                     original: tree(),
                 },
             ),
-            "Redid the duplicate of hello. The duplicate is here again. ctrl+z undoes it.",
+            "The duplicate is here again. ctrl+z undoes it.",
         ),
         (
             one(
@@ -1795,7 +1856,7 @@ fn a_redo_names_each_kind_of_step_in_plain_words() {
                     at: print(),
                 },
             ),
-            "Redid the rename to b. It is named b again. ctrl+z undoes it.",
+            "It is named b again. ctrl+z undoes it.",
         ),
         (
             one(
@@ -1805,7 +1866,7 @@ fn a_redo_names_each_kind_of_step_in_plain_words() {
                     held: None,
                 },
             ),
-            "Redid the move of a to the trash. It is in the trash again. ctrl+z undoes it.",
+            "It is in the trash again. ctrl+z undoes it.",
         ),
         (
             one(
@@ -1815,7 +1876,7 @@ fn a_redo_names_each_kind_of_step_in_plain_words() {
                     at: print(),
                 },
             ),
-            "Redid the new folder New folder. The new folder New folder is back. ctrl+z undoes it.",
+            "The new folder New folder is back. ctrl+z undoes it.",
         ),
         (
             one(
@@ -1825,7 +1886,7 @@ fn a_redo_names_each_kind_of_step_in_plain_words() {
                     at: print(),
                 },
             ),
-            "Redid the new file New file. The new file New file is back. ctrl+z undoes it.",
+            "The new file New file is back. ctrl+z undoes it.",
         ),
     ];
     for ((step, outcomes), expected) in cases {
@@ -2058,9 +2119,11 @@ fn redo_trashes_again_and_makes_new_items_again() {
     let mut browser = opened(temp.path());
     point_at(&mut browser, &file);
     assert!(browser.trash_picks());
-    wait_until(&mut browser, "the trash", |browser| {
-        browser.note().count == "1 moved to the trash. ctrl+z puts it back."
-    });
+    wait_notice(
+        &mut browser,
+        "the trash",
+        "1 moved to the trash. ctrl+z puts it back.",
+    );
     assert!(undo(&mut browser));
     assert!(file.exists());
     assert!(redo(&mut browser));
@@ -2138,13 +2201,13 @@ fn undo_and_redo_refuse_while_the_other_one_runs_and_name_which_one() {
     assert!(browser.undo_running());
     assert!(browser.undo(false));
     assert_eq!(
-        browser.ops.notice.as_deref(),
-        Some("Nothing was undone. Press ctrl+z again when the redo ends.")
+        notice(&browser),
+        "Nothing was undone. Press ctrl+z again when the redo ends."
     );
     assert!(browser.redo(false));
     assert_eq!(
-        browser.ops.notice.as_deref(),
-        Some("Nothing was redone. Press ctrl+shift+z again when the redo ends.")
+        notice(&browser),
+        "Nothing was redone. Press ctrl+shift+z again when the redo ends."
     );
     assert_eq!(
         browser.note().count,
@@ -2156,8 +2219,8 @@ fn undo_and_redo_refuse_while_the_other_one_runs_and_name_which_one() {
     assert!(browser.undo_running());
     assert!(browser.redo(false));
     assert_eq!(
-        browser.ops.notice.as_deref(),
-        Some("Nothing was redone. Press ctrl+shift+z again when the undo ends.")
+        notice(&browser),
+        "Nothing was redone. Press ctrl+shift+z again when the undo ends."
     );
     wait_until(&mut browser, "the undo", |browser| !browser.undo_running());
 }
@@ -2228,7 +2291,7 @@ fn keep_this_on_the_redo_sheet_leaves_the_item_and_drops_the_step() {
     assert!(temp.path().join("a.txt").exists());
     assert_eq!(
         notice(&browser),
-        "Nothing was redone: a.txt stays where it is, as you chose. Nothing is left to redo."
+        "Could not redo the move of a.txt into dest. Nothing was redone: a.txt stays where it is, as you chose. Nothing is left to redo."
     );
     assert!(!redo(&mut browser));
     assert_eq!(notice(&browser), "Nothing to redo");
@@ -2251,8 +2314,7 @@ fn every_undo_and_redo_adds_a_row_to_the_moves_list_with_the_full_note() {
         undone,
         (
             "Undid the copy of a.txt into dest".to_string(),
-            "Undid the copy of a.txt into dest. The copy went to the trash. ctrl+shift+z redoes it."
-                .to_string(),
+            "The copy went to the trash. ctrl+shift+z redoes it.".to_string(),
             MoveState::Done
         )
     );
@@ -2262,12 +2324,46 @@ fn every_undo_and_redo_adds_a_row_to_the_moves_list_with_the_full_note() {
         rows(&browser)[0],
         (
             "Redid the copy of a.txt into dest".to_string(),
-            "Redid the copy of a.txt into dest. The copy is in dest again. ctrl+z undoes it."
-                .to_string(),
+            "The copy is in dest again. ctrl+z undoes it.".to_string(),
             MoveState::Done
         )
     );
     assert_eq!(rows(&browser).len(), 3);
+}
+
+#[test]
+fn an_undo_posts_one_info_message_titled_like_its_moves_row() {
+    let (_temp, _dest, _file, browser) = copied_then_undone();
+    let title = rows(&browser)[0].0.clone();
+
+    let posted = browser.posted();
+
+    assert_eq!(posted.len(), 2);
+    assert_eq!(posted[0].level, Level::Info);
+    assert_eq!(
+        posted[1],
+        Message::info(title, "The copy went to the trash. ctrl+shift+z redoes it.")
+    );
+}
+
+#[test]
+fn a_trash_that_fails_posts_an_error_and_nothing_about_success() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = write(temp.path(), "a.txt", "text");
+    let mut browser = opened(temp.path());
+    point_at(&mut browser, &file);
+    fs::remove_file(&file).unwrap();
+
+    assert!(browser.trash_picks());
+    wait_until(&mut browser, "the trash", |browser| {
+        browser.ops.trashing == 0
+    });
+
+    let posted = browser.posted();
+    assert_eq!(posted.len(), 1);
+    assert_eq!(posted[0].level, Level::Error);
+    assert_eq!(posted[0].title, "Could not move 1 item to the trash");
+    assert!(posted[0].body.starts_with("a.txt: "));
 }
 
 #[test]
@@ -2300,9 +2396,7 @@ fn dropping_a_step_that_changed_nothing_and_a_delete_that_cannot_be_undone_leave
     assert!(browser.erase_ask());
     assert!(browser.erase_confirm());
     wait_until(&mut browser, "the delete", |_| !file.exists());
-    wait_until(&mut browser, "the note", |browser| {
-        browser.note().count == "1 item deleted for good."
-    });
+    wait_notice(&mut browser, "the note", "1 item deleted for good");
 
     assert!(undo(&mut browser));
     assert_eq!(
@@ -2418,9 +2512,11 @@ fn a_copy_then_a_drag_onto_the_same_folder_leaves_one_empty_step_so_undo_names_t
     assert_eq!(steps_in(&browser), 2);
     assert!(browser.choose(0, Resolve::Keep));
     assert!(browser.confirm());
-    wait_until(&mut browser, "the move", |browser| {
-        browser.note().count == "Nothing changed in Untitled Folder."
-    });
+    wait_notice(
+        &mut browser,
+        "the move",
+        "Nothing changed in Untitled Folder",
+    );
     assert!(source.is_dir());
     assert!(target.join("Test 1").is_dir());
     assert_eq!(steps_in(&browser), 2);

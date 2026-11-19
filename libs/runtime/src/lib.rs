@@ -21,6 +21,6 @@ mod watchdog;
 pub use display::x11 as xrandr;
 pub use pane_field::PaneField;
 
-pub use client::{PlatformStateClient, Subscription};
+pub use client::{Notification, PlatformStateClient, Subscription};
 pub use types::{CursorPos, MonitorBounds, PlatformState, WindowBounds};
 pub use watchdog::{spawn_host_death_watchdog, spawn_host_death_watchdog_with};

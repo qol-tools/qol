@@ -18,6 +18,7 @@ use crate::ops::history::{
 };
 use crate::ops::print::Print;
 use crate::ops::{self, Failure, Room, Survey, Transfer, Trashing, Verb};
+use crate::relay::Message;
 
 pub(super) struct Renaming {
     pub target: PathBuf,
@@ -71,7 +72,6 @@ impl Browser {
         if paths.is_empty() {
             return false;
         }
-        self.ops.notice = None;
         self.failure = None;
         let step = self.ops.history.open(Action::Trash(paths.clone()));
         self.ops.trashing += 1;
@@ -100,10 +100,12 @@ impl Browser {
         }
         self.ops.history.close(step);
         if count > 0 {
-            self.ops.notice = Some(ops_text::trashed_note(count, undoable));
+            self.post(ops_text::trashed_note(count, undoable));
             self.picks.clear();
         }
-        self.failure = ops_text::failure_text(&trashing.failures);
+        if let Some(message) = ops_text::failure_text("move", " to the trash", &trashing.failures) {
+            self.post(message);
+        }
         self.reload();
     }
 
@@ -119,12 +121,11 @@ impl Browser {
             .collect();
         if paths.is_empty() {
             if held > 0 {
-                self.ops.notice = Some(ops_text::erase_elsewhere_note());
+                self.post(ops_text::erase_elsewhere_note());
                 return true;
             }
             return false;
         }
-        self.ops.notice = None;
         self.failure = None;
         self.ops.erasing = Some(paths);
         true
@@ -176,9 +177,11 @@ impl Browser {
         self.ops.history.close(step);
         if count > 0 {
             self.picks.clear();
-            self.ops.notice = Some(ops_text::erased_note(count));
+            self.post(ops_text::erased_note(count));
         }
-        self.failure = ops_text::failure_text(&failures);
+        if let Some(message) = ops_text::failure_text("delete", "", &failures) {
+            self.post(message);
+        }
         self.reload();
     }
 
@@ -260,16 +263,11 @@ impl Browser {
                 self.picks.rename(&target, renamed);
                 self.ops.rename = None;
                 self.failure = None;
-                self.ops.notice = Some(if undoable {
-                    format!("Renamed to {name}. ctrl+z undoes it.")
-                } else {
-                    format!("Renamed to {name}.")
-                });
+                let body = if undoable { "ctrl+z undoes it." } else { "" };
+                self.post(Message::info(format!("Renamed to {name}"), body));
                 self.reload();
             }
-            Err(problem) => {
-                self.failure = Some(ops_text::problem_text(&problem, &name));
-            }
+            Err(problem) => self.post(ops_text::name_problem(&problem, &name, "rename to")),
         }
     }
 
@@ -312,9 +310,7 @@ impl Browser {
                 self.failure = None;
                 self.reload();
             }
-            Err(problem) => {
-                self.failure = Some(ops_text::problem_text(&problem, &name));
-            }
+            Err(problem) => self.post(ops_text::name_problem(&problem, &name, "create")),
         }
         true
     }
@@ -361,10 +357,9 @@ impl Browser {
         if self.ops.asking.is_some() {
             return true;
         }
-        self.ops.notice = None;
         self.failure = None;
         if let Some(when) = self.undo_busy(keys_waiting) {
-            self.ops.notice = Some(ops_text::refused(direction, &when));
+            self.post(ops_text::refused(direction, &when));
             return true;
         }
         match direction {
@@ -382,7 +377,7 @@ impl Browser {
             Top::Undo(step) => Some((step.id, None)),
         };
         let Some((id, spent)) = top else {
-            self.ops.notice = Some(ops_text::nothing_to(Direction::Undo));
+            self.post(ops_text::nothing_to(Direction::Undo));
             return false;
         };
         let Some(spent) = spent else {
@@ -391,14 +386,14 @@ impl Browser {
         self.ops.history.drop_step(id);
         let next = ops_text::next_text(self.ops.history.top(), &here);
         let text = format!("{} {next}", spent.text);
-        self.log_step(spent.title, text.clone(), spent.state);
-        self.ops.notice = Some(text);
+        self.post(spent.message(&next));
+        self.log_step(spent.title, text, spent.state);
         true
     }
 
     fn redo_top(&mut self) -> bool {
         let Some(id) = self.ops.history.redo_top().map(|step| step.id) else {
-            self.ops.notice = Some(ops_text::nothing_to(Direction::Redo));
+            self.post(ops_text::nothing_to(Direction::Redo));
             return false;
         };
         self.start_step(id, Direction::Redo, None)
@@ -437,13 +432,13 @@ impl Browser {
             .map(|found| ops_text::step_label(&found.action, &here));
         let plan = self.ops.history.plan(step, direction);
         let (Some(label), Some(plan)) = (label, plan) else {
-            self.ops.notice = Some(ops_text::nothing_to(direction));
+            self.post(ops_text::nothing_to(direction));
             return false;
         };
         let lock = match self.ops.tools.gate.claim() {
             Ok(lock) => lock,
             Err(Taken) => {
-                self.ops.notice = Some(ops_text::refused(
+                self.post(ops_text::refused(
                     direction,
                     "when the move in another window ends",
                 ));
@@ -591,8 +586,8 @@ impl Browser {
             } else {
                 MoveState::Failed
             };
-            self.log_step(title, text.clone(), state);
-            self.ops.notice = Some(text);
+            self.post(ops_text::step_message(&title, &text, did));
+            self.log_step(title, text, state);
             self.rename_picks(&step, &outcomes);
         }
         self.reload();
