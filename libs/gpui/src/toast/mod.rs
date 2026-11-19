@@ -24,6 +24,7 @@ use slab::SlabPresenter;
 
 const POINTER_POLL: Duration = Duration::from_millis(60);
 const AGE_TICK: Duration = Duration::from_secs(30);
+const LONGEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const WINDOW_ROOM: f32 = 4096.0;
 
 static TOAST_HOST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -200,7 +201,7 @@ impl Toast {
     }
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
+        self.timeout = Some(timeout.min(LONGEST_TIMEOUT));
         self.timeout_explicit = true;
         self
     }
@@ -506,7 +507,7 @@ impl ToastHost {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN};
 
@@ -703,6 +704,22 @@ mod tests {
             long_warning.effective_timeout(),
             Some(Duration::from_secs(60))
         );
+    }
+
+    #[test]
+    fn a_timeout_longer_than_a_day_stays_a_day() {
+        let day = Duration::from_secs(24 * 60 * 60);
+        let cases = [
+            (day, day),
+            (day + Duration::from_secs(1), day),
+            (Duration::from_millis(u64::MAX), day),
+            (Duration::MAX, day),
+        ];
+        for (asked, kept) in cases {
+            let toast = Toast::new("t", "m", ToastLayout::status()).timeout(asked);
+            assert_eq!(toast.effective_timeout(), Some(kept), "{asked:?}");
+            assert!(Instant::now().checked_add(kept).is_some());
+        }
     }
 
     #[test]

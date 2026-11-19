@@ -805,9 +805,9 @@ stays host-authoritative for state.
   and old hosts ignore the extra fields.
 - `push_notification` also takes three optional fields after `activate`, each
   omitted from the packet when unset:
-  `duration_ms` is how long the card stays, in milliseconds. `0` keeps it
-  until dismissed, and an absent value leaves it to the level (about 4 s for
-  `info`, 8 s for `warn`, 10 s for `error`).
+  `duration_ms` is how long the card stays, in milliseconds, and at most a
+  day. `0` keeps it until dismissed, and an absent value leaves it to the
+  level (about 4 s for `info`, 8 s for `warn`, 10 s for `error`).
   `key` makes a later notification from the same plugin with the same key
   replace the card on screen instead of stacking a new one.
   `image` is the absolute path of a picture the card shows.

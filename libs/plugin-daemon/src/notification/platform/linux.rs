@@ -146,6 +146,7 @@ fn notify_send_args(
         args.push("-r".to_string());
         args.push(id.to_string());
     }
+    args.push("--".to_string());
     args.push(notification.title.clone());
     args.push(notification.body.clone());
     args
@@ -217,55 +218,55 @@ mod tests {
                 notification(NotificationLevel::Info),
                 false,
                 None,
-                vec!["-u", "low", "Title", "Body"],
+                vec!["-u", "low", "--", "Title", "Body"],
             ),
             (
                 notification(NotificationLevel::Warn),
                 false,
                 None,
-                vec!["-u", "normal", "Title", "Body"],
+                vec!["-u", "normal", "--", "Title", "Body"],
             ),
             (
                 notification(NotificationLevel::Error),
                 false,
                 None,
-                vec!["-u", "critical", "Title", "Body"],
+                vec!["-u", "critical", "--", "Title", "Body"],
             ),
             (
                 notification(NotificationLevel::Info).until_dismissed(),
                 false,
                 None,
-                vec!["-u", "low", "-t", "0", "Title", "Body"],
+                vec!["-u", "low", "-t", "0", "--", "Title", "Body"],
             ),
             (
                 notification(NotificationLevel::Info).stay(Duration::from_millis(2500)),
                 false,
                 None,
-                vec!["-u", "low", "-t", "2500", "Title", "Body"],
+                vec!["-u", "low", "-t", "2500", "--", "Title", "Body"],
             ),
             (
                 notification(NotificationLevel::Info).stay(Duration::MAX),
                 false,
                 None,
-                vec!["-u", "low", "-t", "2147483647", "Title", "Body"],
+                vec!["-u", "low", "-t", "2147483647", "--", "Title", "Body"],
             ),
             (
                 notification(NotificationLevel::Info).image("/tmp/a.png"),
                 false,
                 None,
-                vec!["-u", "low", "-i", "/tmp/a.png", "Title", "Body"],
+                vec!["-u", "low", "-i", "/tmp/a.png", "--", "Title", "Body"],
             ),
             (
                 notification(NotificationLevel::Info).key("copy"),
                 true,
                 None,
-                vec!["-u", "low", "-p", "Title", "Body"],
+                vec!["-u", "low", "-p", "--", "Title", "Body"],
             ),
             (
                 notification(NotificationLevel::Info).key("copy"),
                 true,
                 Some(42),
-                vec!["-u", "low", "-p", "-r", "42", "Title", "Body"],
+                vec!["-u", "low", "-p", "-r", "42", "--", "Title", "Body"],
             ),
             (
                 notification(NotificationLevel::Error)
@@ -284,15 +285,22 @@ mod tests {
                     "-p",
                     "-r",
                     "7",
+                    "--",
                     "Title",
                     "Body",
                 ],
             ),
             (
+                Notification::new("--icon=/x", "-x"),
+                false,
+                None,
+                vec!["-u", "low", "--", "--icon=/x", "-x"],
+            ),
+            (
                 notification(NotificationLevel::Info).key("copy"),
                 false,
                 None,
-                vec!["-u", "low", "Title", "Body"],
+                vec!["-u", "low", "--", "Title", "Body"],
             ),
         ];
         for (notification, print_id, replace, expected) in cases {
