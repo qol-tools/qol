@@ -137,15 +137,14 @@ runs:
       # outside mirror. autoclean drops the files Ubuntu has replaced, so the
       # saved set does not grow.
       # The key names the files, so a set is saved once and the prune keeps the
-      # newest. Main saves a changed set. A push to main compiles nothing while
-      # the build cache is complete, and the one Linux job it runs through this
-      # setup only looks the build cache up, so the first set was never saved
-      # on main and every pull request downloaded its own. On main a lookup
-      # therefore still downloads and saves the set. It stops before it
-      # installs, and ends without a save when no mirror answers, because a
-      # lookup needs no package. Any other run saves only when it restored
-      # nothing, into its own pull request's scope, which covers the time
-      # before main has saved a first set.
+      # newest. Main saves a changed set. A push to main runs this whole step
+      # only when it builds a release candidate or the build cache missed; any
+      # other push compiles nothing and only looks the build cache up. On main
+      # a lookup therefore still downloads and saves the set, so every push
+      # keeps it current. It stops before it installs, and ends without a save
+      # when no mirror answers, because a lookup needs no package. Any other
+      # run saves only when it restored nothing, into its own pull request's
+      # scope, which covers the time before main has saved a first set.
       run: |
         packages=(
           pkg-config libx11-dev libxi-dev libxtst-dev libxcb1-dev
