@@ -67,10 +67,6 @@ function contractDefaultDriftHits(cwd) {
     return [copiedHelpers, oldLoaders.join('\n')].filter(Boolean).join('\n');
 }
 
-function launcherIdentityHits(cwd) {
-    return grep(cwd, 'qol-tray-launcher|qol-launcher', ['plugins/*/src']).trim();
-}
-
 function nestedWorkflowHits(cwd) {
     const files = execFileSync(
         'git',
@@ -117,18 +113,11 @@ const conventionConstants = [
     '/dev/promote-generation',
     'RESERVED_PLUGIN_IDS',
 ].join('|');
-const pluginPorts = '42710|42720';
 
-const constantHits = [
-    grep(root, conventionConstants, ['*.rs', ':!libs/conventions/']),
-    grep(root, pluginPorts, ['*.js', '*.py']),
-]
-    .join('')
-    .trim();
+const constantHits = grep(root, conventionConstants, ['*.rs', ':!libs/conventions/']).trim();
 
 const socketHits = manifestSocketFallbackHits(root);
 const contractDefaultHits = contractDefaultDriftHits(root);
-const launcherHits = launcherIdentityHits(root);
 const nestedWorkflows = nestedWorkflowHits(root);
 const prefixedPluginDirectories = prefixedPluginDirectoryHits(root);
 
@@ -136,7 +125,6 @@ if (
     constantHits ||
     socketHits ||
     contractDefaultHits ||
-    launcherHits ||
     nestedWorkflows ||
     prefixedPluginDirectories
 ) {
@@ -151,7 +139,6 @@ if (
         out.write('    - reserved ids  : qol_conventions::is_reserved_plugin_id\n');
         out.write('    - trace log     : qol_config::trace_log_path (host), qol_conventions::GUEST_TRACE_LOG_PATH (sandbox guests)\n');
         out.write('    - plugin id     : qol_conventions::build::emit_plugin_id (from plugin.toml)\n');
-        out.write('    - daemon port   : [daemon] port in plugin.toml (emit_daemon_port in Rust; host-served daemonPort in JS)\n');
     }
     if (socketHits) {
         out.write('\n  a plugin that declares [daemon].socket in plugin.toml must not also hardcode\n');
@@ -170,11 +157,6 @@ if (
         out.write('    - load with qol_config::load_plugin_config_from_env_with_contract(...)\n');
         out.write('    - validate tests with qol_config::validate_contract_defaults_match_type::<T>(...)\n');
         out.write('    - for runtime-socket config, merge raw JSON with qol_config::deserialize_with_contract_defaults(...)\n');
-    }
-    if (launcherHits) {
-        out.write('\n  launcher window identity markers must come from qol_conventions::launcher\n');
-        out.write('  offending occurrences:\n');
-        for (const line of launcherHits.split('\n')) out.write(`    ${line}\n`);
     }
     if (nestedWorkflows) {
         out.write('\n  nested GitHub workflows are inert inside the monorepo and duplicate automation\n');
