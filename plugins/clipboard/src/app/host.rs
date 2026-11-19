@@ -1,7 +1,8 @@
 use anyhow::{bail, Context, Result};
+use qol_plugin_ids::launcher;
 use serde_json::json;
 
-const LAUNCHER: &str = "qol-launcher";
+const LAUNCHER: &str = launcher::ID;
 const FLOW_ACTION: &str = "flow";
 
 pub fn open_in_launcher() -> Result<()> {

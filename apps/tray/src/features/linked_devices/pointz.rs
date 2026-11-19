@@ -19,7 +19,7 @@ use tokio::runtime::Handle;
 use super::{ActiveAuthority, Host, PeerHostHandle, State};
 use crate::plugins::PluginManager;
 
-const POINTZ_UID: &str = "9cb88d65-1d43-4fde-95b6-105761f0a14b";
+const POINTZ_UID: &str = qol_plugin_ids::pointz::UID;
 const LEGACY_SEED: &str = "pairing-secret";
 const LEGACY_DEVICES: &str = "devices.json";
 const MIGRATED_SUFFIX: &str = "migrated";

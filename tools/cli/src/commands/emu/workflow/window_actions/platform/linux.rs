@@ -20,7 +20,7 @@ use super::Verdict;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(20);
 const FIXTURE_TIMEOUT: Duration = Duration::from_secs(15);
-const PLUGIN_ID: &str = "qol-window-actions";
+const PLUGIN_ID: &str = qol_plugin_ids::window_actions::ID;
 
 pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     let mut guest = connect_desktop_guest(vm)?;

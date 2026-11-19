@@ -17,7 +17,7 @@ use super::Verdict;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(25);
 const KEY_SETTLE: Duration = Duration::from_millis(200);
-const LAUNCHER_UID: &str = "5cc75f62-2e3b-463c-ac7b-ae269cff1ef1";
+const LAUNCHER_UID: &str = qol_plugin_ids::launcher::UID;
 const QOL_COMBO: &str = "Ctrl+Alt+F9";
 const GTK_COMBO: &str = "['<Primary><Alt>F9']";
 const KEYBINDINGS: &str = "/org/cinnamon/desktop/keybindings";
@@ -48,7 +48,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     install_payload(&mut guest)?;
     seed_conflicts(&mut guest)?;
 
-    let mut auth = start_tray_and_wait_plugin(&mut guest, "qol-launcher")?;
+    let mut auth = start_tray_and_wait_plugin(&mut guest, qol_plugin_ids::launcher::ID)?;
     let baseline = require_status(
         request(&mut guest, &auth, "GET", "/api/hotkeys", None)?,
         200,

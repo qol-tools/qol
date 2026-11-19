@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const ID: &str = "dev_link_paths";
-const RENAMED_PLUGINS: &[(&str, &str, &str)] = &[("plugin-screen-recorder", "qol-shot", "shot")];
+const RENAMED_PLUGINS: &[(&str, &str, &str)] =
+    &[("plugin-screen-recorder", qol_plugin_ids::shot::ID, "shot")];
 
 pub(super) struct DevLinkPathsCheck;
 

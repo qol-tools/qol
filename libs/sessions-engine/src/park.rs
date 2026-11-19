@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 
 /// CLI Sessions owns parking; these subcommands forward to its installed binary,
 /// so the park runner and the woken-tab close always come from the plugin qol-tray updates.
-const PLUGIN_ID: &str = "qol-cli-sessions";
+const PLUGIN_ID: &str = qol_plugin_ids::cli_sessions::ID;
 const WATCH_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const WATCH_READY_POLL: Duration = Duration::from_millis(50);
 

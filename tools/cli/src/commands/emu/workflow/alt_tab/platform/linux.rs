@@ -22,7 +22,7 @@ use super::Verdict;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(20);
-const PLUGIN_ID: &str = "qol-alt-tab";
+const PLUGIN_ID: &str = qol_plugin_ids::alt_tab::ID;
 const PICKER_PREFIX: &str = "qol-alt-tab-picker@";
 const CINNAMON_EXTENSION_UUID: &str = "qol-alt-tab-preview-plane@qol-tools";
 const CINNAMON_EXTENSION_PARENT: &str = "/home/qol/.local/share/cinnamon/extensions";
@@ -93,7 +93,7 @@ pub(super) fn run_performance(vm: &BootedVm) -> Result<Verdict> {
     dismiss_sticky_performance(&mut guest)?;
 
     let metrics_cursor = current_trace_cursor(&mut guest)?;
-    let pid_before = plugin_daemon_pid(&mut guest, &["-x", "qol-alt-tab"], "Alt Tab daemon")?;
+    let pid_before = plugin_daemon_pid(&mut guest, &["-x", PLUGIN_ID], "Alt Tab daemon")?;
     let fds_before = fd_count(&mut guest, &pid_before)?;
     for _ in 0..PERFORMANCE_RETAINED_CYCLES {
         open_sticky_performance(&mut guest, &auth)?;
@@ -115,7 +115,7 @@ pub(super) fn run_performance(vm: &BootedVm) -> Result<Verdict> {
     )?;
     dismiss_sticky_performance(&mut guest)?;
 
-    let pid_after = plugin_daemon_pid(&mut guest, &["-x", "qol-alt-tab"], "Alt Tab daemon")?;
+    let pid_after = plugin_daemon_pid(&mut guest, &["-x", PLUGIN_ID], "Alt Tab daemon")?;
     if pid_before != pid_after {
         bail!("Alt Tab restarted during Cinnamon performance storm");
     }
@@ -491,7 +491,7 @@ fn test_sticky_input_storm(
 ) -> Result<()> {
     open_sticky(guest, auth)?;
     qmp.screendump(artifact)?;
-    let pid_before = plugin_daemon_pid(guest, &["-x", "qol-alt-tab"], "Alt Tab daemon")?;
+    let pid_before = plugin_daemon_pid(guest, &["-x", PLUGIN_ID], "Alt Tab daemon")?;
     let fds_before = fd_count(guest, &pid_before)?;
     let cursor = current_trace_cursor(guest)?;
     for index in 0..KEY_CYCLES {
@@ -539,7 +539,7 @@ fn test_sticky_input_storm(
         &["path=ghost", &format!("n={}", FIXTURE_COUNT - 1)],
         ACTION_TIMEOUT,
     )?;
-    let pid_after = plugin_daemon_pid(guest, &["-x", "qol-alt-tab"], "Alt Tab daemon")?;
+    let pid_after = plugin_daemon_pid(guest, &["-x", PLUGIN_ID], "Alt Tab daemon")?;
     if pid_before != pid_after {
         bail!("Alt Tab restarted during sticky input storm");
     }
@@ -615,13 +615,13 @@ fn test_fresh_window_actions(guest: &mut GuestControlClient, auth: &str) -> Resu
 }
 
 fn test_retained_cycles(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
-    let pid_before = plugin_daemon_pid(guest, &["-x", "qol-alt-tab"], "Alt Tab daemon")?;
+    let pid_before = plugin_daemon_pid(guest, &["-x", PLUGIN_ID], "Alt Tab daemon")?;
     let fds_before = fd_count(guest, &pid_before)?;
     for _ in 0..RETAINED_CYCLES {
         open_sticky(guest, auth)?;
         dismiss_sticky(guest)?;
     }
-    let pid_after = plugin_daemon_pid(guest, &["-x", "qol-alt-tab"], "Alt Tab daemon")?;
+    let pid_after = plugin_daemon_pid(guest, &["-x", PLUGIN_ID], "Alt Tab daemon")?;
     if pid_before != pid_after {
         bail!("Alt Tab restarted during retained show/dismiss cycles");
     }
@@ -654,7 +654,7 @@ fn test_http_guards(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
 
 fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
     open_sticky(guest, auth)?;
-    let before = plugin_daemon_pid(guest, &["-x", "qol-alt-tab"], "Alt Tab daemon")?;
+    let before = plugin_daemon_pid(guest, &["-x", PLUGIN_ID], "Alt Tab daemon")?;
     require_exec(
         guest,
         command("/usr/bin/kill", &["--signal", "KILL", &before]),
@@ -663,7 +663,7 @@ fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()>
     wait_for_visible_picker_count(guest, 0)?;
     let outcome = wait_for_command(
         guest,
-        command("/usr/bin/pgrep", &["-x", "qol-alt-tab"]),
+        command("/usr/bin/pgrep", &["-x", PLUGIN_ID]),
         ACTION_TIMEOUT,
         |outcome| {
             outcome

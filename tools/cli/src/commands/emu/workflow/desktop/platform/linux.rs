@@ -32,9 +32,9 @@ pub(in crate::commands::emu::workflow) const BOOT_READY_TIMEOUT: Duration =
 pub(in crate::commands::emu::workflow) const ACTION_TIMEOUT: Duration = Duration::from_secs(30);
 pub(in crate::commands::emu::workflow) const AUTOSTART_PATH: &str =
     "/home/qol/.config/autostart/qol-tray.desktop";
-pub(in crate::commands::emu::workflow) const PLUGIN_ID: &str = "qol-shot";
+pub(in crate::commands::emu::workflow) const PLUGIN_ID: &str = qol_plugin_ids::shot::ID;
 pub(in crate::commands::emu::workflow) const PREVIEW_PREFIX: &str = "^qol-shot-preview";
-const QOL_SHOT_SOCKET_PATH: &str = "/home/qol/.local/share/qol-tray/runtime/sockets/qol-shot.sock";
+const GUEST_SOCKETS_DIR: &str = "/home/qol/.local/share/qol-tray/runtime/sockets";
 const CAPTURE_MARKER: &str = "/tmp/qol-workflow-capture-start";
 const PIN_DRAG_HOLD: Duration = Duration::from_millis(80);
 const STATUS_SETTLE: Duration = Duration::from_millis(250);
@@ -59,10 +59,11 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
 fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
     let mut guest = connect_desktop_guest(vm)?;
     install_payload(&mut guest)?;
-    start_tray_and_wait_plugin(&mut guest, "qol-shot")?;
+    start_tray_and_wait_plugin(&mut guest, PLUGIN_ID)?;
+    let socket = format!("{GUEST_SOCKETS_DIR}/{}", qol_plugin_ids::shot::SOCKET_NAME);
     wait_for_command(
         &mut guest,
-        command("/usr/bin/test", &["-S", QOL_SHOT_SOCKET_PATH]),
+        command("/usr/bin/test", &["-S", socket.as_str()]),
         DESKTOP_READY_TIMEOUT,
         |_| true,
         "the qol-shot daemon socket",
@@ -108,7 +109,7 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
     let capture_trace = current_trace_cursor(&mut guest)?;
     require_exec(
         &mut guest,
-        command(TRAY_BINARY, &["exec", "qol-shot", "screenshot"]),
+        command(TRAY_BINARY, &["exec", PLUGIN_ID, "screenshot"]),
         GUEST_COMMAND_TIMEOUT,
     )?;
     wait_for_probe_line(
@@ -335,7 +336,7 @@ fn exercise_recording_cancellation(
     let trace = current_trace_cursor(guest)?;
     require_exec(
         guest,
-        command(TRAY_BINARY, &["exec", "qol-shot", "record"]),
+        command(TRAY_BINARY, &["exec", PLUGIN_ID, "record"]),
         GUEST_COMMAND_TIMEOUT,
     )?;
     wait_for_probe_line(
@@ -357,7 +358,7 @@ fn exercise_recording_cancellation(
     qmp.screendump(&countdown)?;
     require_exec(
         guest,
-        command(TRAY_BINARY, &["exec", "qol-shot", "record"]),
+        command(TRAY_BINARY, &["exec", PLUGIN_ID, "record"]),
         GUEST_COMMAND_TIMEOUT,
     )?;
     wait_for_probe_fields(
@@ -1647,11 +1648,11 @@ mod tests {
 
     #[test]
     fn guest_commands_are_absolute_typed_argv() {
-        let command = command(TRAY_BINARY, &["exec", "qol-shot", "screenshot"]);
+        let command = command(TRAY_BINARY, &["exec", PLUGIN_ID, "screenshot"]);
         command.validate().unwrap();
         assert_eq!(
             command.args,
-            ["exec", "qol-shot", "screenshot"].map(str::to_string)
+            ["exec", PLUGIN_ID, "screenshot"].map(str::to_string)
         );
     }
 

@@ -374,6 +374,49 @@ class LocalPlannerContract(unittest.TestCase):
                         self.assertEqual(emit.call_args.args[0]["crates"], crates)
 
     @patch.object(ac, "embedded_files")
+    @patch.object(ac, "emit")
+    @patch.object(ac, "skip_all")
+    @patch.object(ac, "workspace_graph")
+    @patch.object(ac, "changed_files")
+    def test_a_file_a_build_script_reads_seeds_that_crate(
+        self, changed_files, graph, skip_all, emit, embedded_files
+    ):
+        graph.return_value = {
+            "qol-plugin-ids": {
+                "dir": "libs/plugin-ids",
+                "deps": set(),
+                "doctest": False,
+                "build_inputs": ["plugins/*/plugin.toml"],
+            },
+            "qol-clipboard": {
+                "dir": "plugins/clipboard",
+                "deps": {"qol-plugin-ids"},
+                "doctest": False,
+            },
+            "qol-lights": {"dir": "plugins/lights", "deps": set(), "doctest": False},
+        }
+        embedded_files.return_value = []
+        cases = [
+            ("plugins/lights/plugin.toml", "qol-clipboard qol-lights qol-plugin-ids"),
+            ("plugins/lights/src/main.rs", "qol-lights"),
+            ("docs/plugin.toml", None),
+        ]
+        with patch.object(ac, "UBUNTU_EXCLUDE", set()), patch.dict(
+            os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}
+        ):
+            for path, crates in cases:
+                with self.subTest(path=path):
+                    changed_files.return_value = [path]
+                    emit.reset_mock()
+                    skip_all.reset_mock()
+                    ac.main()
+                    if crates is None:
+                        skip_all.assert_called_once()
+                        emit.assert_not_called()
+                    else:
+                        self.assertEqual(emit.call_args.args[0]["crates"], crates)
+
+    @patch.object(ac, "embedded_files")
     @patch.object(ac, "full_workspace")
     @patch.object(ac, "workspace_graph")
     @patch.object(ac, "changed_files")
@@ -649,6 +692,37 @@ class LocalPlannerContract(unittest.TestCase):
             self.assertEqual(
                 {name: package["doctest"] for name, package in graph.items()},
                 {"binary": False, "library": True, "disabled": False},
+            )
+
+    def test_build_inputs_resolve_from_the_crate_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers=["libs/ids", "plain"]\nresolver="2"\n'
+            )
+            manifests = {
+                "libs/ids": '[package.metadata.qol]\nbuild-inputs=["../../plugins/*/plugin.toml"]\n',
+                "plain": "",
+            }
+            for folder, metadata in manifests.items():
+                package = root / folder
+                (package / "src").mkdir(parents=True)
+                name = Path(folder).name
+                (package / "Cargo.toml").write_text(
+                    f'[package]\nname="{name}"\nversion="0.1.0"\nedition="2021"\n{metadata}'
+                )
+                (package / "src" / "lib.rs").write_text("")
+            subprocess.run(
+                ["cargo", "generate-lockfile", "--offline"], cwd=root, check=True,
+                capture_output=True,
+            )
+            with patch.object(ac, "run", side_effect=lambda argv: subprocess.run(
+                argv, cwd=root, capture_output=True, text=True,
+            )):
+                graph = ac.workspace_graph()
+            self.assertEqual(
+                {name: package["build_inputs"] for name, package in graph.items()},
+                {"ids": ["plugins/*/plugin.toml"], "plain": []},
             )
 
 

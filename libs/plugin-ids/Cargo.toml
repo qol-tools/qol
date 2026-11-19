@@ -1,0 +1,18 @@
+[package]
+name = "qol-plugin-ids"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Every plugin's id, uid, daemon socket name and port, generated from its plugin.toml"
+
+[package.metadata.qol]
+build-inputs = ["../../plugins/*/plugin.toml"]
+
+[dependencies]
+workspace-hack.workspace = true
+
+[build-dependencies]
+toml.workspace = true
+
+[lints]
+workspace = true

@@ -31,6 +31,7 @@ qol-frecency = { path = "libs/frecency" }
 qol-fs = { path = "libs/fs" }
 qol-log = { path = "libs/log" }
 qol-platform = { path = "libs/platform" }
+qol-plugin-ids = { path = "libs/plugin-ids" }
 qol-plugin-index = { path = "libs/plugin-index" }
 qol-peers = { path = "libs/peers" }
 qol-watch = { path = "libs/watch" }

@@ -229,7 +229,7 @@ fn run_storm_checks(
 }
 
 fn daemon_pid(guest: &mut GuestControlClient) -> Result<String> {
-    plugin_daemon_pid(guest, &["-x", "qol-shot"], "qol-shot daemon")
+    plugin_daemon_pid(guest, &["-x", PLUGIN_ID], "qol-shot daemon")
 }
 
 fn require_no_capture_process(guest: &mut GuestControlClient) -> Result<()> {
@@ -1077,7 +1077,7 @@ fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()>
     require_visible_window_count(guest, SELECTOR_PREFIX, 0)?;
     let outcome = wait_for_command(
         guest,
-        command("/usr/bin/pgrep", &["-x", "qol-shot"]),
+        command("/usr/bin/pgrep", &["-x", PLUGIN_ID]),
         ACTION_TIMEOUT,
         |outcome| {
             outcome
@@ -1638,7 +1638,7 @@ fn test_cold_standalone_preview(
 ) -> Result<()> {
     let pointer = (screen.0 / 8, screen.1 / 6);
     qmp.move_pointer_absolute(pointer.0, pointer.1, screen.0, screen.1)?;
-    let daemon_pid = plugin_daemon_pid(guest, &["-x", "qol-shot"], "qol-shot daemon")?;
+    let daemon_pid = plugin_daemon_pid(guest, &["-x", PLUGIN_ID], "qol-shot daemon")?;
     let binary = require_exec(
         guest,
         command(
@@ -1707,7 +1707,7 @@ fn test_cold_standalone_preview(
     }
     let standalone_pid = wait_for_command(
         guest,
-        command("/usr/bin/pgrep", &["-x", "qol-shot"]),
+        command("/usr/bin/pgrep", &["-x", PLUGIN_ID]),
         ACTION_TIMEOUT,
         |outcome| {
             outcome
