@@ -1141,7 +1141,7 @@ export const toFork = (list: Entry[], text: string, fromSwitchboard = true): { e
   if (exact !== undefined) return { entry: exact, message: message.trim() }
   if (colon !== ':') {
     const tabbed = fromSwitchboard && message === '' && word.length > 1 ? keyCompletions(list, word)[0]?.label : undefined
-    const entry = tabbed === undefined ? undefined : rows.find(one => keyOf(one) === tabbed)
+    const entry = tabbed?.startsWith(word) === true ? rows.find(one => keyOf(one) === tabbed) : undefined
     return entry === undefined ? undefined : { entry, message: '' }
   }
   const starts = keyStarts(rows, word)

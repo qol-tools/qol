@@ -2852,9 +2852,10 @@ test('enter on the start of a fork key, as when it overtakes the tab that would 
   await typed($, 'asking-fork')
   sent.length = 0
   expect((await typed($, 'qo')).drop).toContain('Writing to qol-ci-build-speed')
-  expect((await typed($, 'bu')).drop).toContain('Writing to qol-ci-build-speed')
   expect((await typed($, 'as')).drop).toContain('Writing to asking-fork')
   expect(sent).toEqual([])
+  expect((await typed($, 'build')).drop).toContain('→ asking-fork')
+  expect((await typed($, 'bu')).drop).toContain('→ asking-fork')
   expect((await typed($, 'a')).drop).toContain('→ asking-fork')
   expect((await typed($, 'yes')).drop).toContain('→ asking-fork')
   expect((await typed($, 'qo it')).drop).toContain('→ asking-fork')
