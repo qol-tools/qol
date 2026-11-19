@@ -3,8 +3,10 @@ use std::time::Duration;
 
 use qol_gpui::format_bytes;
 
-use super::ops::Held;
-use crate::ops::history::{Action, Change, Outcome as Verdict, Reason, Step, Top, Undone};
+use super::ops::{Held, MoveState};
+use crate::ops::history::{
+    Action, Change, Direction, Outcome as Verdict, Reason, Source, Step, Top, Undone,
+};
 use crate::ops::{free_name, Clash, NameProblem, Room, Survey, Verb};
 
 pub(super) fn held_note(held: Held, count: usize, into: Option<&str>) -> String {
@@ -184,12 +186,121 @@ pub(super) fn verb_noun(verb: Verb) -> &'static str {
     }
 }
 
-pub(super) fn refused(when: &str) -> String {
-    format!("Nothing was undone. Press ctrl+z again {when}.")
+pub(super) fn word(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Undo => "undo",
+        Direction::Redo => "redo",
+    }
 }
 
-pub(super) fn undoing_note(label: &str) -> String {
-    format!("Undoing the {label}. Esc stops it.")
+fn done_word(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Undo => "undone",
+        Direction::Redo => "redone",
+    }
+}
+
+fn lead_verb(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Undo => "Undid",
+        Direction::Redo => "Redid",
+    }
+}
+
+fn acts(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Undo => "undoes",
+        Direction::Redo => "redoes",
+    }
+}
+
+fn key_of(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Undo => "ctrl+z",
+        Direction::Redo => "ctrl+shift+z",
+    }
+}
+
+fn opposite(direction: Direction) -> Direction {
+    match direction {
+        Direction::Undo => Direction::Redo,
+        Direction::Redo => Direction::Undo,
+    }
+}
+
+fn closing(direction: Direction) -> String {
+    let other = opposite(direction);
+    format!("{} {} it.", key_of(other), acts(other))
+}
+
+pub(super) fn nothing_to(direction: Direction) -> String {
+    format!("Nothing to {}", word(direction))
+}
+
+pub(super) fn refused(direction: Direction, when: &str) -> String {
+    format!(
+        "Nothing was {}. Press {} again {when}.",
+        done_word(direction),
+        key_of(direction)
+    )
+}
+
+pub(super) fn asked_off(direction: Direction) -> String {
+    format!(
+        "Nothing was {}. {} asks again.",
+        done_word(direction),
+        key_of(direction)
+    )
+}
+
+pub(super) fn undoing_note(direction: Direction, label: &str) -> String {
+    let doing = match direction {
+        Direction::Undo => "Undoing",
+        Direction::Redo => "Redoing",
+    };
+    format!("{doing} the {label}. Esc stops it.")
+}
+
+pub(super) fn menu_word(action: &Action) -> &'static str {
+    match action {
+        Action::Transfer { verb, .. } => verb_noun(*verb),
+        Action::Rename { .. } => "rename",
+        Action::Trash(_) => "move to trash",
+        Action::NewFolder(_) => "new folder",
+        Action::NewFile(_) => "new file",
+        Action::Erase(_) => "permanent delete",
+    }
+}
+
+pub(super) fn step_title(direction: Direction, action: &Action, did: bool) -> String {
+    let label = step_label(action, Path::new(""));
+    if did {
+        format!("{} the {label}", lead_verb(direction))
+    } else {
+        format!("Could not {} the {label}", word(direction))
+    }
+}
+
+pub(super) struct Spent {
+    pub text: String,
+    pub title: String,
+    pub state: MoveState,
+}
+
+pub(super) fn spent(action: &Action, here: &Path, cannot: bool) -> Spent {
+    let whole = step_label(action, Path::new(""));
+    if cannot {
+        return Spent {
+            text: "Delete permanently cannot be undone.".to_string(),
+            title: format!("Cannot undo the {whole}"),
+            state: MoveState::Failed,
+        };
+    }
+    Spent {
+        text: format!("The {} changed nothing.", step_label(action, here)),
+        title: format!("The {whole} changed nothing"),
+        state: MoveState::Done,
+    }
 }
 
 pub(super) fn step_label(action: &Action, here: &Path) -> String {
@@ -231,6 +342,16 @@ pub(super) fn next_text(top: Top<'_>, here: &Path) -> String {
     }
 }
 
+pub(super) fn next_redo_text(step: Option<&Step>, here: &Path) -> String {
+    match step {
+        Some(step) => format!(
+            "Next, ctrl+shift+z redoes the {}.",
+            step_label(&step.action, here)
+        ),
+        None => "Nothing is left to redo.".to_string(),
+    }
+}
+
 fn place_of(path: &Path, here: &Path) -> String {
     let folder = path.parent().unwrap_or(path);
     if folder == here {
@@ -240,11 +361,23 @@ fn place_of(path: &Path, here: &Path) -> String {
     }
 }
 
-pub(crate) fn undo_sheet_lines(clashes: &[Clash], here: &Path) -> Vec<String> {
+pub(crate) fn undo_sheet_lines(
+    direction: Direction,
+    clashes: &[Clash],
+    here: &Path,
+) -> Vec<String> {
     let Some(first) = clashes.first() else {
         return Vec::new();
     };
     let place = place_of(&first.existing, here);
+    let (head, there) = match direction {
+        Direction::Undo => ("Undo", "puts it back"),
+        Direction::Redo => ("Redo", "puts it there"),
+    };
+    let each = match direction {
+        Direction::Undo => "puts each one back",
+        Direction::Redo => "puts each one there",
+    };
     if let [one] = clashes {
         let parent = one.existing.parent().unwrap_or(&one.existing);
         let free = one
@@ -252,17 +385,16 @@ pub(crate) fn undo_sheet_lines(clashes: &[Clash], here: &Path) -> Vec<String> {
             .file_name()
             .map_or_else(|| one.existing.clone(), |name| free_name(parent, name));
         return vec![
-            format!("Undo: {} is already {place}.", name_of(&one.existing)),
+            format!("{head}: {} is already {place}.", name_of(&one.existing)),
             format!(
-                "Undo never replaces anything. Keep both puts it back as {}.",
+                "{head} never replaces anything. Keep both {there} as {}.",
                 name_of(&free)
             ),
         ];
     }
     vec![
-        format!("Undo: some of these are already {place}."),
-        "Undo never replaces anything. Keep both puts each one back with a number after its name."
-            .to_string(),
+        format!("{head}: some of these are already {place}."),
+        format!("{head} never replaces anything. Keep both {each} with a number after its name."),
     ]
 }
 
@@ -292,12 +424,21 @@ impl Problem {
     }
 }
 
-fn problem_of(reason: &Reason) -> Option<Problem> {
+fn problem_of(reason: &Reason, direction: Direction) -> Option<Problem> {
+    let redo = direction == Direction::Redo;
     let problem = match reason {
         Reason::Gone(path) => Problem::named(format!("{} is gone.", name_of(path))),
         Reason::Changed(path) => Problem::named(format!("{} changed, so it stays.", name_of(path))),
+        Reason::OriginalGone(path) if redo => Problem::worded(format!(
+            "the original {} is gone, so it is not copied again.",
+            name_of(path)
+        )),
         Reason::OriginalGone(path) => Problem::worded(format!(
             "the original {} is gone, so the copy stays.",
+            name_of(path)
+        )),
+        Reason::OriginalChanged(path) if redo => Problem::worded(format!(
+            "the original {} changed, so it is not copied again.",
             name_of(path)
         )),
         Reason::OriginalChanged(path) => Problem::worded(format!(
@@ -319,6 +460,9 @@ fn problem_of(reason: &Reason) -> Option<Problem> {
             "{} was only partly moved, so its files stay in both places.",
             name_of(path)
         )),
+        Reason::CannotUndo(path) if redo => {
+            Problem::named(format!("{} cannot be redone from here.", name_of(path)))
+        }
         Reason::CannotUndo(path) => Problem::named(format!(
             "{} cannot be put back from here, but your desktop's trash can restore it.",
             name_of(path)
@@ -352,9 +496,25 @@ fn kept_copy(change: &Change, undone: &Undone) -> Option<Problem> {
     )))
 }
 
+fn kept_source(change: &Change) -> Option<Problem> {
+    let Change::Crossed {
+        from,
+        source: Source::Partly,
+        ..
+    } = change
+    else {
+        return None;
+    };
+    let folder = from.parent().map(name_of).unwrap_or_default();
+    Some(Problem::worded(format!(
+        "the original {} in {folder} stays too, so it is in both places.",
+        name_of(from)
+    )))
+}
+
 fn back_to(undone: &Undone) -> Option<&Path> {
     match undone {
-        Undone::MovedBack { to } | Undone::CopiedBack { to, .. } => Some(to),
+        Undone::MovedBack { to, .. } | Undone::CopiedBack { to, .. } => Some(to),
         Undone::Binned(_) | Undone::Restored { .. } | Undone::Removed | Undone::Remade { .. } => {
             None
         }
@@ -365,7 +525,7 @@ fn binned(undone: &Undone) -> bool {
     matches!(undone, Undone::Binned(_))
 }
 
-fn success_text(action: &Action, undone: &[(&Change, &Undone)], here: &Path) -> String {
+fn undo_success_text(action: &Action, undone: &[(&Change, &Undone)], here: &Path) -> String {
     let lead = format!("Undid the {}.", step_label(action, here));
     let main = match action {
         Action::Transfer { verb, .. } => {
@@ -379,7 +539,7 @@ fn success_text(action: &Action, undone: &[(&Change, &Undone)], here: &Path) -> 
             let restored: Vec<PathBuf> = undone
                 .iter()
                 .filter_map(|(_, done)| match done {
-                    Undone::Restored { to } => Some(to.clone()),
+                    Undone::Restored { to, .. } => Some(to.clone()),
                     Undone::MovedBack { .. }
                     | Undone::CopiedBack { .. }
                     | Undone::Binned(_)
@@ -441,16 +601,92 @@ fn transfer_text(verb: Verb, undone: &[(&Change, &Undone)], here: &Path) -> Opti
     }
 }
 
-pub(super) fn undone_note(
+fn landing_of(change: &Change) -> Option<&Path> {
+    match change {
+        Change::Moved { to, .. } | Change::Copied { to, .. } | Change::Crossed { to, .. } => {
+            Some(to)
+        }
+        Change::Replaced { .. }
+        | Change::Matched { .. }
+        | Change::Emptied { .. }
+        | Change::Made { .. }
+        | Change::Trashed { .. }
+        | Change::Erased { .. } => None,
+    }
+}
+
+fn again(count: usize, one: &str, many: &str, place: &str) -> String {
+    let (subject, be) = if count == 1 {
+        (one, "is")
+    } else {
+        (many, "are")
+    };
+    format!("{subject} {be} {place} again.")
+}
+
+fn redo_transfer_text(verb: Verb, landed: &[&Path], here: &Path) -> Option<String> {
+    let place = place_of(landed.first()?, here);
+    let text = match verb {
+        Verb::Move => again(landed.len(), "It", "They", &place),
+        Verb::Copy => again(landed.len(), "The copy", "The copies", &place),
+        Verb::Duplicate => again(landed.len(), "The duplicate", "The duplicates", &place),
+    };
+    Some(text)
+}
+
+fn redo_success_text(action: &Action, redone: &[&Change], here: &Path) -> String {
+    let lead = format!("Redid the {}.", step_label(action, here));
+    let landed: Vec<&Path> = redone.iter().copied().filter_map(landing_of).collect();
+    let trashed = redone
+        .iter()
+        .filter(|change| matches!(change, Change::Trashed { .. }))
+        .count();
+    let made = redone
+        .iter()
+        .any(|change| matches!(change, Change::Made { .. }));
+    let main = match action {
+        Action::Transfer { verb, .. } => redo_transfer_text(*verb, &landed, here),
+        Action::Rename { .. } => landed
+            .first()
+            .map(|to| format!("It is named {} again.", name_of(to))),
+        Action::Trash(_) => (trashed > 0).then(|| again(trashed, "It", "They", "in the trash")),
+        Action::NewFolder(path) => {
+            made.then(|| format!("The new folder {} is back.", name_of(path)))
+        }
+        Action::NewFile(path) => made.then(|| format!("The new file {} is back.", name_of(path))),
+        Action::Erase(_) => None,
+    };
+    let mut text = lead;
+    if let Some(main) = main {
+        text.push(' ');
+        text.push_str(&main);
+    }
+    for change in redone {
+        if let Change::Replaced { at, .. } = change {
+            text.push_str(&format!(" The old {} went to the trash.", name_of(at)));
+        }
+    }
+    text
+}
+
+pub(super) struct Report<'a> {
+    pub direction: Direction,
+    pub stopped: bool,
+    pub here: &'a Path,
+    pub next: &'a str,
+    pub reversible: bool,
+}
+
+pub(super) fn report_note(
     step: &Step,
     outcomes: &[(usize, Verdict)],
-    stopped: bool,
-    here: &Path,
-    next: &str,
-) -> (Option<String>, Option<String>) {
+    report: &Report<'_>,
+) -> String {
+    let direction = report.direction;
     let mut undone: Vec<(&Change, &Undone)> = Vec::new();
+    let mut redone: Vec<&Change> = Vec::new();
     let mut problems: Vec<Problem> = Vec::new();
-    let mut stopped = stopped;
+    let mut stopped = report.stopped;
     let mut retry = false;
     for (index, outcome) in outcomes {
         let Some(item) = step.items.get(*index) else {
@@ -461,46 +697,62 @@ pub(super) fn undone_note(
                 undone.push((&item.change, done));
                 problems.extend(kept_copy(&item.change, done));
             }
+            Verdict::Redone(change) => {
+                redone.push(change);
+                problems.extend(kept_source(change));
+            }
             Verdict::Stays(Reason::Stopped) => stopped = true,
             Verdict::Stays(reason) => {
                 retry = true;
-                problems.extend(problem_of(reason));
+                problems.extend(problem_of(reason, direction));
             }
-            Verdict::Leaves(reason) => problems.extend(problem_of(reason)),
+            Verdict::Leaves(reason) => problems.extend(problem_of(reason, direction)),
         }
     }
+    let key = key_of(direction);
     let tail = if stopped {
-        " The undo stopped before it finished. ctrl+z undoes the rest."
+        format!(
+            " The {} stopped before it finished. {key} {} the rest.",
+            word(direction),
+            acts(direction)
+        )
     } else if retry {
-        " ctrl+z tries again."
+        format!(" {key} tries again.")
     } else {
-        ""
+        String::new()
     };
     let more = match problems.len().saturating_sub(1) {
         0 => String::new(),
         1 => " 1 more stays as it is.".to_string(),
         many => format!(" {many} more stay as they are."),
     };
-    if undone.is_empty() {
+    if undone.is_empty() && redone.is_empty() {
         let mut text = match problems.first() {
-            Some(first) => format!("Nothing was undone: {}{more}", first.text),
-            None => "Nothing was undone.".to_string(),
+            Some(first) => format!("Nothing was {}: {}{more}", done_word(direction), first.text),
+            None => format!("Nothing was {}.", done_word(direction)),
         };
-        text.push_str(tail);
+        text.push_str(&tail);
         if tail.is_empty() {
             text.push(' ');
-            text.push_str(next);
+            text.push_str(report.next);
         }
-        return (None, Some(text));
+        return text;
     }
-    let mut text = success_text(&step.action, &undone, here);
+    let mut text = match direction {
+        Direction::Undo => undo_success_text(&step.action, &undone, report.here),
+        Direction::Redo => redo_success_text(&step.action, &redone, report.here),
+    };
     if let Some(first) = problems.first() {
         text.push(' ');
         text.push_str(&first.sentence());
         text.push_str(&more);
     }
-    text.push_str(tail);
-    (Some(text), None)
+    text.push_str(&tail);
+    if report.reversible {
+        text.push(' ');
+        text.push_str(&closing(direction));
+    }
+    text
 }
 
 pub(super) fn erased_note(count: usize) -> String {

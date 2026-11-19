@@ -8,13 +8,13 @@ use gpui::{Keystroke, Modifiers};
 use qol_gpui::text_edit::{Clipboard, MemoryClipboard};
 use qol_gpui::{PathEdit, PathKey};
 
-use super::ops::{UndoAsk, UndoRun, Work};
+use super::ops::{MoveRecord, MoveState, Stepping, UndoAsk, UndoRun, Work};
 use super::ops_text;
 use super::Browser;
 use crate::listing::Entry;
 use crate::ops::gate::Taken;
 use crate::ops::history::{
-    self, Action, Change, Choices, Outcome, Reply, Settled, StepId, Top, Undone,
+    self, Action, Change, Choices, Direction, Outcome, Reply, Settled, StepId, Top, Undone,
 };
 use crate::ops::print::Print;
 use crate::ops::{self, Failure, Room, Survey, Transfer, Trashing, Verb};
@@ -335,47 +335,78 @@ impl Browser {
     }
 
     pub fn undo(&mut self, keys_waiting: bool) -> bool {
+        self.step_through(Direction::Undo, keys_waiting)
+    }
+
+    pub fn redo(&mut self, keys_waiting: bool) -> bool {
+        self.step_through(Direction::Redo, keys_waiting)
+    }
+
+    pub fn stepping(&self) -> Stepping {
+        let undo = match self.ops.history.top() {
+            Top::Nothing => None,
+            Top::Empty(step) | Top::Erased(step) | Top::Undo(step) => {
+                Some(ops_text::menu_word(&step.action))
+            }
+        };
+        let redo = self
+            .ops
+            .history
+            .redo_top()
+            .map(|step| ops_text::menu_word(&step.action));
+        Stepping { undo, redo }
+    }
+
+    fn step_through(&mut self, direction: Direction, keys_waiting: bool) -> bool {
         if self.ops.asking.is_some() {
             return true;
         }
         self.ops.notice = None;
         self.failure = None;
         if let Some(when) = self.undo_busy(keys_waiting) {
-            self.failure = Some(ops_text::refused(&when));
+            self.ops.notice = Some(ops_text::refused(direction, &when));
             return true;
         }
+        match direction {
+            Direction::Undo => self.undo_top(),
+            Direction::Redo => self.redo_top(),
+        }
+    }
+
+    fn undo_top(&mut self) -> bool {
         let here = self.folder().to_path_buf();
         let top = match self.ops.history.top() {
             Top::Nothing => None,
-            Top::Empty(step) => Some((
-                step.id,
-                Some(format!(
-                    "The {} changed nothing.",
-                    ops_text::step_label(&step.action, &here)
-                )),
-            )),
-            Top::Erased(step) => Some((
-                step.id,
-                Some("Delete permanently cannot be undone.".to_string()),
-            )),
+            Top::Empty(step) => Some((step.id, Some(ops_text::spent(&step.action, &here, false)))),
+            Top::Erased(step) => Some((step.id, Some(ops_text::spent(&step.action, &here, true)))),
             Top::Undo(step) => Some((step.id, None)),
         };
         let Some((id, spent)) = top else {
-            self.failure = Some("Nothing to undo".to_string());
+            self.ops.notice = Some(ops_text::nothing_to(Direction::Undo));
             return false;
         };
         let Some(spent) = spent else {
-            return self.start_undo(id, None);
+            return self.start_step(id, Direction::Undo, None);
         };
         self.ops.history.drop_step(id);
         let next = ops_text::next_text(self.ops.history.top(), &here);
-        self.failure = Some(format!("{spent} {next}"));
+        let text = format!("{} {next}", spent.text);
+        self.log_step(spent.title, text.clone(), spent.state);
+        self.ops.notice = Some(text);
         true
     }
 
+    fn redo_top(&mut self) -> bool {
+        let Some(id) = self.ops.history.redo_top().map(|step| step.id) else {
+            self.ops.notice = Some(ops_text::nothing_to(Direction::Redo));
+            return false;
+        };
+        self.start_step(id, Direction::Redo, None)
+    }
+
     fn undo_busy(&self, keys_waiting: bool) -> Option<String> {
-        if self.ops.undo.is_some() {
-            return Some("when the undo ends".to_string());
+        if let Some(run) = &self.ops.undo {
+            return Some(format!("when the {} ends", ops_text::word(run.direction)));
         }
         if let Some(verb) = self.ops.busy_verb() {
             return Some(format!("when the {} ends", ops_text::verb_noun(verb)));
@@ -392,29 +423,44 @@ impl Browser {
         keys_waiting.then(|| "once the folder has loaded".to_string())
     }
 
-    pub(super) fn start_undo(&mut self, step: StepId, choices: Option<Choices>) -> bool {
+    pub(super) fn start_step(
+        &mut self,
+        step: StepId,
+        direction: Direction,
+        choices: Option<Choices>,
+    ) -> bool {
         let here = self.folder().to_path_buf();
         let label = self
             .ops
             .history
             .step(step)
             .map(|found| ops_text::step_label(&found.action, &here));
-        let plan = self.ops.history.plan(step);
+        let plan = self.ops.history.plan(step, direction);
         let (Some(label), Some(plan)) = (label, plan) else {
-            self.failure = Some("Nothing to undo".to_string());
+            self.ops.notice = Some(ops_text::nothing_to(direction));
             return false;
         };
         let lock = match self.ops.tools.gate.claim() {
             Ok(lock) => lock,
             Err(Taken) => {
-                self.failure = Some(ops_text::refused("when the move in another window ends"));
+                self.ops.notice = Some(ops_text::refused(
+                    direction,
+                    "when the move in another window ends",
+                ));
                 return true;
             }
         };
-        let undoing =
-            history::start_undo(plan, choices, self.ops.tools.clone(), lock, self.waker());
+        let undoing = history::start(
+            plan,
+            direction,
+            choices,
+            self.ops.tools.clone(),
+            lock,
+            self.waker(),
+        );
         self.ops.undo = Some(UndoRun {
             undoing,
+            direction,
             outcomes: Vec::new(),
             label,
         });
@@ -444,7 +490,7 @@ impl Browser {
         loop {
             match run.undoing.result.try_recv() {
                 Ok(Reply::Item(index, outcome)) => {
-                    run.outcomes.push((index, outcome));
+                    run.outcomes.push((index, *outcome));
                     changed = true;
                 }
                 Ok(Reply::Asks(clashes)) => {
@@ -464,7 +510,7 @@ impl Browser {
         }
         if let Some(clashes) = asked {
             if let Some(run) = self.ops.undo.take() {
-                self.open_undo_sheet(run.undoing.step, clashes);
+                self.open_undo_sheet(run.undoing.step, run.direction, clashes);
             }
             return true;
         }
@@ -475,14 +521,19 @@ impl Browser {
         changed
     }
 
-    fn open_undo_sheet(&mut self, step: StepId, asked: Vec<(usize, ops::Clash)>) {
+    fn open_undo_sheet(
+        &mut self,
+        step: StepId,
+        direction: Direction,
+        asked: Vec<(usize, ops::Clash)>,
+    ) {
         let (indices, clashes): (Vec<usize>, Vec<ops::Clash>) = asked.into_iter().unzip();
         let here = self.folder().to_path_buf();
         let into = clashes
             .first()
             .and_then(|clash| clash.existing.parent())
             .map_or_else(|| here.clone(), Path::to_path_buf);
-        let lines = ops_text::undo_sheet_lines(&clashes, &here);
+        let lines = ops_text::undo_sheet_lines(direction, &clashes, &here);
         let survey = Survey {
             transfer: Transfer {
                 verb: Verb::Move,
@@ -498,6 +549,7 @@ impl Browser {
         };
         self.ops.asking = Some(UndoAsk {
             step,
+            direction,
             indices,
             survey,
             lines,
@@ -509,6 +561,7 @@ impl Browser {
             return;
         };
         let id = run.undoing.step;
+        let direction = run.direction;
         let outcomes = run.outcomes;
         let step = self.ops.history.step(id).cloned();
         self.ops.history.settle(&Settled {
@@ -517,22 +570,69 @@ impl Browser {
         });
         let here = self.folder().to_path_buf();
         if let Some(step) = step {
-            let next = ops_text::next_text(self.ops.history.top(), &here);
-            let (notice, failure) = ops_text::undone_note(&step, &outcomes, vanished, &here, &next);
-            self.ops.notice = notice;
-            self.failure = failure;
-            self.rename_picks_back(&step, &outcomes);
+            let (next, reversible) = self.follow_up(id, direction, &here);
+            let text = ops_text::report_note(
+                &step,
+                &outcomes,
+                &ops_text::Report {
+                    direction,
+                    stopped: vanished,
+                    here: &here,
+                    next: &next,
+                    reversible,
+                },
+            );
+            let did = outcomes
+                .iter()
+                .any(|(_, outcome)| matches!(outcome, Outcome::Undone(_) | Outcome::Redone(_)));
+            let title = ops_text::step_title(direction, &step.action, did);
+            let state = if did {
+                MoveState::Done
+            } else {
+                MoveState::Failed
+            };
+            self.log_step(title, text.clone(), state);
+            self.ops.notice = Some(text);
+            self.rename_picks(&step, &outcomes);
         }
         self.reload();
     }
 
-    fn rename_picks_back(&mut self, step: &history::Step, outcomes: &[(usize, Outcome)]) {
+    fn follow_up(&self, id: StepId, direction: Direction, here: &Path) -> (String, bool) {
+        let steps = &self.ops.history;
+        match direction {
+            Direction::Undo => (
+                ops_text::next_text(steps.top(), here),
+                steps.redo_top().is_some_and(|step| step.id == id),
+            ),
+            Direction::Redo => (
+                ops_text::next_redo_text(steps.redo_top(), here),
+                matches!(steps.top(), Top::Undo(step) if step.id == id),
+            ),
+        }
+    }
+
+    fn log_step(&mut self, title: String, detail: String, state: MoveState) {
+        self.ops.open_record(MoveRecord {
+            title,
+            detail,
+            bytes: None,
+            state,
+        });
+    }
+
+    fn rename_picks(&mut self, step: &history::Step, outcomes: &[(usize, Outcome)]) {
         let Action::Rename { to, .. } = &step.action else {
             return;
         };
         for (_, outcome) in outcomes {
-            if let Outcome::Undone(Undone::MovedBack { to: home }) = outcome {
+            if let Outcome::Undone(Undone::MovedBack { to: home, .. }) = outcome {
                 self.picks.rename(to, home.clone());
+            } else if let Outcome::Redone(Change::Moved {
+                from, to: renamed, ..
+            }) = outcome
+            {
+                self.picks.rename(from, renamed.clone());
             }
         }
     }

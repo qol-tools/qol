@@ -7,7 +7,8 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::thread;
 
-use super::{Change, Outcome, Plan, Planned, Reason, Source, StepId, Undone};
+use super::redo;
+use super::{Change, Direction, Outcome, Plan, Planned, Reason, Source, StepId, Undone};
 use crate::ops::bin::{BinError, Held};
 use crate::ops::copy::{copy_to, same_entry, Meter};
 use crate::ops::print::{Kind, Print, TreePrint};
@@ -22,7 +23,7 @@ pub type Choices = HashMap<usize, Resolve>;
 #[derive(Debug, Clone)]
 pub enum Reply {
     Asks(Vec<(usize, Clash)>),
-    Item(usize, Outcome),
+    Item(usize, Box<Outcome>),
     Done,
 }
 
@@ -32,8 +33,9 @@ pub struct Undoing {
     pub stop: Arc<AtomicBool>,
 }
 
-pub fn start_undo(
+pub fn start(
     plan: Plan,
+    direction: Direction,
     choices: Option<Choices>,
     tools: Tools,
     lock: Option<File>,
@@ -51,7 +53,10 @@ pub fn start_undo(
         let choices = match choices {
             Some(choices) => choices,
             None => {
-                let clashes = asks(&plan);
+                let clashes = match direction {
+                    Direction::Undo => asks(&plan),
+                    Direction::Redo => redo::asks(&plan),
+                };
                 if !clashes.is_empty() {
                     drop(lock);
                     send(Reply::Asks(clashes));
@@ -60,18 +65,23 @@ pub fn start_undo(
                 Choices::new()
             }
         };
+        let mut halted = false;
         for planned in &plan.items {
-            let outcome = if stopped.load(Ordering::Relaxed) {
+            let outcome = if halted || stopped.load(Ordering::Relaxed) {
                 Outcome::Stays(Reason::Stopped)
             } else {
-                let undo = Undo {
+                let work = Undo {
                     tools: &tools,
                     choice: choices.get(&planned.index).copied(),
                     retry: planned.retry,
                 };
-                undo.one(&planned.change)
+                match direction {
+                    Direction::Undo => work.one(&planned.change),
+                    Direction::Redo => work.again(&planned.change, planned.undone.as_ref()),
+                }
             };
-            send(Reply::Item(planned.index, outcome));
+            halted |= matches!(outcome, Outcome::Stays(_));
+            send(Reply::Item(planned.index, Box::new(outcome)));
         }
         drop(lock);
         send(Reply::Done);
@@ -138,7 +148,7 @@ fn vacates(change: &Change) -> Option<&Path> {
     }
 }
 
-fn clash(home: &Path, current: &Path) -> Option<Clash> {
+pub(super) fn clash(home: &Path, current: &Path) -> Option<Clash> {
     let here = fs::symlink_metadata(home).ok()?;
     let incoming = fs::symlink_metadata(current).ok()?;
     Some(Clash {
@@ -151,17 +161,17 @@ fn clash(home: &Path, current: &Path) -> Option<Clash> {
     })
 }
 
-enum Exit {
+pub(super) enum Exit {
     Stays(Reason),
     Leaves(Reason),
 }
 
 type Tried = Result<Undone, Exit>;
 
-struct Undo<'a> {
-    tools: &'a Tools,
-    choice: Option<Resolve>,
-    retry: bool,
+pub(super) struct Undo<'a> {
+    pub(super) tools: &'a Tools,
+    pub(super) choice: Option<Resolve>,
+    pub(super) retry: bool,
 }
 
 impl Undo<'_> {
@@ -204,7 +214,13 @@ impl Undo<'_> {
         let home = self.landing(from, to)?;
         self.make_parent(&home, at.device())?;
         match move_noreplace(to, &home) {
-            Ok(()) => Ok(Undone::MovedBack { to: home }),
+            Ok(()) => {
+                let landed = Print::read(&home).unwrap_or(*at);
+                Ok(Undone::MovedBack {
+                    to: home,
+                    at: landed,
+                })
+            }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 Err(leaves(Reason::Taken(home)))
             }
@@ -260,6 +276,7 @@ impl Undo<'_> {
             }
             return Err(self.failed(to, plain(&error)));
         }
+        let copy_tree = TreePrint::read(&home, &self.tools.key).unwrap_or(*tree);
         let kept = match TreePrint::read(to, &self.tools.key) {
             Ok(after) if tree.unchanged(&after) => match self.tools.bin.trash(to) {
                 Ok(far) => {
@@ -267,6 +284,7 @@ impl Undo<'_> {
                         to: home,
                         far,
                         kept: None,
+                        tree: copy_tree,
                     })
                 }
                 Err(error) => error.reason(),
@@ -278,6 +296,7 @@ impl Undo<'_> {
             to: home,
             far: None,
             kept: Some(kept),
+            tree: copy_tree,
         })
     }
 
@@ -285,10 +304,22 @@ impl Undo<'_> {
         let Some(held) = held else {
             return Err(leaves(Reason::CannotUndo(home.to_path_buf())));
         };
+        let place = self.restore_held(home, held)?;
+        let tree = TreePrint::read(&place, &self.tools.key).unwrap_or(TreePrint {
+            root: held.before,
+            entries: 0,
+            bytes: 0,
+            shape: 0,
+            objects: 0,
+        });
+        Ok(Undone::Restored { to: place, tree })
+    }
+
+    pub(super) fn restore_held(&self, home: &Path, held: &Held) -> Result<PathBuf, Exit> {
         let place = self.landing(home, &held.item)?;
         self.make_parent(&place, held.before.device())?;
         match self.tools.bin.restore(held, &place) {
-            Ok(()) => Ok(Undone::Restored { to: place }),
+            Ok(()) => Ok(place),
             Err(BinError::Gone) if unplugged(&held.item, held.before.device()) => {
                 Err(stays(Reason::Unplugged(home.to_path_buf())))
             }
@@ -337,7 +368,7 @@ impl Undo<'_> {
         }
     }
 
-    fn landing(&self, home: &Path, current: &Path) -> Result<PathBuf, Exit> {
+    pub(super) fn landing(&self, home: &Path, current: &Path) -> Result<PathBuf, Exit> {
         if !occupied(home) || same_entry(home, current) {
             return Ok(home.to_path_buf());
         }
@@ -354,7 +385,7 @@ impl Undo<'_> {
         }
     }
 
-    fn make_parent(&self, place: &Path, device: Option<u64>) -> Result<(), Exit> {
+    pub(super) fn make_parent(&self, place: &Path, device: Option<u64>) -> Result<(), Exit> {
         let Some(parent) = place.parent() else {
             return Ok(());
         };
@@ -367,7 +398,7 @@ impl Undo<'_> {
         fs::create_dir_all(parent).map_err(|error| self.failed(place, plain(&error)))
     }
 
-    fn present(&self, path: &Path, device: Option<u64>) -> Result<Print, Exit> {
+    pub(super) fn present(&self, path: &Path, device: Option<u64>) -> Result<Print, Exit> {
         match Print::read(path) {
             Ok(print) => Ok(print),
             Err(error) if gone(&error) => Err(missing(path, device)),
@@ -375,7 +406,7 @@ impl Undo<'_> {
         }
     }
 
-    fn tree_at(&self, path: &Path, device: Option<u64>) -> Result<TreePrint, Exit> {
+    pub(super) fn tree_at(&self, path: &Path, device: Option<u64>) -> Result<TreePrint, Exit> {
         match TreePrint::read(path, &self.tools.key) {
             Ok(tree) => Ok(tree),
             Err(error) if gone(&error) && occupied(path) => {
@@ -386,7 +417,7 @@ impl Undo<'_> {
         }
     }
 
-    fn bin(&self, path: &Path) -> Result<Option<Held>, Exit> {
+    pub(super) fn bin(&self, path: &Path) -> Result<Option<Held>, Exit> {
         self.tools.bin.trash(path).map_err(|error| match error {
             BinError::NoTrash(reason) => leaves(Reason::NoTrash(path.to_path_buf(), reason)),
             BinError::Gone => leaves(Reason::Gone(path.to_path_buf())),
@@ -396,7 +427,7 @@ impl Undo<'_> {
         })
     }
 
-    fn failed(&self, path: &Path, reason: String) -> Exit {
+    pub(super) fn failed(&self, path: &Path, reason: String) -> Exit {
         let reason = Reason::Failed(path.to_path_buf(), reason);
         if self.retry {
             Exit::Leaves(reason)
@@ -406,13 +437,13 @@ impl Undo<'_> {
     }
 }
 
-struct Quiet;
+pub(super) struct Quiet;
 
 impl Meter for Quiet {
     fn advance(&mut self, _bytes: u64) {}
 }
 
-fn missing(path: &Path, device: Option<u64>) -> Exit {
+pub(super) fn missing(path: &Path, device: Option<u64>) -> Exit {
     if unplugged(path, device) {
         stays(Reason::Unplugged(path.to_path_buf()))
     } else {
@@ -420,7 +451,7 @@ fn missing(path: &Path, device: Option<u64>) -> Exit {
     }
 }
 
-fn unplugged(path: &Path, device: Option<u64>) -> bool {
+pub(super) fn unplugged(path: &Path, device: Option<u64>) -> bool {
     match (device, nearest_device(path)) {
         (Some(device), Some(near)) => device != near,
         _ => false,
@@ -434,21 +465,21 @@ fn nearest_device(path: &Path) -> Option<u64> {
     })
 }
 
-fn occupied(path: &Path) -> bool {
+pub(super) fn occupied(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
-fn gone(error: &io::Error) -> bool {
+pub(super) fn gone(error: &io::Error) -> bool {
     matches!(
         error.kind(),
         io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
     )
 }
 
-fn leaves(reason: Reason) -> Exit {
+pub(super) fn leaves(reason: Reason) -> Exit {
     Exit::Leaves(reason)
 }
 
-fn stays(reason: Reason) -> Exit {
+pub(super) fn stays(reason: Reason) -> Exit {
     Exit::Stays(reason)
 }

@@ -7,17 +7,24 @@ use super::Verb;
 #[cfg(test)]
 mod faults;
 mod inverse;
+mod redo;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod walk;
 
-pub use inverse::{start_undo, Choices, Reply, Undoing};
+pub use inverse::{start, Choices, Reply, Undoing};
 
 const KEPT: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StepId(u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Undo,
+    Redo,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -92,15 +99,18 @@ pub enum Change {
 pub enum Undone {
     MovedBack {
         to: PathBuf,
+        at: Print,
     },
     Binned(Option<Held>),
     Restored {
         to: PathBuf,
+        tree: TreePrint,
     },
     CopiedBack {
         to: PathBuf,
         far: Option<Held>,
         kept: Option<String>,
+        tree: TreePrint,
     },
     Removed,
     Remade {
@@ -111,7 +121,7 @@ pub enum Undone {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
     Done,
-    Undone(Undone),
+    Undone(Box<Undone>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +150,12 @@ impl Step {
     pub fn undone(&self) -> bool {
         !self.items.is_empty() && self.waiting() == 0
     }
+
+    pub fn pending(&self) -> bool {
+        self.items
+            .iter()
+            .any(|item| matches!(item.state, State::Undone(_)))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +178,7 @@ pub enum Reason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Undone(Undone),
+    Redone(Change),
     Stays(Reason),
     Leaves(Reason),
 }
@@ -171,6 +188,7 @@ pub struct Planned {
     pub index: usize,
     pub change: Change,
     pub retry: bool,
+    pub undone: Option<Undone>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,12 +214,14 @@ pub enum Top<'a> {
 #[derive(Debug, Default)]
 pub struct History {
     steps: Vec<Step>,
+    redo: Vec<StepId>,
     serial: u64,
 }
 
 impl History {
     pub fn open(&mut self, action: Action) -> StepId {
         self.steps.retain(|step| step.open || !step.undone());
+        self.redo.clear();
         self.serial += 1;
         let id = StepId(self.serial);
         self.steps.push(Step {
@@ -214,7 +234,8 @@ impl History {
             let Some(oldest) = self.steps.iter().position(|step| !step.open) else {
                 break;
             };
-            self.steps.remove(oldest);
+            let removed = self.steps.remove(oldest);
+            self.redo.retain(|kept| *kept != removed.id);
         }
         id
     }
@@ -279,24 +300,46 @@ impl History {
         Top::Nothing
     }
 
-    pub fn drop_step(&mut self, step: StepId) {
-        self.steps.retain(|kept| kept.id != step);
+    pub fn redo_top(&self) -> Option<&Step> {
+        self.redo
+            .iter()
+            .rev()
+            .filter_map(|id| self.step(*id))
+            .find(|step| !step.open && step.pending())
     }
 
-    pub fn plan(&self, step: StepId) -> Option<Plan> {
+    pub fn drop_step(&mut self, step: StepId) {
+        self.steps.retain(|kept| kept.id != step);
+        self.redo.retain(|kept| *kept != step);
+    }
+
+    pub fn plan(&self, step: StepId, direction: Direction) -> Option<Plan> {
         let found = self.step(step)?;
-        let items = found
-            .items
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|(_, item)| item.state == State::Done)
-            .map(|(index, item)| Planned {
-                index,
-                change: item.change.clone(),
-                retry: item.tried,
-            })
-            .collect();
+        let planned = |index: usize, item: &Item, undone: Option<Undone>| Planned {
+            index,
+            change: item.change.clone(),
+            retry: item.tried,
+            undone,
+        };
+        let items: Vec<Planned> = match direction {
+            Direction::Undo => found
+                .items
+                .iter()
+                .enumerate()
+                .rev()
+                .filter(|(_, item)| item.state == State::Done)
+                .map(|(index, item)| planned(index, item, None))
+                .collect(),
+            Direction::Redo => found
+                .items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| match &item.state {
+                    State::Undone(undone) => Some(planned(index, item, Some((**undone).clone()))),
+                    State::Done => None,
+                })
+                .collect(),
+        };
         Some(Plan { step, items })
     }
 
@@ -310,7 +353,15 @@ impl History {
                 continue;
             };
             match outcome {
-                Outcome::Undone(undone) => item.state = State::Undone(undone.clone()),
+                Outcome::Undone(undone) => {
+                    item.state = State::Undone(Box::new(undone.clone()));
+                    item.tried = false;
+                }
+                Outcome::Redone(change) => {
+                    item.change = change.clone();
+                    item.state = State::Done;
+                    item.tried = false;
+                }
                 Outcome::Stays(Reason::Stopped) => {}
                 Outcome::Stays(_) => item.tried = true,
                 Outcome::Leaves(_) => leaving.push(*index),
@@ -323,6 +374,28 @@ impl History {
         }
         if step.items.is_empty() {
             self.drop_step(settled.step);
+            return;
+        }
+        let undid = settled
+            .outcomes
+            .iter()
+            .any(|(_, outcome)| matches!(outcome, Outcome::Undone(_)));
+        self.refresh_redo(settled.step, undid);
+    }
+
+    fn refresh_redo(&mut self, id: StepId, undid: bool) {
+        let (fully, pending) = match self.step(id) {
+            Some(step) => (step.undone(), step.pending()),
+            None => return,
+        };
+        let listed = self.redo.contains(&id);
+        if !pending {
+            self.redo.retain(|kept| *kept != id);
+            return;
+        }
+        if fully && (undid || !listed) {
+            self.redo.retain(|kept| *kept != id);
+            self.redo.push(id);
         }
     }
 

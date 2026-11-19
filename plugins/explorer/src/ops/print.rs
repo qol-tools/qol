@@ -45,7 +45,7 @@ impl Print {
             kind: kind_of(meta),
             len: meta.len(),
             modified: meta.modified().ok(),
-            born: meta.created().ok(),
+            born: platform::born_at(meta),
         }
     }
 
