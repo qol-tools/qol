@@ -19,7 +19,10 @@ inputs:
     required: false
     default: ""
   lookup-only:
-    description: Check for an exact cache entry without downloading, saving, or preparing the build
+    description: >-
+      Check for an exact build cache entry without downloading it, saving one,
+      or preparing the build; on main a Linux lookup still saves a changed set
+      of system package files
     required: false
     default: "false"
   save-cache:
@@ -98,13 +101,13 @@ runs:
     # it reads as empty, so a shell step names the sets of this image.
     - name: Name the saved Linux system packages
       id: package-sets
-      if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && inputs.lookup-only != 'true'
+      if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && (inputs.lookup-only != 'true' || github.ref == 'refs/heads/main')
       shell: bash
       run: echo "prefix=apt-archives-$ImageOS-" >> "$GITHUB_OUTPUT"
 
     - name: Restore downloaded Linux system packages
       id: saved-packages
-      if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && inputs.lookup-only != 'true'
+      if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && (inputs.lookup-only != 'true' || github.ref == 'refs/heads/main')
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/apt-archives
@@ -113,11 +116,12 @@ runs:
 
     - name: Install Linux system dependencies
       id: packages
-      if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && inputs.lookup-only != 'true'
+      if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && (inputs.lookup-only != 'true' || github.ref == 'refs/heads/main')
       shell: bash
       env:
         KEY_PREFIX: ${{ steps.package-sets.outputs.prefix }}
         RESTORED_KEY: ${{ steps.saved-packages.outputs.cache-matched-key }}
+        LOOKUP_ONLY: ${{ inputs.lookup-only }}
       # A stalled Ubuntu mirror once hung apt-get update until the 45-minute job
       # timeout; bound each call and retry so a dead mirror fails in minutes.
       # A slow mirror is not a dead one, and no timeout of apt's own ends it. On
@@ -133,9 +137,15 @@ runs:
       # outside mirror. autoclean drops the files Ubuntu has replaced, so the
       # saved set does not grow.
       # The key names the files, so a set is saved once and the prune keeps the
-      # newest. Main saves a changed set. Any other run saves only when it
-      # restored nothing, into its own pull request's scope, which covers the
-      # time before main has saved a first set.
+      # newest. Main saves a changed set. A push to main compiles nothing while
+      # the build cache is complete, and the one Linux job it runs through this
+      # setup only looks the build cache up, so the first set was never saved
+      # on main and every pull request downloaded its own. On main a lookup
+      # therefore still downloads and saves the set. It stops before it
+      # installs, and ends without a save when no mirror answers, because a
+      # lookup needs no package. Any other run saves only when it restored
+      # nothing, into its own pull request's scope, which covers the time
+      # before main has saved a first set.
       run: |
         packages=(
           pkg-config libx11-dev libxi-dev libxtst-dev libxcb1-dev
@@ -157,20 +167,24 @@ runs:
         download() {
           apt_get "$1" install -y --no-install-recommends --download-only "${packages[@]}"
         }
+        give_up() {
+          if [ "$LOOKUP_ONLY" = true ]; then exit 0; fi
+          exit 1
+        }
         mkdir -p "$saved"
         if compgen -G "$saved/*.deb" > /dev/null; then
           sudo cp "$saved"/*.deb "$archives"/
         fi
         for attempt in 1 2 3; do
           apt_get 120 update && break
-          if [ "$attempt" = 3 ]; then exit 1; fi
+          if [ "$attempt" = 3 ]; then give_up; fi
           use_outside_mirror
         done
         if ! download 60; then
           use_outside_mirror
           for attempt in 1 2 3; do
             download 300 && break
-            if [ "$attempt" = 3 ]; then exit 1; fi
+            if [ "$attempt" = 3 ]; then give_up; fi
             apt_get 120 update || true
           done
         fi
@@ -183,6 +197,7 @@ runs:
             echo "save-key=$key" >> "$GITHUB_OUTPUT"
           fi
         fi
+        if [ "$LOOKUP_ONLY" = true ]; then exit 0; fi
         for attempt in 1 2 3; do
           apt_get 300 install -y --no-install-recommends "${packages[@]}" && break
           if [ "$attempt" = 3 ]; then exit 1; fi

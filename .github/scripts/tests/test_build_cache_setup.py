@@ -97,20 +97,28 @@ class BuildCacheSetupTests(unittest.TestCase):
                 })
                 self.assertEqual(actual, ref == "refs/heads/main" and lookup == "false" and save == "true")
 
-    def test_probes_never_clean_disk_or_install_system_dependencies(self):
+    def test_probes_never_clean_disk_and_only_a_main_probe_reaches_the_package_step(self):
         room = next(step for step in self.steps if step.startswith("name: Make room"))
         dependencies = next(step for step in self.steps if step.startswith("name: Install Linux"))
-        for runner, lookup, install in itertools.product(
-            ["Linux", "macOS", "Windows"], ["true", "false"], ["true", "false"]
+        main = "refs/heads/main"
+        for runner, lookup, install, ref in itertools.product(
+            ["Linux", "macOS", "Windows"],
+            ["true", "false"],
+            ["true", "false"],
+            [main, "refs/pull/1/merge", "refs/heads/gh-readonly-queue/main/pr-1"],
         ):
             values = {
                 "runner.os": runner,
                 "inputs.lookup-only": lookup,
                 "inputs.system-dependencies": install,
+                "github.ref": ref,
             }
             with self.subTest(**values):
                 self.assertEqual(condition(field(room, "if"), values), runner == "Linux" and lookup == "false")
-                self.assertEqual(condition(field(dependencies, "if"), values), runner == "Linux" and lookup == "false" and install == "true")
+                self.assertEqual(
+                    condition(field(dependencies, "if"), values),
+                    runner == "Linux" and install == "true" and (lookup == "false" or ref == main),
+                )
 
     def test_probe_and_restore_share_the_exact_setup_and_namespace(self):
         setup = [step for step in self.warm_steps if "uses: ./.github/actions/rust-setup\n" in step]
@@ -147,7 +155,7 @@ class BuildCacheSetupTests(unittest.TestCase):
         lines = [line.strip() for line in update.split("done", 1)[0].splitlines() if line.strip()]
         self.assertEqual(
             lines,
-            ["apt_get 120 update && break", 'if [ "$attempt" = 3 ]; then exit 1; fi', "use_outside_mirror"],
+            ["apt_get 120 update && break", 'if [ "$attempt" = 3 ]; then give_up; fi', "use_outside_mirror"],
         )
         switch = install.split("use_outside_mirror() {\n", 1)[1].split("\n        }\n", 1)[0]
         self.assertIn("local list=/etc/apt/apt-mirrors.txt", switch)
@@ -159,7 +167,7 @@ class BuildCacheSetupTests(unittest.TestCase):
         self.assertNotIn("allow-unauthenticated", install)
         self.assertNotIn("AllowUnauthenticated", install)
 
-    def install_packages(self, failing=(), restored=(), restored_key="", ref="refs/pull/1/merge"):
+    def install_packages(self, failing=(), restored=(), restored_key="", ref="refs/pull/1/merge", lookup_only="false"):
         install = next(step for step in self.steps if step.startswith("name: Install Linux system dependencies"))
         script = textwrap.dedent(install.split("      run: |\n", 1)[1])
         with tempfile.TemporaryDirectory() as folder:
@@ -190,6 +198,7 @@ class BuildCacheSetupTests(unittest.TestCase):
                     "GITHUB_REF": ref,
                     "KEY_PREFIX": "apt-archives-ubuntu24-",
                     "RESTORED_KEY": restored_key,
+                    "LOOKUP_ONLY": lookup_only,
                     "APT_MIRRORS": str(mirrors),
                     "APT_ARCHIVES": str(archives),
                     "APT_CALLS": str(log),
@@ -247,6 +256,35 @@ class BuildCacheSetupTests(unittest.TestCase):
                 self.assertEqual(download[3], ",".join(sorted(restored)) or "-")
                 self.assertEqual(result["saved"], sorted(CURRENT_PACKAGES))
                 self.assertEqual(result["output"], f"save-key={current}\n" if saves else "")
+
+    def test_a_lookup_on_main_saves_a_changed_set_and_installs_nothing(self):
+        current, replaced = saved_key(CURRENT_PACKAGES), saved_key(REPLACED_PACKAGES)
+        runner, outside = RUNNER_MIRROR, OUTSIDE_MIRROR
+        fetched = [("update", "120", runner), ("download", "60", runner), ("autoclean", "60", runner)]
+        no_update = [("update", "120", runner), ("update", "120", outside), ("update", "120", outside)]
+        no_download = (
+            fetched[:2]
+            + [("download", "300", outside)]
+            + [("update", "120", outside), ("download", "300", outside)] * 2
+        )
+        slow = ["download:1", "download:2", "download:3", "download:4"]
+        for restored, restored_key, failing, calls, saves in [
+            ([], "", [], fetched, True),
+            (CURRENT_PACKAGES, current, [], fetched, False),
+            (REPLACED_PACKAGES, replaced, [], fetched, True),
+            (REPLACED_PACKAGES, replaced, ["update:1", "update:2", "update:3"], no_update, False),
+            (REPLACED_PACKAGES, replaced, slow, no_download, False),
+            ([], "", slow, no_download, False),
+        ]:
+            with self.subTest(restored_key=restored_key, failing=failing):
+                result = self.install_packages(
+                    failing, restored, restored_key, ref="refs/heads/main", lookup_only="true"
+                )
+                self.assertEqual(result["code"], 0, result["log"])
+                self.assertEqual([call[:3] for call in result["calls"]], calls)
+                self.assertEqual(result["output"], f"save-key={current}\n" if saves else "")
+        install = next(step for step in self.steps if step.startswith("name: Install Linux system dependencies"))
+        self.assertEqual(field(install, "LOOKUP_ONLY"), "${{ inputs.lookup-only }}")
 
     def test_the_saved_package_set_is_restored_newest_first_and_saved_under_the_key_of_its_files(self):
         restore = next(step for step in self.steps if "id: saved-packages" in step)
