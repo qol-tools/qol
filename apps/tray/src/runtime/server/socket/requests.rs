@@ -97,7 +97,7 @@ fn handle_json_request(request: &str, writer: &mut LocalStream, shared: &SharedS
                 action,
                 artifact,
                 layout,
-                activate.as_ref(),
+                activate.as_deref(),
                 meta,
             )
         }

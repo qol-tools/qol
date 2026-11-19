@@ -81,7 +81,7 @@ impl Notification {
             action_payload: self.action.as_ref().map(|(_, payload)| payload.clone()),
             artifact: self.artifact.clone(),
             layout: self.layout.clone(),
-            activate: self.activate.clone(),
+            activate: self.activate.clone().map(Box::new),
             duration_ms: self.meta.duration_ms,
             key: self.meta.key.clone(),
             image: self.meta.image.clone(),

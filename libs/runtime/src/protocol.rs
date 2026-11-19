@@ -108,7 +108,7 @@ pub enum RuntimeRequest {
         /// notification is clicked, through the same route as any other
         /// plugin action. The plugin decides what "take me there" means.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        activate: Option<DaemonRequest>,
+        activate: Option<Box<DaemonRequest>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -439,10 +439,10 @@ mod tests {
             action_payload: None,
             artifact: None,
             layout: None,
-            activate: Some(DaemonRequest {
+            activate: Some(Box::new(DaemonRequest {
                 action: "focus".to_string(),
                 input: serde_json::json!({ "session": "kitty:42" }),
-            }),
+            })),
             duration_ms: None,
             key: None,
             image: None,
