@@ -56,6 +56,12 @@ pub(crate) fn is_hidden_item(item: &DirEntry) -> bool {
             .is_ok_and(|metadata| metadata.st_flags() & libc::UF_HIDDEN != 0)
 }
 
+#[cfg(test)]
+pub(crate) fn hide(path: &Path) {
+    let metadata = fs::metadata(path).unwrap();
+    assert!(is_hidden(path.file_name().unwrap(), &metadata), "{path:?}");
+}
+
 pub(crate) fn file_id(metadata: &Metadata) -> Option<(u64, u64)> {
     Some((metadata.st_dev(), metadata.st_ino()))
 }

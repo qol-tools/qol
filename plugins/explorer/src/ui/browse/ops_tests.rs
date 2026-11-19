@@ -375,7 +375,7 @@ fn paste_folders() -> tempfile::TempDir {
 #[test]
 fn ctrl_v_pastes_into_the_folder_you_chose_or_else_where_you_are() {
     type Choose = fn(&mut Browser);
-    let cases: [(&str, Choose, &str); 14] = [
+    let cases: [(&str, Choose, &str); 13] = [
         (
             "a clicked folder",
             |browser| {
@@ -482,23 +482,6 @@ fn ctrl_v_pastes_into_the_folder_you_chose_or_else_where_you_are() {
             "",
         ),
         (
-            "a chosen folder renamed",
-            |browser| {
-                copy_a(browser);
-                browser.click_to(row(browser, "inbox"), 0.0);
-                assert!(browser.rename_open());
-                for letter in ["b", "o", "x"] {
-                    browser.rename_key(&key(letter, Some(letter)), &MemoryClipboard::default());
-                }
-                browser.rename_key(&key("enter", None), &MemoryClipboard::default());
-                let renamed = browser.folder().join("box");
-                wait_until(browser, "the renamed folder", |browser| {
-                    browser.row_of(&renamed) == Some(browser.cursor())
-                });
-            },
-            "box",
-        ),
-        (
             "a new folder",
             |browser| {
                 copy_a(browser);
@@ -512,14 +495,40 @@ fn ctrl_v_pastes_into_the_folder_you_chose_or_else_where_you_are() {
         ),
     ];
     for (what, choose, into) in cases {
-        let temp = paste_folders();
-        let mut browser = opened(temp.path());
-        choose(&mut browser);
-        let transfer = browser
-            .paste()
-            .unwrap_or_else(|| panic!("{what}: nothing pasted"));
-        assert_eq!(transfer.into, temp.path().join(into), "{what}");
+        assert_pastes_into(what, choose, into);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn ctrl_v_pastes_into_a_chosen_folder_after_it_is_renamed() {
+    assert_pastes_into(
+        "a chosen folder renamed",
+        |browser| {
+            copy_a(browser);
+            browser.click_to(row(browser, "inbox"), 0.0);
+            assert!(browser.rename_open());
+            for letter in ["b", "o", "x"] {
+                browser.rename_key(&key(letter, Some(letter)), &MemoryClipboard::default());
+            }
+            browser.rename_key(&key("enter", None), &MemoryClipboard::default());
+            let renamed = browser.folder().join("box");
+            wait_until(browser, "the renamed folder", |browser| {
+                browser.row_of(&renamed) == Some(browser.cursor())
+            });
+        },
+        "box",
+    );
+}
+
+fn assert_pastes_into(what: &str, choose: fn(&mut Browser), into: &str) {
+    let temp = paste_folders();
+    let mut browser = opened(temp.path());
+    choose(&mut browser);
+    let transfer = browser
+        .paste()
+        .unwrap_or_else(|| panic!("{what}: nothing pasted"));
+    assert_eq!(transfer.into, temp.path().join(into), "{what}");
 }
 
 #[test]

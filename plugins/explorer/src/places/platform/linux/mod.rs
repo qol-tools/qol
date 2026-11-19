@@ -53,6 +53,12 @@ pub(crate) fn is_hidden_item(item: &DirEntry) -> bool {
     item.file_name().as_encoded_bytes().starts_with(b".")
 }
 
+#[cfg(test)]
+pub(crate) fn hide(path: &Path) {
+    let metadata = fs::metadata(path).unwrap();
+    assert!(is_hidden(path.file_name().unwrap(), &metadata), "{path:?}");
+}
+
 pub(crate) fn file_id(metadata: &Metadata) -> Option<(u64, u64)> {
     Some((metadata.dev(), metadata.ino()))
 }

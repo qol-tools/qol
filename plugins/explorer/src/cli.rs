@@ -158,7 +158,6 @@ fn platform_supported_result(os: Option<Os>) -> DoctorCheckResult {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     use qol_headless::{DoctorReport, DoctorStatus, Execution, EXIT_SUCCESS, EXIT_USAGE};
@@ -166,7 +165,7 @@ mod tests {
     use super::*;
 
     fn test_home() -> Option<PathBuf> {
-        Some(PathBuf::from("/explorer-test-home"))
+        Some(std::env::temp_dir().join("explorer-test-home"))
     }
 
     fn run(args: &[&str]) -> (Execution, Vec<PathBuf>) {
@@ -186,14 +185,14 @@ mod tests {
 
     #[test]
     fn open_starts_on_home_or_the_given_path() {
+        let home = test_home().unwrap();
+        let elsewhere = std::env::temp_dir().join("srv").join("data");
+        let typed = elsewhere.to_str().unwrap();
         let cases: [(&[&str], PathBuf); 4] = [
-            (&[], PathBuf::from("/explorer-test-home")),
-            (&["open"], PathBuf::from("/explorer-test-home")),
-            (
-                &["open", "~/Git"],
-                Path::new("/explorer-test-home").join("Git"),
-            ),
-            (&["open", "/srv/data"], PathBuf::from("/srv/data")),
+            (&[], home.clone()),
+            (&["open"], home.clone()),
+            (&["open", "~/Git"], home.join("Git")),
+            (&["open", typed], elsewhere.clone()),
         ];
         for (args, expected) in cases {
             let (execution, opened) = run(args);

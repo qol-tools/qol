@@ -53,13 +53,11 @@ WORKTREE_HEAD = "WORKTREE"
 
 def plugin_platforms():
     for manifest in sorted(REPO_ROOT.glob("plugins/*/plugin.toml")):
-        platforms = (
-            tomllib.loads(manifest.read_text())
-            .get("plugin", {})
-            .get("platforms", ["linux"])
-        )
+        declared = tomllib.loads(manifest.read_text())
+        platforms = declared.get("plugin", {}).get("platforms", ["linux"])
+        tested = declared.get("build", {}).get("test_platforms", [])
         name = tomllib.loads((manifest.parent / "Cargo.toml").read_text())["package"]["name"]
-        yield name, platforms
+        yield name, [*platforms, *tested]
 
 
 def platform_sets():
