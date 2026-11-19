@@ -1,5 +1,6 @@
 mod environment;
 mod history;
+mod keybindings;
 mod metadata;
 mod search;
 pub use search::search_transcripts;
@@ -11,10 +12,11 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    ChatTurn, CliComposer, CliConversation, CliConversationMatch, CliDraftStash, CliLaunchProgram,
-    CliRemoteControlToggle, CliResumeSettings, CliRuntimeState, CliScreenEvidence,
-    CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy,
-    CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliViewportState,
+    ChatTurn, CliChordBinder, CliComposer, CliConversation, CliConversationMatch, CliDraftStash,
+    CliLaunchProgram, CliRemoteControlToggle, CliResumeSettings, CliRuntimeState,
+    CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence,
+    CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError, CliTool,
+    CliViewportState,
 };
 use crate::SessionFacts;
 
@@ -138,6 +140,10 @@ impl CliSessionStrategy for ClaudeStrategy {
 
     fn resume_args(&self, external_id: &str) -> Option<Vec<String>> {
         Some(vec!["--resume".to_owned(), external_id.to_owned()])
+    }
+
+    fn chord_binder(&self) -> Option<&dyn CliChordBinder> {
+        Some(&keybindings::ClaudeKeybindings)
     }
 
     fn resume_settings(&self, session: &SessionFacts) -> CliResumeSettings {

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { chatTail, claimsUser, echoesOnly, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withSent } from '../hooks/register'
+import { boundChords, chatTail, claimsUser, echoesOnly, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -67,6 +67,8 @@ type Spawned = { prompt: string; description: string; model?: string }
 
 type Answer = (e: any) => { isDelivered: boolean; reason?: string }
 
+const described = new Map<string, string>()
+
 const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Spawned[] = [], store = new Map<string, unknown>(), answer: Answer = () => ({ isDelivered: true }), hidden = new Set<string>(), rows = { isCapped: false }) => {
   on('agent.spawn', (_: unknown, e: Spawned) => {
     spawned.push({ prompt: e.prompt, description: e.description, ...(e.model === undefined ? {} : { model: e.model }) })
@@ -121,7 +123,10 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Sp
   })
   on('ui.panes', () => ({ value: [...open].map(id => ({ id, title: id, isShown: !hidden.has(id), isFocused: false, isPlaced: true })) }))
   on('ui.notify', () => ({ value: { isSent: false, reason: 'no-surface' } }))
-  on('command.register', () => ({ value: { command: 'board' } }))
+  on('command.register', (_: unknown, e: { name: string; description: string }) => {
+    described.set(e.name, e.description)
+    return { value: { command: 'board' } }
+  })
   on('tool.register', () => ({ value: { tool: 'mcp__qol-switchboard__fork_board' } }))
   on('session.send', (_: unknown, e: unknown) => {
     sent.push(e)
@@ -3836,6 +3841,7 @@ test('the close command stops the fork you write to and drops it from the board,
   const stops: string[] = []
   engine(on, [], [], [], store)
   on('clock.after', () => new Promise(() => {}))
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_CHORDS' ? '{"launch":"9f-1a","chords":[{"keys":"ctrl+x ctrl+x","command":"close-fork"}]}' : undefined }))
   on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
     cursor: e.start + e.inputText.length,
@@ -3912,7 +3918,7 @@ test('closing a fork closes the sub-forks it started before it, and a busy sub-f
   await deliver($, notification('o1', 'other-fork: other', 'The build is green.'))
   await settle()
   await write('parent-fork')
-  expect(await close()).toContain("parent-fork's sub-fork helper-fork is still working, so parent-fork stays open. ctrl+x ctrl+x again closes it anyway, with its 3 sub-forks.")
+  expect(await close()).toContain("parent-fork's sub-fork helper-fork is still working, so parent-fork stays open. /close-fork again closes it anyway, with its 3 sub-forks.")
   expect(stops).toEqual([])
   expect(closed()).toEqual([])
   expect(await close()).toContain('Closed parent-fork and its 3 sub-forks. The board counts them under closed, and r there lists them')
@@ -3929,8 +3935,37 @@ test('closing a fork closes the sub-forks it started before it, and a busy sub-f
   await deliver($, notification('k3', 'aide-fork: aide', 'Read the file.'))
   await settle()
   await write('second-fork')
-  expect(await close()).toContain('second-fork is still working, so it stays open. ctrl+x ctrl+x again closes it anyway, with its 1 sub-fork.')
+  expect(await close()).toContain('second-fork is still working, so it stays open. /close-fork again closes it anyway, with its 1 sub-fork.')
   expect(closed()).toEqual(['g1', 'k1', 'k2', 'p1'])
+})
+
+test('the chords the launcher bound read as one key spelling per command, and anything else as none', () => {
+  expect(boundChords('{"launch":"9f-1a","chords":[{"keys":"ctrl+x ctrl+x","command":"close-fork"},{"keys":"","command":"interrupt-fork"},{"keys":7},null]}')).toEqual({ launch: '9f-1a', keys: { 'close-fork': 'ctrl+x ctrl+x' } })
+  for (const text of ['{"chords":{}}', '[]', 'not json', undefined]) expect(boundChords(text)).toEqual({ launch: '', keys: {} })
+})
+
+test('the close and interrupt commands name only the chords the launcher bound, and the switchboard gives them back when it exits', async ($, on) => {
+  const runs: string[][] = []
+  described.clear()
+  engine(on)
+  const env: Record<string, string> = { QOL_CLI_SESSIONS: '/bin/qol-cli-sessions', QOL_SWITCHBOARD_CHORDS: '{"launch":"9f-1a","chords":[{"keys":"ctrl+x ctrl+x","command":"close-fork"}]}' }
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: env[e.name] }))
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    runs.push(e.argv)
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  on('session.end', (_: unknown, e: { sessionId: string }) => ({ sessionId: e.sessionId }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(described.get('close-fork')).toContain('with the sub-forks it started (ctrl+x ctrl+x): the board')
+  expect(described.get('interrupt-fork')).toContain('as Esc does in a session of its own: the fork stays open')
+  const released = () => runs.filter(argv => argv[4] === 'release-chords')
+  for (const reason of ['clear', 'resume'] as const) await $.session.end({ reason, sessionId: 'switchboard-session', resume: { id: 'switchboard-session' } })
+  expect(released()).toEqual([])
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'switchboard-session', resume: { id: 'switchboard-session' } })
+  expect(released()).toEqual([['/bin/qol-cli-sessions', 'sessions', 'switchboard', 'hook', 'release-chords', '9f-1a']])
+  env.QOL_SWITCHBOARD_CHORDS = '{"launch":"","chords":[]}'
+  await $.session.end({ reason: 'other', sessionId: 'switchboard-session', resume: { id: 'switchboard-session' } })
+  expect(released().length).toBe(1)
 })
 
 test('the fork you write to shows its model and effort on one row, its pickers change its next model call, and the switchboard keeps its own', async ($, on) => {

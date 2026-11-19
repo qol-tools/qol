@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::cli::CliToolId;
 use crate::{SpawnIdentity, SpawnKey, SpawnRequest, SpawnSurface, TerminalError};
 
-const SESSION_KEY_TAG: &str = "qol_session_key";
+pub(super) const SESSION_KEY_TAG: &str = "qol_session_key";
 const SESSION_TOOL_TAG: &str = "qol_session_tool";
 const SESSION_SURFACE_TAG: &str = "qol_session_surface";
 

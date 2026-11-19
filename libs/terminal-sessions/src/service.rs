@@ -4,8 +4,8 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use crate::{
-    BackendId, DeliveryMode, SessionBinding, SessionFacts, SessionId, SessionSpawner, SpawnRequest,
-    TerminalError, TerminalSnapshot,
+    BackendId, Chord, DeliveryMode, SessionBinding, SessionFacts, SessionId, SessionSpawner,
+    SpawnRequest, TerminalError, TerminalSnapshot,
 };
 
 pub trait SessionInventory {
@@ -49,6 +49,20 @@ pub trait TabTitler {
     fn set_tab_title(&self, target: &SessionBinding, title: &str) -> Result<(), TerminalError>;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChordPassageChange {
+    AlreadyOpen,
+    Opened,
+}
+
+pub trait ChordPassage {
+    fn pass_chords(
+        &self,
+        target: &SessionBinding,
+        chords: &[Chord],
+    ) -> Result<ChordPassageChange, TerminalError>;
+}
+
 pub trait TextInput {
     fn send_text(
         &self,
@@ -84,6 +98,10 @@ pub trait TerminalBackend:
     }
 
     fn tab_titler(&self) -> Option<&dyn TabTitler> {
+        None
+    }
+
+    fn chord_passage(&self) -> Option<&dyn ChordPassage> {
         None
     }
 }
@@ -269,6 +287,21 @@ impl TerminalSessionService {
                 capability: "tab title",
             })?;
         titler.set_tab_title(target, title)
+    }
+
+    pub fn pass_chords(
+        &self,
+        target: &SessionBinding,
+        chords: &[Chord],
+    ) -> Result<ChordPassageChange, TerminalError> {
+        let backend = self.backend_for(target.session_id())?;
+        let passage = backend
+            .chord_passage()
+            .ok_or_else(|| TerminalError::Unsupported {
+                target: target.session_id().clone(),
+                capability: "chord passage",
+            })?;
+        passage.pass_chords(target, chords)
     }
 
     pub fn is_current(&self, target: &SessionBinding) -> Result<bool, TerminalError> {

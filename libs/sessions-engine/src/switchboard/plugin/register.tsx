@@ -1869,9 +1869,31 @@ const refreshDetails = ($: EngineInterface, own: readonly Pull[], details: Recor
 }
 
 const CLOSE = 'close-fork'
-const CLOSE_CHORD = 'ctrl+x ctrl+x'
 const INTERRUPT = 'interrupt-fork'
-const INTERRUPT_CHORD = 'ctrl+x ctrl+c'
+const RELEASE_CHORDS_TIMEOUT_MS = 1_000
+
+type BoundChords = { launch: string; keys: Record<string, string> }
+
+export const boundChords = (text: string | undefined): BoundChords => {
+  try {
+    const parsed: unknown = JSON.parse(text ?? '')
+    const raw = typeof parsed === 'object' && parsed !== null ? (parsed as { launch?: unknown; chords?: unknown }) : {}
+    const chords: { keys?: unknown; command?: unknown }[] = Array.isArray(raw.chords) ? raw.chords : []
+    const keys = Object.fromEntries(chords.flatMap(one => (typeof one?.keys === 'string' && one.keys !== '' && typeof one.command === 'string' ? [[one.command, one.keys] as const] : [])))
+    return { launch: typeof raw.launch === 'string' ? raw.launch : '', keys }
+  } catch {
+    return { launch: '', keys: {} }
+  }
+}
+
+const chordsOf = async ($: EngineInterface): Promise<BoundChords> => boundChords(await $.env.get('QOL_SWITCHBOARD_CHORDS').catch(() => undefined))
+
+const releaseChords = async ($: EngineInterface): Promise<void> => {
+  const { launch } = await chordsOf($)
+  const program = launch === '' ? undefined : await recordProgram($)
+  if (program === undefined) return
+  await $.process.run([program, 'sessions', 'switchboard', 'hook', 'release-chords', launch], { cwd: folderOf(program), timeoutMs: RELEASE_CHORDS_TIMEOUT_MS }).catch(() => undefined)
+}
 const CUT_NOTE = 'The user interrupted this turn from the switchboard: stop here and wait for their next message.'
 const CUT_REPLY = 'Interrupted from the switchboard.'
 const CUT_SAID = 'interrupted, waiting for you'
@@ -1954,11 +1976,12 @@ export const closeFork = async ($: EngineInterface): Promise<string> => {
   if ((busy !== undefined || busySubs.length > 0) && !isForced) {
     closeArmed = { agentId, at: now }
     const withSubs = subs.length === 0 ? '' : `, with its ${subForksText(subs.length)}`
-    if (busy !== undefined) return `${name} ${busy}, so it stays open. ${CLOSE_CHORD} again closes it anyway${withSubs}.`
+    const again = (await chordsOf($)).keys[CLOSE] ?? `/${CLOSE}`
+    if (busy !== undefined) return `${name} ${busy}, so it stays open. ${again} again closes it anyway${withSubs}.`
     const [first] = busySubs
     const atWork = first === undefined ? '' : `${keyName(first.name)} ${busyOf(first) ?? ''}`
     const others = busySubs.length === 1 ? '' : ` and ${busySubs.length - 1} more of its sub-forks ${busySubs.length === 2 ? 'is' : 'are'} busy`
-    return `${name}'s sub-fork ${atWork}${others}, so ${name} stays open. ${CLOSE_CHORD} again closes it anyway${withSubs}.`
+    return `${name}'s sub-fork ${atWork}${others}, so ${name} stays open. ${again} again closes it anyway${withSubs}.`
   }
   closeArmed = { agentId: '', at: 0 }
   for (const one of [...subs].reverse().concat(entry)) {
@@ -2830,6 +2853,11 @@ export const register: Register = on => {
     return started
   }).catch(($, e, next) => next(e))
 
+  on('session.end', async ($, e, next) => {
+    if (e.reason !== 'clear' && e.reason !== 'resume') await releaseChords($).catch(() => undefined)
+    return next(e)
+  })
+
   on('session.start', async ($, e, next) => {
     await update($, starting, () => STARTING).catch(() => undefined)
     const started = await next(e)
@@ -2870,8 +2898,10 @@ export const register: Register = on => {
       await noteReopen($, { at: await $.clock.now(), start: id, boards: others.length, carried: earlier.length, own: own.length, rows: merged.map(one => one.agentId), pending })
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
-      await $.command.register({ name: CLOSE, description: `Close the fork you write to or have open, with the sub-forks it started (${CLOSE_CHORD} once bound): the board counts them under closed and they leave the agent list within half a minute`, immediate: true })
-      await $.command.register({ name: INTERRUPT, description: `Stop the running turn of the fork you write to or have open, as Esc does in a session of its own (${INTERRUPT_CHORD} once bound): the fork stays open and your next message to it continues the conversation`, immediate: true })
+      const { keys } = await chordsOf($)
+      const chord = (name: string): string => (keys[name] === undefined ? '' : ` (${keys[name]})`)
+      await $.command.register({ name: CLOSE, description: `Close the fork you write to or have open, with the sub-forks it started${chord(CLOSE)}: the board counts them under closed and they leave the agent list within half a minute`, immediate: true })
+      await $.command.register({ name: INTERRUPT, description: `Stop the running turn of the fork you write to or have open, as Esc does in a session of its own${chord(INTERRUPT)}: the fork stays open and your next message to it continues the conversation`, immediate: true })
       void Promise.all([
         $.tool.register({
         name: TOOL,

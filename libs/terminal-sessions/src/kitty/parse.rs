@@ -46,6 +46,8 @@ pub struct KittyWindow {
     pub foreground_processes: Vec<ForegroundProcess>,
     #[serde(default)]
     pub user_vars: HashMap<String, String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

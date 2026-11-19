@@ -1,4 +1,5 @@
 pub mod bridge;
+mod chord;
 pub mod cli;
 pub mod closed;
 pub mod console;
@@ -12,13 +13,15 @@ mod platform;
 mod service;
 mod spawn;
 
+pub use chord::{Chord, ChordCommand, ChordError, CtrlKey};
 pub use error::{IdentityError, TerminalError};
 pub use model::{
     BackendId, DeliveryMode, SessionBinding, SessionCapabilities, SessionFacts, SessionId,
     TerminalSnapshot,
 };
 pub use service::{
-    screen_contains_ignoring_whitespace, ScreenReader, SessionCloser, SessionFocus,
-    SessionInventory, TabTitler, TerminalBackend, TerminalSessionService, TextInput, WaitOutcome,
+    screen_contains_ignoring_whitespace, ChordPassage, ChordPassageChange, ScreenReader,
+    SessionCloser, SessionFocus, SessionInventory, TabTitler, TerminalBackend,
+    TerminalSessionService, TextInput, WaitOutcome,
 };
 pub use spawn::{SessionSpawner, SpawnIdentity, SpawnKey, SpawnRequest, SpawnSurface};

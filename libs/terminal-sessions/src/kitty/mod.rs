@@ -1,3 +1,4 @@
+mod chords;
 mod endpoint;
 mod parse;
 mod program;
@@ -18,9 +19,10 @@ use endpoint::LegacyEndpointSource;
 use endpoint::{Endpoint, EndpointSource, SystemEndpointSource};
 
 use crate::{
-    BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionCloser, SessionFacts,
-    SessionFocus, SessionId, SessionInventory, SessionSpawner, SpawnIdentity, SpawnRequest,
-    SpawnSurface, TabTitler, TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
+    BackendId, Chord, ChordPassage, ChordPassageChange, DeliveryMode, ScreenReader, SessionBinding,
+    SessionCloser, SessionFacts, SessionFocus, SessionId, SessionInventory, SessionSpawner,
+    SpawnIdentity, SpawnRequest, SpawnSurface, TabTitler, TerminalBackend, TerminalError,
+    TerminalSnapshot, TextInput,
 };
 
 const BACKEND_ID: &str = "kitty";
@@ -220,6 +222,10 @@ impl TerminalBackend for KittyBackend {
         Some(self)
     }
 
+    fn chord_passage(&self) -> Option<&dyn ChordPassage> {
+        Some(self)
+    }
+
     fn read_screen_from_snapshot(
         &self,
         snapshot: &TerminalSnapshot,
@@ -320,6 +326,53 @@ impl TabTitler for KittyBackend {
             None,
         )
         .map(drop)
+    }
+}
+
+impl ChordPassage for KittyBackend {
+    fn pass_chords(
+        &self,
+        target: &SessionBinding,
+        chords: &[Chord],
+    ) -> Result<ChordPassageChange, TerminalError> {
+        let (endpoint, _) = self.route_target(target)?;
+        let listing = self.run_at(&endpoint, "discover sessions", &strings(["@", "ls"]), None)?;
+        let listing = parse_ls(&listing, backend_id())?;
+        let effective = chords::effective_config_file(&listing)
+            .and_then(|file| std::fs::read_to_string(file).ok());
+        let session = listing
+            .sessions_for(backend_id(), endpoint.instance())
+            .into_iter()
+            .find(|session| session.id == *target.session_id())
+            .ok_or_else(|| TerminalError::TargetMissing(target.clone()))?;
+        if session.root_pid != target.root_pid() {
+            return Err(TerminalError::TargetChanged {
+                target: session.id,
+                expected_root_pid: target.root_pid(),
+                actual_root_pid: session.root_pid,
+            });
+        }
+        let Some(identity) = session.spawn_identity else {
+            return Err(TerminalError::Unsupported {
+                target: session.id,
+                capability: "chord passage to a session without a spawn key",
+            });
+        };
+        let lines = chords
+            .iter()
+            .map(|chord| chords::config_line(&identity.key, chord))
+            .collect();
+        let missing = chords::missing(lines, effective.as_deref());
+        if missing.is_empty() {
+            return Ok(ChordPassageChange::AlreadyOpen);
+        }
+        let mut args = strings(["@", "load-config"]);
+        for line in &missing {
+            args.push("--override".to_owned());
+            args.push(chords::override_argument(line));
+        }
+        self.run_at(&endpoint, "let chords through", &args, None)?;
+        Ok(ChordPassageChange::Opened)
     }
 }
 
@@ -650,10 +703,10 @@ mod tests {
     };
     use crate::cli::{CliLaunchProgram, CliToolId};
     use crate::{
-        kitty::backend_id, DeliveryMode, ScreenReader, SessionBinding, SessionCapabilities,
-        SessionCloser, SessionFacts, SessionFocus, SessionId, SessionInventory, SpawnIdentity,
-        SpawnKey, SpawnRequest, SpawnSurface, TabTitler, TerminalBackend, TerminalError,
-        TerminalSessionService, TerminalSnapshot, TextInput,
+        kitty::backend_id, Chord, ChordPassage, ChordPassageChange, DeliveryMode, ScreenReader,
+        SessionBinding, SessionCapabilities, SessionCloser, SessionFacts, SessionFocus, SessionId,
+        SessionInventory, SpawnIdentity, SpawnKey, SpawnRequest, SpawnSurface, TabTitler,
+        TerminalBackend, TerminalError, TerminalSessionService, TerminalSnapshot, TextInput,
     };
 
     type RecordedCall = (Option<String>, Vec<String>, Option<String>);
@@ -1221,6 +1274,118 @@ mod tests {
             root_pid,
         )
         .unwrap()
+    }
+
+    fn switchboard_chords() -> Vec<Chord> {
+        vec![Chord::ctrl("xx").unwrap(), Chord::ctrl("xc").unwrap()]
+    }
+
+    const CLOSE_OVERRIDE: &str =
+        r"map=--when-focus-on var:qol_session_key=switchboard ctrl+x>ctrl+x send_text all \x18\x18";
+    const INTERRUPT_OVERRIDE: &str =
+        r"map=--when-focus-on var:qol_session_key=switchboard ctrl+x>ctrl+c send_text all \x18\x03";
+
+    #[test]
+    fn chords_pass_through_a_mapping_scoped_to_the_keyed_window() {
+        let runner = FakeRunner::with_outputs(vec![
+            success(ls_with_identity(42, "switchboard", "claude", "tab")),
+            success(String::new()),
+        ]);
+        let backend = KittyBackend::with_runner(runner.clone());
+
+        let change = backend
+            .pass_chords(&binding(42, 900), &switchboard_chords())
+            .unwrap();
+
+        assert_eq!(change, ChordPassageChange::Opened);
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].1, ["@", "ls"]);
+        assert_eq!(
+            calls[1].1,
+            [
+                "@",
+                "load-config",
+                "--override",
+                CLOSE_OVERRIDE,
+                "--override",
+                INTERRUPT_OVERRIDE
+            ]
+        );
+    }
+
+    #[test]
+    fn chords_the_running_kitty_already_passes_reload_nothing() {
+        let cache = tempfile::tempdir().unwrap();
+        let effective = cache.path().join("effective-config");
+        std::fs::create_dir_all(&effective).unwrap();
+        std::fs::write(
+            effective.join("12140"),
+            format!(
+                "font_size 12.5\n{}\n{}\n",
+                CLOSE_OVERRIDE.replacen('=', " ", 1),
+                INTERRUPT_OVERRIDE.replacen('=', " ", 1)
+            ),
+        )
+        .unwrap();
+        let env = serde_json::json!({
+            "KITTY_PID": "12140",
+            "KITTY_CACHE_DIRECTORY": cache.path(),
+        });
+        let listing = format!(
+            r#"[{{"id":1,"tabs":[{{"windows":[{{"id":42,"title":"Switchboard","cwd":"/work/project","pid":900,"env":{env},"user_vars":{{"qol_session_key":"switchboard","qol_session_tool":"claude","qol_session_surface":"tab"}}}}]}}]}}]"#
+        );
+        let runner = FakeRunner::with_outputs(vec![success(listing.clone())]);
+        let backend = KittyBackend::with_runner(runner.clone());
+
+        let change = backend
+            .pass_chords(&binding(42, 900), &switchboard_chords())
+            .unwrap();
+
+        assert_eq!(change, ChordPassageChange::AlreadyOpen);
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
+
+        let runner =
+            FakeRunner::with_outputs(vec![success(listing.clone()), success(String::new())]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let more = [Chord::ctrl("xc").unwrap(), Chord::ctrl("xk").unwrap()];
+
+        let change = backend.pass_chords(&binding(42, 900), &more).unwrap();
+
+        assert_eq!(change, ChordPassageChange::Opened);
+        assert_eq!(
+            runner.calls.lock().unwrap()[1].1,
+            [
+                "@",
+                "load-config",
+                "--override",
+                r"map=--when-focus-on var:qol_session_key=switchboard ctrl+x>ctrl+k send_text all \x18\x0b"
+            ]
+        );
+    }
+
+    #[test]
+    fn chords_do_not_pass_to_a_window_that_changed_or_has_no_key() {
+        let runner = FakeRunner::with_outputs(vec![success(ls_without_identity(42))]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let error = backend
+            .pass_chords(&binding(42, 900), &switchboard_chords())
+            .unwrap_err();
+        assert!(matches!(error, TerminalError::Unsupported { .. }));
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
+
+        let runner = FakeRunner::with_outputs(vec![success(ls_with_identity(
+            42,
+            "switchboard",
+            "claude",
+            "tab",
+        ))]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let error = backend
+            .pass_chords(&binding(42, 901), &switchboard_chords())
+            .unwrap_err();
+        assert!(matches!(error, TerminalError::TargetChanged { .. }));
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
     }
 
     fn spawn_request(surface: SpawnSurface) -> SpawnRequest {

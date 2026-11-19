@@ -22,6 +22,7 @@ pub(super) const FORK_STATES: &str = "fork-states";
 pub(super) const FOLD_TRANSCRIPTS: &str = "fold-transcripts";
 pub(super) const FORK_SAID: &str = "fork-said";
 pub(super) const ROLE_REFRESH: &str = "role-refresh";
+const RELEASE_CHORDS: &str = super::chords::RELEASE;
 pub(super) const ROLE_REFRESH_SLOTS: usize = 3;
 pub(super) const ROLE_REFRESH_SOURCES: &str = "resume|compact";
 const COMPACT_BOUNDARY: &str = "\"compact_boundary\"";
@@ -318,7 +319,7 @@ fn read_payload() -> Result<Payload> {
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let name = args.first().and_then(|arg| arg.to_str()).ok_or_else(|| {
         anyhow!(
-            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}|{FORK_STATES}|{FORK_SAID}|{FOLD_TRANSCRIPTS} DIR>"
+            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}|{FORK_STATES}|{FORK_SAID}|{FOLD_TRANSCRIPTS} DIR|{RELEASE_CHORDS} LAUNCH>"
         )
     })?;
     match name {
@@ -353,6 +354,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
             crate::cli::line(serde_json::to_string(&super::fold::fold(&conversations))?);
             Ok(())
         }
+        RELEASE_CHORDS => super::chords::run_release(&args[1..]),
         RETIRED_POST_AGENT => Ok(()),
         RETIRED_WORKTREE_CREATE => bail!(
             "this switchboard was started by an older CLI Sessions whose forks ran in worktree isolation; close the switchboard and open it again to start forks"
@@ -812,6 +814,7 @@ mod tests {
             FORK_STATES,
             FORK_SAID,
             FOLD_TRANSCRIPTS,
+            RELEASE_CHORDS,
         ] {
             assert!(error.contains(verb), "{verb}: {error}");
         }

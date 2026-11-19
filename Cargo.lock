@@ -7495,6 +7495,8 @@ dependencies = [
  "qol-conventions",
  "qol-fs",
  "qol-headless",
+ "qol-host-fixes",
+ "qol-host-session",
  "qol-mcp",
  "qol-platform",
  "qol-plugin-daemon",
