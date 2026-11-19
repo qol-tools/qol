@@ -844,13 +844,14 @@ mod tests {
 
     #[test]
     fn a_model_is_answered_with_the_id_it_runs_as_or_with_why_it_may_not_run() {
+        type Admit<'a> = &'a dyn Fn(&str) -> Result<String>;
         fn as_opus(_model: &str) -> Result<String> {
             Ok("claude-opus-5-5".to_owned())
         }
         fn refuse(model: &str) -> Result<String> {
             bail!("model {model} is not allowed")
         }
-        let cases: [(&str, &dyn Fn(&str) -> Result<String>, Value); 4] = [
+        let cases: [(&str, Admit, Value); 4] = [
             ("opus-5.5", &as_opus, json!({ "model": "claude-opus-5-5" })),
             (
                 "gpt-9-turbo",
