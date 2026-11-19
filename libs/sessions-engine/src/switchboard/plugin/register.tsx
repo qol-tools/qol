@@ -137,6 +137,7 @@ const current = atom({ plugin: 'qol-switchboard', key: 'current' } as const, '')
 const focusActivity = atom({ plugin: 'qol-switchboard', key: 'focusActivity' } as const, '')
 const freshReply = atom({ plugin: 'qol-switchboard', key: 'freshReply' } as const, '')
 const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', prevId: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
+const rowsCapped = atom({ plugin: 'qol-switchboard', key: 'rowsCapped' } as const, false)
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
 const pullDetails = atom({ plugin: 'qol-switchboard', key: 'pullDetails' } as const, {} as Record<string, PullDetail>)
@@ -376,11 +377,22 @@ const withUnseen = (agentId: string, all: Said[], now: number): Said[] => {
   return placed
 }
 
+const HANDBACK_TOOL = 'SubagentHandback'
+
+const handedBack = (toolUses: unknown): string[] => {
+  if (!Array.isArray(toolUses)) return []
+  return toolUses.flatMap((one): string[] => {
+    const { tool, input } = (one ?? {}) as { tool?: unknown; input?: { message?: unknown } | null }
+    const message = tool === HANDBACK_TOOL ? input?.message : undefined
+    return typeof message === 'string' ? [message] : []
+  })
+}
+
 export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
   if (!Array.isArray(messages)) return []
   const said = messages.flatMap((one): Said[] => {
     if (typeof one !== 'object' || one === null) return []
-    const { role, text } = one as { role?: unknown; text?: unknown }
+    const { role, text, toolUses } = one as { role?: unknown; text?: unknown; toolUses?: unknown }
     if (typeof text !== 'string' || (role !== 'user' && role !== 'assistant')) return []
     const queued = role === 'user' ? [...text.matchAll(QUEUED_NOTE)].map(match => match[1] ?? '').filter(note => MID_TURN_NOTE.test(note.trim())) : []
     if (queued.length > 0) {
@@ -389,7 +401,7 @@ export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
         return shown === '' || isPluginNote(shown) ? [] : [{ isUser: true, text: clipSaid(shown) }]
       })
     }
-    const words = role === 'user' ? userWords(text) : text
+    const words = role === 'user' ? userWords(text) : [text, ...handedBack(toolUses)].filter(part => part.trim() !== '').join('\n\n')
     const shown = plainText(words)
     if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown))) || (role === 'assistant' && isHeldReply(shown))) return []
     return [{ isUser: role === 'user', text: clipSaid(shown) }]
@@ -410,7 +422,7 @@ const COMPACTED = 'This session is being continued from a previous conversation'
 
 const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', COMPACTED, '[SYSTEM NOTIFICATION']
 
-const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY].includes(text.trim())
+const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY, CUT_REPLY].includes(text.trim())
 
 const isPluginNote = (text: string): boolean => {
   const said = text.replace(MID_TURN_NOTE, '').trim()
@@ -579,6 +591,36 @@ let swapFor = ''
 const FOCUS_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment', 'queue']
 
 let focusRows: { agentId: string; rows: Said[] } = { agentId: '', rows: [] }
+
+const BAND_SPARE = 4
+const BAND_MIN_COLUMNS = 20
+
+export const chatTail = (said: Said[], rows: number, columns: number): Said[] => {
+  const width = Math.max(columns, BAND_MIN_COLUMNS)
+  const tail: Said[] = []
+  let left = rows
+  for (const one of [...said].reverse()) {
+    const lines = one.text.split('\n')
+    const kept: string[] = []
+    let used = 2
+    for (const line of [...lines].reverse()) {
+      const tall = Math.max(1, Math.ceil(line.length / width))
+      if (used + tall > left) break
+      kept.unshift(line)
+      used += tall
+    }
+    if (kept.length === lines.length) {
+      tail.unshift(one)
+      left -= used
+      continue
+    }
+    const cut = lines[lines.length - kept.length - 1] ?? ''
+    const room = (left - used - 1) * width
+    if (kept.length > 0 || (tail.length === 0 && room > 0)) tail.unshift({ ...one, text: [`…${kept.length > 0 ? '' : cut.slice(-room)}`, ...kept].join('\n') })
+    break
+  }
+  return tail
+}
 let focusPlaced = 0
 let focusWait = 0
 let isPlacingFocus = false
@@ -593,7 +635,13 @@ const placeFocus = async ($: EngineInterface): Promise<void> => {
   const placed = await $.ui.place({ id }).catch(() => undefined).finally(() => {
     isPlacingFocus = false
   })
-  if (placed?.isPlaced !== true || (await read($, writingTo)) !== target) return
+  if ((await read($, writingTo)) !== target) return
+  const isCapped = placed?.isPlaced !== true
+  if ((await read($, rowsCapped)) !== isCapped) await update($, rowsCapped, () => isCapped)
+  if (isCapped) {
+    if ((await read($, focusShown)).id !== '') await update($, focusShown, () => ({ id: '', prevId: '', agentId: '', key: '', rows: [] }))
+    return
+  }
   const rows = focusRows.agentId === target ? focusRows.rows : []
   await update($, focusShown, shown => ({ id, prevId: shown.agentId === target ? shown.id : '', agentId: target, key: keyOf(entry), rows }))
 }
@@ -1084,14 +1132,18 @@ export const nextKey = (list: Entry[], current: string, step: 1 | -1 = 1): strin
   return keys[(from + step + keys.length) % keys.length]
 }
 
-export const toFork = (list: Entry[], text: string): { entry: Entry; message: string } | undefined => {
+export const toFork = (list: Entry[], text: string, fromSwitchboard = true): { entry: Entry; message: string } | undefined => {
   const match = TO_FORK.exec(text)
   if (match === null) return undefined
   const [, word = '', colon, message = ''] = match
   const rows = reachable(list)
   const exact = rows.find(entry => keyOf(entry) === word)
   if (exact !== undefined) return { entry: exact, message: message.trim() }
-  if (colon !== ':') return undefined
+  if (colon !== ':') {
+    const tabbed = fromSwitchboard && message === '' && word.length > 1 ? keyCompletions(list, word)[0]?.label : undefined
+    const entry = tabbed?.startsWith(word) === true ? rows.find(one => keyOf(one) === tabbed) : undefined
+    return entry === undefined ? undefined : { entry, message: '' }
+  }
   const starts = keyStarts(rows, word)
   const typed = starts.length > 0 ? starts : wordStarts(rows, word)
   return typed.length === 1 && typed[0] !== undefined ? { entry: typed[0], message: message.trim() } : undefined
@@ -1818,6 +1870,11 @@ const refreshDetails = ($: EngineInterface, own: readonly Pull[], details: Recor
 
 const CLOSE = 'close-fork'
 const CLOSE_CHORD = 'ctrl+x ctrl+x'
+const INTERRUPT = 'interrupt-fork'
+const INTERRUPT_CHORD = 'ctrl+x ctrl+c'
+const CUT_NOTE = 'The user interrupted this turn from the switchboard: stop here and wait for their next message.'
+const CUT_REPLY = 'Interrupted from the switchboard.'
+const CUT_SAID = 'interrupted, waiting for you'
 const CLOSED_REASON = 'Closed by the user.'
 const RECENT_MAX = 5
 export const CLOSE_AGAIN_MS = 10_000
@@ -1825,15 +1882,48 @@ let closeArmed = { agentId: '', at: 0 }
 
 const subForksText = (count: number): string => `${count} sub-fork${count === 1 ? '' : 's'}`
 
+const stopTask = ($: EngineInterface, agentId: string): Promise<string | undefined> =>
+  $.tool
+    .call({ tool: 'TaskStop', task_id: agentId })
+    .then(one => one.deny ?? (one.isError === true ? (one.text ?? 'TaskStop failed') : undefined))
+    .catch((error: unknown) => String(error))
+
+const CUT = Symbol('cut')
+const cutting = new Set<string>()
+const cutWaits = new Map<string, Set<() => void>>()
+
+const cutOf = (agentId: string): { cut: Promise<typeof CUT>; drop: () => void } => {
+  const waits = cutWaits.get(agentId) ?? new Set<() => void>()
+  cutWaits.set(agentId, waits)
+  let fire = (): void => {}
+  const cut = new Promise<typeof CUT>(resolve => {
+    fire = () => resolve(CUT)
+  })
+  waits.add(fire)
+  if (cutting.has(agentId)) fire()
+  return { cut, drop: () => void waits.delete(fire) }
+}
+
+const cutReply = (e: { turnId: string; index: number }, answer: string) => ({ turnId: e.turnId, index: e.index, usage: null, answer, toolUses: [], stopReason: 'end_turn' as const })
+
+export const interruptFork = async ($: EngineInterface): Promise<string> => {
+  const agentId = viewedFork ?? (await read($, writingTo))
+  const entry = agentId === '' ? undefined : (await read($, board)).find(one => one.agentId === agentId)
+  if (entry === undefined) return 'No fork to interrupt: write to one or open its conversation first.'
+  const name = keyName(entry.name)
+  if (!entry.isWorking) return `${name} is not in a turn, so there is nothing to interrupt.`
+  cutting.add(agentId)
+  for (const fire of cutWaits.get(agentId) ?? []) fire()
+  await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isWorking: false } : one)))
+  return `Interrupted ${name}: its turn stops here and its background commands keep running. Your next message to it continues the conversation.`
+}
+
 const endFork = async ($: EngineInterface, entry: Entry): Promise<string | undefined> => {
   const { agentId } = entry
   closing.add(agentId)
   try {
     if (listedAgents(await $.agent.list().catch(() => [])).has(agentId)) {
-      const failed = await $.tool
-        .call({ tool: 'TaskStop', task_id: agentId })
-        .then(one => one.deny ?? (one.isError === true ? (one.text ?? 'TaskStop failed') : undefined))
-        .catch((error: unknown) => String(error))
+      const failed = await stopTask($, agentId)
       if (failed !== undefined) return `${keyName(entry.name)} could not be closed: ${printable(failed)}`
     }
     await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isWorking: false, isDismissed: true, isClosed: true, isDone: true } : one)))
@@ -2485,7 +2575,7 @@ const once = (text: string, needle: string): boolean => text.indexOf(needle) !==
 
 export type Origin = 'peer' | 'task-notification'
 
-type Intake = { text: string; entry: Entry }
+type Intake = { text: string; entry: Entry; isInterrupt?: true }
 
 export const intake = async (
   $: EngineInterface,
@@ -2523,7 +2613,9 @@ export const intake = async (
   const report = result?.[2]?.trim() ?? ''
   if (HANDED_BACK.test(report)) return undefined
   if (report === RESTARTED_REPLY) keeping.delete(agentId)
+  const cut = report === CUT_REPLY ? (await read($, board)).find(one => one.agentId === agentId) : undefined
   const entry =
+    cut ??
     (report === RESTARTED_REPLY ? await rested($, agentId) : undefined) ??
     (await file($, { agentId, name, status, report, ...(report === RESTARTED_REPLY ? { filing: { kind: 'note' as Kind, headline: RESTARTED_REPLY } } : {}) }))
   if (isKept) void keep($, agentId)
@@ -2536,6 +2628,7 @@ export const intake = async (
     text: text.replace(block, () => filed),
     entry,
     ...(report === RESTARTED_REPLY ? { isRestart: true as const } : {}),
+    ...(cut === undefined ? {} : { isInterrupt: true as const }),
     ...(isKept ? { isKept: true as const } : {}),
   }
 }
@@ -2678,6 +2771,7 @@ const quietReport = async ($: EngineInterface, text: string, origin: string | un
     const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
     if (filed === undefined) return undefined
     if ('isKept' in filed) return { fork: keyName(filed.entry.name), said: KEPT_SAID }
+    if (filed.isInterrupt === true) return { fork: keyName(filed.entry.name), said: CUT_SAID }
     return { fork: keyName(filed.entry.name), said: filed.entry.headline.trim() === '' ? 'back in the agent list' : filed.entry.headline }
   } catch {
     return undefined
@@ -2777,6 +2871,7 @@ export const register: Register = on => {
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
       await $.command.register({ name: CLOSE, description: `Close the fork you write to or have open, with the sub-forks it started (${CLOSE_CHORD} once bound): the board counts them under closed and they leave the agent list within half a minute`, immediate: true })
+      await $.command.register({ name: INTERRUPT, description: `Stop the running turn of the fork you write to or have open, as Esc does in a session of its own (${INTERRUPT_CHORD} once bound): the fork stays open and your next message to it continues the conversation`, immediate: true })
       void Promise.all([
         $.tool.register({
         name: TOOL,
@@ -2860,13 +2955,29 @@ export const register: Register = on => {
       $.clock.after(0, () => void seenInView($, viewing).catch(() => undefined))
     }
     if ((loading === '' && key === '') || e.props.hasSurvey) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Text, Markdown } = $.ui.resolve(e)
     if (loading === '') {
-      return (
+      const writing = (
         <Box marginTop={1}>
           <Text dimColor>writing to </Text>
           <Text bold color="claude">{key}</Text>
           <Text dimColor> · esc on an empty prompt leaves</Text>
+        </Box>
+      )
+      const isChatHere = (await read($, rowsCapped)) && (await read($, writingTo)) === shown?.agentId
+      const said = isChatHere ? chatTail(await read($, writingSaid), e.props.maxRows - BAND_SPARE, e.props.bodyColumns) : []
+      if (said.length === 0) return writing
+      return (
+        <Box flexDirection="column">
+          {said.map((one, index) => (
+            <Box key={`band-${index}`} flexDirection="column" marginTop={1}>
+              <Text bold color={one.isUser ? 'suggestion' : 'claude'}>
+                {one.isUser ? 'you' : key}
+              </Text>
+              <Markdown text={one.text} />
+            </Box>
+          ))}
+          {writing}
         </Box>
       )
     }
@@ -2956,6 +3067,8 @@ export const register: Register = on => {
 
   on('command.run', { command: CLOSE }, async $ => ({ text: await closeFork($) })).catch(() => ({ text: 'The fork could not be closed.' }))
 
+  on('command.run', { command: INTERRUPT }, async $ => ({ text: await interruptFork($) })).catch(() => ({ text: 'The fork could not be interrupted.' }))
+
   for (const kind of ['model', 'effort'] as const) {
     on('command.run', { command: kind }, async ($, e, next) => {
       const text = await setByCommand($, kind, e.args)
@@ -2977,7 +3090,7 @@ export const register: Register = on => {
       }
     }
     const typed = await ensureLoaded($)
-      .then(async () => toFork(await read($, board), e.text))
+      .then(async () => toFork(await read($, board), e.text, viewing === undefined))
       .catch(() => undefined)
     if (TYPED_TOGGLE.test(e.text)) {
       isAutoOpenPending = false
@@ -3078,7 +3191,7 @@ export const register: Register = on => {
       const rows = sbCompletions(one.commands, e.text, e.start, e.token, one.lead)
       if (rows.length > 0) return { suggestions: [...own.suggestions, ...rows] }
     }
-    if (e.text.slice(0, e.start).trim() !== '') return own
+    if (viewedFork !== undefined || e.text.slice(0, e.start).trim() !== '') return own
     try {
       await ensureLoaded($)
       const mine = keyCompletions(await read($, board), e.token)
@@ -3101,9 +3214,9 @@ export const register: Register = on => {
       const list = await read($, board)
       const current = e.text.trim()
       const isKeyOnly = e.text === '' || (e.text === `${current} ` && reachable(list).some(entry => keyOf(entry) === current))
-      const key = isKeyOnly ? nextKey(list, current, e.key?.shift === true ? -1 : 1) : undefined
+      const key = isKeyOnly && isMain ? nextKey(list, current, e.key?.shift === true ? -1 : 1) : undefined
       if (key !== undefined) {
-        if (isMain) await writeToSoon($, reachable(list).find(entry => keyOf(entry) === key))
+        await writeToSoon($, reachable(list).find(entry => keyOf(entry) === key))
         return { text: `${key} `, cursor: key.length + 1, decorations: [{ start: 0, end: key.length, bold: true }] }
       }
     }
@@ -3193,7 +3306,7 @@ export const register: Register = on => {
     } else {
       await bringBack($, target.agentId)
     }
-    const answer = await next(target.agentId === e.to ? e : { ...e, to: target.agentId })
+      const answer = await next(target.agentId === e.to ? e : { ...e, to: target.agentId })
     if (!isUndelivered(answer)) return answer
     const revived = await revive($, target)
     if (revived === undefined) return answer
@@ -3220,18 +3333,24 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     if (e.agentId !== undefined && CROSS_SESSION.test(e.tool)) return { deny: FORK_RESUME }
-    if (e.agentId !== undefined) {
-      const agentId = e.agentId
-      if ((e as unknown as Record<string, unknown>).run_in_background === true) noteForkCall(e.tool_use_id)
-      try {
-        const label = toolLabel(e.tool, e as unknown as Record<string, unknown>)
-        void noteActivity($, agentId, label).catch(() => {})
-      } catch {}
-    }
-    return next(MESSAGING.test(e.tool) ? asFork(e) : e)
+    if (e.agentId === undefined) return next(MESSAGING.test(e.tool) ? asFork(e) : e)
+    const agentId = e.agentId
+    if (cutting.has(agentId)) return { deny: CUT_NOTE }
+    if ((e as unknown as Record<string, unknown>).run_in_background === true) noteForkCall(e.tool_use_id)
+    try {
+      const label = toolLabel(e.tool, e as unknown as Record<string, unknown>)
+      void noteActivity($, agentId, label).catch(() => {})
+    } catch {}
+    const { cut, drop } = cutOf(agentId)
+    const ran = next(MESSAGING.test(e.tool) ? asFork(e) : e)
+    const first = await Promise.race([ran, cut]).finally(drop)
+    if (first !== CUT) return first
+    void ran.catch(() => undefined)
+    return { deny: CUT_NOTE }
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { deny: FORK_RESUME }))
 
   on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) cutting.delete(e.agentId)
     const isHeld = await claimHold($, e.agentId, e.turnId, e.text)
     if (e.agentId !== undefined && !isHeld) {
       const forkId = e.agentId
@@ -3258,10 +3377,41 @@ export const register: Register = on => {
       yield { kind: 'stop', stopReason: 'end_turn', usage: null }
       return { turnId: e.turnId, index: e.index, usage: null, answer: RESTARTED_REPLY, toolUses: [], stopReason: 'end_turn' }
     }
+    const agentId = e.agentId
+    if (agentId !== undefined && cutting.has(agentId)) {
+      yield { kind: 'text', index: 0, text: CUT_REPLY }
+      yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+      return cutReply(e, CUT_REPLY)
+    }
     const reply = await heldReply($, e.agentId, e.turnId)
     if (reply === undefined || e.index > 1) {
-      if (reply !== undefined && e.agentId !== undefined) await finishHold($, e.agentId)
-      return yield* next(await withChoice($, e).catch(() => e))
+      if (reply !== undefined && agentId !== undefined) await finishHold($, agentId)
+      const stream = next(await withChoice($, e).catch(() => e))
+      if (agentId === undefined) return yield* stream
+      const live = stream[Symbol.asyncIterator]()
+      const { cut, drop } = cutOf(agentId)
+      let pending = live.next()
+      let isCut = false
+      let hasTool = false
+      try {
+        while (true) {
+          const step = isCut ? await pending : await Promise.race([pending, cut])
+          if (step === CUT) {
+            isCut = true
+            if (hasTool) continue
+            void pending.catch(() => undefined)
+            yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+            return cutReply(e, '')
+          }
+          if (step.done === true) return step.value
+          if (step.value.kind === 'tool') hasTool = true
+          yield step.value
+          pending = live.next()
+        }
+      } finally {
+        drop()
+        if (isCut) void Promise.resolve().then(() => live.return?.(undefined)).catch(() => undefined)
+      }
     }
     const base = { turnId: e.turnId, index: e.index, usage: null }
     if (e.index === 0) {
@@ -3278,11 +3428,12 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     quietTurns.delete(e.turnId)
+    if (e.agentId !== undefined) cutting.delete(e.agentId)
     if (e.agentId !== undefined && (await holdOf($, e.agentId))?.turnId === e.turnId) await finishHold($, e.agentId)
     const done = await next(e)
     const ended = e.agentId
     if (ended !== undefined) await change($, list => list.map(one => (one.agentId === ended && one.isWorking ? { ...one, isRunOver: true } : one)))
-    if (ended !== undefined) lastTurns.set(ended, { turnId: e.turnId, ...(typeof e.answer === 'string' && e.answer.trim() !== '' && !e.isAborted ? { answer: e.answer } : {}) })
+    if (ended !== undefined) lastTurns.set(ended, { turnId: e.turnId, ...(typeof e.answer === 'string' && e.answer.trim() !== '' && !isHeldReply(e.answer) && !e.isAborted ? { answer: e.answer } : {}) })
     if (ended !== undefined) $.clock.after(RUN_OVER_MS, () => void settleRun($, ended, e.turnId).catch(() => undefined))
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {

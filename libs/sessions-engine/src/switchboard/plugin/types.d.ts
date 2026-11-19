@@ -73,6 +73,7 @@ declare module 'claude-code' {
       focusActivity: string
       freshReply: string
       focusShown: { id: string; prevId: string; agentId: string; key: string; rows: { isUser: boolean; text: string }[] }
+      rowsCapped: boolean
       starting: string
       current: string
     }
