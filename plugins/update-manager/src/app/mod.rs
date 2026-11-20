@@ -403,7 +403,9 @@ fn survey(shared: &Shared) {
                 SURVEY_EVERY
             };
         let mut state = shared.lock();
-        state.session.survey = Some(found);
+        if state.session.job.is_none() {
+            state.session.survey = Some(found);
+        }
         state.surveying = false;
         shared.wake.notify_all();
     }

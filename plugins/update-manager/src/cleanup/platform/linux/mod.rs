@@ -23,6 +23,8 @@ const SIMULATE: &[&str] = &["apt-get", "-s", "autoremove"];
 const PURGE: &[&str] = &["apt-get", "purge", "-y"];
 const DPKG: &str = "dpkg's estimate; apt's own count needs an administrator";
 const EXEC_SH: &str = "exec \"$@\"";
+const UNKNOWN_RUNNING: &str =
+    "the running kernel's version does not read as a packaged kernel, so none are listed";
 const SNAP_SH: &str = r#"for item in "$@"; do
   snap remove "${item%_*}" --revision="${item##*_}" || exit 3
 done
@@ -239,15 +241,23 @@ fn orphans(simulated: &str) -> Result<Amount, String> {
 }
 
 fn kernels_by_hand(manual: &str) -> Result<Amount, String> {
-    let running = running().ok_or("the running kernel's version is not known")?;
-    let listing = command::output(
+    if !manual
+        .lines()
+        .any(|package| parse::versioned_abi(package.trim()).is_some())
+    {
+        return Ok(dpkg_sized(Vec::new(), 0));
+    }
+    let Some(running) = running() else {
+        return Ok(Amount::unknown(Why::Cannot(UNKNOWN_RUNNING)));
+    };
+    let listing = command::lenient(
         "dpkg-query",
         &[
             "-W",
             "-f=${db:Status-Status}\t${Package}\n",
             "linux-image-*",
         ],
-    )?;
+    );
     let (packages, count) = parse::by_hand(manual, &running, &parse::installed(&listing));
     Ok(dpkg_sized(packages, count))
 }
