@@ -91,6 +91,7 @@ pub(super) fn render(view: &ExplorerView) -> AnyElement {
                         )),
                 )
                 .child(kit.scroll_cue(
+                    "explorer-props-bar",
                     ScrollSource::Handle {
                         handle: view.props_scroll.clone(),
                         children: rows + usize::from(props.preview().is_some()),

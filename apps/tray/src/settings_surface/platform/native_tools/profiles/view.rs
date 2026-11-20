@@ -768,11 +768,19 @@ impl ProfilesView {
         }
         list.child(self.list_height.recorder(cx.weak_entity()))
             .child(kit().scroll_cue(
-                ScrollSource::Window {
-                    first: range.start,
-                    shown: range.len(),
+                ("profiles-list-bar", level as usize),
+                ScrollSource::window(
+                    range.start,
+                    range.len(),
                     total,
-                },
+                    cx.listener(move |view: &mut Self, at: &f32, _, cx| {
+                        view.list.seek(*at, total);
+                        view.selected = view.list.selected;
+                        let rows = view.rows();
+                        view.sync_selection(&rows);
+                        cx.notify();
+                    }),
+                ),
                 kit().grounds.pane,
             ))
             .into_any_element()

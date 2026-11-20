@@ -551,10 +551,14 @@ impl ExplorerView {
 
     fn sorted(&mut self, by: SortBy) -> bool {
         let order = self.browser.order().chosen(by);
-        let changed = self.revealed(|browser| browser.resort(order));
+        let (layout, at, height) = (self.layout(), self.scroll_offset(), self.list_height());
+        let scroll = layout.resorted(&mut self.browser, order, at, height);
+        if let Some(scroll) = scroll {
+            self.set_scroll(scroll);
+        }
         self.saver.save("sort_by", order.by);
         self.saver.save("sort_descending", order.descending);
-        changed
+        scroll.is_some()
     }
 
     fn filter_yields(keystroke: &Keystroke) -> bool {

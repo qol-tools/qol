@@ -11,7 +11,7 @@ use qol_theme::{translucent, Alpha, TextStyle};
 
 use crate::kit::Kit;
 use crate::scroll_list::wheel_rows;
-use crate::scrollbar::ScrollSource;
+use crate::scrollbar::{window_first, ScrollSource};
 use crate::text::{laid_out_width, shaped_width, TextStyled};
 use crate::text_edit::{visible_char_count, CaretStyle, TextFieldElement};
 
@@ -368,14 +368,20 @@ fn fold_menu(
         })
         .collect();
     let shown = rows.len();
+    let sought = first.clone();
     kit.menu(FOLD_MENU_WIDTH)
         .children(rows)
         .child(kit.scroll_cue(
-            ScrollSource::Window {
-                first: top,
-                shown,
-                total,
-            },
+            "crumb-fold-bar",
+            ScrollSource::window(top, shown, total, move |at, _, cx| {
+                let moved = window_first(*at, shown, total);
+                sought.update(cx, |first, cx| {
+                    if *first != moved {
+                        *first = moved;
+                        cx.notify();
+                    }
+                });
+            }),
             kit.grounds.menu,
         ))
         .on_scroll_wheel(move |event, _, cx| {
@@ -550,15 +556,22 @@ fn suggestion_menu(
                 kit,
             )
         });
+    let total = edit.suggestions().len();
+    let seek_wheel = on_wheel.clone();
+    let landed = Rc::new(Cell::new(first));
     Some(
         kit.menu(width)
             .children(rows)
             .child(kit.scroll_cue(
-                ScrollSource::Window {
-                    first,
-                    shown: count,
-                    total: edit.suggestions().len(),
-                },
+                "crumb-suggestion-bar",
+                ScrollSource::window(first, count, total, move |at, window, cx| {
+                    let target = window_first(*at, count, total);
+                    let rows = target as isize - landed.get() as isize;
+                    if let Some(on_wheel) = seek_wheel.as_ref().filter(|_| rows != 0) {
+                        landed.set(target);
+                        on_wheel(rows, window, cx);
+                    }
+                }),
                 kit.grounds.menu,
             ))
             .when_some(on_wheel, |menu, on_wheel| {

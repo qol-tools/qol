@@ -678,11 +678,7 @@ impl LauncherView {
     }
 
     fn scroll_flow_detail(&mut self, delta: f32, cx: &mut Context<Self>) {
-        let max = self.detail_scroll.max_offset().height;
-        let y = (self.detail_scroll.offset().y - px(delta))
-            .max(-max)
-            .min(px(0.0));
-        self.detail_scroll.set_offset(gpui::point(px(0.0), y));
+        qol_gpui::scroll_list::scroll_handle_by(&self.detail_scroll, px(delta));
         cx.notify();
     }
 

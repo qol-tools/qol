@@ -4548,6 +4548,7 @@ impl SettingsPanelView {
             .when(front, |frame| frame.child(frame_bounds))
             .when(front && !has_custom_view, |frame| {
                 frame.child(self.kit.scroll_cue(
+                    "settings-body-bar",
                     crate::scrollbar::ScrollSource::Handle {
                         handle: self.stack[level_index].body_scroll.handle().clone(),
                         children,
@@ -4638,6 +4639,7 @@ impl SettingsPanelView {
                     .children(entries),
             )
             .child(self.kit.scroll_cue(
+                "settings-devices-bar",
                 crate::scrollbar::ScrollSource::Handle {
                     handle: self.device_scroll.clone(),
                     children,
@@ -4738,6 +4740,7 @@ impl SettingsPanelView {
                     .children(rail),
             )
             .child(self.kit.scroll_cue(
+                "settings-rail-bar",
                 crate::scrollbar::ScrollSource::Handle {
                     handle: self.rail_scroll.handle().clone(),
                     children: rail_children,

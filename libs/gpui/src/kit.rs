@@ -612,10 +612,11 @@ impl Kit {
 
     pub fn scroll_cue(
         &self,
+        id: impl Into<ElementId>,
         source: crate::scrollbar::ScrollSource,
         ground: Ground,
     ) -> impl IntoElement {
-        crate::scrollbar::scroll_cue(source, ground)
+        crate::scrollbar::scroll_cue(id, source, ground)
     }
 
     pub fn row_metadata(&self) -> Div {

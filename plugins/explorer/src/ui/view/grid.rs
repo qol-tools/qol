@@ -9,6 +9,8 @@ use qol_gpui::theme::{
 
 use super::pictogram::PictogramSize;
 use crate::config::ViewSize;
+use crate::listing::SortOrder;
+use crate::ui::browse::Browser;
 use crate::ui::gesture::Tiles;
 use crate::ui::keys::Resize;
 
@@ -170,14 +172,81 @@ impl Layout {
         let followed = follow_offset_y(viewport, line, px(-scroll), px(self.pitch));
         (-f32::from(followed)).clamp(0.0, self.max_scroll(total, height))
     }
+
+    pub(super) fn resorted(
+        self,
+        browser: &mut Browser,
+        order: SortOrder,
+        scroll: f32,
+        height: f32,
+    ) -> Option<f32> {
+        browser
+            .resort(order)
+            .then(|| scroll.clamp(0.0, self.max_scroll(browser.row_count(), height)))
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::Path;
+    use std::thread;
+    use std::time::{Duration, Instant, SystemTime};
+
     use super::{Layout, ACROSS};
     use crate::config::ViewSize;
+    use crate::listing::{SortBy, SortOrder};
+    use crate::ui::browse::Browser;
     use crate::ui::keys::Resize;
     use qol_gpui::theme::{SPACE_GUTTER, SPACE_INSET};
+
+    fn aged_folder(files: u64) -> tempfile::TempDir {
+        let temp = tempfile::tempdir().unwrap();
+        let start = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        for index in 0..files {
+            let path = temp.path().join(format!("file-{index:02}.txt"));
+            fs::write(&path, b"x").unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(start + Duration::from_secs(index * 60))
+                .unwrap();
+        }
+        temp
+    }
+
+    fn opened(folder: &Path) -> Browser {
+        let mut browser = Browser::new(folder.to_path_buf(), folder.to_path_buf(), false);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while browser.reading() {
+            browser.drain(Instant::now());
+            assert!(Instant::now() < deadline, "the read never finished");
+            thread::sleep(Duration::from_millis(2));
+        }
+        browser
+    }
+
+    #[test]
+    fn a_sort_reorders_the_rows_in_place_and_never_scrolls() {
+        let temp = aged_folder(60);
+        let layout = Layout::new(ViewSize::List, 800.0);
+        let height = layout.pitch * 10.0;
+        for scroll in [0.0, layout.pitch * 20.0] {
+            let mut browser = opened(temp.path());
+            assert_eq!(browser.row_count(), 60);
+            let top = (scroll / layout.pitch) as usize;
+            browser.place_cursor(top, scroll);
+            let order = SortOrder::new(SortBy::Modified, true);
+            assert_eq!(
+                layout.resorted(&mut browser, order, scroll, height),
+                Some(scroll),
+                "scrolled from {scroll}"
+            );
+            assert_eq!(browser.cursor(), 59 - top, "the cursor stays on its entry");
+            assert_eq!(layout.resorted(&mut browser, order, scroll, height), None);
+        }
+    }
 
     #[test]
     fn stops_step_one_at_a_time_and_clamp_at_both_ends() {

@@ -71,6 +71,12 @@ pub fn clamp_offset_y(offset: gpui::Pixels, max: gpui::Pixels) -> gpui::Pixels {
     offset.clamp(-max, gpui::px(0.))
 }
 
+pub fn scroll_handle_by(handle: &ScrollHandle, delta: gpui::Pixels) {
+    let mut offset = handle.offset();
+    offset.y = clamp_offset_y(offset.y - delta, handle.max_offset().height);
+    handle.set_offset(offset);
+}
+
 impl SelectionScroll {
     pub fn new() -> Self {
         Self::default()
@@ -234,6 +240,11 @@ impl ScrollList {
             self.scroll_offset + self.max_visible - 1 - lead
         };
         self.selected = self.selected.clamp(low, high);
+    }
+
+    pub fn seek(&mut self, at: f32, total: usize) {
+        let first = crate::scrollbar::window_first(at, self.max_visible, total);
+        self.wheel_by(first as isize - self.scroll_offset as isize, total);
     }
 
     pub fn scroll_by(&mut self, increments: f32, count: usize) {
@@ -814,6 +825,21 @@ mod tests {
             list.scroll_offset, 7,
             "cannot scroll past the last visible row"
         );
+    }
+
+    #[test]
+    fn a_seek_moves_the_window_and_brings_the_selection_along() {
+        let mut list = ScrollList::new(5);
+        list.seek(1.0, 25);
+        assert_eq!(list.scroll_offset, 20);
+        assert_eq!(list.selected, 21);
+        list.sync(25);
+        assert_eq!(list.scroll_offset, 20, "the next sync keeps the seek");
+        list.seek(0.5, 25);
+        assert_eq!(list.scroll_offset, 10);
+        assert!(list.visible_range(25).contains(&list.selected));
+        list.seek(0.0, 25);
+        assert_eq!((list.scroll_offset, list.selected), (0, 3));
     }
 
     #[test]

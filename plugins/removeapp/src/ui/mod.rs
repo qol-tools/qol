@@ -535,11 +535,16 @@ impl RemoveAppView {
                             .children(rows)
                             .children(empty)
                             .child(clear_of_resize_edge(kit.scroll_cue(
-                                ScrollSource::Window {
-                                    first: range.start,
-                                    shown: range.len(),
-                                    total: self.matches.len(),
-                                },
+                                "qol-removeapp-list-bar",
+                                ScrollSource::window(
+                                    range.start,
+                                    range.len(),
+                                    self.matches.len(),
+                                    cx.listener(|this, at: &f32, _, cx| {
+                                        this.list.seek(*at, this.matches.len());
+                                        cx.notify();
+                                    }),
+                                ),
                                 kit.grounds.pane,
                             ))),
                     )
@@ -768,6 +773,7 @@ impl RemoveAppView {
                                     .children(items),
                             )
                             .child(clear_of_resize_edge(kit.scroll_cue(
+                                "qol-removeapp-items-bar",
                                 ScrollSource::Handle {
                                     handle: self.items_scroll.clone(),
                                     children: item_count,
