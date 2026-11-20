@@ -8,8 +8,7 @@ use qol_headless::{
 };
 
 use crate::cleanup::{
-    self, asks, leftovers, primary, Consent, Found, Leftover, Live, Measure, Origin, Size, State,
-    Survey,
+    self, leftovers, primary, Consent, Found, Leftover, Live, Measure, Origin, Size, State, Survey,
 };
 use crate::platform::Refusal;
 use crate::updates;
@@ -179,7 +178,7 @@ fn remove_kinds(
                 out.push_str(&format!("Removed any there were: {}\n", kind.name))
             }
             Ok(()) => out.push_str(&format!("Removed: {}\n", kind.name)),
-            Err(refusal) if asks(kind) && !confirm => {
+            Err(refusal) if cleanup::why(kind).is_some() && !confirm => {
                 failed.push_str(&format!("{}: {refusal}; add --confirm\n", kind.name))
             }
             Err(refusal @ (Refusal::Dismissed | Refusal::Denied | Refusal::TimedOut)) => {
@@ -215,7 +214,11 @@ fn choose(
                     .into(),
             );
         }
-        let kinds = table.iter().copied().filter(|kind| !asks(kind)).collect();
+        let kinds = table
+            .iter()
+            .copied()
+            .filter(|kind| cleanup::why(kind).is_none())
+            .collect();
         return Ok((kinds, Consent::All));
     }
     let kind = table
@@ -243,7 +246,7 @@ fn listing(survey: &Survey, switches: &[Live]) -> String {
     for found in &survey.found {
         let kind = found.leftover;
         let mut line = format!("{} [{}]: {}", kind.name, kind.id, amount(found));
-        if asks(kind) {
+        if cleanup::why(kind).is_some() {
             line.push_str(", asks first");
         }
         for along in kind.along {

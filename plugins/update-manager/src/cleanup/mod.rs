@@ -12,7 +12,7 @@ mod consent;
 mod measure;
 mod platform;
 
-pub(crate) use consent::{asks, Consent};
+pub(crate) use consent::{why, Consent};
 pub(crate) use platform::{leftovers, stamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -374,6 +374,14 @@ pub(crate) fn survey(at: NaiveDateTime) -> Survey {
 }
 
 pub(crate) fn remove(found: &Found, consent: Consent) -> Result<(), Refusal> {
+    remove_by(found, consent, platform::run)
+}
+
+fn remove_by(
+    found: &Found,
+    consent: Consent,
+    run: impl FnOnce(&Remove, &[String], bool) -> Result<(), Refusal>,
+) -> Result<(), Refusal> {
     let leftover = found.leftover;
     let Some(amount) = found.amount.as_ref() else {
         return Err(Refusal::Failed("they are not on this computer".into()));
@@ -400,7 +408,7 @@ pub(crate) fn remove(found: &Found, consent: Consent) -> Result<(), Refusal> {
             Size::Exact(_) | Size::Estimate { .. } => Ok(()),
         };
     }
-    platform::run(&leftover.remove, &items, leftover.admin)
+    run(&leftover.remove, &items, leftover.admin)
 }
 
 #[cfg(test)]

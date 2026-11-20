@@ -339,7 +339,7 @@ fn refresh(shared: &Shared) {
                     return;
                 }
                 let at = Instant::now();
-                let idle = state.session.job.is_none() && !state.surveying;
+                let idle = may_read_updates(&state);
                 let updates_due = idle && (state.want_updates || at >= next_updates);
                 let host_due = state.want_host || at >= next_host;
                 if updates_due || host_due {
@@ -424,6 +424,10 @@ fn survey(shared: &Shared) {
         state.surveying = false;
         shared.wake.notify_all();
     }
+}
+
+fn may_read_updates(state: &State) -> bool {
+    state.session.job.is_none() && !state.surveying
 }
 
 fn survey_wait(want: bool, busy: bool, changed: bool, left: Duration) -> Option<Duration> {
@@ -592,6 +596,14 @@ mod tests {
             "the survey thread starts holding the first survey"
         );
         assert!(state.want_updates && !state.want_survey && !state.reading);
+        assert!(
+            !may_read_updates(&state),
+            "updates are read only once the first survey is stored"
+        );
+        let shared = shared();
+        assert!(may_read_updates(&shared.lock()));
+        shared.lock().surveying = true;
+        assert!(!may_read_updates(&shared.lock()), "never while measuring");
     }
 
     #[test]

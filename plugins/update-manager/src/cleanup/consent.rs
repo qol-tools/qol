@@ -6,10 +6,6 @@ pub(crate) enum Consent {
     Asked,
 }
 
-pub(crate) fn asks(leftover: &Leftover) -> bool {
-    why(leftover).is_some()
-}
-
 pub(super) fn allows(leftover: &Leftover, consent: Consent) -> Result<(), String> {
     match (consent, why(leftover)) {
         (Consent::All, Some(why)) => Err(why),
@@ -17,7 +13,7 @@ pub(super) fn allows(leftover: &Leftover, consent: Consent) -> Result<(), String
     }
 }
 
-pub(super) fn why(leftover: &Leftover) -> Option<String> {
+pub(crate) fn why(leftover: &Leftover) -> Option<String> {
     match (leftover.way_back, leftover.origin) {
         (WayBack::Last { to }, _) => Some(format!("are the last way back to {to}")),
         (_, Origin::ByHand) => Some("were installed by hand".into()),

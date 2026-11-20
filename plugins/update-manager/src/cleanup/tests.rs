@@ -191,11 +191,14 @@ fn the_total_counts_a_package_two_kinds_list_once() {
 
 #[test]
 fn the_last_way_back_and_kinds_installed_by_hand_ask_first() {
-    assert!(!asks(&OLD));
-    assert!(!asks(&ORPHANS));
-    assert!(asks(&LAST));
-    assert!(asks(&BY_HAND));
-    assert!(asks(&ALONG), "taking an asking kind along asks too");
+    assert!(why(&OLD).is_none());
+    assert!(why(&ORPHANS).is_none());
+    assert!(why(&LAST).is_some());
+    assert!(why(&BY_HAND).is_some());
+    assert!(
+        why(&ALONG).is_some(),
+        "taking an asking kind along asks too"
+    );
     assert_eq!(
         consent::why(&ALONG).as_deref(),
         Some("take last along, which are the last way back to the version before")
@@ -244,6 +247,35 @@ fn a_kind_that_could_not_be_listed_is_not_reported_removed() {
         matches!(remove(&whole, Consent::All), Err(Refusal::Failed(ref reason)) if reason.contains("apt-get -s failed")),
         "a kind that removes without a list still refuses when its listing failed"
     );
+}
+
+#[test]
+fn a_whole_command_kind_runs_unless_its_listing_failed() {
+    for (why, runs) in [
+        (Why::Cannot("no dry run"), true),
+        (Why::NeedsAdmin, true),
+        (Why::Failed("apt-get -s failed".into()), false),
+    ] {
+        let unknown = Found {
+            leftover: &ORPHANS,
+            amount: Some(Amount::unknown(why.clone())),
+        };
+        let mut ran = Vec::new();
+        let result = remove_by(&unknown, Consent::All, |remove, items, _| {
+            ran.push((*remove, items.to_vec()));
+            Ok(())
+        });
+        assert_eq!(result.is_ok(), runs, "{why:?}");
+        assert_eq!(
+            ran,
+            if runs {
+                vec![(ORPHANS.remove, Vec::new())]
+            } else {
+                Vec::new()
+            },
+            "{why:?}"
+        );
+    }
 }
 
 #[test]

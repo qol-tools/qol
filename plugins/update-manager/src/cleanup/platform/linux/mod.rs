@@ -374,7 +374,7 @@ mod tests {
         );
         let asking: Vec<&str> = leftovers()
             .iter()
-            .filter(|leftover| crate::cleanup::asks(leftover))
+            .filter(|leftover| crate::cleanup::why(leftover).is_some())
             .map(|leftover| leftover.id)
             .collect();
         assert_eq!(asking, ["kernels_by_hand", "snap"]);

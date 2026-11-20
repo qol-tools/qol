@@ -73,9 +73,9 @@ fn follow(mut child: Child, limit: Duration) -> Result<(), Refusal> {
     if let Some(stdout) = child.stdout.take() {
         thread::spawn(move || {
             let line = BufReader::new(stdout)
-                .lines()
+                .split(b'\n')
                 .map_while(Result::ok)
-                .map(|line| line.trim().to_string())
+                .map(|line| String::from_utf8_lossy(&line).trim().to_string())
                 .filter(|line| !line.is_empty())
                 .last();
             let _ = sender.send(line);
@@ -151,6 +151,14 @@ mod tests {
                 "env: snap: No such file or directory".into()
             )),
             "after the password, a missing program is the script's failure, not a closed prompt"
+        );
+        assert_eq!(
+            follow(
+                authorized("echo ready; printf 'caf\\351\\n'; echo 'E: after'; exit 3"),
+                long
+            ),
+            Err(Refusal::Failed("E: after".into())),
+            "a line that is not UTF-8 neither stops the reading nor closes the pipe"
         );
         assert_eq!(
             follow(
