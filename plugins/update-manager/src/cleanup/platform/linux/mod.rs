@@ -5,7 +5,7 @@ use crate::cleanup::{
     Amount, Item, Leftover, Measure, Noun, Origin, Remove, Requires, Size, WayBack, Why,
 };
 use crate::platform::linux::command;
-use crate::platform::linux::packages::{base, installed_images, running_kernel, versioned_abi};
+use crate::platform::linux::packages::{base, images_on_disk, running_kernel, versioned_abi};
 use crate::platform::linux::privileged::run_long_script;
 use crate::platform::Refusal;
 
@@ -277,7 +277,7 @@ fn kernels_by_hand(manual: &str) -> Result<Amount, String> {
     let running = running_kernel();
     let present = parse::kept(manual, running.as_deref());
     Ok(
-        match parse::by_hand(manual, running.as_deref(), installed_images) {
+        match parse::by_hand(manual, running.as_deref(), images_on_disk) {
             Ok(Some(by_hand)) => listed(by_hand.packages, by_hand.kernels, present, simulate_purge),
             Ok(None) => unknown(Why::Cannot(UNKNOWN_RUNNING), present),
             Err(reason) => unknown(Why::Failed(reason), present),

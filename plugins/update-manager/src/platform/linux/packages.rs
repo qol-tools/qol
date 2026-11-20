@@ -48,16 +48,36 @@ pub(crate) fn running_kernel() -> Option<String> {
 }
 
 pub(crate) fn installed_images() -> Result<Vec<String>, String> {
-    images(&command::run("dpkg-query", &IMAGES, command::READ)?)
+    images(
+        &command::run("dpkg-query", &IMAGES, command::READ)?,
+        installed,
+    )
 }
 
-fn images(listed: &Done) -> Result<Vec<String>, String> {
+pub(crate) fn images_on_disk() -> Result<Vec<String>, String> {
+    images(
+        &command::run("dpkg-query", &IMAGES, command::READ)?,
+        on_disk,
+    )
+}
+
+fn installed(status: &str) -> bool {
+    status == "installed"
+}
+
+fn on_disk(status: &str) -> bool {
+    !matches!(status, "not-installed" | "config-files")
+}
+
+fn images(listed: &Done, keep: fn(&str) -> bool) -> Result<Vec<String>, String> {
     match listed.code {
         Some(0) => Ok(listed
             .stdout
             .lines()
-            .filter_map(|line| line.strip_prefix("installed\t"))
-            .map(String::from)
+            .filter_map(|line| {
+                let (status, package) = line.split_once('\t')?;
+                keep(status).then(|| package.to_string())
+            })
             .collect()),
         Some(NONE_MATCHED) => Ok(Vec::new()),
         _ => Err(listed.reason()),
@@ -116,24 +136,39 @@ mod tests {
     #[test]
     fn installed_images_read_dpkg_query_exits() {
         let listing = "installed\tlinux-image-6.8.0-149-lowlatency\n\
+                       half-configured\tlinux-image-6.8.0-150-lowlatency\n\
                        config-files\tlinux-image-6.8.0-111-generic\n\
                        not-installed\tlinux-image-6.17.0-1008-nvidia\n";
         assert_eq!(
-            images(&done(Some(0), listing, "")),
+            images(&done(Some(0), listing, ""), installed),
             Ok(vec!["linux-image-6.8.0-149-lowlatency".to_string()])
         );
         assert_eq!(
-            images(&done(
-                Some(1),
-                "",
-                "dpkg-query: no packages found matching linux-image-*"
-            )),
+            images(&done(Some(0), listing, ""), on_disk),
+            Ok(vec![
+                "linux-image-6.8.0-149-lowlatency".to_string(),
+                "linux-image-6.8.0-150-lowlatency".to_string()
+            ]),
+            "a kernel whose setup failed is still on disk and counts as one of the newest"
+        );
+        assert_eq!(
+            images(
+                &done(
+                    Some(1),
+                    "",
+                    "dpkg-query: no packages found matching linux-image-*"
+                ),
+                installed
+            ),
             Ok(Vec::new())
         );
         assert_eq!(
-            images(&done(Some(2), "", "dpkg-query: error: database is locked")),
+            images(
+                &done(Some(2), "", "dpkg-query: error: database is locked"),
+                installed
+            ),
             Err("dpkg-query: error: database is locked".to_string())
         );
-        assert!(images(&done(None, "", "")).is_err());
+        assert!(images(&done(None, "", ""), installed).is_err());
     }
 }

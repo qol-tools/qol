@@ -100,16 +100,7 @@ pub fn run() -> ExitCode {
     );
     session.install_log = log.as_ref().map(|log| log.display().to_string());
     let shared = Arc::new(Shared {
-        state: Mutex::new(State {
-            session,
-            want_updates: true,
-            want_host: true,
-            want_rules: true,
-            want_survey: true,
-            reading: false,
-            surveying: false,
-            stop: false,
-        }),
+        state: Mutex::new(starting(session)),
         wake: Condvar::new(),
         journal,
         log,
@@ -120,6 +111,8 @@ pub fn run() -> ExitCode {
     }
     if let Err(error) = spawn("survey", &shared, survey) {
         log::warn!("update-manager: cannot start measuring what updates left behind: {error}");
+        shared.lock().surveying = false;
+        shared.wake.notify_all();
     }
     let (released, done) = mpsc::channel();
     let watcher = Arc::clone(&shared);
@@ -150,6 +143,19 @@ pub fn run() -> ExitCode {
             log::error!("update-manager: the daemon listener failed: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn starting(session: Session) -> State {
+    State {
+        session,
+        want_updates: true,
+        want_host: true,
+        want_rules: true,
+        want_survey: false,
+        reading: false,
+        surveying: true,
+        stop: false,
     }
 }
 
@@ -383,7 +389,11 @@ fn survey(shared: &Shared) {
     loop {
         {
             let mut state = shared.lock();
-            loop {
+            if state.stop {
+                state.surveying = false;
+                return;
+            }
+            while !state.surveying {
                 if state.stop {
                     return;
                 }
@@ -391,12 +401,13 @@ fn survey(shared: &Shared) {
                 let changed = seen.as_ref().is_some_and(|seen| *seen != cleanup::stamp());
                 let left = next.saturating_duration_since(Instant::now());
                 match survey_wait(state.want_survey, busy, changed, left) {
-                    None => break,
+                    None => {
+                        state.want_survey = false;
+                        state.surveying = true;
+                    }
                     Some(wait) => state = shared.wait(state, wait),
                 }
             }
-            state.want_survey = false;
-            state.surveying = true;
         }
         let found = cleanup::survey(now());
         seen = Some(found.stamp.clone());
@@ -571,6 +582,16 @@ mod tests {
             )
         );
         assert!(state.want_survey, "an install measures leftovers again");
+    }
+
+    #[test]
+    fn the_first_survey_runs_before_the_first_read_of_updates() {
+        let state = starting(Session::new(Journal::default(), false));
+        assert!(
+            state.surveying,
+            "the survey thread starts holding the first survey"
+        );
+        assert!(state.want_updates && !state.want_survey && !state.reading);
     }
 
     #[test]
