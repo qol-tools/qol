@@ -2461,13 +2461,15 @@ let reopenTries = 0
 const REOPEN_TRIES = 12
 const REOPEN_RETRY_MS = 1_000
 
-export const reopenForks = async ($: EngineInterface): Promise<void> => {
-  if (isReopening) return
+export const reopenForks = async ($: EngineInterface, dropped: readonly string[] = []): Promise<boolean> => {
+  if (isReopening) return false
   isReopening = true
   try {
     const key = REOPEN_PREFIX + (await $.session.id())
     const saved = await $.store.get(key)
-    const pending = Array.isArray(saved) ? saved.filter((one): one is string => typeof one === 'string') : []
+    const queued = Array.isArray(saved) ? saved.filter((one): one is string => typeof one === 'string') : []
+    const pending = [...new Set([...queued, ...dropped])]
+    if (queued.length === 0 && dropped.length > 0) reopenTries = 0
     const agents: unknown = await $.agent.list().catch(() => [])
     const held = listedAgents(agents)
     const rows = await read($, board)
@@ -2494,9 +2496,24 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
     if (again.length > 0) reopenTries += 1
     if (again.length > 0 && reopenTries < REOPEN_TRIES) $.clock.after(REOPEN_RETRY_MS, () => void reopenForks($).catch(() => undefined))
     else if (again.length > 0) await $.store.delete(key)
+    return true
   } finally {
     isReopening = false
   }
+}
+
+const RELIST_MS = 40_000
+
+const turnsStarted = new Map<string, string>()
+
+const relist = async ($: EngineInterface, agentId: string, turnId: string): Promise<void> => {
+  if (turnsStarted.get(agentId) !== turnId) return
+  const list = await read($, board)
+  const entry = list.find(one => one.agentId === agentId)
+  if (entry === undefined || entry.isWorking || entry.isStoppedByUser === true || !backAtRestart(list).includes(agentId)) return
+  if (listedAgents(await $.agent.list()).has(agentId)) return
+  if (await reopenForks($, [agentId])) return
+  $.clock.after(REOPEN_RETRY_MS, () => void relist($, agentId, turnId).catch(() => undefined))
 }
 
 export const drainOutbox = async ($: EngineInterface): Promise<void> => {
@@ -3604,6 +3621,7 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId !== undefined) cutting.delete(e.agentId)
+    if (e.agentId !== undefined) turnsStarted.set(e.agentId, e.turnId)
     if (e.agentId !== undefined) await forgetActivity($, e.agentId)
     const isHeld = await claimHold($, e.agentId, e.turnId, e.text)
     if (e.agentId !== undefined && !isHeld) {
@@ -3683,9 +3701,11 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     quietTurns.delete(e.turnId)
     if (e.agentId !== undefined) cutting.delete(e.agentId)
-    if (e.agentId !== undefined && (await holdOf($, e.agentId))?.turnId === e.turnId) await finishHold($, e.agentId)
+    const wasHeld = e.agentId !== undefined && (await holdOf($, e.agentId))?.turnId === e.turnId
+    if (e.agentId !== undefined && wasHeld) await finishHold($, e.agentId)
     const done = await next(e)
     const ended = e.agentId
+    if (ended !== undefined && !wasHeld) $.clock.after(RELIST_MS, () => void relist($, ended, e.turnId).catch(() => undefined))
     if (ended !== undefined) await change($, list => list.map(one => (one.agentId === ended && one.isWorking ? { ...one, isRunOver: true } : one)))
     if (ended !== undefined) lastTurns.set(ended, { turnId: e.turnId, ...(typeof e.answer === 'string' && e.answer.trim() !== '' && !isHeldReply(e.answer) && !e.isAborted ? { answer: e.answer } : {}) })
     if (ended !== undefined) $.clock.after(RUN_OVER_MS, () => void settleRun($, ended, e.turnId).catch(() => undefined))
