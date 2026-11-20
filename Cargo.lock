@@ -6293,6 +6293,7 @@ dependencies = [
  "dirs 6.0.0",
  "git2",
  "libc",
+ "log",
  "qol-agent-homes",
  "qol-apps",
  "qol-artifact",
