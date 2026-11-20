@@ -18,7 +18,7 @@ use qol_gpui::settings_panel::components::{
     SettingsHint, SettingsTextField,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, settings_action_busy, settings_action_spinner,
+    adjacent_visible_row, escape_step, intent, settings_action_spinner, settings_action_word,
     settings_busy_message, settings_list, settings_tag, CustomHints, CustomPanelCallback,
     CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs, EscapeStep, Intent,
     SettingsDestination, SettingsGroupHeader, SettingsRow, SETTINGS_LIST_GAP,
@@ -425,11 +425,9 @@ impl PluginsView {
                         .clone()
                         .map(|value| settings_tag(value, row.tone, ground, kit)),
                 )
-                .children(
-                    row.affordance
-                        .filter(|_| !row.opens())
-                        .map(|_| settings_action_busy(("plugins-action", index), false, kit)),
-                );
+                .children(row.affordance.filter(|_| !row.opens()).map(|verb| {
+                    settings_action_word(("plugins-action", index), verb, false, ground, kit)
+                }));
         }
         SettingsRow::setting(("plugins-row", index), kit)
             .selected(selected, focused)

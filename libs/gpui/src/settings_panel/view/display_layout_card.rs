@@ -7,8 +7,8 @@ use gpui::*;
 use qol_config::contract::resolve_slider_action;
 
 use super::super::components::{
-    display_layout_ghost, display_layout_stage, display_layout_tile, settings_action_busy,
-    settings_action_spinner, settings_busy_message, settings_description, settings_label,
+    display_layout_ghost, display_layout_stage, display_layout_tile, settings_action_spinner,
+    settings_action_word, settings_busy_message, settings_description, settings_label,
     settings_label_group, settings_message, settings_tag, settings_tagged_label_group,
     settings_value_text, ChoiceArt, DisplayLayoutTile, RowGround, SettingsFeedback, SettingsRow,
     SettingsValueTone, SettingsWell, TileArt,
@@ -766,9 +766,13 @@ impl SettingsPanelView {
                 primary_ground,
                 palette,
             ),
-            Some(false) => {
-                settings_action_busy(("settings-display-layout-primary", 0usize), false, palette)
-            }
+            Some(false) => settings_action_word(
+                ("settings-display-layout-primary", 0usize),
+                "make primary",
+                false,
+                primary_ground,
+                palette,
+            ),
             None => settings_description("unavailable", primary_ground, palette),
         };
         let mut primary_row =

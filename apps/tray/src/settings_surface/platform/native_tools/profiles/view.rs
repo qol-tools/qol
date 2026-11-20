@@ -19,7 +19,7 @@ use qol_gpui::settings_panel::components::{
     SettingsTextField, SettingsToggle, SettingsValueTone, SettingsWell,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, settings_action_busy, settings_action_spinner,
+    adjacent_visible_row, escape_step, intent, settings_action_spinner, settings_action_word,
     settings_busy_message, settings_description, settings_list, CustomHints, CustomPanelCallback,
     CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs, EscapeStep, Intent,
     SettingsDestination, SettingsGroupHeader, SettingsRow, SETTINGS_LIST_GAP,
@@ -676,14 +676,24 @@ impl ProfilesView {
                     (row.chip_when_selected && selected)
                         .then_some(row.verb)
                         .flatten()
-                        .map(|_| settings_action_busy(("profiles-action", index), busy, kit)),
+                        .map(|verb| {
+                            settings_action_word(
+                                ("profiles-action", index),
+                                verb,
+                                busy,
+                                ground,
+                                kit,
+                            )
+                        }),
                 ),
             Value::Toggle(on) => values.child(SettingsToggle::new(*on, ground, kit)),
             Value::Chip => values.children(
                 (!row.chip_when_selected || selected)
                     .then_some(row.verb)
                     .flatten()
-                    .map(|_| settings_action_busy(("profiles-action", index), busy, kit)),
+                    .map(|verb| {
+                        settings_action_word(("profiles-action", index), verb, busy, ground, kit)
+                    }),
             ),
             Value::Name => values.child(SettingsTextField::live(self.field.clone(), ground, kit)),
         }
