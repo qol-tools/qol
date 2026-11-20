@@ -29,8 +29,8 @@ fn parse(dump: &str) -> Cleanup {
 
 fn value(dump: &str, key: &str) -> Option<String> {
     dump.lines()
-        .filter_map(|line| line.strip_prefix(key)?.strip_prefix(' '))
-        .last()
+        .rev()
+        .find_map(|line| line.strip_prefix(key)?.strip_prefix(' '))
         .map(|rest| {
             rest.trim()
                 .trim_end_matches(';')
