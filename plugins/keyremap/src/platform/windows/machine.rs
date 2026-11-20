@@ -1,4 +1,4 @@
-use crate::platform::engine::config::ModifierKeys;
+use crate::config::ModifierKeys;
 use crate::platform::engine::remap::{
     self, modifiers_from_bits, target_bits, KeyAction, MouseAction, MouseButton, ResolvedConfig,
     ScrollAction,
@@ -436,7 +436,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::platform::engine::config::RemapConfig;
+    use crate::config::RemapConfig;
 
     #[derive(Clone, Copy)]
     enum Input {

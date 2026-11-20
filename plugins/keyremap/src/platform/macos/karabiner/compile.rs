@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use super::hotkeys::Hotkeys;
 use super::key_codes;
 use super::system_modifier_keys::DeviceModifiers;
-use crate::platform::engine::config::{ModifierKeys, ModifierTarget};
+use crate::config::{ModifierKeys, ModifierTarget};
 use crate::platform::engine::remap::{self, Modifiers, ResolvedConfig, ResolvedKeyTarget};
 use crate::platform::macos::layout::{KeyStroke, LayoutSnapshot};
 
@@ -342,7 +342,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::platform::engine::config::RemapConfig;
+    use crate::config::RemapConfig;
     use crate::platform::macos::layout::CharTable;
 
     fn layout() -> LayoutSnapshot {

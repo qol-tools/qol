@@ -1,7 +1,7 @@
 use qol_hotkeys::macos_keycode::{self as keycode, PhysicalLayout};
 
 use super::fn_keys;
-use crate::platform::engine::config::{ModifierKeys, ModifierTarget};
+use crate::config::{ModifierKeys, ModifierTarget};
 use crate::platform::engine::remap::{
     self, modifiers_from_bits, target_bits, KeyAction, ResolvedConfig,
 };
@@ -371,7 +371,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::platform::engine::config::RemapConfig;
+    use crate::config::RemapConfig;
     use crate::platform::engine::remap::Modifiers;
     use crate::platform::macos::hid_helper::protocol::PAGE_CONSUMER;
 
