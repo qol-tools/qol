@@ -29,11 +29,36 @@ pub(super) fn kernels(packages: &[String]) -> usize {
         .len()
 }
 
-pub(super) fn by_hand(manual: &str, running: Option<&str>) -> (Vec<String>, usize) {
+const NEWEST_KEPT: usize = 2;
+
+pub(super) fn installed(listing: &str) -> Vec<String> {
+    listing
+        .lines()
+        .filter_map(|line| line.strip_prefix("installed\t"))
+        .map(String::from)
+        .collect()
+}
+
+fn version(abi: &str) -> Vec<u32> {
+    abi.split(['.', '-'])
+        .filter_map(|part| part.parse().ok())
+        .collect()
+}
+
+pub(super) fn by_hand(manual: &str, running: &str, installed: &[String]) -> (Vec<String>, usize) {
+    let mut images: Vec<String> = installed
+        .iter()
+        .filter_map(|package| kernel_abi(package))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    images.sort_by_key(|abi| std::cmp::Reverse(version(abi)));
+    let mut kept: BTreeSet<String> = images.into_iter().take(NEWEST_KEPT).collect();
+    kept.insert(running.to_string());
     let packages: Vec<String> = manual
         .lines()
         .map(str::trim)
-        .filter(|package| versioned_abi(package).is_some_and(|abi| Some(abi.as_str()) != running))
+        .filter(|package| versioned_abi(package).is_some_and(|abi| !kept.contains(&abi)))
         .map(String::from)
         .collect();
     let images = packages
@@ -108,13 +133,38 @@ mod tests {
     }
 
     #[test]
-    fn kernels_kept_by_hand_leave_out_the_running_one_and_meta_packages() {
-        let manual = "firefox\nlinux-generic\nlinux-image-generic\nlinux-image-6.8.0-111-generic\nlinux-image-6.8.0-111-lowlatency\nlinux-modules-6.8.0-111-generic\nlinux-image-6.8.0-149-lowlatency\nlinux-headers-6.8.0-111\n";
-        let (packages, count) = by_hand(manual, Some("6.8.0-149"));
-        assert_eq!(count, 2);
-        assert_eq!(packages.len(), 4);
-        assert_eq!(by_hand(manual, None).1, 3);
-        assert_eq!(by_hand("", Some("6.8.0-149")).1, 0);
+    fn kernels_kept_by_hand_leave_out_the_running_one_the_two_newest_and_meta_packages() {
+        let manual = "firefox\nlinux-generic\nlinux-image-generic\nlinux-image-6.8.0-90-generic\nlinux-image-6.8.0-111-generic\nlinux-image-6.8.0-111-lowlatency\nlinux-modules-6.8.0-111-generic\nlinux-image-6.8.0-149-lowlatency\nlinux-image-6.8.0-152-generic\nlinux-headers-6.8.0-111\n";
+        let installed: Vec<String> = [
+            "linux-image-6.8.0-90-generic",
+            "linux-image-6.8.0-111-generic",
+            "linux-image-6.8.0-111-lowlatency",
+            "linux-image-6.8.0-149-lowlatency",
+            "linux-image-6.8.0-152-generic",
+            "linux-image-6.8.0-153-generic",
+            "linux-image-generic",
+        ]
+        .map(String::from)
+        .to_vec();
+        let (packages, count) = by_hand(manual, "6.8.0-90", &installed);
+        assert_eq!(
+            packages,
+            [
+                "linux-image-6.8.0-111-generic",
+                "linux-image-6.8.0-111-lowlatency",
+                "linux-modules-6.8.0-111-generic",
+                "linux-image-6.8.0-149-lowlatency",
+                "linux-headers-6.8.0-111"
+            ]
+        );
+        assert_eq!(count, 3);
+        assert_eq!(by_hand("", "6.8.0-149", &installed).1, 0);
+        assert_eq!(
+            super::installed("not-installed\tlinux-image-6.17.0-1008-nvidia\ninstalled\tlinux-image-6.8.0-149-lowlatency\n"),
+            ["linux-image-6.8.0-149-lowlatency"]
+        );
+        assert!(version("6.8.0-152") > version("6.8.0-149"));
+        assert!(version("6.10.0-1") > version("6.8.0-152"));
     }
 
     #[test]

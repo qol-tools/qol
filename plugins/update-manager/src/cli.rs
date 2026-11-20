@@ -243,15 +243,7 @@ fn amount(found: &Found) -> String {
     match &amount.size {
         Size::Exact(size) => format!("{count}, {}", bytes(*size)),
         Size::Estimate { bytes: size, why } => format!("{count}, about {} ({why})", bytes(*size)),
-        Size::Unknown(why) => format!("size unknown, {}", reason(why)),
-    }
-}
-
-fn reason(why: &Why) -> String {
-    match why {
-        Why::NeedsAdmin => "needs an administrator to measure".into(),
-        Why::Cannot(reason) => (*reason).into(),
-        Why::Failed(reason) => format!("could not measure: {reason}"),
+        Size::Unknown(why) => format!("size unknown, {}", why.reason()),
     }
 }
 

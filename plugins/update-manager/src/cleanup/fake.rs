@@ -93,6 +93,22 @@ pub(crate) static ALONG: Leftover = kind(
     Origin::System,
     &[&LAST],
 );
+pub(crate) static LISTED: Leftover = Leftover {
+    remove: Remove::Command {
+        argv: &["true"],
+        items: true,
+    },
+    ..kind(
+        "listed",
+        Noun {
+            one: "listed",
+            many: "listed",
+        },
+        WayBack::None,
+        Origin::System,
+        &[],
+    )
+};
 pub(crate) static EXTRA: Leftover = kind(
     "extra",
     Noun {

@@ -124,6 +124,16 @@ pub(crate) enum Why {
     Failed(String),
 }
 
+impl Why {
+    pub(crate) fn reason(&self) -> String {
+        match self {
+            Why::NeedsAdmin => "needs an administrator to measure".into(),
+            Why::Cannot(reason) => (*reason).into(),
+            Why::Failed(reason) => format!("could not measure: {reason}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Size {
     Exact(u64),
@@ -239,6 +249,15 @@ impl Survey {
             .as_ref()
     }
 
+    pub(crate) fn failed(&self) -> bool {
+        self.found.iter().any(|found| {
+            matches!(
+                found.amount.as_ref().map(|amount| &amount.size),
+                Some(Size::Unknown(Why::Failed(_)))
+            )
+        })
+    }
+
     pub(crate) fn total(&self, take: impl Fn(&Leftover) -> bool) -> Total {
         let mut amounts: Vec<&Amount> = self
             .found
@@ -348,7 +367,14 @@ pub(crate) fn remove(found: &Found, consent: Consent) -> Result<(), Refusal> {
     let takes_items = matches!(leftover.remove, Remove::Command { items: true, .. })
         || matches!(leftover.remove, Remove::Script(_));
     if takes_items && items.is_empty() {
-        return Ok(());
+        return match &amount.size {
+            Size::Unknown(why) => Err(Refusal::Failed(format!(
+                "{} could not be listed, so nothing was removed: {}",
+                leftover.name,
+                why.reason()
+            ))),
+            Size::Exact(_) | Size::Estimate { .. } => Ok(()),
+        };
     }
     platform::run(&leftover.remove, &items, leftover.admin)
 }

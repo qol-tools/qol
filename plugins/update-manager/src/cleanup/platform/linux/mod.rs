@@ -55,7 +55,7 @@ static KERNELS: Leftover = Leftover {
 static KERNELS_BY_HAND: Leftover = Leftover {
     id: "kernels_by_hand",
     name: "Kernels installed by hand",
-    what: "Kernels installed by name or from Mint's Update Manager window. Nothing removes them on its own; the running one stays.",
+    what: "Kernels installed by name or from Mint's Update Manager window. Nothing removes them on its own; the running kernel and the two newest stay.",
     noun: Noun {
         one: "kernel installed by hand",
         many: "kernels installed by hand",
@@ -109,7 +109,7 @@ static PACKAGE_CACHE: Leftover = Leftover {
     },
     requires: APT,
     measure: Measure::Files {
-        dirs: &["/var/cache/apt/archives", "/var/cache/apt/archives/partial"],
+        dirs: &["/var/cache/apt/archives"],
         suffix: ".deb",
     },
     remove: Remove::Command {
@@ -239,7 +239,16 @@ fn orphans(simulated: &str) -> Result<Amount, String> {
 }
 
 fn kernels_by_hand(manual: &str) -> Result<Amount, String> {
-    let (packages, count) = parse::by_hand(manual, running().as_deref());
+    let running = running().ok_or("the running kernel's version is not known")?;
+    let listing = command::output(
+        "dpkg-query",
+        &[
+            "-W",
+            "-f=${db:Status-Status}\t${Package}\n",
+            "linux-image-*",
+        ],
+    )?;
+    let (packages, count) = parse::by_hand(manual, &running, &parse::installed(&listing));
     Ok(dpkg_sized(packages, count))
 }
 

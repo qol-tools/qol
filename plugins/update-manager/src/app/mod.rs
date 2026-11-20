@@ -25,6 +25,7 @@ const HOST_EVERY: Duration = Duration::from_secs(60);
 const UPDATES_EVERY: Duration = Duration::from_secs(15 * 60);
 const RULES_EVERY: Duration = Duration::from_secs(5);
 const SURVEY_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+const SURVEY_RETRY: Duration = Duration::from_secs(10 * 60);
 const RELEASE_WAIT: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +43,8 @@ struct State {
     want_host: bool,
     want_rules: bool,
     want_survey: bool,
+    reading: bool,
+    surveying: bool,
     stop: bool,
 }
 
@@ -101,6 +104,8 @@ pub fn run() -> ExitCode {
             want_host: true,
             want_rules: true,
             want_survey: true,
+            reading: false,
+            surveying: false,
             stop: false,
         }),
         wake: Condvar::new(),
@@ -322,12 +327,13 @@ fn refresh(shared: &Shared) {
                     return;
                 }
                 let at = Instant::now();
-                let idle = state.session.job.is_none();
+                let idle = state.session.job.is_none() && !state.surveying;
                 let updates_due = idle && (state.want_updates || at >= next_updates);
                 let host_due = state.want_host || at >= next_host;
                 if updates_due || host_due {
                     if updates_due {
                         state.want_updates = false;
+                        state.reading = true;
                     }
                     state.want_host = false;
                     break (updates_due, host_due);
@@ -354,6 +360,8 @@ fn refresh(shared: &Shared) {
             let list = updates::read_updates();
             next_updates = Instant::now() + UPDATES_EVERY;
             let mut state = shared.lock();
+            state.reading = false;
+            shared.wake.notify_all();
             if state.session.job.is_none() {
                 state.session.apply_updates(list, now());
             } else {
@@ -368,18 +376,36 @@ fn survey(shared: &Shared) {
     loop {
         {
             let mut state = shared.lock();
-            while !state.stop && !state.want_survey && Instant::now() < next {
-                let wait = next.saturating_duration_since(Instant::now());
+            loop {
+                if state.stop {
+                    return;
+                }
+                let busy = state.reading || state.session.job.is_some();
+                let due = state.want_survey || Instant::now() >= next;
+                if due && !busy {
+                    break;
+                }
+                let wait = if busy {
+                    SURVEY_RETRY
+                } else {
+                    next.saturating_duration_since(Instant::now())
+                };
                 state = shared.wait(state, wait);
             }
-            if state.stop {
-                return;
-            }
             state.want_survey = false;
+            state.surveying = true;
         }
         let found = cleanup::survey(now());
-        next = Instant::now() + SURVEY_EVERY;
-        shared.lock().session.survey = Some(found);
+        next = Instant::now()
+            + if found.failed() {
+                SURVEY_RETRY
+            } else {
+                SURVEY_EVERY
+            };
+        let mut state = shared.lock();
+        state.session.survey = Some(found);
+        state.surveying = false;
+        shared.wake.notify_all();
     }
 }
 
@@ -501,6 +527,8 @@ mod tests {
                 want_host: false,
                 want_rules: false,
                 want_survey: false,
+                reading: false,
+                surveying: false,
                 stop: false,
             }),
             wake: Condvar::new(),

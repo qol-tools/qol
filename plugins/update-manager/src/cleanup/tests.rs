@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use super::fake::{self, found, ALONG, BY_HAND, LAST, OLD, ORPHANS};
+use super::fake::{self, found, ALONG, BY_HAND, LAST, LISTED, OLD, ORPHANS};
 use super::*;
 
 fn word(text: &str) -> bool {
@@ -169,6 +169,20 @@ fn the_last_way_back_and_kinds_installed_by_hand_ask_first() {
         amount: None,
     };
     assert!(remove(&absent, Consent::Asked).is_err());
+}
+
+#[test]
+fn a_kind_that_could_not_be_listed_is_not_reported_removed() {
+    let failed = Found {
+        leftover: &LISTED,
+        amount: Some(Amount::unknown(Why::Failed("snap list failed".into()))),
+    };
+    let refused = remove(&failed, Consent::All);
+    assert!(
+        matches!(refused, Err(Refusal::Failed(ref reason)) if reason.contains("snap list failed")),
+        "{refused:?}"
+    );
+    assert_eq!(remove(&found(&LISTED, 0, &[]), Consent::All), Ok(()));
 }
 
 #[test]
