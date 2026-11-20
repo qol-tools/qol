@@ -1,5 +1,5 @@
 use crate::cleanup::State;
-use crate::platform::linux::command::lenient;
+use crate::platform::linux::command::output;
 use crate::platform::linux::privileged::run_script;
 use crate::platform::Refusal;
 
@@ -13,8 +13,14 @@ mv "$conf.new" "$conf" || exit 3
 exit 0
 "#;
 
+const UNREAD: &str = "apt's settings could not be read";
+
 pub(super) fn read() -> Option<State> {
-    Some(parse(&lenient("apt-config", &["dump"])))
+    Some(read_from(output("apt-config", &["dump"])))
+}
+
+fn read_from(dump: Result<String, String>) -> State {
+    dump.map_or(State::Unknown(UNREAD), |dump| parse(&dump))
 }
 
 fn parse(dump: &str) -> State {
@@ -69,6 +75,11 @@ mod tests {
         );
         assert_eq!(parse(""), State::On { idle: true });
         assert!(!parse("APT::Periodic::Unattended-Upgrade-Extra \"1\";\n").removing());
+        assert_eq!(
+            read_from(Err("apt-config: E: Syntax error".into())),
+            State::Unknown(UNREAD)
+        );
+        assert_eq!(read_from(Ok(ubuntu.into())), State::On { idle: false });
     }
 
     #[test]

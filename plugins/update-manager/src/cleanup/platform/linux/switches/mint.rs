@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::cleanup::State;
 use crate::platform::linux::command::lenient;
 use crate::platform::linux::privileged::run_script;
+use crate::platform::linux::systemd::{unit, Unit};
 use crate::platform::Refusal;
 
 const TIMER: &str = "mintupdate-automation-autoremove.timer";
@@ -29,24 +30,6 @@ fi
 systemctl daemon-reload || exit 3
 exit 0
 "#;
-
-#[derive(Debug, Default, PartialEq, Eq)]
-struct Unit {
-    loaded: bool,
-    enabled: bool,
-}
-
-fn unit(text: &str) -> Unit {
-    let mut unit = Unit::default();
-    for (key, value) in text.lines().filter_map(|line| line.split_once('=')) {
-        match key {
-            "LoadState" => unit.loaded = value == "loaded",
-            "UnitFileState" => unit.enabled = value == "enabled",
-            _ => {}
-        }
-    }
-    unit
-}
 
 fn timer() -> Unit {
     unit(&lenient(
@@ -116,17 +99,6 @@ mod tests {
         assert_eq!(state(false, false), State::Off);
         assert_eq!(state(true, false), State::Unknown(SPLIT));
         assert_eq!(state(false, true), State::Unknown(SPLIT));
-        assert_eq!(
-            unit("LoadState=loaded\nUnitFileState=enabled\n"),
-            Unit {
-                loaded: true,
-                enabled: true
-            }
-        );
-        assert_eq!(
-            unit("LoadState=not-found\nUnitFileState=\n"),
-            Unit::default()
-        );
     }
 
     #[test]

@@ -165,7 +165,7 @@ pub(crate) fn install(
 
 pub(crate) fn set_auto(key: AutoKey, on: bool) -> Result<(), Refusal> {
     if let AutoKey::Switch(switch) = key {
-        return (switch.set)(on);
+        return crate::cleanup::set_switch(switch, on);
     }
     mint::set_auto(key, on)
 }

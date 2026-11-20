@@ -30,10 +30,7 @@ const fn kind(
         noun,
         requires: Requires::Path("/"),
         measure: Measure::Unknown("a fake kind"),
-        remove: Remove::Command {
-            argv: &["true"],
-            items: false,
-        },
+        remove: Remove::Command(&["true"]),
         admin: false,
         way_back,
         origin,
@@ -47,7 +44,7 @@ pub(crate) static OLD: Leftover = kind(
         one: "old kernel",
         many: "old kernels",
     },
-    WayBack::Keeps,
+    WayBack::None,
     Origin::System,
     &[],
 );
@@ -57,7 +54,7 @@ pub(crate) static BY_HAND: Leftover = kind(
         one: "kernel installed by hand",
         many: "kernels installed by hand",
     },
-    WayBack::Keeps,
+    WayBack::None,
     Origin::ByHand,
     &[],
 );
@@ -94,15 +91,25 @@ pub(crate) static ALONG: Leftover = kind(
     &[&LAST],
 );
 pub(crate) static LISTED: Leftover = Leftover {
-    remove: Remove::Command {
-        argv: &["true"],
-        items: true,
-    },
+    remove: Remove::Packages,
     ..kind(
         "listed",
         Noun {
             one: "listed",
             many: "listed",
+        },
+        WayBack::None,
+        Origin::System,
+        &[],
+    )
+};
+pub(crate) static SCRIPTED: Leftover = Leftover {
+    remove: Remove::Script("exit 0"),
+    ..kind(
+        "scripted",
+        Noun {
+            one: "scripted",
+            many: "scripted",
         },
         WayBack::None,
         Origin::System,
@@ -210,6 +217,7 @@ pub(crate) fn found(leftover: &'static Leftover, count: usize, items: &[(&str, u
         leftover,
         amount: Some(Amount {
             count,
+            present: count,
             size: Size::Exact(items.iter().filter_map(|item| item.bytes).sum()),
             items,
         }),
@@ -219,6 +227,7 @@ pub(crate) fn found(leftover: &'static Leftover, count: usize, items: &[(&str, u
 pub(crate) fn survey(found: Vec<Found>) -> Survey {
     Survey {
         at: NaiveDateTime::default(),
+        stamp: Vec::new(),
         found,
     }
 }

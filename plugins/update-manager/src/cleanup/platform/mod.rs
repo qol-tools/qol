@@ -4,6 +4,6 @@ mod linux;
 mod unsupported;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{found, leftovers, output, run, switches};
+pub(crate) use linux::{found, leftovers, output, run, stamp, switches};
 #[cfg(not(target_os = "linux"))]
-pub(crate) use unsupported::{found, leftovers, output, run, switches};
+pub(crate) use unsupported::{found, leftovers, output, run, stamp, switches};

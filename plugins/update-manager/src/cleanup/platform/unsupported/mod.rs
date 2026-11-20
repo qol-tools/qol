@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use crate::cleanup::{Leftover, Remove, Switch};
 use crate::platform::Refusal;
 
@@ -17,6 +19,10 @@ pub(crate) fn found(_program: &str) -> bool {
 
 pub(crate) fn output(_argv: &[&str]) -> Result<String, String> {
     Err(UNSUPPORTED.into())
+}
+
+pub(crate) fn stamp() -> Vec<Option<SystemTime>> {
+    Vec::new()
 }
 
 pub(crate) fn run(_remove: &Remove, _items: &[String], _admin: bool) -> Result<(), Refusal> {

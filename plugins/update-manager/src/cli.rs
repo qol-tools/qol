@@ -2,15 +2,15 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use chrono::Local;
-use qol_config::text::plural;
+use qol_config::text::{format_bytes, plural};
 use qol_headless::{
     Command, CommandContext, DoctorCheck, DoctorCheckResult, Execution, HeadlessApp,
 };
 
 use crate::cleanup::{
     self, asks, leftovers, primary, Consent, Found, Leftover, Live, Origin, Size, State, Survey,
-    Why,
 };
+use crate::platform::Refusal;
 use crate::updates;
 use crate::PLUGIN_ID;
 
@@ -38,7 +38,7 @@ fn app() -> HeadlessApp {
             Command::new("cleanup")
                 .about("List what updates left behind, the space it takes, and what removes it on its own; or remove it.")
                 .usage(format!("{PLUGIN_ID} cleanup [remove <kind>|all] [--confirm]"))
-                .detail("`remove all` leaves out kinds that are the last way back or were installed by hand; name one of those and add --confirm to remove it. A kind that needs an administrator asks for the password.")
+                .detail("`remove all` leaves out kinds that are the last way back or were installed by hand; name one of those and add --confirm to remove it. A kind that needs an administrator asks for the password, and closing that prompt stops `remove all`.")
                 .output("One line per kind with its id and size, the total, when it was measured, then the switches that remove leftovers on their own. `remove` prints one line per kind removed.")
                 .exit_behavior("Exits 64 on a usage error, 1 when a removal is refused or fails, 0 otherwise.")
                 .run_result(cleanup_command),
@@ -141,23 +141,9 @@ fn cleanup_command(context: &CommandContext) -> Result<Execution> {
             )))
         }
     };
-    let kinds: Vec<&'static Leftover> = if target == "all" {
-        leftovers()
-            .iter()
-            .copied()
-            .filter(|kind| !asks(kind))
-            .collect()
-    } else if let Some(kind) = cleanup::leftover(target) {
-        vec![kind]
-    } else {
-        return Ok(Execution::usage(format!(
-            "unknown kind `{target}`; `{PLUGIN_ID} cleanup` lists them\n{usage}"
-        )));
-    };
-    let consent = if confirm {
-        Consent::Asked
-    } else {
-        Consent::All
+    let (kinds, consent) = match choose(target, confirm, leftovers()) {
+        Ok(chosen) => chosen,
+        Err(problem) => return Ok(Execution::usage(format!("{problem}\n{usage}"))),
     };
     let mut out = String::new();
     let mut failed = Vec::new();
@@ -174,11 +160,46 @@ fn cleanup_command(context: &CommandContext) -> Result<Execution> {
             Err(refusal) if asks(kind) && !confirm => {
                 failed.push(format!("{}: {refusal}; add --confirm", kind.name))
             }
+            Err(refusal @ (Refusal::Dismissed | Refusal::Denied | Refusal::TimedOut)) => {
+                failed.push(format!(
+                    "{}: {refusal}, so nothing more was removed",
+                    kind.name
+                ));
+                break;
+            }
             Err(refusal) => failed.push(format!("{}: {refusal}", kind.name)),
         }
     }
     let code = u8::from(!failed.is_empty());
     Ok(Execution::new(out, failed.join("\n"), code))
+}
+
+fn choose(
+    target: &str,
+    confirm: bool,
+    table: &'static [&'static Leftover],
+) -> Result<(Vec<&'static Leftover>, Consent), String> {
+    if target == "all" {
+        if confirm {
+            return Err(
+                "--confirm goes with one kind; `remove all` leaves out the kinds that ask first"
+                    .into(),
+            );
+        }
+        let kinds = table.iter().copied().filter(|kind| !asks(kind)).collect();
+        return Ok((kinds, Consent::All));
+    }
+    let kind = table
+        .iter()
+        .copied()
+        .find(|kind| kind.id == target)
+        .ok_or_else(|| format!("unknown kind `{target}`; `{PLUGIN_ID} cleanup` lists them"))?;
+    let consent = if confirm {
+        Consent::Asked
+    } else {
+        Consent::All
+    };
+    Ok((vec![kind], consent))
 }
 
 fn empty(found: &Found) -> bool {
@@ -202,11 +223,11 @@ fn listing(survey: &Survey, switches: &[Live]) -> String {
         out.push_str(&line);
         out.push('\n');
     }
-    let total = survey.total(|_| true);
+    let total = survey.total();
     out.push_str(&format!(
         "Altogether: {}{}{}\n",
         if total.estimate { "about " } else { "" },
-        bytes(total.bytes),
+        format_bytes(total.bytes),
         match total.unknown {
             0 => String::new(),
             unknown => format!(", and {} of unknown size", plural(unknown, "kind", "kinds")),
@@ -241,27 +262,9 @@ fn amount(found: &Found) -> String {
     };
     let count = plural(amount.count, kind.noun.one, kind.noun.many);
     match &amount.size {
-        Size::Exact(size) => format!("{count}, {}", bytes(*size)),
-        Size::Estimate { bytes: size, why } => format!("{count}, about {} ({why})", bytes(*size)),
+        Size::Exact(size) => format!("{count}, {}", format_bytes(*size)),
+        Size::Estimate { bytes, why } => format!("{count}, about {} ({why})", format_bytes(*bytes)),
         Size::Unknown(why) => format!("size unknown, {}", why.reason()),
-    }
-}
-
-fn bytes(count: u64) -> String {
-    const UNITS: [&str; 4] = ["kB", "MB", "GB", "TB"];
-    if count < 1000 {
-        return format!("{count} B");
-    }
-    let mut value = count as f64 / 1000.0;
-    let mut unit = 0;
-    while value >= 1000.0 && unit + 1 < UNITS.len() {
-        value /= 1000.0;
-        unit += 1;
-    }
-    if value < 10.0 {
-        format!("{value:.1} {}", UNITS[unit])
-    } else {
-        format!("{value:.0} {}", UNITS[unit])
     }
 }
 
@@ -302,20 +305,20 @@ fn kind_check(kind: &'static Leftover) -> DoctorCheck {
     DoctorCheck::new(
         id.clone(),
         format!(
-            "Answer how much {} take here and whether qol can measure them. {}",
+            "Answer whether qol can measure {} here; `{PLUGIN_ID} cleanup` measures them. {}",
             kind.name.to_lowercase(),
             kind.what
         ),
-        move || Ok(kind_result(&id, &cleanup::find(kind))),
+        move || Ok(kind_result(&id, kind, kind.requires.missing())),
     )
 }
 
-fn kind_result(id: &str, found: &Found) -> DoctorCheckResult {
-    let message = format!("{}: {}", found.leftover.name, amount(found));
-    match found.amount.as_ref().map(|amount| &amount.size) {
-        Some(Size::Unknown(Why::Failed(_))) => DoctorCheckResult::warn(id, message),
-        _ => DoctorCheckResult::ok(id, message),
-    }
+fn kind_result(id: &str, kind: &Leftover, missing: Option<String>) -> DoctorCheckResult {
+    let message = match missing {
+        Some(missing) => format!("{}: not here, {missing}", kind.name),
+        None => format!("{}: `{PLUGIN_ID} cleanup` measures them", kind.name),
+    };
+    DoctorCheckResult::ok(id, message)
 }
 
 fn platform_supported() -> DoctorCheckResult {
@@ -359,6 +362,7 @@ mod tests {
     use qol_headless::{DoctorStatus, EXIT_USAGE};
 
     use super::*;
+    use crate::cleanup::{Amount, Item, Why};
 
     fn run(args: &[&str]) -> u8 {
         let args: Vec<String> = args.iter().map(ToString::to_string).collect();
@@ -433,8 +437,84 @@ mod tests {
             text.contains("Switch, mint's cleanup: Old kernels and leftovers: on\n"),
             "{text}"
         );
-        assert_eq!(bytes(999), "999 B");
-        assert_eq!(bytes(1_500_000), "1.5 MB");
+        let odd = fake::survey(vec![
+            Found {
+                leftover: &OLD,
+                amount: Some(Amount {
+                    count: 1,
+                    present: 1,
+                    size: Size::Estimate {
+                        bytes: 1_500_000,
+                        why: "dpkg's estimate",
+                    },
+                    items: vec![Item {
+                        name: "linux-image-1".into(),
+                        bytes: Some(1_500_000),
+                    }],
+                }),
+            },
+            Found {
+                leftover: &ORPHANS,
+                amount: Some(Amount::unknown(Why::NeedsAdmin)),
+            },
+            Found {
+                leftover: &LAST,
+                amount: None,
+            },
+        ]);
+        let text = listing(&odd, &[]);
+        assert!(
+            text.contains("kernels [kernels]: 1 old kernel, about 1.5 MB (dpkg's estimate)\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("orphans [orphans]: size unknown, needs an administrator to measure, takes kernels along\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("last [last]: not here, it went away, asks first\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Altogether: about 1.5 MB, and 1 kind of unknown size\n"),
+            "{text}"
+        );
+        assert!(!text.contains("Switch,"), "{text}");
+    }
+
+    #[test]
+    fn a_kind_check_only_says_whether_the_kind_can_be_measured() {
+        use crate::cleanup::fake::OLD;
+        let here = kind_result("cleanup_kernels", &OLD, None);
+        assert_eq!(here.status, DoctorStatus::Ok);
+        assert!(
+            here.message.contains("cleanup` measures them"),
+            "{}",
+            here.message
+        );
+        let gone = kind_result(
+            "cleanup_kernels",
+            &OLD,
+            Some("apt-get is not installed".into()),
+        );
+        assert_eq!(gone.status, DoctorStatus::Ok);
+        assert_eq!(gone.message, "kernels: not here, apt-get is not installed");
+    }
+
+    #[test]
+    fn remove_all_leaves_out_kinds_that_ask_and_one_kind_takes_its_consent() {
+        use crate::cleanup::fake::{ALONG, BY_HAND, LAST, OLD, ORPHANS};
+        static TABLE: [&Leftover; 5] = [&OLD, &BY_HAND, &ORPHANS, &LAST, &ALONG];
+        let (all, consent) = choose("all", false, &TABLE).expect("all");
+        let ids: Vec<&str> = all.iter().map(|kind| kind.id).collect();
+        assert_eq!(ids, ["kernels", "orphans"]);
+        assert_eq!(consent, Consent::All);
+        assert!(choose("all", true, &TABLE).is_err());
+        let (last, consent) = choose("last", false, &TABLE).expect("last");
+        assert_eq!((last[0].id, consent), ("last", Consent::All));
+        let (last, consent) = choose("last", true, &TABLE).expect("last --confirm");
+        assert_eq!((last[0].id, consent), ("last", Consent::Asked));
+        assert!(choose("nothing", false, &TABLE).is_err());
     }
 
     #[test]
@@ -455,6 +535,7 @@ mod tests {
         assert_eq!(run(&["cleanup", "remove"]), EXIT_USAGE);
         assert_eq!(run(&["cleanup", "remove", "nothing"]), EXIT_USAGE);
         assert_eq!(run(&["cleanup", "sweep"]), EXIT_USAGE);
+        assert_eq!(run(&["cleanup", "remove", "all", "--confirm"]), EXIT_USAGE);
         assert_eq!(run(&["help", "cleanup"]), 0);
     }
 

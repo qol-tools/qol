@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use super::fake::{self, found, ALONG, BY_HAND, LAST, LISTED, OLD, ORPHANS};
+use super::fake::{self, found, ALONG, BY_HAND, LAST, LISTED, OLD, ORPHANS, SCRIPTED};
 use super::*;
 
 fn word(text: &str) -> bool {
@@ -26,15 +26,16 @@ fn every_kind_fills_every_field_its_type_asks_for() {
             assert!(word(text), "kind `{}` has an empty word", leftover.id);
         }
         match leftover.measure {
-            Measure::Files { dirs, suffix } => {
-                assert!(!dirs.is_empty() && dirs.iter().all(|dir| dir.starts_with('/')));
+            Measure::Files { dir, suffix } => {
+                assert!(dir.starts_with('/'));
                 assert!(word(suffix));
             }
             Measure::Command { argv, .. } => assert!(argv.iter().all(|arg| word(arg))),
             Measure::Unknown(reason) => assert!(word(reason)),
         }
         match leftover.remove {
-            Remove::Command { argv, .. } => assert!(!argv.is_empty()),
+            Remove::Command(argv) => assert!(!argv.is_empty()),
+            Remove::Packages => {}
             Remove::Script(script) => assert!(word(script)),
         }
         if let WayBack::Last { to } = leftover.way_back {
@@ -72,7 +73,7 @@ fn every_switch_fills_its_words_and_covers_kinds_of_its_own_table() {
         assert!(!switch.covers.is_empty(), "switch `{}`", switch.id);
         for kind in switch.covers {
             assert!(
-                leftover(kind.id).is_some(),
+                leftovers().iter().any(|known| known.id == kind.id),
                 "switch `{}` covers `{}`, which is not in the table",
                 switch.id,
                 kind.id
@@ -104,20 +105,20 @@ fn the_total_counts_a_package_two_kinds_list_once() {
         },
     ]);
     assert_eq!(
-        survey.total(|_| true),
+        survey.total(),
         Total {
             bytes: 35,
             estimate: false,
             unknown: 1,
         }
     );
-    assert_eq!(survey.total(|kind| kind.id == "kernels").bytes, 30);
     let lump = fake::survey(vec![
         found(&OLD, 1, &[("linux-image-1", 10)]),
         Found {
             leftover: &ORPHANS,
             amount: Some(Amount {
                 count: 2,
+                present: 2,
                 size: Size::Estimate {
                     bytes: 100,
                     why: "apt's count",
@@ -136,7 +137,7 @@ fn the_total_counts_a_package_two_kinds_list_once() {
         },
     ]);
     assert_eq!(
-        lump.total(|_| true),
+        lump.total(),
         Total {
             bytes: 100,
             estimate: true,
@@ -153,10 +154,12 @@ fn the_last_way_back_and_kinds_installed_by_hand_ask_first() {
     assert!(asks(&BY_HAND));
     assert!(asks(&ALONG), "taking an asking kind along asks too");
     assert_eq!(
-        consent::why(&ALONG),
-        "take last along, which are the last way back to the version before"
+        consent::why(&ALONG).as_deref(),
+        Some("take last along, which are the last way back to the version before")
     );
     for kind in [&LAST, &BY_HAND, &ALONG] {
+        assert_eq!(consent::allows(kind, Consent::Asked), Ok(()), "{}", kind.id);
+        assert!(consent::allows(kind, Consent::All).is_err(), "{}", kind.id);
         let refused = remove(&found(kind, 1, &[("x", 1)]), Consent::All);
         assert!(
             matches!(refused, Err(Refusal::Failed(ref reason)) if reason.contains("only when asked for by name")),
@@ -183,10 +186,74 @@ fn a_kind_that_could_not_be_listed_is_not_reported_removed() {
         "{refused:?}"
     );
     assert_eq!(remove(&found(&LISTED, 0, &[]), Consent::All), Ok(()));
+    let scripted = Found {
+        leftover: &SCRIPTED,
+        amount: Some(Amount::unknown(Why::Failed("snap list failed".into()))),
+    };
+    assert!(
+        matches!(remove(&scripted, Consent::All), Err(Refusal::Failed(ref reason)) if reason.contains("could not be listed")),
+    );
+    let whole = Found {
+        leftover: &OLD,
+        amount: Some(Amount::unknown(Why::Failed("apt-get -s failed".into()))),
+    };
+    assert!(
+        matches!(remove(&whole, Consent::All), Err(Refusal::Failed(ref reason)) if reason.contains("apt-get -s failed")),
+        "a kind that removes without a list still refuses when its listing failed"
+    );
+}
+
+fn on() -> Option<State> {
+    Some(State::On { idle: false })
+}
+
+fn unread() -> Option<State> {
+    None
+}
+
+fn refuse(_on: bool) -> Result<(), Refusal> {
+    Err(Refusal::Denied)
+}
+
+const fn row(name: &'static str, requires: Requires, read: fn() -> Option<State>) -> Switch {
+    Switch {
+        id: "kernels",
+        owner: Owner {
+            title: "owner",
+            colophon: "owner",
+        },
+        name,
+        short: name,
+        doing: name,
+        when: name,
+        words: Words {
+            on: name,
+            idle: name,
+            off: name,
+        },
+        covers: &[],
+        requires,
+        read,
+        set: refuse,
+    }
+}
+
+static ROWS: [Switch; 4] = [
+    row("missing", Requires::Path("/nowhere/qol-cleanup"), on),
+    row("unread", Requires::Path("/"), unread),
+    row("live", Requires::Path("/"), on),
+    row("second", Requires::Path("/"), on),
+];
+
+#[test]
+fn the_first_present_row_that_reads_is_the_live_one_for_its_id() {
+    let rows = live(&ROWS);
+    let names: Vec<&str> = rows.iter().map(|live| live.switch.name).collect();
+    assert_eq!(names, ["live"]);
 }
 
 #[test]
-fn the_first_switch_present_for_an_id_is_the_live_one() {
+fn the_primary_switch_is_the_one_that_covers_kinds_the_system_installed() {
     let live = fake::mint();
     assert_eq!(
         primary(&live).map(|live| live.switch.name),

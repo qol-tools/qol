@@ -98,6 +98,26 @@ mod tests {
     }
 
     #[test]
+    fn the_page_fakes_carry_the_real_switch_texts() {
+        use crate::cleanup::fake::{MINT_BY_HAND, MINT_KERNELS, UNATTENDED_KERNELS};
+        let ids =
+            |switch: &Switch| -> Vec<&str> { switch.covers.iter().map(|kind| kind.id).collect() };
+        for (real, fake) in SWITCHES
+            .iter()
+            .zip([&MINT_KERNELS, &MINT_BY_HAND, &UNATTENDED_KERNELS])
+        {
+            assert_eq!(real.id, fake.id);
+            assert_eq!(real.owner, fake.owner, "{}", real.name);
+            assert_eq!(
+                (real.name, real.short, real.doing, real.when),
+                (fake.name, fake.short, fake.doing, fake.when)
+            );
+            assert_eq!(real.words, fake.words, "{}", real.name);
+            assert_eq!(ids(real), ids(fake), "{}", real.name);
+        }
+    }
+
+    #[test]
     fn switches_sharing_an_id_are_alternatives_for_the_same_kinds() {
         let mint = &SWITCHES[0];
         let unattended = &SWITCHES[2];

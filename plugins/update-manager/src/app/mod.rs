@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{Local, NaiveDateTime};
 use qol_audio::devices::{self, Direction, Kind, State as DeviceState};
@@ -27,6 +27,7 @@ const UPDATES_EVERY: Duration = Duration::from_secs(15 * 60);
 const RULES_EVERY: Duration = Duration::from_secs(5);
 const SURVEY_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const SURVEY_RETRY: Duration = Duration::from_secs(10 * 60);
+const SURVEY_CHECK: Duration = Duration::from_secs(60);
 const RELEASE_WAIT: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,8 +310,12 @@ fn work(shared: &Shared, task: Task) {
         }
         Task::Rules => return,
     };
+    finish(shared, &task, result);
+}
+
+fn finish(shared: &Shared, task: &Task, result: Result<(), Refusal>) {
     let mut state = shared.lock();
-    state.session.done(&task, result, now());
+    state.session.done(task, result, now());
     shared.save(&state.session);
     state.want_host = true;
     state.want_survey = true;
@@ -374,6 +379,7 @@ fn refresh(shared: &Shared) {
 
 fn survey(shared: &Shared) {
     let mut next = Instant::now();
+    let mut seen: Option<Vec<Option<SystemTime>>> = None;
     loop {
         {
             let mut state = shared.lock();
@@ -382,7 +388,8 @@ fn survey(shared: &Shared) {
                     return;
                 }
                 let busy = state.reading || state.session.job.is_some();
-                let due = state.want_survey || Instant::now() >= next;
+                let changed = seen.as_ref().is_some_and(|seen| *seen != cleanup::stamp());
+                let due = state.want_survey || changed || Instant::now() >= next;
                 if due && !busy {
                     break;
                 }
@@ -390,6 +397,7 @@ fn survey(shared: &Shared) {
                     SURVEY_RETRY
                 } else {
                     next.saturating_duration_since(Instant::now())
+                        .min(SURVEY_CHECK)
                 };
                 state = shared.wait(state, wait);
             }
@@ -397,6 +405,7 @@ fn survey(shared: &Shared) {
             state.surveying = true;
         }
         let found = cleanup::survey(now());
+        seen = Some(found.stamp.clone());
         next = Instant::now()
             + if found.failed() {
                 SURVEY_RETRY
@@ -557,6 +566,21 @@ mod tests {
                 "the install log could not be written: qol's data folder was not found".into()
             )
         );
+        assert!(state.want_survey, "an install measures leftovers again");
+    }
+
+    #[test]
+    fn a_finished_switch_change_measures_leftovers_again() {
+        let shared = shared();
+        let task = Task::Auto {
+            key: crate::updates::AutoKey::Switch(&crate::cleanup::fake::MINT_KERNELS),
+            on: true,
+            was: false,
+        };
+        finish(&shared, &task, Ok(()));
+        let state = shared.lock();
+        assert!(state.want_survey);
+        assert!(state.want_host);
     }
 
     #[test]

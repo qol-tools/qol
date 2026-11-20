@@ -1,31 +1,31 @@
 use std::fs;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::cleanup::{
     Amount, Item, Leftover, Measure, Noun, Origin, Remove, Requires, Size, WayBack, Why,
 };
-use crate::platform::linux::command::{self, run as run_command};
-use crate::platform::linux::packages::{base, kernel_abi};
-use crate::platform::linux::privileged::run_script;
+use crate::platform::linux::command;
+use crate::platform::linux::packages::{base, installed_images, running_kernel};
+use crate::platform::linux::privileged::run_long_script;
 use crate::platform::Refusal;
 
 mod parse;
 mod switches;
 
+pub(crate) use crate::platform::linux::command::found;
 pub(crate) use switches::switches;
 
 const REMOVE: Duration = Duration::from_secs(3600);
-const LABEL: &str = "qol-update-manager";
-const OSRELEASE: &str = "/proc/sys/kernel/osrelease";
 const SNAPS: &str = "/var/lib/snapd/snaps";
+const CHANGES: [&str; 3] = ["/var/lib/dpkg/status", "/var/cache/apt/archives", SNAPS];
 const APT: Requires = Requires::Program("apt-get");
 const SIMULATE: &[&str] = &["apt-get", "-s", "autoremove"];
-const PURGE: &[&str] = &["apt-get", "purge", "-y"];
+const PURGE: [&str; 3] = ["apt-get", "purge", "-y"];
 const DPKG: &str = "dpkg's estimate; apt's own count needs an administrator";
-const EXEC_SH: &str = "exec \"$@\"";
-const NONE_MATCHED: i32 = 1;
+const EXEC_SH: &str = "exec env DEBIAN_FRONTEND=noninteractive LANG=C LC_ALL=C \"$@\"";
 const UNKNOWN_RUNNING: &str =
     "the running kernel's version does not read as a packaged kernel, so none are listed";
+const TAKES_MORE: &str = "apt would remove other packages with them, so none are listed";
 const SNAP_SH: &str = r#"for item in "$@"; do
   snap remove "${item%_*}" --revision="${item##*_}" || exit 3
 done
@@ -35,7 +35,7 @@ exit 0
 static KERNELS: Leftover = Leftover {
     id: "kernels",
     name: "Old kernels",
-    what: "Kernels apt no longer needs. The running kernel and the newest stay.",
+    what: "Kernels apt no longer needs. The running kernel and the two newest stay.",
     noun: Noun {
         one: "old kernel",
         many: "old kernels",
@@ -45,12 +45,9 @@ static KERNELS: Leftover = Leftover {
         argv: SIMULATE,
         read: old_kernels,
     },
-    remove: Remove::Command {
-        argv: PURGE,
-        items: true,
-    },
+    remove: Remove::Packages,
     admin: true,
-    way_back: WayBack::Keeps,
+    way_back: WayBack::None,
     origin: Origin::System,
     along: &[],
 };
@@ -68,12 +65,9 @@ static KERNELS_BY_HAND: Leftover = Leftover {
         argv: &["apt-mark", "showmanual"],
         read: kernels_by_hand,
     },
-    remove: Remove::Command {
-        argv: PURGE,
-        items: true,
-    },
+    remove: Remove::Packages,
     admin: true,
-    way_back: WayBack::Keeps,
+    way_back: WayBack::None,
     origin: Origin::ByHand,
     along: &[],
 };
@@ -91,10 +85,7 @@ static ORPHANS: Leftover = Leftover {
         argv: SIMULATE,
         read: orphans,
     },
-    remove: Remove::Command {
-        argv: &["apt-get", "autoremove", "--purge", "-y"],
-        items: false,
-    },
+    remove: Remove::Command(&["apt-get", "autoremove", "--purge", "-y"]),
     admin: true,
     way_back: WayBack::None,
     origin: Origin::System,
@@ -112,13 +103,10 @@ static PACKAGE_CACHE: Leftover = Leftover {
     },
     requires: APT,
     measure: Measure::Files {
-        dirs: &["/var/cache/apt/archives"],
+        dir: "/var/cache/apt/archives",
         suffix: ".deb",
     },
-    remove: Remove::Command {
-        argv: &["apt-get", "clean"],
-        items: false,
-    },
+    remove: Remove::Command(&["apt-get", "clean"]),
     admin: true,
     way_back: WayBack::None,
     origin: Origin::System,
@@ -137,10 +125,7 @@ static FLATPAK: Leftover = Leftover {
     measure: Measure::Unknown(
         "Flatpak 1.14 has no dry run for unused runtimes, and its listed sizes overcount files runtimes share",
     ),
-    remove: Remove::Command {
-        argv: &["flatpak", "uninstall", "--unused", "-y", "--noninteractive"],
-        items: false,
-    },
+    remove: Remove::Command(&["flatpak", "uninstall", "--unused", "-y", "--noninteractive"]),
     admin: false,
     way_back: WayBack::None,
     origin: Origin::System,
@@ -182,8 +167,11 @@ pub(crate) fn leftovers() -> &'static [&'static Leftover] {
     &LEFTOVERS
 }
 
-pub(crate) fn found(program: &str) -> bool {
-    command::found(program)
+pub(crate) fn stamp() -> Vec<Option<SystemTime>> {
+    CHANGES
+        .iter()
+        .map(|path| fs::metadata(path).and_then(|meta| meta.modified()).ok())
+        .collect()
 }
 
 pub(crate) fn output(argv: &[&str]) -> Result<String, String> {
@@ -194,13 +182,16 @@ pub(crate) fn output(argv: &[&str]) -> Result<String, String> {
 }
 
 pub(crate) fn run(remove: &Remove, items: &[String], admin: bool) -> Result<(), Refusal> {
+    if *remove == Remove::Packages && takes_more(items).map_err(Refusal::Failed)? {
+        return Err(Refusal::Failed(
+            "apt would remove other packages with them, so nothing was removed".into(),
+        ));
+    }
     let (script, args) = script(remove, items);
     if admin {
-        return run_script(&script, &args);
+        return run_long_script(&script, &args, REMOVE);
     }
-    let mut all = vec!["-c", script.as_str(), LABEL];
-    all.extend(args.iter().map(String::as_str));
-    let done = run_command("/bin/sh", &all, REMOVE).map_err(Refusal::Failed)?;
+    let done = command::script(&script, &args, REMOVE).map_err(Refusal::Failed)?;
     if done.code == Some(0) {
         Ok(())
     } else {
@@ -210,20 +201,32 @@ pub(crate) fn run(remove: &Remove, items: &[String], admin: bool) -> Result<(), 
 
 fn script(remove: &Remove, items: &[String]) -> (String, Vec<String>) {
     match remove {
-        Remove::Command { argv, items: pass } => {
-            let mut args: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
-            if *pass {
-                args.extend(items.iter().cloned());
-            }
+        Remove::Command(argv) => (EXEC_SH.into(), words(argv)),
+        Remove::Packages => {
+            let mut args = words(&PURGE);
+            args.extend(items.iter().cloned());
             (EXEC_SH.into(), args)
         }
         Remove::Script(script) => ((*script).into(), items.to_vec()),
     }
 }
 
-fn running() -> Option<String> {
-    let release = fs::read_to_string(OSRELEASE).ok()?;
-    kernel_abi(&format!("linux-image-{}", release.trim()))
+fn words(argv: &[&str]) -> Vec<String> {
+    argv.iter().map(|arg| arg.to_string()).collect()
+}
+
+fn takes_more(packages: &[String]) -> Result<bool, String> {
+    let mut args = vec!["-s", "purge"];
+    args.extend(packages.iter().map(String::as_str));
+    let planned = command::output("apt-get", &args)?;
+    Ok(parse::beyond(&parse::removals(&planned), packages).is_some())
+}
+
+fn listed(packages: Vec<String>, count: usize, present: usize) -> Result<Amount, String> {
+    if !packages.is_empty() && takes_more(&packages)? {
+        return Ok(Amount::unknown(Why::Cannot(TAKES_MORE)));
+    }
+    Ok(dpkg_sized(packages, count, present))
 }
 
 fn old_kernels(simulated: &str) -> Result<Amount, String> {
@@ -232,41 +235,20 @@ fn old_kernels(simulated: &str) -> Result<Amount, String> {
         .filter(|package| parse::versioned_abi(package).is_some())
         .collect();
     let count = parse::kernels(&packages);
-    Ok(dpkg_sized(packages, count))
+    listed(packages, count, count)
 }
 
 fn orphans(simulated: &str) -> Result<Amount, String> {
     let packages = parse::removals(simulated);
     let count = packages.len();
-    Ok(dpkg_sized(packages, count))
+    Ok(dpkg_sized(packages, count, count))
 }
 
 fn kernels_by_hand(manual: &str) -> Result<Amount, String> {
-    if !manual
-        .lines()
-        .any(|package| parse::versioned_abi(package.trim()).is_some())
-    {
-        return Ok(dpkg_sized(Vec::new(), 0));
+    match parse::by_hand(manual, running_kernel().as_deref(), installed_images)? {
+        Some(by_hand) => listed(by_hand.packages, by_hand.kernels, by_hand.present),
+        None => Ok(Amount::unknown(Why::Cannot(UNKNOWN_RUNNING))),
     }
-    let Some(running) = running() else {
-        return Ok(Amount::unknown(Why::Cannot(UNKNOWN_RUNNING)));
-    };
-    let listed = run_command(
-        "dpkg-query",
-        &[
-            "-W",
-            "-f=${db:Status-Status}\t${Package}\n",
-            "linux-image-*",
-        ],
-        command::READ,
-    )?;
-    let listing = match listed.code {
-        Some(0) => listed.stdout,
-        Some(NONE_MATCHED) => String::new(),
-        _ => return Err(listed.reason()),
-    };
-    let (packages, count) = parse::by_hand(manual, &running, &parse::installed(&listing));
-    Ok(dpkg_sized(packages, count))
 }
 
 fn snaps(listing: &str) -> Result<Amount, String> {
@@ -288,15 +270,17 @@ fn snaps(listing: &str) -> Result<Amount, String> {
     };
     Ok(Amount {
         count: items.len(),
+        present: items.len(),
         size,
         items,
     })
 }
 
-fn dpkg_sized(packages: Vec<String>, count: usize) -> Amount {
+fn dpkg_sized(packages: Vec<String>, count: usize, present: usize) -> Amount {
     if packages.is_empty() {
         return Amount {
             count,
+            present,
             size: Size::Exact(0),
             items: Vec::new(),
         };
@@ -316,6 +300,7 @@ fn dpkg_sized(packages: Vec<String>, count: usize) -> Amount {
         .collect();
     Amount {
         count,
+        present,
         size: Size::Estimate {
             bytes: items.iter().filter_map(|item| item.bytes).sum(),
             why: DPKG,
@@ -342,6 +327,12 @@ mod tests {
                 "snap"
             ]
         );
+        let asking: Vec<&str> = leftovers()
+            .iter()
+            .filter(|leftover| crate::cleanup::asks(leftover))
+            .map(|leftover| leftover.id)
+            .collect();
+        assert_eq!(asking, ["kernels_by_hand", "snap"]);
     }
 
     #[test]
@@ -349,6 +340,7 @@ mod tests {
         let items = vec!["linux-image-6.8.0-111-generic".to_string()];
         let (exec, args) = script(&KERNELS.remove, &items);
         assert_eq!(exec, EXEC_SH);
+        assert_eq!(script(&KERNELS_BY_HAND.remove, &items).1, args);
         assert_eq!(
             args,
             ["apt-get", "purge", "-y", "linux-image-6.8.0-111-generic"]

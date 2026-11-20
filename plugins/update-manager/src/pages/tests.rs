@@ -934,15 +934,16 @@ fn old_kernels_switch_through_tasks_and_list_as_changes() {
 #[test]
 fn old_kernels_read_like_each_platform_removes_them() {
     let mut session = mint();
-    session.survey = Some(fake::survey(vec![found(
-        &BY_HAND,
-        2,
-        &[("linux-image-1", 1), ("linux-image-2", 1)],
-    )]));
+    let mut by_hand = found(&BY_HAND, 1, &[("linux-image-1", 1)]);
+    if let Some(amount) = by_hand.amount.as_mut() {
+        amount.present = 3;
+    }
+    session.survey = Some(fake::survey(vec![by_hand]));
     let pages = build(&session, now()).pages;
     assert_eq!(
         detail(&pages, "kernels", "by_hand"),
-        "2 kernels installed by hand are never removed."
+        "3 kernels installed by hand are never removed.",
+        "the page counts every kernel installed by hand but the running one, as main did"
     );
 
     let unattended = Live {
@@ -965,6 +966,24 @@ fn old_kernels_read_like_each_platform_removes_them() {
     assert_eq!(
         detail(&pages, "kernels", "kernels"),
         "Automatic updates are off here, so this never runs."
+    );
+
+    session.host.switches = vec![Live {
+        state: State::Unknown("apt's settings could not be read"),
+        ..unattended
+    }];
+    let pages = build(&session, now()).pages;
+    assert_eq!(broken(&pages), Vec::<String>::new());
+    assert_eq!(value(&pages, ROOT, "kernels"), "kept");
+    assert_eq!(
+        detail(&pages, "kernels", "kernels"),
+        "Old kernels stay until you remove them."
+    );
+    assert_eq!(
+        page(&pages, "kernels")
+            .row("kernels")
+            .and_then(|row| row.control.clone()),
+        Some(Control::Toggle(false))
     );
 
     session.host.switches.clear();

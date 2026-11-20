@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::time::SystemTime;
 
 use chrono::NaiveDateTime;
 
@@ -12,7 +13,7 @@ mod measure;
 mod platform;
 
 pub(crate) use consent::{asks, Consent};
-pub(crate) use platform::leftovers;
+pub(crate) use platform::{leftovers, stamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Noun {
@@ -29,7 +30,7 @@ pub(crate) enum Requires {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Measure {
     Files {
-        dirs: &'static [&'static str],
+        dir: &'static str,
         suffix: &'static str,
     },
     Command {
@@ -41,17 +42,14 @@ pub(crate) enum Measure {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Remove {
-    Command {
-        argv: &'static [&'static str],
-        items: bool,
-    },
+    Command(&'static [&'static str]),
+    Packages,
     Script(&'static str),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WayBack {
     None,
-    Keeps,
     Last { to: &'static str },
 }
 
@@ -150,6 +148,7 @@ pub(crate) struct Item {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Amount {
     pub(crate) count: usize,
+    pub(crate) present: usize,
     pub(crate) size: Size,
     pub(crate) items: Vec<Item>,
 }
@@ -163,6 +162,7 @@ pub(crate) struct Found {
 #[derive(Debug, Clone)]
 pub(crate) struct Survey {
     pub(crate) at: NaiveDateTime,
+    pub(crate) stamp: Vec<Option<SystemTime>>,
     pub(crate) found: Vec<Found>,
 }
 
@@ -230,6 +230,7 @@ impl Amount {
     pub(crate) fn unknown(why: Why) -> Self {
         Self {
             count: 0,
+            present: 0,
             size: Size::Unknown(why),
             items: Vec::new(),
         }
@@ -258,11 +259,10 @@ impl Survey {
         })
     }
 
-    pub(crate) fn total(&self, take: impl Fn(&Leftover) -> bool) -> Total {
+    pub(crate) fn total(&self) -> Total {
         let mut amounts: Vec<&Amount> = self
             .found
             .iter()
-            .filter(|found| take(found.leftover))
             .filter_map(|found| found.amount.as_ref())
             .collect();
         amounts.sort_by_key(|amount| amount.itemised());
@@ -295,27 +295,17 @@ impl Survey {
     }
 }
 
-pub(crate) fn leftover(id: &str) -> Option<&'static Leftover> {
-    leftovers()
-        .iter()
-        .copied()
-        .find(|leftover| leftover.id == id)
-}
-
 pub(crate) fn switch(id: &str) -> Option<&'static Switch> {
-    let mut named = platform::switches()
-        .iter()
-        .filter(|switch| switch.id == id)
-        .peekable();
-    let first = named.peek().copied();
-    named
-        .find(|switch| switch.requires.missing().is_none())
-        .or(first)
+    platform::switches().iter().find(|switch| switch.id == id)
 }
 
 pub(crate) fn read_switches() -> Vec<Live> {
+    live(platform::switches())
+}
+
+fn live(switches: &'static [Switch]) -> Vec<Live> {
     let mut live: Vec<Live> = Vec::new();
-    for switch in platform::switches() {
+    for switch in switches {
         if live.iter().any(|known| known.switch.id == switch.id)
             || switch.requires.missing().is_some()
         {
@@ -326,6 +316,14 @@ pub(crate) fn read_switches() -> Vec<Live> {
         }
     }
     live
+}
+
+pub(crate) fn set_switch(switch: &Switch, on: bool) -> Result<(), Refusal> {
+    let live = read_switches()
+        .into_iter()
+        .find(|live| live.switch.id == switch.id)
+        .ok_or_else(|| Refusal::Failed(format!("{} is not on this computer", switch.name)))?;
+    (live.switch.set)(on)
 }
 
 pub(crate) fn primary(live: &[Live]) -> Option<&Live> {
@@ -344,6 +342,7 @@ pub(crate) fn find(leftover: &'static Leftover) -> Found {
 pub(crate) fn survey(at: NaiveDateTime) -> Survey {
     Survey {
         at,
+        stamp: stamp(),
         found: leftovers().iter().copied().map(find).collect(),
     }
 }
@@ -356,23 +355,27 @@ pub(crate) fn remove(found: &Found, consent: Consent) -> Result<(), Refusal> {
             leftover.name
         )));
     };
-    if !consent::allows(leftover, consent) {
-        return Err(Refusal::Failed(format!(
-            "{} {}, so they are removed only when asked for by name",
+    consent::allows(leftover, consent).map_err(|why| {
+        Refusal::Failed(format!(
+            "{} {why}, so they are removed only when asked for by name",
+            leftover.name
+        ))
+    })?;
+    let unlisted = |why: &Why| {
+        Err(Refusal::Failed(format!(
+            "{} could not be listed, so nothing was removed: {}",
             leftover.name,
-            consent::why(leftover)
-        )));
+            why.reason()
+        )))
+    };
+    if let Size::Unknown(why @ Why::Failed(_)) = &amount.size {
+        return unlisted(why);
     }
     let items: Vec<String> = amount.items.iter().map(|item| item.name.clone()).collect();
-    let takes_items = matches!(leftover.remove, Remove::Command { items: true, .. })
-        || matches!(leftover.remove, Remove::Script(_));
+    let takes_items = matches!(leftover.remove, Remove::Packages | Remove::Script(_));
     if takes_items && items.is_empty() {
         return match &amount.size {
-            Size::Unknown(why) => Err(Refusal::Failed(format!(
-                "{} could not be listed, so nothing was removed: {}",
-                leftover.name,
-                why.reason()
-            ))),
+            Size::Unknown(why) => unlisted(why),
             Size::Exact(_) | Size::Estimate { .. } => Ok(()),
         };
     }

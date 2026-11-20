@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use qol_process::{run_owned_with_output_timeout, BoundedCommandOutput};
 
+use super::{LABEL, SHELL};
+
 pub(crate) const READ: Duration = Duration::from_secs(120);
 const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 
@@ -45,6 +47,12 @@ pub(crate) fn run(program: &str, args: &[&str], timeout: Duration) -> Result<Don
         )),
         Err(error) => Err(format!("{program} could not start: {error}")),
     }
+}
+
+pub(crate) fn script(script: &str, args: &[String], timeout: Duration) -> Result<Done, String> {
+    let mut all = vec!["-c", script, LABEL];
+    all.extend(args.iter().map(String::as_str));
+    run(SHELL, &all, timeout)
 }
 
 pub(crate) fn output(program: &str, args: &[&str]) -> Result<String, String> {

@@ -69,7 +69,7 @@ fn kept(live: &Live, session: &Session) -> Option<String> {
         .iter()
         .filter(|kind| kind.origin == Origin::ByHand)
         .find_map(|kind| {
-            let count = survey.amount(kind)?.count;
+            let count = survey.amount(kind)?.present;
             (count > 0).then(|| {
                 format!(
                     "{} {} never removed.",
