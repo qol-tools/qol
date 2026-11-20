@@ -1994,10 +1994,19 @@ const refreshDetails = ($: EngineInterface, own: readonly Pull[], details: Recor
   for (const pull of own) {
     const known = details[pull.pullRequest]
     const tried = detailTried.get(pull.pullRequest) ?? 0
-    if (pull.mergeCommit !== undefined || known?.state === 'merged' || known?.state === 'closed' || now - tried < DETAIL_MS) continue
+    if (pull.mergeCommit !== undefined || known?.state === 'merged' || now - tried < DETAIL_MS) continue
     detailTried.set(pull.pullRequest, now)
     $.clock.after(0, () => void fetchDetail($, pull.pullRequest).catch(() => undefined))
   }
+}
+
+const detailsRead = async ($: EngineInterface, own: readonly Pull[]): Promise<Record<string, PullDetail>> => {
+  const known = await read($, pullDetails)
+  const now = await $.clock.now()
+  const stale = [...new Set(own.filter(pull => pull.mergeCommit === undefined && known[pull.pullRequest]?.state !== 'merged').map(pull => pull.pullRequest))].filter(url => now - (detailTried.get(url) ?? 0) >= DETAIL_MS)
+  for (const url of stale) detailTried.set(url, now)
+  await Promise.all(stale.map(url => fetchDetail($, url).catch(() => undefined)))
+  return read($, pullDetails)
 }
 
 const CLOSE = 'close-fork'
@@ -3504,7 +3513,11 @@ export const register: Register = on => {
   on('tool.call', { tool: TOOL_NAME }, async ($, e) => {
     const fork = typeof e.fork === 'string' ? e.fork : undefined
     await ensureLoaded($)
-    return { result: readText(await withLaunchers($, await read($, board)), fork, await read($, pulls), await read($, forkStates), await read($, pullDetails)) }
+    const list = await withLaunchers($, await read($, board))
+    const ledger = await read($, pulls)
+    const listed = list.filter(entry => !entry.isDismissed || fork !== undefined)
+    const details = await detailsRead($, ledger.filter(pull => listed.some(entry => entry.agentId === pull.agentId)))
+    return { result: readText(list, fork, ledger, await read($, forkStates), details) }
   }).catch(() => ({ deny: 'The fork board could not be read.' }))
 
   on('tool.call', { tool: RESUME_NAME }, async ($, e) => {

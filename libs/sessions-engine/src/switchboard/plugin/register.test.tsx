@@ -69,7 +69,7 @@ type Answer = (e: any) => { isDelivered: boolean; reason?: string }
 
 const described = new Map<string, string>()
 
-const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Spawned[] = [], store = new Map<string, unknown>(), answer: Answer = () => ({ isDelivered: true }), hidden = new Set<string>(), rows = { isCapped: false }) => {
+const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Spawned[] = [], store = new Map<string, unknown>(), answer: Answer = () => ({ isDelivered: true }), hidden = new Set<string>(), rows = { isCapped: false }, clock = { now: 1_800_000_000_000 }) => {
   on('agent.spawn', (_: unknown, e: Spawned) => {
     spawned.push({ prompt: e.prompt, description: e.description, ...(e.model === undefined ? {} : { model: e.model }) })
     const fork = /^Project: \/work\nLauncher: [^\n]*\nfork (\S+)$/.exec(e.prompt)
@@ -98,7 +98,7 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Sp
     return { value: { isPlaced: true, requestId: `placed-${e.id}` } }
   })
   on('clock.every', () => ({ value: undefined }))
-  on('clock.now', () => ({ value: 1_800_000_000_000 }))
+  on('clock.now', () => ({ value: clock.now }))
   const open = new Set<string>()
   on('ui.open', (_: unknown, e: { id: string; closeOnEscape?: true }) => {
     panes.push(`open ${e.id}${(e as { closeOnEscape?: true }).closeOnEscape === true ? ' esc' : ''}`)
@@ -3908,6 +3908,50 @@ test("the board's text names a pull request merged or closed from its state on G
   expect(readText(list, undefined, pulls, {}, details)).toContain('[#7 merged; #8 closed, not merged; #9 open · no watcher]')
   expect(readText(list, 'audit-fork', pulls, {}, details)).toContain('pull requests: #7 merged https://github.com/o/r/pull/7; #8 closed, not merged https://github.com/o/r/pull/8; #9 open · no watcher https://github.com/o/r/pull/9')
   expect(readText(list, undefined, pulls)).toContain('[#7 open · no watcher; #8 open · no watcher; #9 open · no watcher]')
+})
+
+test('the board tool fetches the state of the pull requests it lists, so a merge no watcher saw reads merged with no board pane drawn, and a reopened one reads open again', async ($, on) => {
+  const clock = { now: 1_800_000_000_000 }
+  const states: Record<string, string> = { '71': 'MERGED', '72': 'CLOSED' }
+  const viewed: string[] = []
+  engine(on, [], [], [], new Map<string, unknown>(), () => ({ isDelivered: true }), new Set<string>(), { isCapped: false }, clock)
+  watchEngine(on, { q1: { cwd: '/work', description: 'q1-fork: a fork' } })
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (isRecord(e.argv) || isAuth(e.argv)) return { value: NO_RECORD }
+    if (e.argv[0] === 'gh') {
+      if (e.argv[1] !== 'pr') return { value: { exitCode: 1, stdout: '', stderr: '' } }
+      const number = String(e.argv[3]).replace(/^.*\//, '')
+      viewed.push(number)
+      return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ state: states[number], isDraft: false }) } }
+    }
+    return {
+      value: {
+        exitCode: 0,
+        stderr: '',
+        stdout: JSON.stringify({
+          results: [],
+          pulls: [
+            { agent_id: 'q1', pull_request: 'https://github.com/o/r/pull/71', number: 71, merge_commit: null, is_watched: false },
+            { agent_id: 'q1', pull_request: 'https://github.com/o/r/pull/72', number: 72, merge_commit: null, is_watched: true },
+            { agent_id: 'q1', pull_request: 'https://github.com/o/r/pull/73', number: 73, merge_commit: '1a4ac81fb6080dad', is_watched: false },
+          ],
+        }),
+      },
+    }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'q1', 'q1-fork: a fork')
+  await settle()
+  const boardText = async () => String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(await boardText()).toContain('[#71 merged; #72 closed, not merged; #73 merged 1a4ac81]')
+  expect([...viewed].sort()).toEqual(['71', '72'])
+  states['72'] = 'OPEN'
+  expect(await boardText()).toContain('#72 closed, not merged')
+  expect(viewed).toHaveLength(2)
+  clock.now += 60_000
+  expect(await boardText()).toContain('[#71 merged; #72 open · CLI Sessions watching; #73 merged 1a4ac81]')
+  expect([...viewed].sort()).toEqual(['71', '72', '72'])
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'q1-fork' })).result)).toContain('#71 merged https://github.com/o/r/pull/71; #72 open · CLI Sessions watching')
 })
 
 test('a pull request reads as its state, its checks without the skipped ones, the claude review and the live test', () => {
