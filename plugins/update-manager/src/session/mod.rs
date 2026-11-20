@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::NaiveDateTime;
 
 use crate::updates::{
-    visible, Auto, AutoKey, Clock, Failure, Finish, Holding, Host, Hours, Mint, Refusal, Update,
-    Updates,
+    visible, Auto, AutoKey, Cleanup, Clock, Failure, Finish, Holding, Host, Hours, Mint, Refusal,
+    Update, Updates,
 };
 
 mod journal;
@@ -213,6 +213,17 @@ impl Session {
         self.mint().map(|mint| mint.auto).unwrap_or_default()
     }
 
+    pub(crate) fn cleanup(&self) -> Option<Cleanup> {
+        self.host.cleanup
+    }
+
+    pub(crate) fn switch(&self, key: AutoKey) -> bool {
+        if key.removes() {
+            return self.cleanup().is_some_and(|cleanup| cleanup.get(key));
+        }
+        self.auto().get(key)
+    }
+
     pub(crate) fn run_at(&self) -> Option<String> {
         let mint = self.mint()?;
         if !mint.auto.packages || self.holding_all() {
@@ -252,11 +263,10 @@ impl Session {
     }
 
     pub(crate) fn auto_changed(&self) -> Vec<(AutoKey, bool)> {
-        let auto = self.auto();
         self.journal
             .auto
             .iter()
-            .filter(|change| auto.get(change.key) != change.was)
+            .filter(|change| self.switch(change.key) != change.was)
             .map(|change| (change.key, change.was))
             .collect()
     }
@@ -351,7 +361,7 @@ impl Session {
                 }))
             }
             Act::Auto(key, on) => {
-                let was = self.auto().get(*key);
+                let was = self.switch(*key);
                 self.start(Op::Auto(*key))?;
                 Ok(Some(Task::Auto {
                     key: *key,

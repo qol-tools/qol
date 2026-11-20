@@ -220,20 +220,22 @@ fn setting(key: &str) -> bool {
     gsettings::get_within(SCHEMA, key, READ).is_ok_and(|value| value == "true")
 }
 
-fn gsettings_key(key: AutoKey) -> Option<&'static str> {
-    match key {
-        AutoKey::Packages => None,
-        AutoKey::Spices => Some("auto-update-cinnamon-spices"),
-        AutoKey::Flatpak => Some("auto-update-flatpaks"),
-    }
-}
-
 pub(super) fn set_auto(key: AutoKey, on: bool) -> Result<(), Refusal> {
-    match gsettings_key(key) {
-        Some(name) => gsettings::set_within(SCHEMA, name, if on { "true" } else { "false" }, READ)
-            .map_err(|error| Refusal::Failed(format!("{error:#}"))),
-        None => run_script(AUTO_SH, &[if on { "enable" } else { "disable" }.into()]),
-    }
+    let name = match key {
+        AutoKey::Packages => {
+            return run_script(AUTO_SH, &[if on { "enable" } else { "disable" }.into()])
+        }
+        AutoKey::Spices => "auto-update-cinnamon-spices",
+        AutoKey::Flatpak => "auto-update-flatpaks",
+        AutoKey::Kernels | AutoKey::ByHand => {
+            return Err(Refusal::Failed(format!(
+                "{} is not one of Mint's install switches",
+                key.name()
+            )))
+        }
+    };
+    gsettings::set_within(SCHEMA, name, if on { "true" } else { "false" }, READ)
+        .map_err(|error| Refusal::Failed(format!("{error:#}")))
 }
 
 pub(super) fn set_hours(

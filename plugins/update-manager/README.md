@@ -23,6 +23,12 @@ qol-update-manager doctor
 - The waiting page tags every update with its updater when they differ: Update Manager, Flatpak or firmware. A list longer than 40 shows 40 at a time.
 - Restart tonight waits for Mint's own nightly run; Restart now asks first.
 - Hours and Installs on its own change Mint's own settings, and they stay when qol stops.
+- Old kernels switches the system's own removal of old kernels, and it stays when qol stops. apt always keeps the running kernel and the two newest.
+  - On Linux Mint it is Mint's cleanup, which runs weekly and 3 hours after each startup. It runs `apt-get autoremove --purge`, so it also removes other packages nothing needs.
+  - Include kernels installed by hand adds `qol-kernels-by-hand.conf` to that cleanup, so kernels installed from Mint's Update Manager window are removed too. It is off until you switch it on, so a kernel kept on purpose stays.
+  - On Ubuntu and Debian it is the unattended-upgrades setting that removes unused kernels, written to `/etc/apt/apt.conf.d/90qol-update-manager-kernels`. It runs only while automatic updates are on.
+  - Anywhere else the row says nothing removes old kernels on its own.
+- `status` ends with an `Old kernels:` line.
 - Wait while in use and Hold all are qol's rules, and they end when qol stops.
 - History lists each run with who started it; a run's page lists what it installed.
 
