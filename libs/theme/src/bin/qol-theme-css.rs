@@ -2,6 +2,7 @@ use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTe
 use std::{ffi::OsStr, fs, path::PathBuf, process::ExitCode};
 
 fn main() -> ExitCode {
+    qol_log::init_stderr();
     app().run(std::env::args().skip(1))
 }
 

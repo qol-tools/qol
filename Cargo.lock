@@ -7622,6 +7622,7 @@ dependencies = [
  "qol-color",
  "qol-conventions",
  "qol-headless",
+ "qol-log",
  "serde_json",
  "tempfile",
  "ttf-parser 0.25.1",
