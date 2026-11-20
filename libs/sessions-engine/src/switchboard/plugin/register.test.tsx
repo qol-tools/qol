@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { boundChords, chatTail, claimsUser, doneSoFar, echoesOnly, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
+import { boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, litBody, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -377,6 +377,9 @@ test('a report line keeps no terminal codes, control characters or line breaks f
 const placedRow = (id: string, surface: 'terminal' | 'desktop' = 'terminal', plugin = 'qol-switchboard') =>
   ({ plugin: 'qol-switchboard', surface, component: 'Placed', requestId: `placed-${id}`, props: { id, plugin } }) as const
 
+const agentRow = (id: string, body: string) =>
+  ({ plugin: 'qol-switchboard', surface: 'terminal', component: 'AgentRow', requestId: id, props: { id, description: 'work', type: 'subagent', status: 'running', hasRow: true, rowIds: [id], isHidden: false, body } }) as any
+
 const boardCalls = (panes: string[]) => panes.filter(one => !one.startsWith('place focus-'))
 
 const logIds = (panes: string[]) => panes.filter(one => one.startsWith('place ')).map(one => one.slice('place '.length))
@@ -691,6 +694,35 @@ test('a sent line put back behind words typed since leaves the box, and those wo
   expect(fills).toEqual(['ok '])
   await $.prompt.change({ origin: { kind: 'engine' }, text: 'ok \nasking-fork teal', cursor: 20 })
   expect(fills).toEqual(['ok '])
+})
+
+test('a sent line with pasted text leaves the box, though the box names the paste where the sent line holds its text', async ($, on) => {
+  engine(on)
+  on('clock.after', () => new Promise(() => {}))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  on('session.messages', () => ({ value: [] }))
+  const fills: string[] = []
+  on('prompt.fill', (_: unknown, e: { text: string }) => {
+    fills.push(e.text)
+    return { isFilled: true }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  expect((await typed($, 'asking-fork see this\nline one\nline two\nline three\nthanks')).drop).toContain('→ asking-fork')
+  await $.prompt.change({ origin: { kind: 'engine' }, text: 'asking-fork see this\n[Pasted text #1 +2 lines]\nthanks', cursor: 10 })
+  expect(fills).toEqual([''])
+  const sent = 'look:\nalpha\nbeta\nmid\ngamma\nend'
+  expect(draftedAs('look:\n[Pasted text #1 +1 lines]\nmid\n[...Truncated text #2 +40 lines...]\nend', sent)).toBe(true)
+  expect(draftedAs('[Pasted text #3]', 'anything at all')).toBe(true)
+  expect(draftedAs('look:\n[Pasted text #1 +1 lines]\nother\nend', sent)).toBe(false)
+  expect(draftedAs('look:\nalpha\nbeta\nmid\ngamma\nend[Pasted text #1]end', sent)).toBe(false)
+  expect(draftedAs('typed, no paste', sent)).toBe(false)
+  expect(typedSince(sent)('new words\nmore\nlook:\n[Pasted text #1 +3 lines]\nend')).toBe('new words\nmore')
+  expect(typedSince(sent)('look:\n[Pasted text #1 +3 lines]\nother')).toBeUndefined()
+  expect(typedSince('plain')('typed\nplain')).toBe('typed')
+  expect(typedSince('copied line')('copied line\n')).toBe('')
+  expect(typedSince('copied line\n')('typed \ncopied line\n')).toBe('typed ')
+  expect(typedSince('copied line')('copied line and more')).toBeUndefined()
 })
 
 test("in a fork's view the board frames that fork, and the whole board shows in the view of an agent it does not list", async ($, on) => {
@@ -3101,6 +3133,12 @@ test('a fork that started forks holds them on its row: their questions stay with
   const sent: any[] = []
   const viewed: string[] = []
   const written: Record<string, string> = {}
+  const bodies: string[] = []
+  on('ui.render', { component: 'AgentRow' }, ($: any, e: any) => {
+    bodies.push(e.props.body ?? '')
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
   engine(on, sent)
   on('clock.after', () => ({ value: undefined }))
   on('session.messages', () => ({ value: [] }))
@@ -3147,10 +3185,19 @@ test('a fork that started forks holds them on its row: their questions stay with
   expect(viewed).toEqual(['k2'])
   await writing.unmount()
   await settle()
-  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: [], asks: [], models: {}, writing: 'p1' })
+  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: [], asks: [], models: {} })
+  const row = async (id: string, body = `  ${id}  work`) => {
+    const ui = await $.ui.mount(agentRow(id, body))
+    await ui.unmount()
+    return bodies.at(-1)
+  }
+  const lit = (mark: string) => `\x1b[1m\x1b[38;5;214m${mark}\x1b[22m\x1b[39m `
+  expect([await row('p1'), await row('k2')]).toEqual([`${lit('●')}p1  work`, '  k2  work'])
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'helper-fork ', cursor: 12 })
   await settle()
-  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: [], asks: [], models: {}, writing: 'k2', writingUnder: ['p1'] })
+  expect([await row('p1'), await row('k2'), await row('c1')]).toEqual([`${lit('◐')}p1  work`, `${lit('●')}k2  work`, '  c1  work'])
+  expect(await row('k2', '\x1b[1m\x1b[38;5;147m◉\x1b[22m\x1b[39m k2  work')).toBe(`${lit('●')}k2  work`)
+  expect(litBody('k2  work', 'k2', { writing: 'k2' })).toBe('k2  work')
 })
 
 test('open pull requests gather under PULL REQUESTS at the bottom of the board, and each fork row names its own', async ($, on) => {

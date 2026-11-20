@@ -30,9 +30,6 @@ const WAITS_ON_LABEL: &str = "waits on";
 const ASKS_LABEL: &str = "asks you";
 const FRESH_MARK: char = '◉';
 const FRESH_LOOK: &str = "\x1b[1m\x1b[38;5;147m";
-const WRITING_MARK: char = '●';
-const WRITING_UNDER_MARK: char = '◐';
-const WRITING_LOOK: &str = "\x1b[1m\x1b[38;5;214m";
 const PARENT_KEY: &str = "parentAgentId";
 const MARKS_EXTENSION: &str = ".json";
 const ELLIPSIS: char = '…';
@@ -146,16 +143,7 @@ struct Fork {
     parent: Option<String>,
     fresh: bool,
     asks: bool,
-    writing: Writing,
     picked: Picked,
-}
-
-#[derive(Clone, Copy, Default)]
-enum Writing {
-    #[default]
-    Elsewhere,
-    Here,
-    Under,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -170,9 +158,6 @@ struct Picked {
 struct Marks {
     fresh: Vec<String>,
     asks: Vec<String>,
-    writing: Option<String>,
-    #[serde(rename = "writingUnder")]
-    writing_under: Vec<String>,
     models: HashMap<String, Picked>,
 }
 
@@ -181,19 +166,8 @@ impl Marks {
         Fork {
             fresh: self.fresh.iter().any(|one| one == id),
             asks: self.asks.iter().any(|one| one == id),
-            writing: self.writing(id),
             picked: self.models.get(id).cloned().unwrap_or_default(),
             ..fork
-        }
-    }
-
-    fn writing(&self, id: &str) -> Writing {
-        if self.writing.as_deref() == Some(id) {
-            Writing::Here
-        } else if self.writing_under.iter().any(|one| one == id) {
-            Writing::Under
-        } else {
-            Writing::Elsewhere
         }
     }
 }
@@ -409,21 +383,16 @@ fn looked(text: &str, paint: Option<&str>) -> String {
     }
 }
 
-fn lead(fork: &Fork) -> Drawn {
-    let (mark, look) = match fork.writing {
-        Writing::Here => (WRITING_MARK, WRITING_LOOK),
-        Writing::Under => (WRITING_UNDER_MARK, WRITING_LOOK),
-        Writing::Elsewhere if fork.fresh => (FRESH_MARK, FRESH_LOOK),
-        Writing::Elsewhere => {
-            return Drawn {
-                text: GAP.to_owned(),
-                width: width(GAP),
-            };
-        }
-    };
+fn lead(fresh: bool) -> Drawn {
+    if !fresh {
+        return Drawn {
+            text: GAP.to_owned(),
+            width: width(GAP),
+        };
+    }
     Drawn {
-        text: format!("{} ", looked(&mark.to_string(), Some(look))),
-        width: width(&format!("{mark} ")),
+        text: format!("{} ", looked(&FRESH_MARK.to_string(), Some(FRESH_LOOK))),
+        width: width(&format!("{FRESH_MARK} ")),
     }
 }
 
@@ -708,7 +677,7 @@ fn row(one: &Shown, all: &[Shown], columns: Option<usize>, clock: &Clock) -> Opt
     let head = Head {
         name: &name,
         color,
-        lead: lead(fork),
+        lead: lead(fork.fresh),
         badge: family.badge(),
         model: fork.picked.model.as_deref().or(task.model.as_deref()),
         effort: fork
@@ -1986,48 +1955,6 @@ mod tests {
     }
 
     #[test]
-    fn the_fork_written_to_gets_a_lit_dot_and_the_fork_that_started_it_a_half_one() {
-        let fork = |id: &str| Fork {
-            color: Some("cyan".to_owned()),
-            fresh: true,
-            writing: match id {
-                "a1" => Writing::Under,
-                "a2" => Writing::Here,
-                _ => Writing::Elsewhere,
-            },
-            ..Fork::default()
-        };
-        let tasks = json!({"tasks": [
-            {"id": "a1", "name": "fork-a", "description": "work", "status": "completed"},
-            {"id": "a2", "name": "fork-b", "description": "work", "status": "completed"},
-            {"id": "a3", "name": "fork-c", "description": "work", "status": "completed"},
-        ]});
-        let rows = content_of(tasks, &fork, &status_state);
-        assert_eq!(
-            rows.iter()
-                .map(String::as_str)
-                .map(visible)
-                .collect::<Vec<_>>(),
-            [
-                "◐ fork-a  work  idle · 0 tokens",
-                "● fork-b  work  idle · 0 tokens",
-                "◉ fork-c  work  idle · 0 tokens",
-            ]
-        );
-        assert!(
-            rows[0].starts_with("\x1b[1m\x1b[38;5;214m◐\x1b[22m\x1b[39m "),
-            "{:?}",
-            rows[0]
-        );
-        assert!(
-            rows[1].starts_with("\x1b[1m\x1b[38;5;214m●\x1b[22m\x1b[39m "),
-            "{:?}",
-            rows[1]
-        );
-        assert!(rows[2].starts_with(FRESH), "{:?}", rows[2]);
-    }
-
-    #[test]
     fn a_fork_that_started_forks_counts_them_after_its_name_and_waits_on_the_busy_ones() {
         let tasks = json!([
             family_task("ap", "completed"),
@@ -2144,18 +2071,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("c0ab.json"),
-            json!({"fresh": ["a1"], "asks": ["a2", "a3"], "writing": "a3", "writingUnder": ["a2"]})
-                .to_string(),
+            json!({"fresh": ["a1"], "asks": ["a2", "a3"]}).to_string(),
         )
         .unwrap();
         let marks = read_marks(dir.path(), Path::new("/p/proj/c0ab.jsonl"));
-        assert!(matches!(marks.writing("a3"), Writing::Here));
-        assert!(matches!(marks.writing("a2"), Writing::Under));
-        assert!(matches!(marks.writing("a1"), Writing::Elsewhere));
-        assert!(matches!(
-            marks.marked("a3", Fork::default()).writing,
-            Writing::Here
-        ));
         assert_eq!(marks.fresh, ["a1"]);
         assert_eq!(marks.asks, ["a2", "a3"]);
         let asking = marks.marked(

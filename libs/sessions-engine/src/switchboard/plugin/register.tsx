@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, Register, UiOpenResult } from 'claude-code'
 
-import type { CheckResult, Entry, Kind, ModelChoice, ModelSeen, Pull, PullDetail, RunState } from '../types'
+import type { ActionKind, CheckResult, Doing, Entry, Kind, Lit, ModelChoice, ModelSeen, Pull, PullDetail, RunState } from '../types'
 
 const PROJECT = /^\s*Project:\s*(.+?)\s*$/
 const MODEL_LINE = /^\s*Model:\s*([A-Za-z0-9][\w.[\]-]*)\s*$/
@@ -137,11 +137,10 @@ export const STARTING = 'Starting the switchboard…'
 export const bringingBack = (count: number): string => `Bringing back ${count} fork${count === 1 ? '' : 's'}…`
 const writingSaid = atom({ plugin: 'qol-switchboard', key: 'writingSaid' } as const, [] as { isUser: boolean; text: string }[])
 const current = atom({ plugin: 'qol-switchboard', key: 'current' } as const, '')
-const ACTION_KINDS = ['search', 'read', 'edit', 'shell', 'other'] as const
-type ActionKind = (typeof ACTION_KINDS)[number]
-export type Doing = { counts: Partial<Record<ActionKind, number>>; recent: string[] }
+const ACTION_KINDS: readonly ActionKind[] = ['search', 'read', 'edit', 'shell', 'other']
 const NOTHING_DONE: Doing = { counts: {}, recent: [] }
-const focusActivity = atom({ plugin: 'qol-switchboard', key: 'focusActivity' } as const, NOTHING_DONE)
+const focusDoing = atom({ plugin: 'qol-switchboard', key: 'focusDoing' } as const, NOTHING_DONE)
+const litRows = atom({ plugin: 'qol-switchboard', key: 'litRows' } as const, {} as Lit)
 const freshReply = atom({ plugin: 'qol-switchboard', key: 'freshReply' } as const, '')
 const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', prevId: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
 const rowsCapped = atom({ plugin: 'qol-switchboard', key: 'rowsCapped' } as const, false)
@@ -257,7 +256,34 @@ type TypedSince = (text: string) => string | undefined
 
 let putBack: TypedSince | undefined
 
-const typedSince = (dropped: string): TypedSince => text => (text === dropped ? '' : text.endsWith(`\n${dropped}`) ? text.slice(0, -dropped.length - 1) : undefined)
+const PASTED = /\[(?:Pasted text #\d+(?: \+\d+ lines)?|\.\.\.Truncated text #\d+ \+\d+ lines\.\.\.)\]/
+
+export const draftedAs = (draft: string, sent: string): boolean => {
+  const [first = '', ...rest] = draft.split(PASTED)
+  const last = rest.pop()
+  if (last === undefined) return draft === sent
+  if (sent.length < first.length + last.length || !sent.startsWith(first) || !sent.endsWith(last)) return false
+  const end = sent.length - last.length
+  let from = first.length
+  for (const part of rest) {
+    const at = sent.indexOf(part, from)
+    if (at === -1 || at + part.length > end) return false
+    from = at + part.length
+  }
+  return true
+}
+
+export const typedSince = (dropped: string): TypedSince => boxed => {
+  const sent = dropped.trim()
+  const text = boxed.trimEnd()
+  const paste = text.search(PASTED)
+  if (paste === -1) return text.trimStart() === sent ? '' : text.endsWith(`\n${sent}`) ? text.slice(0, -sent.length - 1) : undefined
+  if (draftedAs(text.trimStart(), sent)) return ''
+  for (let at = text.indexOf('\n'); at !== -1 && at < paste; at = text.indexOf('\n', at + 1)) {
+    if (draftedAs(text.slice(at + 1), sent)) return text.slice(0, at)
+  }
+  return undefined
+}
 
 const clearPutBack = async ($: EngineInterface, text: string): Promise<void> => {
   const kept = text === '' ? undefined : putBack?.(text)
@@ -436,12 +462,13 @@ const isPluginNote = (text: string): boolean => {
 const pointAt = async ($: EngineInterface, entry: Entry | undefined): Promise<boolean> => {
   const agentId = entry?.agentId ?? ''
   if ((await read($, writingTo)) === agentId) return false
+  const lit = writingMarks(await read($, board), agentId)
   await update($, writingTo, () => agentId)
+  await update($, litRows, () => lit)
   await update($, writingSaid, () => [])
-  await update($, focusActivity, () => doing.get(agentId) ?? NOTHING_DONE)
+  await update($, focusDoing, () => doing.get(agentId) ?? NOTHING_DONE)
   await update($, freshReply, () => '')
   if (agentId === '') await update($, focusShown, () => ({ id: '', prevId: '', agentId: '', key: '', rows: [] }))
-  queueMarks($)
   return true
 }
 
@@ -687,12 +714,12 @@ export const doneSoFar = (done: Doing): string => {
 const noteActivity = async ($: EngineInterface, agentId: string, tool: string, label: string): Promise<void> => {
   const done = withAction(doing.get(agentId) ?? NOTHING_DONE, tool, label)
   doing.set(agentId, done)
-  if ((await read($, writingTo)) === agentId) await update($, focusActivity, () => done)
+  if ((await read($, writingTo)) === agentId) await update($, focusDoing, () => done)
 }
 
 const forgetActivity = async ($: EngineInterface, agentId: string): Promise<void> => {
   doing.delete(agentId)
-  if ((await read($, writingTo)) === agentId && (await read($, focusActivity)).recent.length > 0) await update($, focusActivity, () => NOTHING_DONE)
+  if ((await read($, writingTo)) === agentId && (await read($, focusDoing)).recent.length > 0) await update($, focusDoing, () => NOTHING_DONE)
 }
 
 const followFocus = async ($: EngineInterface): Promise<void> => {
@@ -917,7 +944,7 @@ const pickedModels = async ($: EngineInterface, list: Entry[]): Promise<Record<s
   )
 }
 
-export const writingMarks = (list: Entry[], agentId: string): { writing?: string; writingUnder?: string[] } => {
+export const writingMarks = (list: Entry[], agentId: string): Lit => {
   const entry = list.find(one => one.agentId === agentId)
   if (entry === undefined) return {}
   const above: string[] = []
@@ -929,10 +956,19 @@ export const writingMarks = (list: Entry[], agentId: string): { writing?: string
   return { writing: entry.agentId, ...(above.length === 0 ? {} : { writingUnder: above }) }
 }
 
+const ROW_LEAD = /^(?:\x1b\[[0-9;]*m)*[ ◉](?:\x1b\[[0-9;]*m)* /
+const LIT_LOOK = '\x1b[1m\x1b[38;5;214m'
+const LIT_OFF = '\x1b[22m\x1b[39m'
+
+export const litBody = (body: string, id: string, lit: Lit): string => {
+  const mark = lit.writing === id ? '●' : lit.writingUnder?.includes(id) === true ? '◐' : undefined
+  return mark === undefined ? body : body.replace(ROW_LEAD, `${LIT_LOOK}${mark}${LIT_OFF} `)
+}
+
 const writeMarks = async ($: EngineInterface, list: Entry[]): Promise<void> => {
   const folder = await $.env.get('QOL_SWITCHBOARD_MARKS')
   if (folder === undefined || folder === '' || !folder.startsWith('/')) return
-  const text = JSON.stringify({ ...marksOf(list), models: await pickedModels($, list), ...writingMarks(list, await read($, writingTo)) })
+  const text = JSON.stringify({ ...marksOf(list), models: await pickedModels($, list) })
   const path = `${folder}/${await $.session.id()}.json`
   if (`${path}\n${text}` === marksWritten) return
   await $.fs.write(path, text)
@@ -3074,7 +3110,7 @@ export const register: Register = on => {
         </Box>
       )
       const isChatHere = (await read($, rowsCapped)) && (await read($, writingTo)) === shown?.agentId
-      const doingNow = isChatHere && shown?.isWorking === true ? (await read($, focusActivity)).recent.at(-1) : undefined
+      const doingNow = isChatHere && shown?.isWorking === true ? (await read($, focusDoing)).recent.at(-1) : undefined
       const spare = BAND_SPARE + (doingNow === undefined ? 0 : 1)
       const said = isChatHere ? chatTail(await read($, writingSaid), e.props.maxRows - spare, e.props.bodyColumns) : []
       if (said.length === 0) return writing
@@ -3114,7 +3150,7 @@ export const register: Register = on => {
       $.clock.after(FOCUS_SWAP_MS, () => void update($, focusShown, one => (one.id === id ? { ...one, prevId: '' } : one)).catch(() => {}))
     }
     const entry = (await read($, board)).find(one => one.agentId === shown.agentId)
-    const activity = await read($, focusActivity)
+    const activity = await read($, focusDoing)
     const working = (await looksOf($)).get(WORKING_STATE)
     const state = entry === undefined ? '' : ` · ${entry.isWorking ? 'working' : isCut(entry) ? 'stopped mid-turn' : (entry.kind ?? 'note')} · ${age((await $.clock.now()) - entry.at)}`
     return (
@@ -3147,6 +3183,13 @@ export const register: Register = on => {
       </Box>
     )
   })
+
+  on('ui.render', { component: 'AgentRow' }, async ($, e, next) => {
+    const body = e.props.body
+    if (body === undefined) return next(e)
+    const lit = litBody(body, e.props.id, await read($, litRows))
+    return next(lit === body ? e : { ...e, props: { ...e.props, body: lit } })
+  }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Placed' }, async ($, e, next) => {
     const one = e.props.plugin === NAME ? logs.get(e.props.id) : undefined
