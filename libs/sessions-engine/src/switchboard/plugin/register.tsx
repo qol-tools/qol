@@ -446,7 +446,7 @@ export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
     }
     const words = role === 'user' ? userWords(text) : [text, ...handedBack(toolUses)].filter(part => part.trim() !== '').join('\n\n')
     const shown = plainText(words)
-    if (shown === '' || (role === 'user' && (/^<[a-z-]+\/?>/.test(shown) || isPluginNote(shown))) || (role === 'assistant' && isHeldReply(shown))) return []
+    if (shown === '' || (role === 'user' && (/^<[a-z-]+(?:\s[^>]*)?\/?>/.test(shown) || isPluginNote(shown))) || (role === 'assistant' && isHeldReply(shown))) return []
     return [{ isUser: role === 'user', text: clipSaid(shown) }]
   })
   return said.slice(-kept)
@@ -463,7 +463,7 @@ const MID_TURN_NOTE = /^The (?:coordinator sent a message|user sent a new messag
 
 const COMPACTED = 'This session is being continued from a previous conversation'
 
-const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', COMPACTED, '[SYSTEM NOTIFICATION']
+const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', COMPACTED, '[SYSTEM NOTIFICATION', 'Another Claude session sent a message']
 
 const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY, CUT_REPLY].includes(text.trim())
 
