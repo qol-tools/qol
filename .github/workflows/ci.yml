@@ -288,9 +288,9 @@ jobs:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
         run: cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings
 
-      - name: Clippy qol-tray with the dev feature
+      - name: Clippy qol-tray with the dev and sandbox features
         if: runner.os == 'Linux' && matrix.skip != 'true' && matrix.tray_dev == 'true'
-        run: cargo clippy --locked --keep-going -p qol-tray --all-targets --features qol-tray/dev -- -D warnings
+        run: cargo clippy --locked --keep-going -p qol-tray --all-targets --features qol-tray/dev,qol-tray/sandbox -- -D warnings
 
       # A pull request run builds no release binaries, so this check is its
       # proof that the release profile compiles. Only the build cache workflow

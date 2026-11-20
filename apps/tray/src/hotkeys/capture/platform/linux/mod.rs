@@ -3,13 +3,9 @@ use super::super::{OnFire, RebuildBindings};
 use anyhow::Result;
 use crossbeam_channel::Receiver;
 
-#[cfg(feature = "linux_evdev")]
 pub(crate) mod classify;
-#[cfg(feature = "linux_evdev")]
 pub(crate) mod evdev_backend;
-#[cfg(feature = "linux_evdev")]
 mod heal;
-#[cfg(feature = "linux_evdev")]
 mod matcher;
 mod recorder;
 
@@ -18,7 +14,6 @@ pub(crate) const KEEP_REGISTERED_ONE_SHOTS: bool = false;
 /// Shown when shortcut recording could not start.
 pub(crate) const RECORDING_UNAVAILABLE: &str = "Shortcut recording could not start. Try again.";
 
-#[cfg(feature = "linux_evdev")]
 pub(crate) fn install(
     bindings: Vec<Binding>,
     on_fire: OnFire,
@@ -39,20 +34,6 @@ pub(crate) fn cancel_recording(session_id: u64) {
     recorder::global().cancel(session_id);
 }
 
-#[cfg(feature = "linux_evdev")]
 pub(crate) fn release_held_keys() {
     evdev_backend::release_held_keys();
-}
-
-#[cfg(not(feature = "linux_evdev"))]
-pub(crate) fn release_held_keys() {}
-
-#[cfg(not(feature = "linux_evdev"))]
-pub(crate) fn install(
-    _bindings: Vec<Binding>,
-    _on_fire: OnFire,
-    _reload_rx: Receiver<()>,
-    _rebuild: RebuildBindings,
-) -> Result<()> {
-    anyhow::bail!("evdev capture not compiled in (rebuild qol-tray with --features linux_evdev)")
 }

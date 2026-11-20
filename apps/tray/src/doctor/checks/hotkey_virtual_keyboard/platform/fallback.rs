@@ -2,7 +2,6 @@ use super::super::VirtualKeyboardScan;
 
 pub(super) fn virtual_keyboard_probe() -> VirtualKeyboardScan {
     VirtualKeyboardScan {
-        compiled: false,
         devices: Vec::new(),
         physical_down: Vec::new(),
     }

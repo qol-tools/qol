@@ -117,10 +117,9 @@ fn build_command(root: &Path, buildable: &[BuildablePlugin], dev: bool) -> Resul
         .current_dir(root)
         .args(["build", "--release", "--locked", "-p", "qol-tray"]);
     if dev {
-        command.args(["--features", "dev,linux_evdev"]);
+        command.args(["--features", "dev"]);
         return Ok(command);
     }
-    command.args(["--features", "linux_evdev"]);
     for plugin in buildable {
         command.arg("-p").arg(&plugin.package_name);
         for feature in qualified_plugin_build_features(&plugin.dir)? {
@@ -204,17 +203,14 @@ mod tests {
     }
 
     #[test]
-    fn build_command_adds_evdev_to_every_install() {
+    fn build_command_passes_no_feature_to_a_production_install_and_dev_to_a_dev_install() {
         let root = Path::new("/a/b/ws");
         let plain = build_command(root, &[], false).unwrap();
-        assert!(
-            args_of(&plain).contains("--features linux_evdev"),
-            "production install must grab the keyboard at the evdev level so the desktop cannot shadow it"
-        );
+        assert_eq!(args_of(&plain), "build --release --locked -p qol-tray");
         let dev = build_command(root, &[], true).unwrap();
-        assert!(
-            args_of(&dev).contains("--features dev,linux_evdev"),
-            "dev install carries dev and evdev features"
+        assert_eq!(
+            args_of(&dev),
+            "build --release --locked -p qol-tray --features dev"
         );
     }
 
@@ -247,7 +243,7 @@ mod tests {
         let dev = build_command(root, &[plugin], true).unwrap();
         assert_eq!(
             args_of(&dev),
-            "build --release --locked -p qol-tray --features dev,linux_evdev"
+            "build --release --locked -p qol-tray --features dev"
         );
     }
 }

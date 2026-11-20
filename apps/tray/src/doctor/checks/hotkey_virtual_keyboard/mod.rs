@@ -30,14 +30,12 @@ struct VirtualKeyboardProbe {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VirtualKeyboardScan {
-    compiled: bool,
     devices: Vec<VirtualKeyboardProbe>,
     physical_down: Vec<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Assessment {
-    NotCompiled,
     NoDevices,
     OneDeviceIdle,
     LatchedKeys(Vec<u16>),
@@ -56,9 +54,6 @@ fn stuck_keys(devices: &[VirtualKeyboardProbe], physical_down: &[u16]) -> Vec<u1
 }
 
 fn assess(scan: &VirtualKeyboardScan) -> Assessment {
-    if !scan.compiled {
-        return Assessment::NotCompiled;
-    }
     let stuck = stuck_keys(&scan.devices, &scan.physical_down);
     match scan.devices.as_slice() {
         [] => Assessment::NoDevices,
@@ -77,9 +72,6 @@ fn assess(scan: &VirtualKeyboardScan) -> Assessment {
 
 fn render(assessment: &Assessment, namer: impl Fn(u16) -> String) -> CheckReport {
     match assessment {
-        Assessment::NotCompiled => CheckReport::ok(
-            "native evdev capture is not compiled in; no virtual keyboard to inspect",
-        ),
         Assessment::NoDevices => CheckReport::ok(
             "no qol-tray virtual keyboard device present (capture inactive or tray not running)",
         ),
@@ -157,13 +149,8 @@ mod tests {
         }
     }
 
-    fn scan(
-        compiled: bool,
-        devices: Vec<VirtualKeyboardProbe>,
-        physical_down: &[u16],
-    ) -> VirtualKeyboardScan {
+    fn scan(devices: Vec<VirtualKeyboardProbe>, physical_down: &[u16]) -> VirtualKeyboardScan {
         VirtualKeyboardScan {
-            compiled,
             devices,
             physical_down: physical_down.to_vec(),
         }
@@ -180,31 +167,25 @@ mod tests {
     #[test]
     fn assess_covers_virtual_keyboard_states() {
         let cases = [
-            (scan(false, Vec::new(), &[]), Assessment::NotCompiled),
-            (scan(true, Vec::new(), &[]), Assessment::NoDevices),
+            (scan(Vec::new(), &[]), Assessment::NoDevices),
             (
-                scan(true, vec![device("/dev/input/event9", &[])], &[]),
+                scan(vec![device("/dev/input/event9", &[])], &[]),
                 Assessment::OneDeviceIdle,
             ),
             (
-                scan(true, vec![device("/dev/input/event9", &[0x1c, 0x6f])], &[]),
+                scan(vec![device("/dev/input/event9", &[0x1c, 0x6f])], &[]),
                 Assessment::LatchedKeys(vec![0x1c, 0x6f]),
             ),
             (
-                scan(true, vec![device("/dev/input/event9", &[0x1c])], &[0x1c]),
+                scan(vec![device("/dev/input/event9", &[0x1c])], &[0x1c]),
+                Assessment::OneDeviceIdle,
+            ),
+            (
+                scan(vec![device("/dev/input/event9", &[0x1c])], &[0x1c, 0x6f]),
                 Assessment::OneDeviceIdle,
             ),
             (
                 scan(
-                    true,
-                    vec![device("/dev/input/event9", &[0x1c])],
-                    &[0x1c, 0x6f],
-                ),
-                Assessment::OneDeviceIdle,
-            ),
-            (
-                scan(
-                    true,
                     vec![
                         device("/dev/input/event9", &[0x1c]),
                         device("/dev/input/event10", &[]),
@@ -221,7 +202,6 @@ mod tests {
             ),
             (
                 scan(
-                    true,
                     vec![
                         device("/dev/input/event9", &[0x1c]),
                         device("/dev/input/event10", &[0x6f]),
@@ -238,7 +218,6 @@ mod tests {
             ),
             (
                 scan(
-                    true,
                     vec![
                         device("/dev/input/event9", &[]),
                         device("/dev/input/event10", &[]),
