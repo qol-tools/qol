@@ -361,7 +361,7 @@ fn find_by(leftover: &'static Leftover, output: &mut measure::Output) -> Found {
 }
 
 pub(crate) fn survey(at: NaiveDateTime) -> Survey {
-    let mut output = measure::once(|argv| platform::output(argv));
+    let mut output = measure::once(platform::output);
     Survey {
         at,
         stamp: stamp(),
