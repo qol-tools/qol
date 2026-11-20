@@ -275,7 +275,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::platform::engine::config::RemapConfig;
+    use crate::config::RemapConfig;
     use crate::platform::engine::remap;
     use crate::platform::macos::hid_helper::protocol::PAGE_KEYBOARD;
     use crate::platform::macos::layout::{CharTable, LayoutSnapshot};

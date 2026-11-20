@@ -83,12 +83,11 @@ impl<S: Settings> Controller<S> {
                 taken_over: false,
                 status: HostNightLightStatus::Off,
             }),
-            adoption_generation: std::env::var(qol_conventions::ENV_DEV_GENERATION_ID).ok(),
+            adoption_generation: None,
         }
     }
 
-    #[cfg(test)]
-    fn with_adoption_generation(mut self, generation: Option<String>) -> Self {
+    pub(super) fn with_adoption_generation(mut self, generation: Option<String>) -> Self {
         self.adoption_generation = generation;
         self
     }
