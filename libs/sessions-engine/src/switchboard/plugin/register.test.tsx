@@ -1242,7 +1242,7 @@ test('a hold whose turn never ran or ended early never answers a later real turn
   expect(steps).toEqual(['real-2:0', 'real-2:1'])
 })
 
-test('a fork that left the agent list after its turn ended is put back once with a hold and no model run, and a listed fork, one the user stopped and a finished sub-fork are left alone', async ($, on) => {
+test('forks that left the agent list after their turns ended are each put back once with a hold and no model run, and a listed fork, one the user stopped and a finished sub-fork are left alone', async ($, on) => {
   const sent: any[] = []
   const listed = new Set<string>(['a1'])
   const timers: Array<{ ms: number; fire: () => void }> = []
@@ -1256,8 +1256,9 @@ test('a fork that left the agent list after its turn ended is put back once with
   })
   const elapse = async () => {
     for (let round = 0; round < 3; round += 1) {
-      for (const timer of timers.splice(0).sort((a, b) => a.ms - b.ms)) {
-        timer.fire()
+      const due = timers.splice(0)
+      for (const ms of [...new Set(due.map(timer => timer.ms))].sort((a, b) => a - b)) {
+        for (const timer of due.filter(one => one.ms === ms)) timer.fire()
         await settle()
       }
       await renderBand($)
@@ -1272,17 +1273,19 @@ test('a fork that left the agent list after its turn ended is put back once with
   await spawn($, 'a1', 'a1-fork: a fork')
   await spawn($, 's1', 's1-fork: a sub-fork', 'a1')
   await spawn($, 'b1', 'b1-fork: a stopped fork')
+  await spawn($, 'c1', 'c1-fork: a fork dropped in the same moment')
   await turn('a1', 'listed-1')
   expect(timers.some(timer => timer.ms === 40_000)).toBe(true)
   await elapse()
   expect(wakes()).toEqual([])
   listed.clear()
   await turn('a1', 'dropped-1')
+  await turn('c1', 'dropped-2')
   await turn('s1', 'sub-1')
   await turn('b1', 'stopped-1')
   await typed($, stopNotification('b1', 'b1-fork: a stopped fork'), 'task-notification')
   await elapse()
-  expect(wakes()).toEqual([expect.stringContaining('a1')])
+  expect(wakes().sort()).toEqual([expect.stringContaining('a1'), expect.stringContaining('c1')])
   await $.turn.start({ text: '<message>Back in the agent list.</message>', turnId: 'back-1', agentId: 'a1' })
   expect((await answered($, 'a1', 0, 'back-1'))[0]).toMatchObject({ kind: 'tool', name: 'Bash' })
   expect((await answered($, 'a1', 1, 'back-1'))[0]).toMatchObject({ kind: 'text', text: 'Back on the fork board.' })
@@ -1293,7 +1296,7 @@ test('a fork that left the agent list after its turn ended is put back once with
   await turn('a1', 'later-1')
   listed.add('a1')
   await elapse()
-  expect(wakes()).toHaveLength(1)
+  expect(wakes()).toHaveLength(2)
 })
 
 test('closing the switchboard kills each fork hold, and the turn that notice starts leaves the fork idle so the next open does not cut it', async ($, on) => {

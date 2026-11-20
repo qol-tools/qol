@@ -2461,13 +2461,15 @@ let reopenTries = 0
 const REOPEN_TRIES = 12
 const REOPEN_RETRY_MS = 1_000
 
-export const reopenForks = async ($: EngineInterface): Promise<void> => {
-  if (isReopening) return
+export const reopenForks = async ($: EngineInterface, dropped: readonly string[] = []): Promise<boolean> => {
+  if (isReopening) return false
   isReopening = true
   try {
     const key = REOPEN_PREFIX + (await $.session.id())
     const saved = await $.store.get(key)
-    const pending = Array.isArray(saved) ? saved.filter((one): one is string => typeof one === 'string') : []
+    const queued = Array.isArray(saved) ? saved.filter((one): one is string => typeof one === 'string') : []
+    const pending = [...new Set([...queued, ...dropped])]
+    if (queued.length === 0 && dropped.length > 0) reopenTries = 0
     const agents: unknown = await $.agent.list().catch(() => [])
     const held = listedAgents(agents)
     const rows = await read($, board)
@@ -2494,6 +2496,7 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
     if (again.length > 0) reopenTries += 1
     if (again.length > 0 && reopenTries < REOPEN_TRIES) $.clock.after(REOPEN_RETRY_MS, () => void reopenForks($).catch(() => undefined))
     else if (again.length > 0) await $.store.delete(key)
+    return true
   } finally {
     isReopening = false
   }
@@ -2505,21 +2508,12 @@ const turnsStarted = new Map<string, string>()
 
 const relist = async ($: EngineInterface, agentId: string, turnId: string): Promise<void> => {
   if (turnsStarted.get(agentId) !== turnId) return
-  if (isReopening) {
-    $.clock.after(REOPEN_RETRY_MS, () => void relist($, agentId, turnId).catch(() => undefined))
-    return
-  }
   const list = await read($, board)
   const entry = list.find(one => one.agentId === agentId)
   if (entry === undefined || entry.isWorking || entry.isStoppedByUser === true || !backAtRestart(list).includes(agentId)) return
   if (listedAgents(await $.agent.list()).has(agentId)) return
-  const key = REOPEN_PREFIX + (await $.session.id())
-  const saved = await $.store.get(key)
-  const pending = Array.isArray(saved) ? saved.filter((one): one is string => typeof one === 'string') : []
-  if (!pending.includes(agentId)) await $.store.set(key, [...pending, agentId])
-  reopenTries = 0
-  await noteReopen($, { agentId, at: await $.clock.now(), dropped: turnId })
-  await reopenForks($)
+  if (await reopenForks($, [agentId])) return
+  $.clock.after(REOPEN_RETRY_MS, () => void relist($, agentId, turnId).catch(() => undefined))
 }
 
 export const drainOutbox = async ($: EngineInterface): Promise<void> => {
