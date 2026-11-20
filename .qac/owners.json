@@ -140,5 +140,12 @@
       { "path": "apps/tray/src/settings_surface/platform/gpui_host.rs", "text": "ENV_DAEMON_REPLACE_EXISTING", "why": "keeps the settings host, which is no daemon, from replacing a running daemon" },
       { "path": "plugins/pointz/src/doctor/mod.rs", "text": "ENV_DAEMON_SOCKET", "why": "the doctor report names the variable qol-tray hands the socket in" }
     ]
+  },
+  "scroll geometry": {
+    "owner": ["libs/gpui/src/scrollbar.rs", "libs/gpui/src/scroll_list.rs"],
+    "use": "kit.scroll_cue with a ScrollSource, which draws, sizes and drags every scroll bar, and qol_gpui::scroll_list (SelectionScroll, ScrollList, scroll_handle_by) to move a scrolled view; a scroll helper another window needs goes into scroll_list.rs",
+    "scope": "production",
+    "paths": ["max_offset", "bounds_for_item", "max_offset_for_scrollbar", "scroll_px_offset_for_scrollbar", "set_offset_from_scrollbar", "scrollbar_drag_started", "scrollbar_drag_ended"],
+    "allow": []
   }
 }
