@@ -256,25 +256,38 @@ type TypedSince = (text: string) => string | undefined
 
 let putBack: TypedSince | undefined
 
-const PASTED = /\[(?:Pasted text #\d+(?: \+\d+ lines)?|\.\.\.Truncated text #\d+ \+\d+ lines\.\.\.)\]/
+const PASTED = /\[(?:Pasted text #\d+(?: \+(\d+) lines)?|\.\.\.Truncated text #\d+ \+(\d+) lines\.\.\.)\]/g
+const PASTE_TAG = /<pasted_content id="[^"\n]*">\n?|\n?<\/pasted_content(?: id="[^"\n]*")?>/g
+
+const pasteEnd = (sent: string, from: number, breaks: number): number => {
+  let at = from
+  for (let left = breaks; left > 0; left -= 1) {
+    const next = sent.indexOf('\n', at)
+    if (next === -1) return -1
+    at = next + 1
+  }
+  return Math.max(at, from + 1)
+}
 
 export const draftedAs = (draft: string, sent: string): boolean => {
-  const [first = '', ...rest] = draft.split(PASTED)
-  const last = rest.pop()
-  if (last === undefined) return draft === sent
-  if (sent.length < first.length + last.length || !sent.startsWith(first) || !sent.endsWith(last)) return false
-  const end = sent.length - last.length
+  const pastes = [...draft.matchAll(PASTED)]
+  const first = draft.slice(0, pastes[0]?.index)
+  if (pastes.length === 0 || !sent.startsWith(first)) return draft === sent
   let from = first.length
-  for (const part of rest) {
-    const at = sent.indexOf(part, from)
-    if (at === -1 || at + part.length > end) return false
-    from = at + part.length
+  for (const [index, paste] of pastes.entries()) {
+    const after = draft.slice(paste.index + paste[0].length, pastes[index + 1]?.index)
+    const least = pasteEnd(sent, from, Math.max(Number(paste[1] ?? paste[2] ?? 0) - 1, 0))
+    if (least === -1) return false
+    if (index === pastes.length - 1) return sent.length - after.length >= least && sent.endsWith(after)
+    const at = sent.indexOf(after, least)
+    if (at === -1) return false
+    from = at + after.length
   }
-  return true
+  return false
 }
 
 export const typedSince = (dropped: string): TypedSince => boxed => {
-  const sent = dropped.trim()
+  const sent = dropped.replace(PASTE_TAG, '').trim()
   const text = boxed.trimEnd()
   const paste = text.search(PASTED)
   if (paste === -1) return text.trimStart() === sent ? '' : text.endsWith(`\n${sent}`) ? text.slice(0, -sent.length - 1) : undefined
@@ -462,9 +475,8 @@ const isPluginNote = (text: string): boolean => {
 const pointAt = async ($: EngineInterface, entry: Entry | undefined): Promise<boolean> => {
   const agentId = entry?.agentId ?? ''
   if ((await read($, writingTo)) === agentId) return false
-  const lit = writingMarks(await read($, board), agentId)
   await update($, writingTo, () => agentId)
-  await update($, litRows, () => lit)
+  await lightRows($, await read($, board), agentId)
   await update($, writingSaid, () => [])
   await update($, focusDoing, () => doing.get(agentId) ?? NOTHING_DONE)
   await update($, freshReply, () => '')
@@ -814,6 +826,13 @@ const refreshStatus = async ($: EngineInterface): Promise<void> => {
   $.ui.status(parts.length === 0 ? undefined : parts.join(' │ '))
   suggestFork($, list)
   queueMarks($, list)
+  await lightRows($, list, await read($, writingTo))
+}
+
+const lightRows = async ($: EngineInterface, list: Entry[], agentId: string): Promise<void> => {
+  const lit = writingMarks(list, agentId)
+  const shown = await read($, litRows)
+  if (lit.writing !== shown.writing || lit.writingUnder?.join() !== shown.writingUnder?.join()) await update($, litRows, () => lit)
 }
 
 const queueMarks = ($: EngineInterface, list?: Entry[]): void => {
