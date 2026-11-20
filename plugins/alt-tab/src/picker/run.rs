@@ -237,13 +237,9 @@ async fn dispatch_settings(cx: &AsyncApp, state: &PickerState) {
 }
 
 async fn dispatch_reload(cx: &AsyncApp, state: &PickerState) {
-    let config = (state.host.load_config)();
+    (state.host.load_config)();
     let current = state.current.clone();
     let _ = cx.update(move |_cx| {
-        qol_gpui::popup_window::set_ghost_debug(
-            config.display.ghost_opacity,
-            config.display.ghost_debug_color.as_deref(),
-        );
         if crate::picker::PICKER_VISIBLE.load(Ordering::Relaxed) {
             return;
         }
@@ -309,10 +305,6 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     let config = (state.host.load_config)();
     #[cfg(debug_assertions)]
     let config_ms = t_config.elapsed().as_millis();
-    qol_gpui::popup_window::set_ghost_debug(
-        config.display.ghost_opacity,
-        config.display.ghost_debug_color.as_deref(),
-    );
 
     let executor = cx.background_executor().clone();
     let show_minimized = config.display.show_minimized;

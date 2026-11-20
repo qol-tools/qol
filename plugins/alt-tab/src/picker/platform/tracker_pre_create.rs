@@ -11,10 +11,6 @@ pub(super) fn pre_create(
     tracker: &qol_gpui::monitor::MonitorTracker,
     cx: &mut App,
 ) {
-    qol_gpui::popup_window::set_ghost_debug(
-        config.display.ghost_opacity,
-        config.display.ghost_debug_color.as_deref(),
-    );
     let windows = crate::discovery::WindowDiscovery::visible_windows(
         &crate::discovery::Platform,
         config.display.show_minimized,
