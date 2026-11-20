@@ -26,7 +26,7 @@ use super::components::{
     SettingsToggle,
 };
 use super::{
-    escape_step, intent, settings_action_busy, settings_action_spinner, CustomHints,
+    escape_step, intent, settings_action_spinner, settings_action_word, CustomHints,
     CustomPanelCallback, CustomPanelContext, CustomPanelFactory, CustomPanelNoticeTone,
     CustomPanelNotifier, CustomPanelView, CustomSettingsBreadcrumbs, EscapeStep, Intent,
     SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsRuntime, SettingsValueTone,
@@ -647,15 +647,13 @@ impl PagesView {
         }
         values = match &row.control {
             Some(Control::Toggle(on)) => values.child(SettingsToggle::new(*on, ground, kit)),
-            Some(Control::Button(_)) => {
-                values.child(settings_action_busy((action_id, index), busy, kit))
-            }
+            Some(Control::Button(_) | Control::Destroy { .. }) => values.children(
+                model::enter_verb(row)
+                    .map(|verb| settings_action_word((action_id, index), verb, busy, ground, kit)),
+            ),
             Some(Control::Check) => values.child(SettingsTick::new(ground, kit)),
             Some(Control::Feature { on, .. }) => {
                 values.child(SettingsFeature::new(*on, None, ground, kit))
-            }
-            Some(Control::Destroy { .. }) => {
-                values.child(settings_action_busy((action_id, index), busy, kit))
             }
             Some(Control::Qr(_)) | None => values,
         };

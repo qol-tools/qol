@@ -17,7 +17,7 @@ use qol_gpui::settings_panel::components::{
     SettingsHint, SettingsToggle,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, settings_action_busy, settings_action_spinner,
+    adjacent_visible_row, escape_step, intent, settings_action_spinner, settings_action_word,
     settings_busy_message, settings_list, settings_tag, CustomHints, CustomPanelCallback,
     CustomSettingsBreadcrumbs, EscapeStep, Intent, SettingsDestination, SettingsGroupHeader,
     SettingsRow, SettingsValueTone, SETTINGS_LIST_GAP,
@@ -629,7 +629,7 @@ impl LinkedDevicesView {
             Control::Chip => values.children(
                 row.verb
                     .filter(|_| !row.opens)
-                    .map(|_| settings_action_busy((action_id, index), busy, kit)),
+                    .map(|verb| settings_action_word((action_id, index), verb, busy, ground, kit)),
             ),
             Control::None => values,
         };

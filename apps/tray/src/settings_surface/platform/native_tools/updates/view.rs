@@ -14,7 +14,7 @@ use qol_gpui::settings_panel::components::{
     SettingsHint, DIMMED_OPACITY,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, settings_action_busy, settings_busy_message,
+    adjacent_visible_row, escape_step, intent, settings_action_word, settings_busy_message,
     settings_connection_spinner, settings_description, settings_list, settings_tag, CustomHints,
     CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
     EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsValueTone,
@@ -549,11 +549,15 @@ impl UpdatesView {
             ));
         row.child(label)
             .child(
-                settings_value_group().children(
-                    summary.action_label.map(|_| {
-                        settings_action_busy(("updates-summary-action", index), false, kit)
-                    }),
-                ),
+                settings_value_group().children(summary.action_label.map(|verb| {
+                    settings_action_word(
+                        ("updates-summary-action", index),
+                        verb.to_lowercase(),
+                        false,
+                        ground,
+                        kit,
+                    )
+                })),
             )
             .into_any_element()
     }
@@ -596,9 +600,15 @@ impl UpdatesView {
                     ground,
                     kit,
                 ))
-                .children(target.action_label.map(|_| {
-                    settings_action_busy(("updates-target-action", index), false, kit)
-                        .when(target.dimmed(), |control| control.opacity(DIMMED_OPACITY))
+                .children(target.action_label.map(|verb| {
+                    settings_action_word(
+                        ("updates-target-action", index),
+                        verb.to_lowercase(),
+                        false,
+                        ground,
+                        kit,
+                    )
+                    .when(target.dimmed(), |control| control.opacity(DIMMED_OPACITY))
                 })),
         )
         .into_any_element()
