@@ -1,10 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, Register, UiOpenResult } from 'claude-code'
 
-import type { CheckResult, Entry, Kind, ModelChoice, ModelSeen, Pull, PullDetail, RunState } from '../types'
+import type { ActionKind, CheckResult, Doing, Entry, Kind, Lit, ModelChoice, ModelSeen, Pull, PullDetail, RunState } from '../types'
 
 const PROJECT = /^\s*Project:\s*(.+?)\s*$/
 const MODEL_LINE = /^\s*Model:\s*([A-Za-z0-9][\w.[\]-]*)\s*$/
+const MODEL_ID = /^[A-Za-z0-9][\w.[\]-]*$/
+const ADMIT_MODEL_TIMEOUT_MS = 5_000
+const USED_IDS_MAX = 6
 const FORK = 'project-fork'
 const NAME = 'qol-switchboard'
 const PANE = 'board'
@@ -134,7 +137,10 @@ export const STARTING = 'Starting the switchboard…'
 export const bringingBack = (count: number): string => `Bringing back ${count} fork${count === 1 ? '' : 's'}…`
 const writingSaid = atom({ plugin: 'qol-switchboard', key: 'writingSaid' } as const, [] as { isUser: boolean; text: string }[])
 const current = atom({ plugin: 'qol-switchboard', key: 'current' } as const, '')
-const focusActivity = atom({ plugin: 'qol-switchboard', key: 'focusActivity' } as const, '')
+const ACTION_KINDS: readonly ActionKind[] = ['search', 'read', 'edit', 'shell', 'other']
+const NOTHING_DONE: Doing = { counts: {}, recent: [] }
+const focusDoing = atom({ plugin: 'qol-switchboard', key: 'focusDoing' } as const, NOTHING_DONE)
+const litRows = atom({ plugin: 'qol-switchboard', key: 'litRows' } as const, {} as Lit)
 const freshReply = atom({ plugin: 'qol-switchboard', key: 'freshReply' } as const, '')
 const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', prevId: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
 const rowsCapped = atom({ plugin: 'qol-switchboard', key: 'rowsCapped' } as const, false)
@@ -229,11 +235,8 @@ const stateOf = (entry: Entry, list: Entry[] = [], states: Record<string, RunSta
   if (isCut(entry)) return 'stopped by a restart'
   if (entry.isWorking) return 'working'
   if (isEnded(entry)) return 'done'
-  if (entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)) return 'needs the user'
-  const subs = forksUnder(list, entry)
-  const asking = subs.filter(needsYou).length
-  if (asking > 0) return `${asking} of its sub-forks need${asking === 1 ? 's' : ''} the user`
-  const live = subs.filter(sub => isLive(sub, states)).length
+  if (entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)) return parentOf(list, entry) === undefined ? 'needs the user' : 'asks the fork that started it'
+  const live = forksUnder(list, entry).filter(sub => isBusy(sub, states)).length
   if (live > 0) return `waits on ${live} sub-fork${live === 1 ? '' : 's'}`
   if (isWaiting(entry, states)) return 'waiting on its pull request'
   return entry.isStoppedByUser === true ? 'stopped' : 'idle'
@@ -253,7 +256,47 @@ type TypedSince = (text: string) => string | undefined
 
 let putBack: TypedSince | undefined
 
-const typedSince = (dropped: string): TypedSince => text => (text === dropped ? '' : text.endsWith(`\n${dropped}`) ? text.slice(0, -dropped.length - 1) : undefined)
+const PASTED = /\[(?:Pasted text #\d+(?: \+(\d+) lines)?|\.\.\.Truncated text #\d+ \+(\d+) lines\.\.\.)\]/g
+const PASTE_TAG = /<pasted_content id="[^"\n]*">\n?|\n?<\/pasted_content(?: id="[^"\n]*")?>/g
+
+const pasteEnd = (sent: string, from: number, breaks: number): number => {
+  let at = from
+  for (let left = breaks; left > 0; left -= 1) {
+    const next = sent.indexOf('\n', at)
+    if (next === -1) return -1
+    at = next + 1
+  }
+  return Math.max(at, from + 1)
+}
+
+export const draftedAs = (draft: string, sent: string): boolean => {
+  const pastes = [...draft.matchAll(PASTED)]
+  const first = draft.slice(0, pastes[0]?.index)
+  if (pastes.length === 0 || !sent.startsWith(first)) return draft === sent
+  let from = first.length
+  for (const [index, paste] of pastes.entries()) {
+    const after = draft.slice(paste.index + paste[0].length, pastes[index + 1]?.index)
+    const least = pasteEnd(sent, from, Math.max(Number(paste[1] ?? paste[2] ?? 0) - 1, 0))
+    if (least === -1) return false
+    if (index === pastes.length - 1) return sent.length - after.length >= least && sent.endsWith(after)
+    const at = sent.indexOf(after, least)
+    if (at === -1) return false
+    from = at + after.length
+  }
+  return false
+}
+
+export const typedSince = (dropped: string): TypedSince => boxed => {
+  const sent = dropped.replace(PASTE_TAG, '').trim()
+  const text = boxed.trimEnd()
+  const paste = text.search(PASTED)
+  if (paste === -1) return text.trimStart() === sent ? '' : text.endsWith(`\n${sent}`) ? text.slice(0, -sent.length - 1) : undefined
+  if (draftedAs(text.trimStart(), sent)) return ''
+  for (let at = text.indexOf('\n'); at !== -1 && at < paste; at = text.indexOf('\n', at + 1)) {
+    if (draftedAs(text.slice(at + 1), sent)) return text.slice(0, at)
+  }
+  return undefined
+}
 
 const clearPutBack = async ($: EngineInterface, text: string): Promise<void> => {
   const kept = text === '' ? undefined : putBack?.(text)
@@ -433,8 +476,9 @@ const pointAt = async ($: EngineInterface, entry: Entry | undefined): Promise<bo
   const agentId = entry?.agentId ?? ''
   if ((await read($, writingTo)) === agentId) return false
   await update($, writingTo, () => agentId)
+  await lightRows($, await read($, board), agentId)
   await update($, writingSaid, () => [])
-  await update($, focusActivity, () => '')
+  await update($, focusDoing, () => doing.get(agentId) ?? NOTHING_DONE)
   await update($, freshReply, () => '')
   if (agentId === '') await update($, focusShown, () => ({ id: '', prevId: '', agentId: '', key: '', rows: [] }))
   return true
@@ -656,9 +700,38 @@ const toolLabel = (tool: string, input: Record<string, unknown>): string => {
   return clip(detail === undefined ? name : `${name}: ${detail}`, TOOL_TEXT)
 }
 
-const noteActivity = async ($: EngineInterface, agentId: string, label: string): Promise<void> => {
-  if ((await read($, writingTo)) !== agentId || (await read($, focusActivity)) === label) return
-  await update($, focusActivity, () => label)
+const ACTIONS_KEPT = 4
+const KIND_OF: Record<string, ActionKind> = { Grep: 'search', Glob: 'search', Read: 'read', Edit: 'edit', Write: 'edit', NotebookEdit: 'edit', Bash: 'shell' }
+const counted = (count: number, one: string): string => `${count} ${one}${count === 1 ? '' : 's'}`
+const ACTION_WORDS: Record<ActionKind, (count: number) => string> = {
+  search: count => `searched for ${counted(count, 'pattern')}`,
+  read: count => `read ${counted(count, 'file')}`,
+  edit: count => `edited ${counted(count, 'file')}`,
+  shell: count => `ran ${counted(count, 'shell command')}`,
+  other: count => `made ${counted(count, 'other call')}`,
+}
+
+const doing = new Map<string, Doing>()
+
+export const withAction = (done: Doing, tool: string, label: string): Doing => {
+  const kind = KIND_OF[tool] ?? 'other'
+  return { counts: { ...done.counts, [kind]: (done.counts[kind] ?? 0) + 1 }, recent: [...done.recent, label].slice(-ACTIONS_KEPT) }
+}
+
+export const doneSoFar = (done: Doing): string => {
+  const said = ACTION_KINDS.flatMap(kind => (done.counts[kind] === undefined ? [] : [ACTION_WORDS[kind](done.counts[kind])])).join(', ')
+  return said === '' ? '' : `${said.charAt(0).toUpperCase()}${said.slice(1)}`
+}
+
+const noteActivity = async ($: EngineInterface, agentId: string, tool: string, label: string): Promise<void> => {
+  const done = withAction(doing.get(agentId) ?? NOTHING_DONE, tool, label)
+  doing.set(agentId, done)
+  if ((await read($, writingTo)) === agentId) await update($, focusDoing, () => done)
+}
+
+const forgetActivity = async ($: EngineInterface, agentId: string): Promise<void> => {
+  doing.delete(agentId)
+  if ((await read($, writingTo)) === agentId && (await read($, focusDoing)).recent.length > 0) await update($, focusDoing, () => NOTHING_DONE)
 }
 
 const followFocus = async ($: EngineInterface): Promise<void> => {
@@ -741,9 +814,9 @@ const ready = async ($: EngineInterface): Promise<void> => {
 export const cutIn = (list: Entry[], entry: Entry): Entry[] => [entry, ...forksUnder(list, entry)].filter(isCut)
 
 export const stoppedFamilies = (list: Entry[]): Entry[] =>
-  list.filter(entry => parentOf(list, entry) === undefined && !needsYou(entry) && !forksUnder(list, entry).some(needsYou) && cutIn(list, entry).length > 0)
+  list.filter(entry => parentOf(list, entry) === undefined && !needsYou(entry) && cutIn(list, entry).length > 0)
 
-export const needYouCount = (list: Entry[]): number => list.filter(needsYou).length + stoppedFamilies(list).length
+export const needYouCount = (list: Entry[]): number => list.filter(entry => asksYou(list, entry)).length + stoppedFamilies(list).length
 
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
@@ -753,6 +826,13 @@ const refreshStatus = async ($: EngineInterface): Promise<void> => {
   $.ui.status(parts.length === 0 ? undefined : parts.join(' │ '))
   suggestFork($, list)
   queueMarks($, list)
+  await lightRows($, list, await read($, writingTo))
+}
+
+const lightRows = async ($: EngineInterface, list: Entry[], agentId: string): Promise<void> => {
+  const lit = writingMarks(list, agentId)
+  const shown = await read($, litRows)
+  if (lit.writing !== shown.writing || lit.writingUnder?.join() !== shown.writingUnder?.join()) await update($, litRows, () => lit)
 }
 
 const queueMarks = ($: EngineInterface, list?: Entry[]): void => {
@@ -836,7 +916,19 @@ export const forksUnder = (list: Entry[], parent: Entry): Entry[] => {
   return found
 }
 
-const isLive = (entry: Entry, states: Record<string, RunState>): boolean => entry.isWorking || needsYou(entry) || isWaiting(entry, states)
+const asksYou = (list: Entry[], entry: Entry): boolean => needsYou(entry) && parentOf(list, entry) === undefined
+
+const isOwed = (entry: Entry): boolean => needsYou(entry) || isCut(entry)
+
+export const backAtRestart = (list: Entry[]): string[] =>
+  list
+    .filter(entry => entry.launcher === undefined && isUnfinished(entry))
+    .flatMap(top => [top, ...forksUnder(list, top).filter(sub => isUnfinished(sub) && [sub, ...forksUnder(list, sub)].some(isOwed))])
+    .map(entry => entry.agentId)
+
+const isBusy = (entry: Entry, states: Record<string, RunState>): boolean => entry.isWorking || isWaiting(entry, states)
+
+const isLive = (entry: Entry, states: Record<string, RunState>): boolean => isBusy(entry, states) || needsYou(entry)
 
 export type Shown = { label: string; state?: string }
 
@@ -844,11 +936,8 @@ export const shownState = (entry: Entry, list: Entry[] = [], states: Record<stri
   if (entry.isWorking) return { label: 'working', state: WORKING_STATE }
   if (isEnded(entry)) return { label: 'closed' }
   if (isCut(entry)) return { label: 'stopped mid-turn' }
-  if (needsYou(entry)) return { label: entry.kind ?? 'ask', state: YOUR_TURN_STATE }
-  const subs = forksUnder(list, entry)
-  const asking = subs.filter(needsYou).length
-  if (asking > 0) return { label: `${asking} sub-fork${asking === 1 ? ' asks' : 's ask'}`, state: YOUR_TURN_STATE }
-  const live = subs.filter(sub => isLive(sub, states)).length
+  if (needsYou(entry)) return { label: entry.kind ?? 'ask', ...(parentOf(list, entry) === undefined ? { state: YOUR_TURN_STATE } : {}) }
+  const live = forksUnder(list, entry).filter(sub => isBusy(sub, states)).length
   if (live > 0) return { label: `waits on ${live}`, state: WAITING_STATE }
   if (isWaiting(entry, states)) return { label: [WAITING_STATE, (states[entry.agentId]?.pulls ?? []).map(url => `#${url.split('/').pop() ?? '?'}`).join(',')].filter(part => part !== '').join(' '), state: WAITING_STATE }
   if (entry.isStoppedByUser === true) return { label: 'stopped' }
@@ -861,7 +950,7 @@ export const hasUnread = (list: Entry[], entry: Entry): boolean => entry.hasNewR
 
 export const marksOf = (list: Entry[]): { fresh: string[]; asks: string[] } => ({
   fresh: list.filter(entry => !entry.isDismissed && entry.hasNewReply === true).map(entry => entry.agentId),
-  asks: list.filter(needsYou).map(entry => entry.agentId),
+  asks: list.filter(entry => asksYou(list, entry)).map(entry => entry.agentId),
 })
 
 let marksWritten = ''
@@ -880,6 +969,27 @@ const pickedModels = async ($: EngineInterface, list: Entry[]): Promise<Record<s
       one.model === undefined && one.effort === undefined ? [] : [[agentId, { ...(one.model === undefined ? {} : { model: pickedLabel(one.model) }), ...(one.effort === undefined ? {} : { effort: one.effort }) }]],
     ),
   )
+}
+
+export const writingMarks = (list: Entry[], agentId: string): Lit => {
+  const entry = list.find(one => one.agentId === agentId)
+  if (entry === undefined) return {}
+  const above: string[] = []
+  const met = new Set([entry.agentId])
+  for (let parent = parentOf(list, entry); parent !== undefined && !met.has(parent.agentId); parent = parentOf(list, parent)) {
+    met.add(parent.agentId)
+    above.push(parent.agentId)
+  }
+  return { writing: entry.agentId, ...(above.length === 0 ? {} : { writingUnder: above }) }
+}
+
+const ROW_LEAD = /^(?:\x1b\[[0-9;]*m)*[ ◉](?:\x1b\[[0-9;]*m)* /
+const LIT_LOOK = '\x1b[1m\x1b[38;5;214m'
+const LIT_OFF = '\x1b[22m\x1b[39m'
+
+export const litBody = (body: string, id: string, lit: Lit): string => {
+  const mark = lit.writing === id ? '●' : lit.writingUnder?.includes(id) === true ? '◐' : undefined
+  return mark === undefined ? body : body.replace(ROW_LEAD, `${LIT_LOOK}${mark}${LIT_OFF} `)
 }
 
 const writeMarks = async ($: EngineInterface, list: Entry[]): Promise<void> => {
@@ -1149,7 +1259,7 @@ export const toFork = (list: Entry[], text: string, fromSwitchboard = true): { e
   return typed.length === 1 && typed[0] !== undefined ? { entry: typed[0], message: message.trim() } : undefined
 }
 
-export type SbCommand = { name: string; about: string; current?: boolean; children?: SbCommand[] }
+export type SbCommand = { name: string; about: string; word?: string; current?: boolean; children?: SbCommand[] }
 
 export type SbTree = { status?: string; commands: SbCommand[] }
 
@@ -1239,7 +1349,7 @@ export const sbCompletions = (commands: readonly SbCommand[], text: string, star
   })
   const children = childrenOf(at)
   if (children !== undefined) return children.map(command => row(command, `${at.word} `))
-  return at.level.filter(command => command.name.startsWith(at.word)).map(command => row(command, ''))
+  return at.level.filter(command => command.name.startsWith(at.word) || command.word?.startsWith(at.word) === true).map(command => row(command, ''))
 }
 
 export const sbLine = (path: readonly SbCommand[], level: readonly SbCommand[]): string =>
@@ -1711,7 +1821,7 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   )
   const entry = filed as Entry
   if (entry.key !== undefined) void recordRun($, 'archive', ['--key', entry.key])
-  if (isNew && !isShown && needsYou(entry)) {
+  if (isNew && !isShown && asksYou(await read($, board), entry)) {
     void $.ui.notify(entry.headline, { title: keyName(entry.name) }).catch(() => {})
   }
   return entry
@@ -1789,6 +1899,25 @@ export const forkModels = (text: string | undefined): string[] => {
 const typedName = (models: string[], id: string): string => (models.filter(one => wordOf(one) === wordOf(id)).length === 1 ? wordOf(id) : id)
 
 const modelsOf = async ($: EngineInterface): Promise<string[]> => forkModels(await $.env.get('QOL_SWITCHBOARD_MODELS').catch(() => undefined))
+
+type Admitted = { model: string } | { refused: string }
+
+export const admittedOf = (text: string): Admitted | undefined => {
+  try {
+    const parsed = JSON.parse(text) as { model?: unknown; refused?: unknown } | null
+    if (typeof parsed?.model === 'string' && MODEL_ID.test(parsed.model)) return { model: parsed.model }
+    return typeof parsed?.refused === 'string' ? { refused: parsed.refused } : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const admitModel = async ($: EngineInterface, id: string): Promise<Admitted | undefined> => {
+  const program = await recordProgram($)
+  if (program === undefined) return undefined
+  const ran = await $.process.run([program, 'sessions', 'switchboard', 'hook', 'admit-model', id], { cwd: folderOf(program), timeoutMs: ADMIT_MODEL_TIMEOUT_MS }).catch(() => undefined)
+  return ran === undefined || ran.exitCode !== 0 ? undefined : admittedOf(ran.stdout)
+}
 
 const listedAs = (models: string[], model: string | undefined): string | undefined => {
   if (model === undefined) return undefined
@@ -1869,9 +1998,31 @@ const refreshDetails = ($: EngineInterface, own: readonly Pull[], details: Recor
 }
 
 const CLOSE = 'close-fork'
-const CLOSE_CHORD = 'ctrl+x ctrl+x'
 const INTERRUPT = 'interrupt-fork'
-const INTERRUPT_CHORD = 'ctrl+x ctrl+c'
+const RELEASE_CHORDS_TIMEOUT_MS = 1_000
+
+type BoundChords = { launch: string; keys: Record<string, string> }
+
+export const boundChords = (text: string | undefined): BoundChords => {
+  try {
+    const parsed: unknown = JSON.parse(text ?? '')
+    const raw = typeof parsed === 'object' && parsed !== null ? (parsed as { launch?: unknown; chords?: unknown }) : {}
+    const chords: { keys?: unknown; command?: unknown }[] = Array.isArray(raw.chords) ? raw.chords : []
+    const keys = Object.fromEntries(chords.flatMap(one => (typeof one?.keys === 'string' && one.keys !== '' && typeof one.command === 'string' ? [[one.command, one.keys] as const] : [])))
+    return { launch: typeof raw.launch === 'string' ? raw.launch : '', keys }
+  } catch {
+    return { launch: '', keys: {} }
+  }
+}
+
+const chordsOf = async ($: EngineInterface): Promise<BoundChords> => boundChords(await $.env.get('QOL_SWITCHBOARD_CHORDS').catch(() => undefined))
+
+const releaseChords = async ($: EngineInterface): Promise<void> => {
+  const { launch } = await chordsOf($)
+  const program = launch === '' ? undefined : await recordProgram($)
+  if (program === undefined) return
+  await $.process.run([program, 'sessions', 'switchboard', 'hook', 'release-chords', launch], { cwd: folderOf(program), timeoutMs: RELEASE_CHORDS_TIMEOUT_MS }).catch(() => undefined)
+}
 const CUT_NOTE = 'The user interrupted this turn from the switchboard: stop here and wait for their next message.'
 const CUT_REPLY = 'Interrupted from the switchboard.'
 const CUT_SAID = 'interrupted, waiting for you'
@@ -1954,11 +2105,12 @@ export const closeFork = async ($: EngineInterface): Promise<string> => {
   if ((busy !== undefined || busySubs.length > 0) && !isForced) {
     closeArmed = { agentId, at: now }
     const withSubs = subs.length === 0 ? '' : `, with its ${subForksText(subs.length)}`
-    if (busy !== undefined) return `${name} ${busy}, so it stays open. ${CLOSE_CHORD} again closes it anyway${withSubs}.`
+    const again = (await chordsOf($)).keys[CLOSE] ?? `/${CLOSE}`
+    if (busy !== undefined) return `${name} ${busy}, so it stays open. ${again} again closes it anyway${withSubs}.`
     const [first] = busySubs
     const atWork = first === undefined ? '' : `${keyName(first.name)} ${busyOf(first) ?? ''}`
     const others = busySubs.length === 1 ? '' : ` and ${busySubs.length - 1} more of its sub-forks ${busySubs.length === 2 ? 'is' : 'are'} busy`
-    return `${name}'s sub-fork ${atWork}${others}, so ${name} stays open. ${CLOSE_CHORD} again closes it anyway${withSubs}.`
+    return `${name}'s sub-fork ${atWork}${others}, so ${name} stays open. ${again} again closes it anyway${withSubs}.`
   }
   closeArmed = { agentId: '', at: 0 }
   for (const one of [...subs].reverse().concat(entry)) {
@@ -2060,20 +2212,30 @@ const setByCommand = async ($: EngineInterface, kind: 'model' | 'effort', args: 
   const models = await modelsOf($)
   const model = kind === 'model' ? models.find(id => words.includes(id) || words.includes(typedName(models, id))) : undefined
   const effort = EFFORTS.find(one => words.includes(one))
-  if (words.length > 0 && words.length === (model === undefined ? 0 : 1) + (effort === undefined ? 0 : 1)) {
+  const typed = kind === 'model' && model === undefined ? words.filter(word => word !== effort) : []
+  const id = typed.length === 1 && words.length === 1 + (effort === undefined ? 0 : 1) ? typed[0] : undefined
+  const exact = id !== undefined && MODEL_ID.test(id) ? await admitModel($, id) : undefined
+  if (exact !== undefined && 'refused' in exact) return `${key} keeps its model: ${oneLine(exact.refused)}`
+  if (words.length > 0 && words.length === (model === undefined && exact === undefined ? 0 : 1) + (effort === undefined ? 0 : 1)) {
     if (model !== undefined) await pickSetting($, 'model', key, model)
+    if (exact !== undefined) await choose($, key, { model: exact.model })
     if (effort !== undefined) await pickSetting($, 'effort', key, effort)
-    const picked = [model === undefined ? '' : modelName(model), effort === undefined ? '' : `${effort} effort`].filter(part => part !== '')
+    const picked = [model !== undefined ? modelName(model) : (exact?.model ?? ''), effort === undefined ? '' : `${effort} effort`].filter(part => part !== '')
     return `${key} uses ${picked.join(' at ')} from its next model call.`
   }
   const now = await settingOf($, key)
   if (kind === 'effort') return `${key} effort: ${now.effort ?? 'shows at its next model call'}. /effort ${EFFORTS.join('|')} changes it; with no fork picked, /effort changes the switchboard.`
   const names = models.map(id => typedName(models, id))
-  const how = names.length === 0 ? 'sessions.toml lets a fork run no model, so /model has none to set' : `/model ${names.join('|')} and a level, such as /model ${names[0]} max, changes it`
+  const how = names.length === 0 ? 'sessions.toml lets a fork run no model, so /model has none to set' : `/model ${names.join('|')} and a level, such as /model ${names[0]} max, changes it, and so does a full model id that sessions.toml admits`
   return `${key} model: ${now.model === undefined ? 'shows at its next model call' : modelName(now.model)}${now.effort === undefined ? '' : ` at ${now.effort} effort`}. ${how}; with no fork picked, /model changes the switchboard.`
 }
 
 type SettingTree = { lead: string; commands: SbCommand[] }
+
+const usedIds = (models: string[], used: { model?: string; at: number }[]): string[] => {
+  const newest = [...used].sort((a, b) => b.at - a.at).flatMap(one => (one.model === undefined ? [] : [one.model]))
+  return [...new Set(newest.filter(id => MODEL_ID.test(id) && wordOf(id) !== id && !models.includes(id)))].slice(0, USED_IDS_MAX)
+}
 
 const settingTrees = async ($: EngineInterface, text: string): Promise<SettingTree[]> => {
   const typed = text.trimStart()
@@ -2083,9 +2245,12 @@ const settingTrees = async ($: EngineInterface, text: string): Promise<SettingTr
   const models = await modelsOf($)
   const current = listedAs(models, now.model)
   const efforts = EFFORTS.map(name => ({ name, about: 'effort', ...(name === now.effort ? { current: true } : {}) }))
-  const listed = models.map(id => ({ name: typedName(models, id), about: modelName(id), ...(id === current ? { current: true } : {}), children: efforts }))
+  const used = usedIds(models, [...Object.values(await read($, modelsSeen)), ...Object.values(await read($, modelChoices))])
+  const isUsedNow = now.model !== undefined && used.includes(now.model)
+  const listed = models.map(id => ({ name: typedName(models, id), about: modelName(id), ...(id === current && !isUsedNow ? { current: true } : {}), children: efforts }))
+  const exact = used.map(id => ({ name: id, word: wordOf(id), about: modelName(id), ...(id === now.model ? { current: true } : {}), children: efforts }))
   return [
-    { lead: '/model', commands: listed },
+    { lead: '/model', commands: [...listed, ...exact] },
     { lead: '/effort', commands: efforts },
   ]
 }
@@ -2306,7 +2471,7 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
     for (const [index, agentId] of pending.entries()) {
       const entry = (await read($, board)).find(one => one.agentId === agentId)
       const skip = entry === undefined ? 'no board row' : held.has(agentId) ? 'in the agent list' : entry.isWorking ? 'working' : !isUnfinished(entry) ? 'finished' : undefined
-      const sent = entry === undefined || skip !== undefined ? undefined : await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry))).catch((error: unknown) => ({ isDelivered: false, reason: String(error), agentId }))
+      const sent = entry === undefined || skip !== undefined ? undefined : await (isCut(entry) ? sendTo($, entry, CONTINUE, viaBand($, true)) : sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY))).catch((error: unknown) => ({ isDelivered: false, reason: String(error), agentId }))
       await noteReopen($, { agentId, at: await $.clock.now(), ...(skip === undefined ? {} : { skip }), ...(sent === undefined ? {} : { isDelivered: sent.isDelivered, to: sent.agentId, reason: printable(String(sent.reason ?? '')) }) })
       if (sent !== undefined && !sent.isDelivered) again.push(sent.agentId)
       const rest = [...again, ...pending.slice(index + 1)]
@@ -2830,6 +2995,11 @@ export const register: Register = on => {
     return started
   }).catch(($, e, next) => next(e))
 
+  on('session.end', async ($, e, next) => {
+    if (e.reason !== 'clear' && e.reason !== 'resume') await releaseChords($).catch(() => undefined)
+    return next(e)
+  })
+
   on('session.start', async ($, e, next) => {
     await update($, starting, () => STARTING).catch(() => undefined)
     const started = await next(e)
@@ -2865,18 +3035,20 @@ export const register: Register = on => {
       for (const key of (await $.store.keys()).filter(one => one.startsWith(OLD_LOG_PREFIX))) await $.store.delete(key)
       if (live.length === 0) for (const key of (await $.store.keys()).filter(one => one.startsWith(HOLD_PREFIX))) await $.store.delete(key)
       const placed = await read($, board)
-      const pending = e.isInteractive && live.length === 0 ? merged.filter(one => isUnfinished(one) && placed.find(row => row.agentId === one.agentId)?.launcher === undefined).map(one => one.agentId) : []
+      const pending = e.isInteractive && live.length === 0 ? backAtRestart(placed.filter(row => merged.some(one => one.agentId === row.agentId))) : []
       reopenTries = 0
       await noteReopen($, { at: await $.clock.now(), start: id, boards: others.length, carried: earlier.length, own: own.length, rows: merged.map(one => one.agentId), pending })
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
-      await $.command.register({ name: CLOSE, description: `Close the fork you write to or have open, with the sub-forks it started (${CLOSE_CHORD} once bound): the board counts them under closed and they leave the agent list within half a minute`, immediate: true })
-      await $.command.register({ name: INTERRUPT, description: `Stop the running turn of the fork you write to or have open, as Esc does in a session of its own (${INTERRUPT_CHORD} once bound): the fork stays open and your next message to it continues the conversation`, immediate: true })
+      const { keys } = await chordsOf($)
+      const chord = (name: string): string => (keys[name] === undefined ? '' : ` (${keys[name]})`)
+      await $.command.register({ name: CLOSE, description: `Close the fork you write to or have open, with the sub-forks it started${chord(CLOSE)}: the board counts them under closed and they leave the agent list within half a minute`, immediate: true })
+      await $.command.register({ name: INTERRUPT, description: `Stop the running turn of the fork you write to or have open, as Esc does in a session of its own${chord(INTERRUPT)}: the fork stays open and your next message to it continues the conversation`, immediate: true })
       void Promise.all([
         $.tool.register({
         name: TOOL,
         description:
-          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, is waiting on its pull request, is idle, was stopped or is done; only a fork the user closed is done, and a merged pull request leaves its fork open. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
+          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, asks the fork that started it, is waiting on its pull request, is idle, was stopped or is done; only a fork the user closed is done, and a merged pull request leaves its fork open. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
         inputSchema: {
           type: 'object',
           properties: { fork: { type: 'string', description: "A fork's key-name or agent id; leave it out for every row." } },
@@ -2965,7 +3137,9 @@ export const register: Register = on => {
         </Box>
       )
       const isChatHere = (await read($, rowsCapped)) && (await read($, writingTo)) === shown?.agentId
-      const said = isChatHere ? chatTail(await read($, writingSaid), e.props.maxRows - BAND_SPARE, e.props.bodyColumns) : []
+      const doingNow = isChatHere && shown?.isWorking === true ? (await read($, focusDoing)).recent.at(-1) : undefined
+      const spare = BAND_SPARE + (doingNow === undefined ? 0 : 1)
+      const said = isChatHere ? chatTail(await read($, writingSaid), e.props.maxRows - spare, e.props.bodyColumns) : []
       if (said.length === 0) return writing
       return (
         <Box flexDirection="column">
@@ -2977,6 +3151,9 @@ export const register: Register = on => {
               <Markdown text={one.text} />
             </Box>
           ))}
+          {doingNow !== undefined && (
+            <Text dimColor wrap="truncate">{`● working · ${doingNow}`}</Text>
+          )}
           {writing}
         </Box>
       )
@@ -3000,7 +3177,7 @@ export const register: Register = on => {
       $.clock.after(FOCUS_SWAP_MS, () => void update($, focusShown, one => (one.id === id ? { ...one, prevId: '' } : one)).catch(() => {}))
     }
     const entry = (await read($, board)).find(one => one.agentId === shown.agentId)
-    const activity = await read($, focusActivity)
+    const activity = await read($, focusDoing)
     const working = (await looksOf($)).get(WORKING_STATE)
     const state = entry === undefined ? '' : ` · ${entry.isWorking ? 'working' : isCut(entry) ? 'stopped mid-turn' : (entry.kind ?? 'note')} · ${age((await $.clock.now()) - entry.at)}`
     return (
@@ -3016,17 +3193,30 @@ export const register: Register = on => {
           </Box>
         ))}
         {entry?.isWorking === true && (
-          <Box marginTop={1}>
-            <Text color={working?.color ?? 'claude'}>● </Text>
-            <Text wrap="truncate">
-              {working === undefined ? <Text dimColor>working</Text> : <Text color={working.color} bold={working.isBold}>working</Text>}
-              <Text dimColor>{activity === '' ? '…' : ` · ${activity}`}</Text>
-            </Text>
+          <Box flexDirection="column" marginTop={1}>
+            {activity.recent.length > 0 && <Text dimColor wrap="truncate">{doneSoFar(activity)}</Text>}
+            {activity.recent.slice(0, -1).map((label, index) => (
+              <Text key={`did-${index}`} dimColor wrap="truncate">{`└ ${label}`}</Text>
+            ))}
+            <Box>
+              <Text color={working?.color ?? 'claude'}>● </Text>
+              <Text wrap="truncate">
+                {working === undefined ? <Text dimColor>working</Text> : <Text color={working.color} bold={working.isBold}>working</Text>}
+                <Text dimColor>{activity.recent.length === 0 ? '…' : ` · ${activity.recent.at(-1)}`}</Text>
+              </Text>
+            </Box>
           </Box>
         )}
       </Box>
     )
   })
+
+  on('ui.render', { component: 'AgentRow' }, async ($, e, next) => {
+    const body = e.props.body
+    if (body === undefined) return next(e)
+    const lit = litBody(body, e.props.id, await read($, litRows))
+    return next(lit === body ? e : { ...e, props: { ...e.props, body: lit } })
+  }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Placed' }, async ($, e, next) => {
     const one = e.props.plugin === NAME ? logs.get(e.props.id) : undefined
@@ -3339,7 +3529,7 @@ export const register: Register = on => {
     if ((e as unknown as Record<string, unknown>).run_in_background === true) noteForkCall(e.tool_use_id)
     try {
       const label = toolLabel(e.tool, e as unknown as Record<string, unknown>)
-      void noteActivity($, agentId, label).catch(() => {})
+      void noteActivity($, agentId, e.tool, label).catch(() => {})
     } catch {}
     const { cut, drop } = cutOf(agentId)
     const ran = next(MESSAGING.test(e.tool) ? asFork(e) : e)
@@ -3351,6 +3541,7 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId !== undefined) cutting.delete(e.agentId)
+    if (e.agentId !== undefined) await forgetActivity($, e.agentId)
     const isHeld = await claimHold($, e.agentId, e.turnId, e.text)
     if (e.agentId !== undefined && !isHeld) {
       const forkId = e.agentId
@@ -3436,8 +3627,8 @@ export const register: Register = on => {
     if (ended !== undefined) lastTurns.set(ended, { turnId: e.turnId, ...(typeof e.answer === 'string' && e.answer.trim() !== '' && !isHeldReply(e.answer) && !e.isAborted ? { answer: e.answer } : {}) })
     if (ended !== undefined) $.clock.after(RUN_OVER_MS, () => void settleRun($, ended, e.turnId).catch(() => undefined))
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
+    if (e.agentId !== undefined) await forgetActivity($, e.agentId)
     if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
-      await update($, focusActivity, () => '')
       if (typeof e.answer === 'string' && e.answer.trim() !== '' && !isHeldReply(e.answer) && !e.isAborted) await update($, freshReply, () => e.agentId ?? '')
     }
     if (e.agentId === undefined && viewedFork === undefined) suggestFork($, await read($, board))
@@ -3495,13 +3686,11 @@ export const register: Register = on => {
     const top = list.filter(entry => parentOf(list, entry) === undefined)
     const subsOf = (entry: Entry) => subForksOf(list, entry)
     const familyIn = (entry: Entry) => forksUnder(list, entry)
-    const askersOf = (entry: Entry) => [...(needsYou(entry) ? [entry] : []), ...familyIn(entry).filter(needsYou).sort((a, b) => a.at - b.at)]
-    const needs = top.filter(entry => askersOf(entry).length > 0).sort((a, b) => a.at - b.at)
+    const needs = top.filter(needsYou).sort((a, b) => a.at - b.at)
     const cut = stoppedFamilies(list).sort((a, b) => a.at - b.at)
-    const working = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && (entry.isWorking || familyIn(entry).some(sub => isLive(sub, states)))).sort((a, b) => a.at - b.at)
+    const working = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && (entry.isWorking || familyIn(entry).some(sub => isBusy(sub, states)))).sort((a, b) => a.at - b.at)
     const waiting = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && !working.includes(entry) && isWaiting(entry, states)).sort((a, b) => a.at - b.at)
     const idle = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && !working.includes(entry) && !waiting.includes(entry) && !isEnded(entry)).sort((a, b) => a.at - b.at)
-    const askers = needs.flatMap(askersOf)
     const badgeOf = (entry: Entry): string => {
       const count = familyIn(entry).filter(one => !isEnded(one)).length
       return count === 0 ? '' : ` +${count}`
@@ -3513,7 +3702,7 @@ export const register: Register = on => {
     const closedFoldable = recent.filter(entry => !hasOpenPull(entry)).length
     const closedRows = isClosedShown ? recent : recent.filter(hasOpenPull)
     const foldedUnread = folded.filter(entry => hasUnread(list, entry)).length
-    const firstAsk = askers.find(entry => entry.recommend !== undefined)
+    const firstAsk = needs.find(entry => entry.recommend !== undefined)
     const labelOf = (entry: Entry): string => shownState(entry, list, states).label
     const looks = await looksOf($)
     const models = await modelsOf($)
@@ -3721,8 +3910,8 @@ export const register: Register = on => {
           {models.length > 0 && (
             <Select
               key={`model-${key}`}
-              options={models.map(id => ({ value: id, label: modelName(id === listed && one.model !== undefined ? one.model : id) }))}
-              {...(listed === undefined ? {} : { value: listed })}
+              options={[...models.map(id => ({ value: id, label: modelName(id === listed && one.model !== undefined ? one.model : id) })), ...(listed === undefined && one.model !== undefined ? [{ value: one.model, label: modelName(one.model) }] : [])]}
+              {...(one.model === undefined ? {} : { value: listed ?? one.model })}
               onSelect={value => void pickSetting($, 'model', key, value)}
             />
           )}
@@ -3887,7 +4076,7 @@ export const register: Register = on => {
           {labelled('pull requests', pullLines(pullsOf(ledger, entry.agentId), false, isCut(entry) || entry.isStoppedByUser === true))}
         </Box>,
       )
-    const asks = askers.length + cut.length
+    const asks = needs.length + cut.length
     const openPulls = ledger.filter(isOpen)
     const mergedCount = ledger.filter(pull => stateOfPull(pull) === 'merged').length
     const summary = asks === 0 ? 'Nothing needs you.' : `${asks} need${asks === 1 ? 's' : ''} you.`
@@ -3925,45 +4114,35 @@ export const register: Register = on => {
         {target === undefined && needs.map(entry => (
           <Box key={`need-${entry.agentId}`} flexDirection="column">
             {title(entry, labelOf(entry), true)}
-            {askersOf(entry).map(one => (
-              <Box key={`ask-${one.agentId}`} paddingLeft={7} flexDirection="column">
+            <Box key={`ask-${entry.agentId}`} paddingLeft={7} flexDirection="column">
+              <Text wrap="wrap">{entry.headline}</Text>
+              {entry.recommend !== undefined && <Text dimColor wrap="wrap">Recommend: {entry.recommend}</Text>}
+              {entry.recommend !== undefined && asking === entry.agentId && (
                 <Text wrap="wrap">
-                  {one === entry ? '' : <Text bold>{keyName(one.name)}: </Text>}
-                  {one.headline}
+                  Send "{entry.recommend}" to {keyName(entry.name)}?
                 </Text>
-                {one.recommend !== undefined && <Text dimColor wrap="wrap">Recommend: {one.recommend}</Text>}
-                {one.recommend !== undefined && asking === one.agentId && (
-                  <Text wrap="wrap">
-                    Send "{one.recommend}" to {keyName(one.name)}?
-                  </Text>
-                )}
-                <Box flexDirection="row" gap={2}>
-                  {one.recommend !== undefined && asking === one.agentId && (
-                    <Button key={`confirm-${one.agentId}`} plain hotkey="y" onPress={send(one)}>
-                      send
-                    </Button>
-                  )}
-                  {one.recommend !== undefined && asking === one.agentId && (
-                    <Button key={`cancel-${one.agentId}`} plain hotkey="n" onPress={confirm('')}>
-                      cancel
-                    </Button>
-                  )}
-                  {one.recommend !== undefined && asking !== one.agentId && (
-                    <Button key={`send-${one.agentId}`} plain {...(one === firstAsk && asking === '' ? { hotkey: 'y' } : {})} onPress={confirm(one.agentId)}>
-                      send recommended
-                    </Button>
-                  )}
-                  {one !== entry && (
-                    <Button key={`view-${one.agentId}`} plain dimColor onPress={open(one)}>
-                      open
-                    </Button>
-                  )}
-                  <Button key={`dismiss-${one.agentId}`} plain dimColor onPress={dismiss([one.agentId])}>
-                    dismiss
+              )}
+              <Box flexDirection="row" gap={2}>
+                {entry.recommend !== undefined && asking === entry.agentId && (
+                  <Button key={`confirm-${entry.agentId}`} plain hotkey="y" onPress={send(entry)}>
+                    send
                   </Button>
-                </Box>
+                )}
+                {entry.recommend !== undefined && asking === entry.agentId && (
+                  <Button key={`cancel-${entry.agentId}`} plain hotkey="n" onPress={confirm('')}>
+                    cancel
+                  </Button>
+                )}
+                {entry.recommend !== undefined && asking !== entry.agentId && (
+                  <Button key={`send-${entry.agentId}`} plain {...(entry === firstAsk && asking === '' ? { hotkey: 'y' } : {})} onPress={confirm(entry.agentId)}>
+                    send recommended
+                  </Button>
+                )}
+                <Button key={`dismiss-${entry.agentId}`} plain dimColor onPress={dismiss([entry.agentId])}>
+                  dismiss
+                </Button>
               </Box>
-            ))}
+            </Box>
           </Box>
         ))}
         {target === undefined && cut.length > 0 && heading('STOPPED BY A RESTART')}
