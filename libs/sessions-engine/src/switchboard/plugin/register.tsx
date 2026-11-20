@@ -446,7 +446,7 @@ export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
     }
     const words = role === 'user' ? userWords(text) : [text, ...handedBack(toolUses)].filter(part => part.trim() !== '').join('\n\n')
     const shown = plainText(words)
-    if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown))) || (role === 'assistant' && isHeldReply(shown))) return []
+    if (shown === '' || (role === 'user' && (/^<[a-z-]+(?:\s[^>]*)?\/?>/.test(shown) || isPluginNote(shown))) || (role === 'assistant' && isHeldReply(shown))) return []
     return [{ isUser: role === 'user', text: clipSaid(shown) }]
   })
   return said.slice(-kept)
@@ -463,7 +463,7 @@ const MID_TURN_NOTE = /^The (?:coordinator sent a message|user sent a new messag
 
 const COMPACTED = 'This session is being continued from a previous conversation'
 
-const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', COMPACTED, '[SYSTEM NOTIFICATION']
+const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', COMPACTED, '[SYSTEM NOTIFICATION', 'Another Claude session sent a message']
 
 const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY, CUT_REPLY].includes(text.trim())
 
@@ -692,11 +692,13 @@ const placeFocus = async ($: EngineInterface): Promise<void> => {
 
 const TOOL_TEXT = 60
 
+const textIn = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? oneLine(value) : undefined)
+const pathIn = (input: Record<string, unknown>): string | undefined => textIn(input.file_path) ?? textIn(input.notebook_path) ?? textIn(input.path)
+
 const toolLabel = (tool: string, input: Record<string, unknown>): string => {
   const name = tool.replace(/^mcp__.+?__/, '')
-  const text = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? oneLine(value) : undefined)
-  const path = text(input.file_path) ?? text(input.notebook_path) ?? text(input.path)
-  const detail = text(input.description) ?? (path === undefined ? undefined : path.replace(/^.*[\\/]/, '')) ?? text(input.pattern) ?? text(input.command) ?? text(input.prompt)
+  const path = pathIn(input)
+  const detail = textIn(input.description) ?? (path === undefined ? undefined : path.replace(/^.*[\\/]/, '')) ?? textIn(input.pattern) ?? textIn(input.command) ?? textIn(input.prompt)
   return clip(detail === undefined ? name : `${name}: ${detail}`, TOOL_TEXT)
 }
 
@@ -712,6 +714,7 @@ const ACTION_WORDS: Record<ActionKind, (count: number) => string> = {
 }
 
 const doing = new Map<string, Doing>()
+const unfoldedRuns = new Set<string>()
 
 export const withAction = (done: Doing, tool: string, label: string): Doing => {
   const kind = KIND_OF[tool] ?? 'other'
@@ -3248,6 +3251,53 @@ export const register: Register = on => {
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     const typed = e.props.origin.kind === 'composer' ? undefined : typedByUser(e.props.text)
     return typed === undefined ? next(e) : next({ ...e, props: { ...e.props, text: typed } })
+  }).catch(($, e, next) => next(e))
+
+  on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
+    if (viewedFork === undefined || e.props.isExpanded) return next(e)
+    const { Box, Text, Button, Link } = $.ui.resolve(e)
+    const run = e.props.calls[0]?.tool_use_id
+    const show = (isShown: boolean) => () => {
+      if (run === undefined) return
+      if (isShown) unfoldedRuns.add(run)
+      else unfoldedRuns.delete(run)
+      $.ui.invalidate('ui.render')
+    }
+    if (run !== undefined && unfoldedRuns.has(run)) {
+      return (
+        <Box flexDirection="column">
+          <Box paddingLeft={2}>
+            <Button key={`fold-${run}`} plain dimColor onPress={show(false)}>
+              <Text underline>hide details</Text>
+            </Button>
+          </Box>
+          {await next({ ...e, props: { ...e.props, isExpanded: true } })}
+        </Box>
+      )
+    }
+    const calls = e.props.calls.map(call => {
+      const input = (typeof call.input === 'object' && call.input !== null ? call.input : {}) as Record<string, unknown>
+      const path = pathIn(input)
+      return { call, label: toolLabel(call.tool, input), file: path?.startsWith('/') === true ? `file://${path}` : undefined }
+    })
+    const done = calls.reduce((sum, one) => withAction(sum, one.call.tool, one.label), NOTHING_DONE)
+    return (
+      <Box flexDirection="column" paddingLeft={2}>
+        <Box flexDirection="row" gap={1}>
+          <Text dimColor wrap="truncate">{doneSoFar(done)}</Text>
+          {run !== undefined && (
+            <Button key={`unfold-${run}`} plain dimColor onPress={show(true)}>
+              <Text underline>details</Text>
+            </Button>
+          )}
+        </Box>
+        {calls.slice(-ACTIONS_KEPT).map((one, index) => (
+          <Text key={`call-${index}`} dimColor={!one.call.isErrored && !one.call.isRunning} {...(one.call.isErrored ? { color: 'error' as const } : {})} wrap="truncate">
+            └ {one.file === undefined ? one.label : <Link href={one.file}>{one.label}</Link>}
+          </Text>
+        ))}
+      </Box>
+    )
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: PANE }, async $ => {
