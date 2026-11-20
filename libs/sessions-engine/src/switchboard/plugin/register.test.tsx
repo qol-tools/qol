@@ -1118,7 +1118,7 @@ const answered = async ($: any, agentId: string, index: number, turnId = `turn-$
   return chunks
 }
 
-test('opening the switchboard puts each unfinished fork back in the agent list, a cut one too, and the plugin answers its turn so no model runs', async ($, on) => {
+test('opening the switchboard puts each unfinished fork back in the agent list and the plugin answers its turn so no model runs, and a fork cut mid-turn is told to continue', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
   const steps: string[] = []
@@ -1141,7 +1141,7 @@ test('opening the switchboard puts each unfinished fork back in the agent list, 
     await settle()
   }
   expect(sent.map(one => one.to).sort()).toEqual(['a1', 'm1', 'p1'])
-  expect(sent.every(one => one.text === 'Back in the agent list.')).toBe(true)
+  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['m1', 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'], ['p1', 'Back in the agent list.']])
   expect(store.has('reopen:earlier-session')).toBe(false)
   expect(store.has('reopen:switchboard-session')).toBe(false)
   expect(await answered($, 'a1', 0)).toEqual([expect.objectContaining({ kind: 'text', text: 'model' })])
@@ -1158,7 +1158,8 @@ test('opening the switchboard puts each unfinished fork back in the agent list, 
   await answered($, 'a1', 0)
   expect(steps).toEqual(['a1'])
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
-  expect(board).toContain('(stopped by a restart, agent id m1)')
+  expect(board).not.toContain('stopped by a restart')
+  expect(board).toContain('(working, agent id m1)')
   expect(board).toContain('a1-fork: Which colour? (needs the user, agent id a1)')
   expect(board).toContain('(done, agent id d1)')
 })
@@ -1426,7 +1427,7 @@ test('recentWords shows the report a fork hands back through a tool as its own w
   expect(recentWords([{ role: 'assistant', text: '', toolUses: [{ tool_use_id: 'toolu_3', tool: 'SubagentHandback', input: {} }] }])).toEqual([])
 })
 
-test('a resumed switchboard conversation puts its own forks a restart cut off back without continuing them', async ($, on) => {
+test('a resumed switchboard conversation puts its own forks back and tells the one a restart cut off to continue', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
   const row = (agentId: string, isWorking: boolean, kind?: string) => ({ agentId, name: `${agentId}-fork: a fork`, ...(kind === undefined ? {} : { kind }), headline: 'h', report: 'r', at: 1, isWorking, isDismissed: false })
@@ -1441,7 +1442,8 @@ test('a resumed switchboard conversation puts its own forks a restart cut off ba
     for (const fire of timers.splice(0)) fire()
     await settle()
   }
-  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['n1', 'Back in the agent list.'], ['w1', 'Back in the agent list.']])
+  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['n1', 'Back in the agent list.'], ['w1', 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.']])
+  expect((store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isWorking, one.isInterrupted === true]).sort()).toEqual([['a1', false, false], ['n1', false, false], ['w1', true, false]])
 })
 
 test('opening the switchboard skips a fork the agent list still holds, and a reload sends nothing', async ($, on) => {
@@ -4280,7 +4282,7 @@ test('a reply the fork gives in its own view, which sends no notification, is fi
   expect(rows().find(one => one.agentId === 'a8')).toMatchObject({ headline: 'Glad it fits.', isWorking: false })
 })
 
-test('the message that puts a fork back after a restart leaves its row as it was: its time, its report, not working and no new reply', async ($, on) => {
+test('the message that puts a fork back after a restart leaves its row as it was: its time, its report, not working and no new reply, and a cut fork works again', async ($, on) => {
   const store = new Map<string, unknown>([['cuts-healed-2', true]])
   const sent: any[] = []
   const forks = [
@@ -4302,8 +4304,8 @@ test('the message that puts a fork back after a restart leaves its row as it was
   }
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await rounds()
-  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['b1', 'Back in the agent list.'], ['c1', 'Back in the agent list.']])
-  for (const fork of forks) {
+  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['b1', 'Back in the agent list.'], ['c1', 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.']])
+  for (const fork of forks.filter(one => !one.isWorking)) {
     await $.agent.spawn({ prompt: `Project: /work\nLauncher: the switchboard\nfork ${fork.agentId}`, description: fork.name, subagentType: 'project-fork', resume: { agentId: fork.agentId } } as any)
     await $.turn.start({ text: 'Back in the agent list.', turnId: `turn-${fork.agentId}`, agentId: fork.agentId })
     expect((await answered($, fork.agentId, 0))[0]).toMatchObject({ kind: 'tool', name: 'Bash' })
@@ -4312,11 +4314,11 @@ test('the message that puts a fork back after a restart leaves its row as it was
     await typed($, notification(fork.agentId, fork.name, 'Back on the fork board.'), 'task-notification')
   }
   await rounds()
-  const rows = (store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.at, one.isWorking, one.kind ?? '', one.headline, one.isInterrupted === true, one.hasNewReply === true])
+  const rows = (store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isWorking ? 'now' : one.at, one.isWorking, one.kind ?? '', one.headline, one.isInterrupted === true, one.hasNewReply === true])
   expect(rows.sort()).toEqual([
     ['a1', 7, false, 'note', 'Done for now.', false, false],
     ['b1', 8, false, '', '', false, false],
-    ['c1', 9, false, 'note', 'Half way.', true, false],
+    ['c1', 'now', true, 'note', 'Half way.', false, false],
   ])
 })
 
@@ -4612,7 +4614,7 @@ test('a fork its killed hold wakes as the switchboard shuts down keeps its row, 
   expect(saved().map(one => one.slice(0, 3))).toEqual([['a1', true, 'The first report.']])
 })
 
-test('a restart puts each fork the switchboard started back in the agent list with its sub-forks that ask or were cut, and leaves finished sub-forks and those of a fork that is gone on the board', async ($, on) => {
+test('a restart puts each fork the switchboard started back in the agent list with its sub-forks that ask or were cut, tells the cut one to continue, and leaves finished sub-forks and those of a fork that is gone on the board', async ($, on) => {
   const store = new Map<string, unknown>([['cuts-healed-2', true]])
   const sent: any[] = []
   const fork = (agentId: string, name: string, extra: object = {}) => ({ agentId, name, kind: 'note', headline: 'Done for now.', report: 'Done for now.', at: 7, isWorking: false, isDismissed: false, ...extra })
@@ -4635,13 +4637,12 @@ test('a restart puts each fork the switchboard started back in the agent list wi
     for (const fire of timers.splice(0)) fire()
     await settle()
   }
-  expect(sent.map(one => one.text)).toEqual(['Back in the agent list.', 'Back in the agent list.', 'Back in the agent list.'])
   expect(sent[0].to).toBe('m1')
-  expect(sent.map(one => one.to).sort()).toEqual(['a1', 'c1', 'm1'])
+  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['c1', 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'], ['m1', 'Back in the agent list.']])
   const kept = (store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isInterrupted === true, one.kind, one.headline, one.isWorking])
   expect(kept.filter(([id]) => ['a1', 'c1', 'm1', 'o1', 's1'].includes(id)).sort()).toEqual([
     ['a1', false, 'ask', 'Which colour?', false],
-    ['c1', true, 'note', 'Done for now.', false],
+    ['c1', false, 'note', 'Done for now.', true],
     ['m1', false, 'note', 'Done for now.', false],
     ['o1', false, 'ask', 'Done for now.', false],
     ['s1', false, 'note', 'Done for now.', false],
