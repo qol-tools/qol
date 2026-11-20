@@ -2448,7 +2448,6 @@ let isReopening = false
 let reopenTries = 0
 const REOPEN_TRIES = 12
 const REOPEN_RETRY_MS = 1_000
-const WAKES_AT_ONCE = 6
 
 export const reopenForks = async ($: EngineInterface): Promise<void> => {
   if (isReopening) return
@@ -2469,20 +2468,13 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
         .map(agentId => bringBack($, agentId).catch(() => undefined)),
     )
     const again: string[] = []
-    for (let from = 0; from < pending.length; from += WAKES_AT_ONCE) {
-      const woken = await Promise.all(
-        pending.slice(from, from + WAKES_AT_ONCE).map(async agentId => {
-          const entry = (await read($, board)).find(one => one.agentId === agentId)
-          const skip = entry === undefined ? 'no board row' : held.has(agentId) ? 'in the agent list' : entry.isWorking ? 'working' : !isUnfinished(entry) ? 'finished' : undefined
-          const sent = entry === undefined || skip !== undefined ? undefined : await (isCut(entry) ? sendTo($, entry, CONTINUE, viaBand($, true)) : sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY))).catch((error: unknown) => ({ isDelivered: false, reason: String(error), agentId }))
-          return { agentId, at: await $.clock.now(), skip, sent }
-        }),
-      )
-      for (const { agentId, at, skip, sent } of woken) {
-        await noteReopen($, { agentId, at, ...(skip === undefined ? {} : { skip }), ...(sent === undefined ? {} : { isDelivered: sent.isDelivered, to: sent.agentId, reason: printable(String(sent.reason ?? '')) }) })
-        if (sent !== undefined && !sent.isDelivered) again.push(sent.agentId)
-      }
-      const rest = [...again, ...pending.slice(from + WAKES_AT_ONCE)]
+    for (const [index, agentId] of pending.entries()) {
+      const entry = (await read($, board)).find(one => one.agentId === agentId)
+      const skip = entry === undefined ? 'no board row' : held.has(agentId) ? 'in the agent list' : entry.isWorking ? 'working' : !isUnfinished(entry) ? 'finished' : undefined
+      const sent = entry === undefined || skip !== undefined ? undefined : await (isCut(entry) ? sendTo($, entry, CONTINUE, viaBand($, true)) : sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY))).catch((error: unknown) => ({ isDelivered: false, reason: String(error), agentId }))
+      await noteReopen($, { agentId, at: await $.clock.now(), ...(skip === undefined ? {} : { skip }), ...(sent === undefined ? {} : { isDelivered: sent.isDelivered, to: sent.agentId, reason: printable(String(sent.reason ?? '')) }) })
+      if (sent !== undefined && !sent.isDelivered) again.push(sent.agentId)
+      const rest = [...again, ...pending.slice(index + 1)]
       if (rest.length === 0) await $.store.delete(key)
       else await $.store.set(key, rest)
     }
