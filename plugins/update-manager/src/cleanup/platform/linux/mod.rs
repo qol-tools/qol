@@ -311,6 +311,17 @@ fn snaps(listing: &str) -> Result<Amount, String> {
 }
 
 fn dpkg_sized(packages: Vec<String>, count: usize, present: usize) -> Amount {
+    sized_by(packages, count, present, |args| {
+        command::output("dpkg-query", args)
+    })
+}
+
+fn sized_by(
+    packages: Vec<String>,
+    count: usize,
+    present: usize,
+    query: impl FnOnce(&[&str]) -> Result<String, String>,
+) -> Amount {
     if packages.is_empty() {
         return Amount {
             count,
@@ -321,9 +332,9 @@ fn dpkg_sized(packages: Vec<String>, count: usize, present: usize) -> Amount {
     }
     let mut args = vec!["-W", "-f=${Package}\t${Installed-Size}\n"];
     args.extend(packages.iter().map(String::as_str));
-    let sizes = match command::output("dpkg-query", &args) {
+    let sizes = match query(&args) {
         Ok(listing) => parse::sizes(&listing),
-        Err(reason) => return Amount::unknown(Why::Failed(reason)),
+        Err(reason) => return unknown(Why::Failed(reason), present),
     };
     let items: Vec<Item> = packages
         .into_iter()
@@ -384,6 +395,25 @@ mod tests {
 
     fn unasked(_: &[String]) -> Result<String, String> {
         panic!("nothing to simulate")
+    }
+
+    #[test]
+    fn a_failed_size_query_keeps_the_count_of_kernels_kept() {
+        let failed = sized_by(kernel(), 1, 3, |_| Err("dpkg-query broke".into()));
+        assert_eq!(failed.present, 3);
+        assert_eq!(
+            failed.size,
+            Size::Unknown(Why::Failed("dpkg-query broke".into()))
+        );
+        assert!(failed.items.is_empty());
+        let sized = sized_by(kernel(), 1, 3, |args| {
+            assert_eq!(args.last(), Some(&"linux-image-6.8.0-111-generic"));
+            Ok("linux-image-6.8.0-111-generic\t100\n".into())
+        });
+        assert_eq!((sized.count, sized.present), (1, 3));
+        assert_eq!(sized.items[0].bytes, Some(100 * 1024));
+        let none = sized_by(Vec::new(), 0, 2, |_| panic!("nothing to query"));
+        assert_eq!((none.present, none.size), (2, Size::Exact(0)));
     }
 
     #[test]

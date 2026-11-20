@@ -281,7 +281,13 @@ impl Survey {
                 }
             };
             if !amount.itemised() {
-                total.bytes += bytes;
+                let counted: u64 = amount
+                    .items
+                    .iter()
+                    .filter(|item| seen.contains(item.name.as_str()))
+                    .filter_map(|item| item.bytes)
+                    .sum();
+                total.bytes += bytes.saturating_sub(counted);
                 seen.extend(amount.items.iter().map(|item| item.name.as_str()));
                 continue;
             }
@@ -342,19 +348,28 @@ pub(crate) fn primary(live: &[Live]) -> Option<&Live> {
 }
 
 pub(crate) fn find(leftover: &'static Leftover) -> Found {
+    find_by(leftover, &mut |argv| platform::output(argv))
+}
+
+fn find_by(leftover: &'static Leftover, output: &mut measure::Output) -> Found {
     let amount = leftover
         .requires
         .missing()
         .is_none()
-        .then(|| measure::measure(&leftover.measure));
+        .then(|| measure::measure_by(&leftover.measure, output));
     Found { leftover, amount }
 }
 
 pub(crate) fn survey(at: NaiveDateTime) -> Survey {
+    let mut output = measure::once(|argv| platform::output(argv));
     Survey {
         at,
         stamp: stamp(),
-        found: leftovers().iter().copied().map(find).collect(),
+        found: leftovers()
+            .iter()
+            .copied()
+            .map(|leftover| find_by(leftover, &mut output))
+            .collect(),
     }
 }
 

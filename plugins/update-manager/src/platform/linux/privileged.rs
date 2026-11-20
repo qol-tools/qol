@@ -58,10 +58,14 @@ pub(crate) fn run_long_script(
     args: &[String],
     limit: Duration,
 ) -> Result<(), Refusal> {
-    let mut child = spawn(&format!("echo {READY}\nexec 2>&1\n{script}"), args)?;
+    let mut child = spawn(&merged(script), args)?;
     drop(child.stdin.take());
     wait_until_authorized(&mut child, READY).map_err(|error| classify(&error))?;
     follow(child, limit)
+}
+
+fn merged(script: &str) -> String {
+    format!("echo {READY}\nexec 2>&1\n{script}")
 }
 
 fn follow(mut child: Child, limit: Duration) -> Result<(), Refusal> {
@@ -147,6 +151,16 @@ mod tests {
                 "env: snap: No such file or directory".into()
             )),
             "after the password, a missing program is the script's failure, not a closed prompt"
+        );
+        assert_eq!(
+            follow(
+                authorized(&merged(
+                    "echo working; echo 'E: apt is locked' >&2; exit 100"
+                )),
+                long
+            ),
+            Err(Refusal::Failed("E: apt is locked".into())),
+            "apt writes its errors to stderr"
         );
         let started = Instant::now();
         let stopped = follow(

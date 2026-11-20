@@ -151,6 +151,42 @@ fn the_total_counts_a_package_two_kinds_list_once() {
             unknown: 0,
         }
     );
+    let partly = |leftover, items: &[(&str, Option<u64>)]| {
+        let items: Vec<Item> = items
+            .iter()
+            .map(|(name, bytes)| Item {
+                name: (*name).into(),
+                bytes: *bytes,
+            })
+            .collect();
+        Found {
+            leftover,
+            amount: Some(Amount {
+                count: items.len(),
+                present: items.len(),
+                size: Size::Estimate {
+                    bytes: items.iter().filter_map(|item| item.bytes).sum(),
+                    why: "dpkg's estimate",
+                },
+                items,
+            }),
+        }
+    };
+    let both = fake::survey(vec![
+        partly(
+            &OLD,
+            &[("linux-image-1", Some(10)), ("linux-modules-1", None)],
+        ),
+        partly(
+            &ORPHANS,
+            &[
+                ("linux-image-1", Some(10)),
+                ("linux-modules-1", None),
+                ("libfoo", Some(5)),
+            ],
+        ),
+    ]);
+    assert_eq!(both.total().bytes, 15, "the kernel image counts once");
 }
 
 #[test]

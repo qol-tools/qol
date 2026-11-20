@@ -334,7 +334,7 @@ fn kind_check(kind: &'static Leftover) -> DoctorCheck {
     DoctorCheck::new(
         id.clone(),
         format!(
-            "Answer whether qol can find {} here; `{PLUGIN_ID} cleanup` measures them. {}",
+            "Answer whether qol can find {} here and whether `{PLUGIN_ID} cleanup` can measure them. {}",
             kind.name.to_lowercase(),
             kind.what
         ),
