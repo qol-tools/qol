@@ -4637,7 +4637,6 @@ test('a restart puts each fork the switchboard started back in the agent list wi
     for (const fire of timers.splice(0)) fire()
     await settle()
   }
-  expect(sent[0].to).toBe('m1')
   expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['c1', 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'], ['m1', 'Back in the agent list.']])
   const kept = (store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isInterrupted === true, one.kind, one.headline, one.isWorking])
   expect(kept.filter(([id]) => ['a1', 'c1', 'm1', 'o1', 's1'].includes(id)).sort()).toEqual([
@@ -4647,6 +4646,63 @@ test('a restart puts each fork the switchboard started back in the agent list wi
     ['o1', false, 'ask', 'Done for now.', false],
     ['s1', false, 'note', 'Done for now.', false],
   ])
+})
+
+test("a fork's view shows each call of the run the fork is in the middle of, and a finished run and the switchboard's own stay one count line", async ($, on) => {
+  engine(on)
+  on('ui.render', ($: any, e: any) => {
+    const { Box, Text } = $.ui.resolve(e)
+    return e.props.isExpanded ? <Text>rows</Text> : <Box />
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'busy-fork: works')
+  const group = (isActive: boolean, isExpanded = false) =>
+    ({ plugin: 'qol-switchboard', surface: 'terminal', component: 'ToolGroup', props: { calls: [{ tool: 'Bash', input: { command: 'ls' }, isRunning: isActive }], isActive, isExpanded } }) as const
+  const unfolds = async (isActive: boolean, isExpanded = false) => {
+    const mounted = await $.ui.mount(group(isActive, isExpanded))
+    const found = (await mounted.find({ type: 'Text' })) !== undefined
+    await mounted.unmount()
+    return found
+  }
+  const main = await $.ui.mount(promptBand(false))
+  await settle()
+  expect(await unfolds(true)).toBe(false)
+  expect(await unfolds(false, true)).toBe(true)
+  await main.unmount()
+  const inFork = await $.ui.mount({ ...promptBand(false), props: { ...promptBand(false).props, view: { agentId: 'a8' } } })
+  await settle()
+  expect(await unfolds(true)).toBe(true)
+  expect(await unfolds(false)).toBe(false)
+  expect(await unfolds(false, true)).toBe(true)
+  await inFork.unmount()
+})
+
+test('a restart wakes its forks six at a time, so six wake messages are on their way before the first is delivered and the rest follow', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-2', true]])
+  const sent: any[] = []
+  const gates: Array<() => void> = []
+  const ids = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8']
+  store.set('board:earlier-session', ids.map((agentId, at) => ({ agentId, name: `${agentId}-fork: words`, kind: 'note', headline: 'Done for now.', report: 'Done for now.', at, isWorking: false, isDismissed: false })))
+  let isOpen = false
+  const held: any = () => (isOpen ? { isDelivered: true } : new Promise(resolve => gates.push(() => resolve({ isDelivered: true }))))
+  engine(on, sent, [], [], store, held)
+  on('agent.list', () => ({ value: [] }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const fire of timers.splice(0)) fire()
+  await settle()
+  const mounting = $.ui.mount(promptBand(false))
+  await settle()
+  expect(sent.length).toBe(6)
+  isOpen = true
+  for (const open of gates.splice(0)) open()
+  await (await mounting).unmount()
+  await renderBand($)
+  await settle()
+  expect(sent.map(one => one.to).sort()).toEqual(ids)
+  expect(sent.every(one => one.text === 'Back in the agent list.')).toBe(true)
+  expect(store.has('reopen:switchboard-session')).toBe(false)
 })
 
 test('the forks a restart brings back are each top-level unfinished fork, then the sub-forks under it that ask, were cut or hold one that does', () => {
