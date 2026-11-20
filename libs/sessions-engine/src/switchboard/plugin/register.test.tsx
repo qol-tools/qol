@@ -1485,7 +1485,7 @@ test("a fork's own fork is filed on the board when it reports to that fork, whic
   })
   expect(stored.message.content.map((block: { text?: string }) => block.text ?? '').join('')).toBe(text)
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
-  expect(board).toContain('child-fork: Which colour should it be? I recommend amber. (needs the user, agent id c1')
+  expect(board).toContain('child-fork: Which colour should it be? I recommend amber. (asks the fork that started it, agent id c1')
   expect(board).toContain('parent-fork (working, agent id p1)')
 })
 
@@ -2291,7 +2291,9 @@ test('waiting comes from what a fork runs, and a fork that started forks counts 
   const parent = row('p1', { kind: 'note' })
   const list = [parent, row('k1', { launcher: 'p1', isWorking: true }), row('k2', { launcher: 'p1', kind: 'note' }), row('k3', { launcher: 'p1', kind: 'ask' }), row('k4', { launcher: 'p1', isDismissed: true }), row('s1')]
   expect(subForksOf(list, parent).map(one => one.agentId)).toEqual(['k1', 'k2', 'k3'])
-  expect(shownState(parent, list)).toEqual({ label: '1 sub-fork asks', state: 'your turn' })
+  expect(shownState(parent, list)).toEqual({ label: 'waits on 1', state: 'waiting' })
+  expect(shownState(list[3], list)).toEqual({ label: 'ask' })
+  expect(needYouCount(list)).toBe(0)
   const quiet = list.filter(one => one.agentId !== 'k3')
   expect(shownState(parent, quiet)).toEqual({ label: 'waits on 1', state: 'waiting' })
   expect(shownState(parent, quiet, { k2: { state: 'waiting' } })).toEqual({ label: 'waits on 2', state: 'waiting' })
@@ -2301,17 +2303,17 @@ test('waiting comes from what a fork runs, and a fork that started forks counts 
   expect(parentOf(list, row('k9', { launcher: 'gone' }))).toBeUndefined()
   expect(parentOf(list, row('k5', { launcher: 'p1', kind: 'note', isInterrupted: true }))?.agentId).toBe('p1')
   const stopped = [parent, row('k5', { launcher: 'p1', kind: 'note', isInterrupted: true }), row('c1', { kind: 'note', isInterrupted: true }), row('a2', { kind: 'ask' }), row('a3', { kind: 'note' }), row('k6', { launcher: 'a3', kind: 'ask' }), row('k7', { launcher: 'a3', kind: 'note', isInterrupted: true })]
-  expect(stoppedFamilies(stopped).map(one => one.agentId)).toEqual(['p1', 'c1'])
+  expect(stoppedFamilies(stopped).map(one => one.agentId)).toEqual(['p1', 'c1', 'a3'])
   expect(needYouCount(stopped)).toBe(4)
   expect(parentOf([{ ...parent, isDone: true }], row('k1', { launcher: 'p1' }))).toBeUndefined()
   expect(parentOf([parent, row('p2', { launcher: 'p1', isDismissed: true }), row('p3', { launcher: 'p1' })], row('k1', { launcher: 'p1' }))?.agentId).toBe('p1')
-  expect(marksOf([row('a1', { hasNewReply: true }), row('a2', { kind: 'ask' }), row('a3', { hasNewReply: true, isDismissed: true })])).toEqual({ fresh: ['a1'], asks: ['a2'] })
+  expect(marksOf([row('a1', { hasNewReply: true }), row('a2', { kind: 'ask' }), row('a3', { hasNewReply: true, isDismissed: true }), row('k8', { launcher: 'a2', kind: 'ask' })])).toEqual({ fresh: ['a1'], asks: ['a2'] })
   expect(hasUnread(list, parent)).toBe(false)
   const deep = [parent, row('k1', { launcher: 'p1', kind: 'note' }), row('g1', { launcher: 'k1', kind: 'ask', hasNewReply: true }), row('g2', { launcher: 'g1', isWorking: true })]
   expect(subForksOf(deep, parent).map(one => one.agentId)).toEqual(['k1'])
   expect(forksUnder(deep, parent).map(one => one.agentId)).toEqual(['k1', 'g1', 'g2'])
-  expect(shownState(parent, deep)).toEqual({ label: '1 sub-fork asks', state: 'your turn' })
-  expect(shownState(deep[1], deep)).toEqual({ label: '1 sub-fork asks', state: 'your turn' })
+  expect(shownState(parent, deep)).toEqual({ label: 'waits on 1', state: 'waiting' })
+  expect(shownState(deep[1], deep)).toEqual({ label: 'waits on 1', state: 'waiting' })
   expect(shownState(parent, deep.map(one => (one.agentId === 'g1' ? { ...one, kind: 'note' } : one)))).toEqual({ label: 'waits on 1', state: 'waiting' })
   expect(hasUnread(deep, parent)).toBe(true)
   expect(forksUnder([row('a1', { launcher: 'b1' }), row('b1', { launcher: 'a1' })], row('a1', { launcher: 'b1' })).map(one => one.agentId)).toEqual(['b1'])
@@ -3092,7 +3094,7 @@ const forkChat = async ($: any, panes: string[]): Promise<string[]> => {
   return rows
 }
 
-test('a fork that started forks holds them on its row: their asks show under it, and writing to it lists them by letter and reads their replies', async ($, on) => {
+test('a fork that started forks holds them on its row: their questions stay with it and never count as needing you, and writing to it lists them by letter and reads their replies', async ($, on) => {
   const sent: any[] = []
   const viewed: string[] = []
   const written: Record<string, string> = {}
@@ -3116,21 +3118,18 @@ test('a fork that started forks holds them on its row: their asks show under it,
   await deliver($, notification('p1', 'parent-fork: parent', 'Split the work in two.'))
   await deliver($, notification('k1', 'child-fork: child', 'Which colour should it be?'))
   await settle()
-  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: ['p1', 'k1'], asks: ['k1'], models: {} })
+  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: ['p1', 'k1'], asks: [], models: {} })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /^1 needs you\.$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '1 sub-fork asks' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Nothing needs you/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'NEEDS YOU' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'waits on 1' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: ' +2' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /child-fork: Which colour should it be\?/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Recommend: amber/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Which colour should it be\?/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Recommend: amber/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /helper-fork/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: 'WORKING' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'WORKING' })).toBeDefined()
   expect(await ui.findAll({ type: 'Text', text: /◉/ })).toHaveLength(1)
-  await ui.press({ key: 'send-k1' })
-  await ui.press({ key: 'confirm-k1' })
-  expect(sent).toHaveLength(1)
-  expect(JSON.stringify(sent[0].to)).toContain('k1')
-  expect(JSON.stringify(sent[0])).toContain('amber')
+  expect(sent).toHaveLength(0)
   await ui.unmount()
 
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'parent-fork ', cursor: 12 })
@@ -4085,6 +4084,12 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   expect(asked).toEqual(['claude-mythos-5-2'])
   await step('a8', 'claude-opus-5-5', 'medium')
   expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'claude-mythos-5-2', effort: 'xhigh' })
+  expect(await offered('/model m')).toEqual([
+    ['mythos', 'Mythos 5.1'],
+    ['claude-mythos-5-2', 'current · Mythos 5.2'],
+  ])
+  expect(await offered('/model cl')).toEqual([['claude-mythos-5-2', 'current · Mythos 5.2']])
+  expect(await offered('/model claude-mythos-5-2 x')).toEqual([['xhigh', 'current · effort']])
   const unlisted = await ui.find({ type: 'Select', key: 'model-asking-fork' })
   expect(unlisted).toMatchObject({ props: { value: 'claude-mythos-5-2' } })
   expect((unlisted?.props as { options: { label?: string }[] }).options.map(one => one.label)).toEqual(['Opus 5.5', 'Mythos 5.1', 'Sonnet', 'Haiku', 'Fable', 'Mythos 5.2'])

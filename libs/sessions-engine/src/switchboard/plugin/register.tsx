@@ -7,6 +7,7 @@ const PROJECT = /^\s*Project:\s*(.+?)\s*$/
 const MODEL_LINE = /^\s*Model:\s*([A-Za-z0-9][\w.[\]-]*)\s*$/
 const MODEL_ID = /^[A-Za-z0-9][\w.[\]-]*$/
 const ADMIT_MODEL_TIMEOUT_MS = 5_000
+const USED_IDS_MAX = 6
 const FORK = 'project-fork'
 const NAME = 'qol-switchboard'
 const PANE = 'board'
@@ -231,11 +232,8 @@ const stateOf = (entry: Entry, list: Entry[] = [], states: Record<string, RunSta
   if (isCut(entry)) return 'stopped by a restart'
   if (entry.isWorking) return 'working'
   if (isEnded(entry)) return 'done'
-  if (entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)) return 'needs the user'
-  const subs = forksUnder(list, entry)
-  const asking = subs.filter(needsYou).length
-  if (asking > 0) return `${asking} of its sub-forks need${asking === 1 ? 's' : ''} the user`
-  const live = subs.filter(sub => isLive(sub, states)).length
+  if (entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)) return parentOf(list, entry) === undefined ? 'needs the user' : 'asks the fork that started it'
+  const live = forksUnder(list, entry).filter(sub => isBusy(sub, states)).length
   if (live > 0) return `waits on ${live} sub-fork${live === 1 ? '' : 's'}`
   if (isWaiting(entry, states)) return 'waiting on its pull request'
   return entry.isStoppedByUser === true ? 'stopped' : 'idle'
@@ -743,9 +741,9 @@ const ready = async ($: EngineInterface): Promise<void> => {
 export const cutIn = (list: Entry[], entry: Entry): Entry[] => [entry, ...forksUnder(list, entry)].filter(isCut)
 
 export const stoppedFamilies = (list: Entry[]): Entry[] =>
-  list.filter(entry => parentOf(list, entry) === undefined && !needsYou(entry) && !forksUnder(list, entry).some(needsYou) && cutIn(list, entry).length > 0)
+  list.filter(entry => parentOf(list, entry) === undefined && !needsYou(entry) && cutIn(list, entry).length > 0)
 
-export const needYouCount = (list: Entry[]): number => list.filter(needsYou).length + stoppedFamilies(list).length
+export const needYouCount = (list: Entry[]): number => list.filter(entry => asksYou(list, entry)).length + stoppedFamilies(list).length
 
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
@@ -838,7 +836,11 @@ export const forksUnder = (list: Entry[], parent: Entry): Entry[] => {
   return found
 }
 
-const isLive = (entry: Entry, states: Record<string, RunState>): boolean => entry.isWorking || needsYou(entry) || isWaiting(entry, states)
+const asksYou = (list: Entry[], entry: Entry): boolean => needsYou(entry) && parentOf(list, entry) === undefined
+
+const isBusy = (entry: Entry, states: Record<string, RunState>): boolean => entry.isWorking || isWaiting(entry, states)
+
+const isLive = (entry: Entry, states: Record<string, RunState>): boolean => isBusy(entry, states) || needsYou(entry)
 
 export type Shown = { label: string; state?: string }
 
@@ -846,11 +848,8 @@ export const shownState = (entry: Entry, list: Entry[] = [], states: Record<stri
   if (entry.isWorking) return { label: 'working', state: WORKING_STATE }
   if (isEnded(entry)) return { label: 'closed' }
   if (isCut(entry)) return { label: 'stopped mid-turn' }
-  if (needsYou(entry)) return { label: entry.kind ?? 'ask', state: YOUR_TURN_STATE }
-  const subs = forksUnder(list, entry)
-  const asking = subs.filter(needsYou).length
-  if (asking > 0) return { label: `${asking} sub-fork${asking === 1 ? ' asks' : 's ask'}`, state: YOUR_TURN_STATE }
-  const live = subs.filter(sub => isLive(sub, states)).length
+  if (needsYou(entry)) return { label: entry.kind ?? 'ask', ...(parentOf(list, entry) === undefined ? { state: YOUR_TURN_STATE } : {}) }
+  const live = forksUnder(list, entry).filter(sub => isBusy(sub, states)).length
   if (live > 0) return { label: `waits on ${live}`, state: WAITING_STATE }
   if (isWaiting(entry, states)) return { label: [WAITING_STATE, (states[entry.agentId]?.pulls ?? []).map(url => `#${url.split('/').pop() ?? '?'}`).join(',')].filter(part => part !== '').join(' '), state: WAITING_STATE }
   if (entry.isStoppedByUser === true) return { label: 'stopped' }
@@ -863,7 +862,7 @@ export const hasUnread = (list: Entry[], entry: Entry): boolean => entry.hasNewR
 
 export const marksOf = (list: Entry[]): { fresh: string[]; asks: string[] } => ({
   fresh: list.filter(entry => !entry.isDismissed && entry.hasNewReply === true).map(entry => entry.agentId),
-  asks: list.filter(needsYou).map(entry => entry.agentId),
+  asks: list.filter(entry => asksYou(list, entry)).map(entry => entry.agentId),
 })
 
 let marksWritten = ''
@@ -1151,7 +1150,7 @@ export const toFork = (list: Entry[], text: string, fromSwitchboard = true): { e
   return typed.length === 1 && typed[0] !== undefined ? { entry: typed[0], message: message.trim() } : undefined
 }
 
-export type SbCommand = { name: string; about: string; current?: boolean; children?: SbCommand[] }
+export type SbCommand = { name: string; about: string; word?: string; current?: boolean; children?: SbCommand[] }
 
 export type SbTree = { status?: string; commands: SbCommand[] }
 
@@ -1241,7 +1240,7 @@ export const sbCompletions = (commands: readonly SbCommand[], text: string, star
   })
   const children = childrenOf(at)
   if (children !== undefined) return children.map(command => row(command, `${at.word} `))
-  return at.level.filter(command => command.name.startsWith(at.word)).map(command => row(command, ''))
+  return at.level.filter(command => command.name.startsWith(at.word) || command.word?.startsWith(at.word) === true).map(command => row(command, ''))
 }
 
 export const sbLine = (path: readonly SbCommand[], level: readonly SbCommand[]): string =>
@@ -1713,7 +1712,7 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   )
   const entry = filed as Entry
   if (entry.key !== undefined) void recordRun($, 'archive', ['--key', entry.key])
-  if (isNew && !isShown && needsYou(entry)) {
+  if (isNew && !isShown && asksYou(await read($, board), entry)) {
     void $.ui.notify(entry.headline, { title: keyName(entry.name) }).catch(() => {})
   }
   return entry
@@ -2124,6 +2123,11 @@ const setByCommand = async ($: EngineInterface, kind: 'model' | 'effort', args: 
 
 type SettingTree = { lead: string; commands: SbCommand[] }
 
+const usedIds = (models: string[], used: { model?: string; at: number }[]): string[] => {
+  const newest = [...used].sort((a, b) => b.at - a.at).flatMap(one => (one.model === undefined ? [] : [one.model]))
+  return [...new Set(newest.filter(id => MODEL_ID.test(id) && wordOf(id) !== id && !models.includes(id)))].slice(0, USED_IDS_MAX)
+}
+
 const settingTrees = async ($: EngineInterface, text: string): Promise<SettingTree[]> => {
   const typed = text.trimStart()
   const target = typed.startsWith('/model') || typed.startsWith('/effort') ? await settingTarget($) : undefined
@@ -2132,9 +2136,12 @@ const settingTrees = async ($: EngineInterface, text: string): Promise<SettingTr
   const models = await modelsOf($)
   const current = listedAs(models, now.model)
   const efforts = EFFORTS.map(name => ({ name, about: 'effort', ...(name === now.effort ? { current: true } : {}) }))
-  const listed = models.map(id => ({ name: typedName(models, id), about: modelName(id), ...(id === current ? { current: true } : {}), children: efforts }))
+  const used = usedIds(models, [...Object.values(await read($, modelsSeen)), ...Object.values(await read($, modelChoices))])
+  const isUsedNow = now.model !== undefined && used.includes(now.model)
+  const listed = models.map(id => ({ name: typedName(models, id), about: modelName(id), ...(id === current && !isUsedNow ? { current: true } : {}), children: efforts }))
+  const exact = used.map(id => ({ name: id, word: wordOf(id), about: modelName(id), ...(id === now.model ? { current: true } : {}), children: efforts }))
   return [
-    { lead: '/model', commands: listed },
+    { lead: '/model', commands: [...listed, ...exact] },
     { lead: '/effort', commands: efforts },
   ]
 }
@@ -2932,7 +2939,7 @@ export const register: Register = on => {
         $.tool.register({
         name: TOOL,
         description:
-          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, is waiting on its pull request, is idle, was stopped or is done; only a fork the user closed is done, and a merged pull request leaves its fork open. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
+          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, asks the fork that started it, is waiting on its pull request, is idle, was stopped or is done; only a fork the user closed is done, and a merged pull request leaves its fork open. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
         inputSchema: {
           type: 'object',
           properties: { fork: { type: 'string', description: "A fork's key-name or agent id; leave it out for every row." } },
@@ -3551,13 +3558,11 @@ export const register: Register = on => {
     const top = list.filter(entry => parentOf(list, entry) === undefined)
     const subsOf = (entry: Entry) => subForksOf(list, entry)
     const familyIn = (entry: Entry) => forksUnder(list, entry)
-    const askersOf = (entry: Entry) => [...(needsYou(entry) ? [entry] : []), ...familyIn(entry).filter(needsYou).sort((a, b) => a.at - b.at)]
-    const needs = top.filter(entry => askersOf(entry).length > 0).sort((a, b) => a.at - b.at)
+    const needs = top.filter(needsYou).sort((a, b) => a.at - b.at)
     const cut = stoppedFamilies(list).sort((a, b) => a.at - b.at)
-    const working = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && (entry.isWorking || familyIn(entry).some(sub => isLive(sub, states)))).sort((a, b) => a.at - b.at)
+    const working = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && (entry.isWorking || familyIn(entry).some(sub => isBusy(sub, states)))).sort((a, b) => a.at - b.at)
     const waiting = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && !working.includes(entry) && isWaiting(entry, states)).sort((a, b) => a.at - b.at)
     const idle = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && !working.includes(entry) && !waiting.includes(entry) && !isEnded(entry)).sort((a, b) => a.at - b.at)
-    const askers = needs.flatMap(askersOf)
     const badgeOf = (entry: Entry): string => {
       const count = familyIn(entry).filter(one => !isEnded(one)).length
       return count === 0 ? '' : ` +${count}`
@@ -3569,7 +3574,7 @@ export const register: Register = on => {
     const closedFoldable = recent.filter(entry => !hasOpenPull(entry)).length
     const closedRows = isClosedShown ? recent : recent.filter(hasOpenPull)
     const foldedUnread = folded.filter(entry => hasUnread(list, entry)).length
-    const firstAsk = askers.find(entry => entry.recommend !== undefined)
+    const firstAsk = needs.find(entry => entry.recommend !== undefined)
     const labelOf = (entry: Entry): string => shownState(entry, list, states).label
     const looks = await looksOf($)
     const models = await modelsOf($)
@@ -3943,7 +3948,7 @@ export const register: Register = on => {
           {labelled('pull requests', pullLines(pullsOf(ledger, entry.agentId), false, isCut(entry) || entry.isStoppedByUser === true))}
         </Box>,
       )
-    const asks = askers.length + cut.length
+    const asks = needs.length + cut.length
     const openPulls = ledger.filter(isOpen)
     const mergedCount = ledger.filter(pull => stateOfPull(pull) === 'merged').length
     const summary = asks === 0 ? 'Nothing needs you.' : `${asks} need${asks === 1 ? 's' : ''} you.`
@@ -3981,45 +3986,35 @@ export const register: Register = on => {
         {target === undefined && needs.map(entry => (
           <Box key={`need-${entry.agentId}`} flexDirection="column">
             {title(entry, labelOf(entry), true)}
-            {askersOf(entry).map(one => (
-              <Box key={`ask-${one.agentId}`} paddingLeft={7} flexDirection="column">
+            <Box key={`ask-${entry.agentId}`} paddingLeft={7} flexDirection="column">
+              <Text wrap="wrap">{entry.headline}</Text>
+              {entry.recommend !== undefined && <Text dimColor wrap="wrap">Recommend: {entry.recommend}</Text>}
+              {entry.recommend !== undefined && asking === entry.agentId && (
                 <Text wrap="wrap">
-                  {one === entry ? '' : <Text bold>{keyName(one.name)}: </Text>}
-                  {one.headline}
+                  Send "{entry.recommend}" to {keyName(entry.name)}?
                 </Text>
-                {one.recommend !== undefined && <Text dimColor wrap="wrap">Recommend: {one.recommend}</Text>}
-                {one.recommend !== undefined && asking === one.agentId && (
-                  <Text wrap="wrap">
-                    Send "{one.recommend}" to {keyName(one.name)}?
-                  </Text>
-                )}
-                <Box flexDirection="row" gap={2}>
-                  {one.recommend !== undefined && asking === one.agentId && (
-                    <Button key={`confirm-${one.agentId}`} plain hotkey="y" onPress={send(one)}>
-                      send
-                    </Button>
-                  )}
-                  {one.recommend !== undefined && asking === one.agentId && (
-                    <Button key={`cancel-${one.agentId}`} plain hotkey="n" onPress={confirm('')}>
-                      cancel
-                    </Button>
-                  )}
-                  {one.recommend !== undefined && asking !== one.agentId && (
-                    <Button key={`send-${one.agentId}`} plain {...(one === firstAsk && asking === '' ? { hotkey: 'y' } : {})} onPress={confirm(one.agentId)}>
-                      send recommended
-                    </Button>
-                  )}
-                  {one !== entry && (
-                    <Button key={`view-${one.agentId}`} plain dimColor onPress={open(one)}>
-                      open
-                    </Button>
-                  )}
-                  <Button key={`dismiss-${one.agentId}`} plain dimColor onPress={dismiss([one.agentId])}>
-                    dismiss
+              )}
+              <Box flexDirection="row" gap={2}>
+                {entry.recommend !== undefined && asking === entry.agentId && (
+                  <Button key={`confirm-${entry.agentId}`} plain hotkey="y" onPress={send(entry)}>
+                    send
                   </Button>
-                </Box>
+                )}
+                {entry.recommend !== undefined && asking === entry.agentId && (
+                  <Button key={`cancel-${entry.agentId}`} plain hotkey="n" onPress={confirm('')}>
+                    cancel
+                  </Button>
+                )}
+                {entry.recommend !== undefined && asking !== entry.agentId && (
+                  <Button key={`send-${entry.agentId}`} plain {...(entry === firstAsk && asking === '' ? { hotkey: 'y' } : {})} onPress={confirm(entry.agentId)}>
+                    send recommended
+                  </Button>
+                )}
+                <Button key={`dismiss-${entry.agentId}`} plain dimColor onPress={dismiss([entry.agentId])}>
+                  dismiss
+                </Button>
               </Box>
-            ))}
+            </Box>
           </Box>
         ))}
         {target === undefined && cut.length > 0 && heading('STOPPED BY A RESTART')}

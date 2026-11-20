@@ -147,7 +147,7 @@ mod tests {
             "const HANDBACK = /^(Another Claude session sent a message:\\n<agent-message from=",
             "const NOTIFICATION = /^<task-notification>\\n[\\s\\S]*<\\/task-notification>$/",
             "if (agentId === undefined || !isFork(agentId)) return undefined",
-            "Send \"{one.recommend}\" to {keyName(one.name)}?",
+            "Send \"{entry.recommend}\" to {keyName(entry.name)}?",
             "const KINDS: readonly Kind[] = ['ask', 'test', 'failed', 'blocked', 'merged', 'note']",
             "const boardLine = (entry: Entry): string => `[fork board] ${keyName(entry.name)}: ${entry.headline}`",
             "headline: headlineOf(report)",
