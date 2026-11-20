@@ -14,9 +14,8 @@ pub fn switch(input: &str) -> anyhow::Result<()> {
     device::switch(INPUT, input).map(|_| ())
 }
 
-pub fn status() -> anyhow::Result<InputStatus> {
-    let inspection = crate::config::inspect().context("cannot read the saved microphone")?;
-    device::status(INPUT, inspection.config.input.device)
+pub fn status(saved: String) -> anyhow::Result<InputStatus> {
+    device::status(INPUT, saved)
 }
 
 pub fn companion(output: &Identity) -> anyhow::Result<Option<Identity>> {
@@ -29,10 +28,5 @@ pub fn follow(output: &Identity) -> anyhow::Result<Option<Identity>> {
         return Ok(None);
     };
     let applied = device::switch(INPUT, companion.as_str())?;
-    if let Err(error) = crate::config::save_input_device(applied.as_str()) {
-        anyhow::bail!(
-            "switched to the microphone `{applied}`, but the choice was not saved: {error:#}"
-        );
-    }
     Ok(Some(applied))
 }

@@ -1,3 +1,5 @@
+pub mod host;
+
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 

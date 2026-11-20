@@ -5,7 +5,7 @@ use gpui::AsyncApp;
 use qol_gpui::monitor::MonitorTracker;
 use qol_headless::CommandResult;
 
-use crate::config::{contract, load_alt_tab_config};
+use crate::config::{contract, load_alt_tab_config, AltTabConfig};
 use crate::picker::run::PickerHost;
 use crate::PLUGIN_ID;
 
@@ -80,12 +80,21 @@ impl InitialRequest {
     }
 }
 
+fn load_config() -> AltTabConfig {
+    let config = load_alt_tab_config();
+    qol_gpui::popup_window::set_ghost_debug(
+        config.display.ghost_opacity,
+        config.display.ghost_debug_color.as_deref(),
+    );
+    config
+}
+
 fn run_picker(initial_request: InitialRequest) -> CommandResult {
     if initial_request.send() {
         return CommandResult::success("");
     }
 
-    let config = load_alt_tab_config();
+    let config = load_config();
     let (tx, rx) = mpsc::channel();
 
     if !super::daemon::start_listener(tx) {
@@ -95,7 +104,7 @@ fn run_picker(initial_request: InitialRequest) -> CommandResult {
 
     crate::preview_plane::prepare();
     let host = PickerHost {
-        load_config: load_alt_tab_config,
+        load_config,
         open_settings: open_settings_panel,
     };
     crate::picker::run::run_app(config, rx, initial_request.show_on_start(), host);

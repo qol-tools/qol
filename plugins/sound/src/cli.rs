@@ -285,7 +285,11 @@ fn next(context: &CommandContext) -> Result<Execution> {
     if let Err(message) = parse_next_args(context.args()) {
         return Ok(Execution::usage(message));
     }
-    let row = crate::output::next()?;
+    let next = crate::output::next()?;
+    if next.switched {
+        crate::config::save_output_device(&next.row.value)?;
+    }
+    let row = next.row;
     Ok(Execution::success(newline_terminated(format!(
         "now playing on {}",
         row.value
@@ -358,7 +362,7 @@ fn input_status(context: &CommandContext) -> Result<Execution> {
     if let Err(message) = parse_no_args(context.args(), usage_input_status()) {
         return Ok(Execution::usage(message));
     }
-    let status = crate::input::status()?;
+    let status = crate::input::status(crate::config::saved_input()?)?;
     let mut lines = vec![format!("{}  ({})", status.shown, state_word(status.state))];
     lines.extend(status.detail);
     Ok(Execution::success(newline_terminated(lines.join("\n"))))

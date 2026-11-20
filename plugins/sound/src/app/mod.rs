@@ -136,7 +136,7 @@ fn dispatch(action: &str, input: &serde_json::Value) -> ReadResult<Command> {
         Action::VolumeDown => volume_step(-crate::volume::STEP),
         Action::Inputs => query(crate::input::list(), "failed to list microphones"),
         Action::InputStatus => query(
-            crate::input::status(),
+            crate::config::saved_input().and_then(crate::input::status),
             "failed to read the microphone status",
         ),
         Action::SwitchInput => switch_input(input),
@@ -206,7 +206,13 @@ fn apply_saved_output(config: &SoundConfig) -> bool {
     if !choice_changed || !should_follow(config.input.follow_output, before, applied.as_str()) {
         return false;
     }
-    match crate::input::follow(&applied) {
+    let followed = crate::input::follow(&applied).and_then(|followed| {
+        if let Some(input) = &followed {
+            crate::config::save_input_device(input.as_str())?;
+        }
+        Ok(followed)
+    });
+    match followed {
         Ok(followed) => followed.is_some(),
         Err(error) => {
             log::warn!("sound: the microphone did not follow the output `{device}`: {error:#}");
@@ -267,7 +273,7 @@ fn outputs_payload(rows: Vec<OutputRow>) -> Result<serde_json::Value, String> {
 }
 
 fn output_status() -> ReadResult<Command> {
-    match crate::output::status() {
+    match crate::config::saved_output().and_then(crate::output::status) {
         Ok(status) => match status_payload(&status) {
             Ok(data) => ReadResult::HandledWithData(data),
             Err(message) => ReadResult::Error(message),
@@ -312,7 +318,13 @@ fn requested<'a>(input: &'a serde_json::Value, key: &str) -> Option<&'a str> {
 }
 
 fn next_output() -> ReadResult<Command> {
-    match crate::output::next() {
+    let next = crate::output::next().and_then(|next| {
+        if next.switched {
+            crate::config::save_output_device(&next.row.value)?;
+        }
+        Ok(next)
+    });
+    match next {
         Ok(_) => ReadResult::Handled,
         Err(error) => ReadResult::Error(format!("{error:#}")),
     }

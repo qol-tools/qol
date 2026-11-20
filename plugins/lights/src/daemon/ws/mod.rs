@@ -48,7 +48,7 @@ pub fn start(
     target: SharedTarget,
     looks: SharedLooks,
 ) {
-    let ws_port: u16 = env!("QOL_DAEMON_PORT")
+    let ws_port: u16 = crate::DAEMON_PORT
         .parse()
         .expect("QOL_DAEMON_PORT must be a valid u16");
 
