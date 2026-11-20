@@ -558,14 +558,17 @@ fn suggestion_menu(
         });
     let total = edit.suggestions().len();
     let seek_wheel = on_wheel.clone();
+    let landed = Rc::new(Cell::new(first));
     Some(
         kit.menu(width)
             .children(rows)
             .child(kit.scroll_cue(
                 "crumb-suggestion-bar",
                 ScrollSource::window(first, count, total, move |at, window, cx| {
-                    let rows = window_first(*at, count, total) as isize - first as isize;
+                    let target = window_first(*at, count, total);
+                    let rows = target as isize - landed.get() as isize;
                     if let Some(on_wheel) = seek_wheel.as_ref().filter(|_| rows != 0) {
+                        landed.set(target);
                         on_wheel(rows, window, cx);
                     }
                 }),
