@@ -437,6 +437,7 @@ const pointAt = async ($: EngineInterface, entry: Entry | undefined): Promise<bo
   await update($, focusActivity, () => '')
   await update($, freshReply, () => '')
   if (agentId === '') await update($, focusShown, () => ({ id: '', prevId: '', agentId: '', key: '', rows: [] }))
+  queueMarks($)
   return true
 }
 
@@ -883,10 +884,22 @@ const pickedModels = async ($: EngineInterface, list: Entry[]): Promise<Record<s
   )
 }
 
+export const writingMarks = (list: Entry[], agentId: string): { writing?: string; writingUnder?: string[] } => {
+  const entry = list.find(one => one.agentId === agentId)
+  if (entry === undefined) return {}
+  const above: string[] = []
+  const met = new Set([entry.agentId])
+  for (let parent = parentOf(list, entry); parent !== undefined && !met.has(parent.agentId); parent = parentOf(list, parent)) {
+    met.add(parent.agentId)
+    above.push(parent.agentId)
+  }
+  return { writing: entry.agentId, ...(above.length === 0 ? {} : { writingUnder: above }) }
+}
+
 const writeMarks = async ($: EngineInterface, list: Entry[]): Promise<void> => {
   const folder = await $.env.get('QOL_SWITCHBOARD_MARKS')
   if (folder === undefined || folder === '' || !folder.startsWith('/')) return
-  const text = JSON.stringify({ ...marksOf(list), models: await pickedModels($, list) })
+  const text = JSON.stringify({ ...marksOf(list), models: await pickedModels($, list), ...writingMarks(list, await read($, writingTo)) })
   const path = `${folder}/${await $.session.id()}.json`
   if (`${path}\n${text}` === marksWritten) return
   await $.fs.write(path, text)

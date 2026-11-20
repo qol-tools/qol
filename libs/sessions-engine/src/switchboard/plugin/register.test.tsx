@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { boundChords, chatTail, claimsUser, echoesOnly, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withSent } from '../hooks/register'
+import { boundChords, chatTail, claimsUser, echoesOnly, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withSent, writingMarks } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -2316,6 +2316,9 @@ test('waiting comes from what a fork runs, and a fork that started forks counts 
   expect(shownState(deep[1], deep)).toEqual({ label: 'waits on 1', state: 'waiting' })
   expect(shownState(parent, deep.map(one => (one.agentId === 'g1' ? { ...one, kind: 'note' } : one)))).toEqual({ label: 'waits on 1', state: 'waiting' })
   expect(hasUnread(deep, parent)).toBe(true)
+  expect(writingMarks(deep, 'g1')).toEqual({ writing: 'g1', writingUnder: ['k1', 'p1'] })
+  expect(writingMarks(deep, 'p1')).toEqual({ writing: 'p1' })
+  expect(writingMarks(deep, '')).toEqual({})
   expect(forksUnder([row('a1', { launcher: 'b1' }), row('b1', { launcher: 'a1' })], row('a1', { launcher: 'b1' })).map(one => one.agentId)).toEqual(['b1'])
   expect(hasUnread(list.map(one => (one.agentId === 'k2' ? { ...one, hasNewReply: true } : one)), parent)).toBe(true)
 })
@@ -3144,7 +3147,10 @@ test('a fork that started forks holds them on its row: their questions stay with
   expect(viewed).toEqual(['k2'])
   await writing.unmount()
   await settle()
-  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: [], asks: [], models: {} })
+  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: [], asks: [], models: {}, writing: 'p1' })
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'helper-fork ', cursor: 12 })
+  await settle()
+  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: [], asks: [], models: {}, writing: 'k2', writingUnder: ['p1'] })
 })
 
 test('open pull requests gather under PULL REQUESTS at the bottom of the board, and each fork row names its own', async ($, on) => {
