@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { boundChords, chatTail, claimsUser, echoesOnly, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withSent, writingMarks } from '../hooks/register'
+import { boundChords, chatTail, claimsUser, doneSoFar, echoesOnly, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -3266,6 +3266,14 @@ test('a fork reads waiting while it runs a watcher, from the fork state CLI Sess
   expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('(waiting on its pull request, agent id w1)')
 })
 
+test('the actions of a turn add up by kind and keep the newest four labels', () => {
+  const tools: [string, string][] = [['Bash', 'Bash: one'], ['Glob', 'Glob: two'], ['Grep', 'Grep: three'], ['Edit', 'Edit: four'], ['Write', 'Write: five'], ['mcp__sessions__session_send', 'session_send'], ['Read', 'Read: seven']]
+  const done = tools.reduce((all, [tool, label]) => withAction(all, tool, label), { counts: {}, recent: [] as string[] })
+  expect(done.recent).toEqual(['Edit: four', 'Write: five', 'session_send', 'Read: seven'])
+  expect(doneSoFar(done)).toBe('Searched for 2 patterns, read 1 file, edited 2 files, ran 1 shell command, made 1 other call')
+  expect(doneSoFar({ counts: {}, recent: [] })).toBe('')
+})
+
 test('the fork chat names the fork state, says what it works on, and the board marks a reply until the next send', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
@@ -3283,9 +3291,17 @@ test('the fork chat names the fork state, says what it works on, and the board m
   const block = await $.ui.mount(placedRow(id))
   expect(await block.find({ type: 'Text', text: /^── asking-fork · working · / })).toBeDefined()
   expect(await block.find({ type: 'Text', text: 'working · Bash: Run the tests' })).toBeDefined()
+  expect(await block.find({ type: 'Text', text: 'Ran 1 shell command' })).toBeDefined()
+  await $.tool.call({ tool: 'Read', agentId: 'a8', file_path: '/repo/src/colors.ts' })
+  await $.tool.call({ tool: 'Grep', agentId: 'a8', pattern: 'teal' })
+  expect(await block.find({ type: 'Text', text: 'Searched for 1 pattern, read 1 file, ran 1 shell command' })).toBeDefined()
+  expect(await block.find({ type: 'Text', text: '└ Bash: Run the tests' })).toBeDefined()
+  expect(await block.find({ type: 'Text', text: '└ Read: colors.ts' })).toBeDefined()
+  expect(await block.find({ type: 'Text', text: 'working · Grep: teal' })).toBeDefined()
   said.push({ role: 'assistant', text: 'Teal it is.' })
   await $.turn.complete({ turnId: 'work-1', agentId: 'a8', answer: 'Teal it is.', durationMs: 1, isAborted: false, reason: 'done' })
   expect(await block.find({ type: 'Text', text: /^working · / })).toBeUndefined()
+  expect(await block.find({ type: 'Text', text: /^Searched for / })).toBeUndefined()
   await block.unmount()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /◉/ })).toBeDefined()
@@ -3411,6 +3427,7 @@ test('past the cap on placed rows the fork conversation moves into the band abov
   engine(on, [], panes, [], new Map(), () => ({ isDelivered: true }), new Set(), rows)
   on('clock.after', () => new Promise(() => {}))
   on('session.messages', (_: unknown, e: { agentId?: string }) => ({ value: [{ role: 'assistant', text: e.agentId === 'a8' ? 'Amber or teal?' : 'Build is green.' }] }))
+  on('tool.call', () => ({ result: 'ok' }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: asks')
   await spawn($, 'a9', 'build-fork: builds')
@@ -3432,6 +3449,10 @@ test('past the cap on placed rows the fork conversation moves into the band abov
   await settle()
   expect((await band.findAll({ type: 'Markdown' })).map((one: any) => one.props?.text ?? one.text)).toEqual(['Build is green.'])
   expect(await band.find({ type: 'Text', text: 'build-fork' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^● working · / })).toBeUndefined()
+  await $.turn.start({ turnId: 'build-1', agentId: 'a9', text: 'go on' })
+  await $.tool.call({ tool: 'Bash', agentId: 'a9', command: 'make', description: 'Build it' })
+  expect(await band.find({ type: 'Text', text: '● working · Bash: Build it' })).toBeDefined()
   await band.unmount()
   rows.isCapped = false
   expect((await typed($, 'asking-fork')).drop).toContain('Writing to asking-fork')

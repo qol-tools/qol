@@ -137,7 +137,11 @@ export const STARTING = 'Starting the switchboard…'
 export const bringingBack = (count: number): string => `Bringing back ${count} fork${count === 1 ? '' : 's'}…`
 const writingSaid = atom({ plugin: 'qol-switchboard', key: 'writingSaid' } as const, [] as { isUser: boolean; text: string }[])
 const current = atom({ plugin: 'qol-switchboard', key: 'current' } as const, '')
-const focusActivity = atom({ plugin: 'qol-switchboard', key: 'focusActivity' } as const, '')
+const ACTION_KINDS = ['search', 'read', 'edit', 'shell', 'other'] as const
+type ActionKind = (typeof ACTION_KINDS)[number]
+export type Doing = { counts: Partial<Record<ActionKind, number>>; recent: string[] }
+const NOTHING_DONE: Doing = { counts: {}, recent: [] }
+const focusActivity = atom({ plugin: 'qol-switchboard', key: 'focusActivity' } as const, NOTHING_DONE)
 const freshReply = atom({ plugin: 'qol-switchboard', key: 'freshReply' } as const, '')
 const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', prevId: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
 const rowsCapped = atom({ plugin: 'qol-switchboard', key: 'rowsCapped' } as const, false)
@@ -434,7 +438,7 @@ const pointAt = async ($: EngineInterface, entry: Entry | undefined): Promise<bo
   if ((await read($, writingTo)) === agentId) return false
   await update($, writingTo, () => agentId)
   await update($, writingSaid, () => [])
-  await update($, focusActivity, () => '')
+  await update($, focusActivity, () => doing.get(agentId) ?? NOTHING_DONE)
   await update($, freshReply, () => '')
   if (agentId === '') await update($, focusShown, () => ({ id: '', prevId: '', agentId: '', key: '', rows: [] }))
   queueMarks($)
@@ -657,9 +661,38 @@ const toolLabel = (tool: string, input: Record<string, unknown>): string => {
   return clip(detail === undefined ? name : `${name}: ${detail}`, TOOL_TEXT)
 }
 
-const noteActivity = async ($: EngineInterface, agentId: string, label: string): Promise<void> => {
-  if ((await read($, writingTo)) !== agentId || (await read($, focusActivity)) === label) return
-  await update($, focusActivity, () => label)
+const ACTIONS_KEPT = 4
+const KIND_OF: Record<string, ActionKind> = { Grep: 'search', Glob: 'search', Read: 'read', Edit: 'edit', Write: 'edit', NotebookEdit: 'edit', Bash: 'shell' }
+const counted = (count: number, one: string): string => `${count} ${one}${count === 1 ? '' : 's'}`
+const ACTION_WORDS: Record<ActionKind, (count: number) => string> = {
+  search: count => `searched for ${counted(count, 'pattern')}`,
+  read: count => `read ${counted(count, 'file')}`,
+  edit: count => `edited ${counted(count, 'file')}`,
+  shell: count => `ran ${counted(count, 'shell command')}`,
+  other: count => `made ${counted(count, 'other call')}`,
+}
+
+const doing = new Map<string, Doing>()
+
+export const withAction = (done: Doing, tool: string, label: string): Doing => {
+  const kind = KIND_OF[tool] ?? 'other'
+  return { counts: { ...done.counts, [kind]: (done.counts[kind] ?? 0) + 1 }, recent: [...done.recent, label].slice(-ACTIONS_KEPT) }
+}
+
+export const doneSoFar = (done: Doing): string => {
+  const said = ACTION_KINDS.flatMap(kind => (done.counts[kind] === undefined ? [] : [ACTION_WORDS[kind](done.counts[kind])])).join(', ')
+  return said === '' ? '' : `${said.charAt(0).toUpperCase()}${said.slice(1)}`
+}
+
+const noteActivity = async ($: EngineInterface, agentId: string, tool: string, label: string): Promise<void> => {
+  const done = withAction(doing.get(agentId) ?? NOTHING_DONE, tool, label)
+  doing.set(agentId, done)
+  if ((await read($, writingTo)) === agentId) await update($, focusActivity, () => done)
+}
+
+const forgetActivity = async ($: EngineInterface, agentId: string): Promise<void> => {
+  doing.delete(agentId)
+  if ((await read($, writingTo)) === agentId && (await read($, focusActivity)).recent.length > 0) await update($, focusActivity, () => NOTHING_DONE)
 }
 
 const followFocus = async ($: EngineInterface): Promise<void> => {
@@ -3041,7 +3074,9 @@ export const register: Register = on => {
         </Box>
       )
       const isChatHere = (await read($, rowsCapped)) && (await read($, writingTo)) === shown?.agentId
-      const said = isChatHere ? chatTail(await read($, writingSaid), e.props.maxRows - BAND_SPARE, e.props.bodyColumns) : []
+      const doingNow = isChatHere && shown?.isWorking === true ? (await read($, focusActivity)).recent.at(-1) : undefined
+      const spare = BAND_SPARE + (doingNow === undefined ? 0 : 1)
+      const said = isChatHere ? chatTail(await read($, writingSaid), e.props.maxRows - spare, e.props.bodyColumns) : []
       if (said.length === 0) return writing
       return (
         <Box flexDirection="column">
@@ -3053,6 +3088,9 @@ export const register: Register = on => {
               <Markdown text={one.text} />
             </Box>
           ))}
+          {doingNow !== undefined && (
+            <Text dimColor wrap="truncate">{`● working · ${doingNow}`}</Text>
+          )}
           {writing}
         </Box>
       )
@@ -3092,12 +3130,18 @@ export const register: Register = on => {
           </Box>
         ))}
         {entry?.isWorking === true && (
-          <Box marginTop={1}>
-            <Text color={working?.color ?? 'claude'}>● </Text>
-            <Text wrap="truncate">
-              {working === undefined ? <Text dimColor>working</Text> : <Text color={working.color} bold={working.isBold}>working</Text>}
-              <Text dimColor>{activity === '' ? '…' : ` · ${activity}`}</Text>
-            </Text>
+          <Box flexDirection="column" marginTop={1}>
+            {activity.recent.length > 0 && <Text dimColor wrap="truncate">{doneSoFar(activity)}</Text>}
+            {activity.recent.slice(0, -1).map((label, index) => (
+              <Text key={`did-${index}`} dimColor wrap="truncate">{`└ ${label}`}</Text>
+            ))}
+            <Box>
+              <Text color={working?.color ?? 'claude'}>● </Text>
+              <Text wrap="truncate">
+                {working === undefined ? <Text dimColor>working</Text> : <Text color={working.color} bold={working.isBold}>working</Text>}
+                <Text dimColor>{activity.recent.length === 0 ? '…' : ` · ${activity.recent.at(-1)}`}</Text>
+              </Text>
+            </Box>
           </Box>
         )}
       </Box>
@@ -3415,7 +3459,7 @@ export const register: Register = on => {
     if ((e as unknown as Record<string, unknown>).run_in_background === true) noteForkCall(e.tool_use_id)
     try {
       const label = toolLabel(e.tool, e as unknown as Record<string, unknown>)
-      void noteActivity($, agentId, label).catch(() => {})
+      void noteActivity($, agentId, e.tool, label).catch(() => {})
     } catch {}
     const { cut, drop } = cutOf(agentId)
     const ran = next(MESSAGING.test(e.tool) ? asFork(e) : e)
@@ -3427,6 +3471,7 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId !== undefined) cutting.delete(e.agentId)
+    if (e.agentId !== undefined) await forgetActivity($, e.agentId)
     const isHeld = await claimHold($, e.agentId, e.turnId, e.text)
     if (e.agentId !== undefined && !isHeld) {
       const forkId = e.agentId
@@ -3512,8 +3557,8 @@ export const register: Register = on => {
     if (ended !== undefined) lastTurns.set(ended, { turnId: e.turnId, ...(typeof e.answer === 'string' && e.answer.trim() !== '' && !isHeldReply(e.answer) && !e.isAborted ? { answer: e.answer } : {}) })
     if (ended !== undefined) $.clock.after(RUN_OVER_MS, () => void settleRun($, ended, e.turnId).catch(() => undefined))
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
+    if (e.agentId !== undefined) await forgetActivity($, e.agentId)
     if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
-      await update($, focusActivity, () => '')
       if (typeof e.answer === 'string' && e.answer.trim() !== '' && !isHeldReply(e.answer) && !e.isAborted) await update($, freshReply, () => e.agentId ?? '')
     }
     if (e.agentId === undefined && viewedFork === undefined) suggestFork($, await read($, board))
