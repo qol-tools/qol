@@ -272,10 +272,7 @@ impl Settings for Gsettings {
     }
 }
 
-pub(crate) fn control(
-    config_root: Option<&Path>,
-    adoption_generation: Option<String>,
-) -> Arc<dyn HostNightLight> {
+pub(crate) fn control(config_root: Option<&Path>) -> Arc<dyn HostNightLight> {
     let Some(desktop) = Desktop::detect(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default())
     else {
         return Arc::new(UnavailableHostNightLight(
@@ -300,10 +297,10 @@ pub(crate) fn control(
                 .is_ok()
                 && settings.get().is_ok()
             {
-                return Arc::new(
-                    Controller::new(settings, session_dir(config_root, Some("kwin")))
-                        .with_adoption_generation(adoption_generation),
-                );
+                return Arc::new(Controller::new(
+                    settings,
+                    session_dir(config_root, Some("kwin")),
+                ));
             }
         }
         return Arc::new(UnavailableHostNightLight(
@@ -330,19 +327,16 @@ pub(crate) fn control(
         ));
     }
     settings.schedule = schedule;
-    Arc::new(
-        Controller::new(
-            settings,
-            session_dir(
-                config_root,
-                match desktop {
-                    Desktop::Cinnamon => None,
-                    Desktop::Gnome | Desktop::Kde => Some(desktop.name()),
-                },
-            ),
-        )
-        .with_adoption_generation(adoption_generation),
-    )
+    Arc::new(Controller::new(
+        settings,
+        session_dir(
+            config_root,
+            match desktop {
+                Desktop::Cinnamon => None,
+                Desktop::Gnome | Desktop::Kde => Some(desktop.name()),
+            },
+        ),
+    ))
 }
 
 struct Kconfig {

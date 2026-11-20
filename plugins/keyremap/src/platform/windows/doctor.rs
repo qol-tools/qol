@@ -14,8 +14,8 @@ pub(super) fn driver() -> DoctorCheckResult {
     )
 }
 
-pub(super) fn daemon(plugin_id: &str) -> DoctorCheckResult {
-    let status = status::read(plugin_id);
+pub(super) fn daemon() -> DoctorCheckResult {
+    let status = status::read();
     let running = status.as_ref().is_some_and(HookStatus::reporter_alive);
     hook_result(status.as_ref(), running, status::unix_now())
 }

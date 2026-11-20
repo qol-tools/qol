@@ -7,7 +7,7 @@ fn main() -> ExitCode {
     register_build_identity();
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if matches!(args.as_slice(), [arg] if arg == qol_bluetooth::SETTINGS_SURFACE_ARG) {
-        return match qol_bluetooth::app::show_settings() {
+        return match qol_bluetooth::show_settings() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 log::error!("{error:#}");
@@ -16,7 +16,7 @@ fn main() -> ExitCode {
         };
     }
     if qol_plugin_daemon::daemon::launched_as_daemon(&args) {
-        return match qol_bluetooth::app::run_daemon() {
+        return match qol_bluetooth::platform::run_daemon(qol_bluetooth::config::load()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 log::error!("{error:#}");

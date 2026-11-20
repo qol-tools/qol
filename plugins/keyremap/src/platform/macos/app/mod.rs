@@ -10,9 +10,8 @@ use super::karabiner::hotkeys;
 use super::karabiner::store::Store;
 use super::layout::{LayoutSnapshot, LayoutStore};
 use super::tap::TapState;
-use crate::config::{KeyBackendChoice, RemapConfig};
-use crate::control::Host;
-use crate::platform::engine::{self, remap};
+use crate::platform::engine::config::KeyBackendChoice;
+use crate::platform::engine::{self, config, remap};
 
 const LAYOUT_POLL: Duration = Duration::from_secs(1);
 
@@ -39,9 +38,9 @@ impl Services {
 }
 
 impl engine::Remapper for Services {
-    fn swap_config(&self, config: remap::ResolvedConfig, raw: &RemapConfig) {
+    fn swap_config(&self, config: remap::ResolvedConfig) {
         self.state.swap_config(config);
-        self.choose(raw.key_backend);
+        self.choose(config::load_config().key_backend);
     }
 
     fn idle(&self) {
@@ -92,7 +91,7 @@ fn follow_hotkeys(
     });
 }
 
-pub(crate) fn run(host: &Host) -> Result<()> {
+pub(crate) fn run() -> Result<()> {
     let layouts = Arc::new(LayoutStore::new(
         LayoutSnapshot::read_current().unwrap_or_else(|error| {
             log::warn!("no keyboard layout to type characters with: {error}");
@@ -101,16 +100,15 @@ pub(crate) fn run(host: &Host) -> Result<()> {
     ));
 
     engine::serve(
-        host,
         LAYOUT_POLL,
-        std::convert::identity,
-        |resolved, raw| {
-            let choice = raw.key_backend;
+        || remap::resolve(&config::load_config()),
+        |resolved| {
+            let choice = config::load_config().key_backend;
             let input = Arc::new(InputState::default());
             input.allow_helper(selection::helper_allowed(choice));
             let app_tracker = super::app_tracker::AppTracker::start();
             let state = Arc::new(TapState::new(resolved, app_tracker, Arc::clone(&input)));
-            let karabiner = match Store::locate(&host.plugin_id) {
+            let karabiner = match Store::locate() {
                 Ok(store) => Some(Arc::new(Mutex::new(Backend::new(Installed(store))))),
                 Err(error) => {
                     log::warn!("Karabiner-Elements backend unavailable: {error:#}");

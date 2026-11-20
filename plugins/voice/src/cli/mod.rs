@@ -7,7 +7,6 @@ mod stt;
 
 use std::process::ExitCode;
 
-use anyhow::Context;
 use qol_headless::{Command, HeadlessApp, PlainTextOutput};
 
 use crate::PLUGIN_ID;
@@ -40,8 +39,7 @@ fn settings_command() -> Command {
         .output("No stdout on success.")
         .run_plain_text(|context| {
             reject_args(context.args())?;
-            qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
-                .context("failed to open settings URL")?;
+            crate::platform::open_settings()?;
             Ok(PlainTextOutput::empty())
         })
 }

@@ -5,7 +5,6 @@ use qol_audio::bluetooth::BluetoothEndpoint;
 use qol_headless::DoctorCheckResult;
 use qol_platform::native::wide::from_wide;
 use qol_plugin_daemon::notification::send_notification;
-use qol_runtime::protocol::DaemonRequest;
 use windows::core::{Owned, GUID, HRESULT, PCWSTR};
 use windows::Devices::Radios::{Radio, RadioAccessStatus, RadioKind, RadioState};
 use windows::Win32::Devices::Bluetooth::{
@@ -30,19 +29,21 @@ use windows::Win32::Foundation::{
 };
 
 use crate::bluetooth::{
-    connection_ready, normalize_address, AdapterHealth, BackendCapabilities, DaemonAction,
-    DaemonHooks, DaemonReply, DeviceInfo, Pairing, ReconnectReport, ReconnectSelection,
+    connection_ready, normalize_address, AdapterHealth, BackendCapabilities, DeviceInfo, Pairing,
+    ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
 
 use super::input_service::{self, Journal};
 use super::low_energy;
 use super::paired::{self, PairedStack};
-pub use super::paired::{open_settings, search_status_snapshot, DaemonCommand};
+pub use super::paired::{
+    open_settings, search_status_snapshot, settings_action, settings_query, stop_search,
+};
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: false,
-    audio_reclaim: crate::audio_claim::RECLAIM_SUPPORTED,
+    audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
     settings_pairing: None,
     settings_pane: None,
 };
@@ -736,27 +737,13 @@ pub fn reconnect_devices(
     paired::reconnect_devices::<WindowsStack>(config, selection)
 }
 
-pub fn devices_snapshot(managed_devices: &[String]) -> Result<serde_json::Value> {
-    paired::devices_snapshot::<WindowsStack>(managed_devices)
+pub fn devices_snapshot() -> Result<serde_json::Value> {
+    paired::devices_snapshot::<WindowsStack>()
 }
 
-pub fn set_adapter_source(_source: fn() -> String) {}
-
-pub fn dispatch_request(
-    action: DaemonAction,
-    request: &DaemonRequest,
-    config: impl FnOnce() -> ReconnectConfig,
-) -> DaemonReply<DaemonCommand> {
-    paired::dispatch_request::<WindowsStack>(action, request, config)
-}
-
-pub fn run_daemon(
-    config: ReconnectConfig,
-    hooks: DaemonHooks,
-    listen: impl FnOnce(std::sync::mpsc::Sender<DaemonCommand>) -> bool,
-) -> Result<()> {
+pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
     restore_input_services();
-    paired::run_daemon::<WindowsStack>(config, hooks, listen)
+    paired::run_daemon::<WindowsStack>(config)
 }
 
 #[cfg(test)]

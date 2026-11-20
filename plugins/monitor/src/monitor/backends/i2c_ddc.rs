@@ -7,13 +7,13 @@ use std::time::Duration;
 
 use qol_windowing::DisplayEnumerator;
 
+use crate::hotkeys::PLUGIN_ID;
 use crate::monitor::backends::ddc_brightness::{percent_from_raw, DdcWrites};
 use crate::monitor::policy::DdcStatus;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
     DisplayMode, GammaState, HdrState, MonitorError, GAMMA_REASON, HDR_REASON, MODES_REASON,
 };
-use crate::PLUGIN_ID;
 
 const HOST_ADDRESS: u8 = 0x51;
 const MONITOR_ADDRESS: u8 = 0x6e;

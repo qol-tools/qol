@@ -9,4 +9,4 @@ pub mod mute;
 pub mod output;
 pub mod volume;
 
-pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");

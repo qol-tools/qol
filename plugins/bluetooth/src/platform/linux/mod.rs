@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::process::Command;
-use std::sync::{mpsc, LazyLock, OnceLock, RwLock};
+use std::sync::{mpsc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
 mod inventory;
@@ -23,17 +23,18 @@ use qol_audio::control::{self, Card, Sink, Source, SourceOutput};
 use qol_audio::devices::{AudioDevice, Direction, Identity, State};
 use qol_headless::DoctorCheckResult;
 use qol_host_fixes::{findings_payload, HostFixes};
+use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_plugin_daemon::notification::send_notification;
-use qol_runtime::protocol::DaemonRequest;
+use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 use crate::bluetooth::{
     adapter_options, audio_output_degraded, audio_profile_repairable, connection_ready,
     device_order, devices_payload, forget_failed_pair, has_audio_class, is_audio_device,
     managed_device_options, nearby_payload, normalize_address,
     retry::{RetryPolicy, RetryState},
-    search_status_payload, supports_audio_sink, AdapterHealth, BackendCapabilities, DaemonAction,
-    DaemonHooks, DaemonReply, DeviceActionState, DeviceInfo, DeviceIntent, DeviceOption,
-    DiscoveryState, Pairing, ReconnectFailure, ReconnectReport, ReconnectSelection,
+    search_status_payload, supports_audio_sink, AdapterHealth, BackendCapabilities,
+    DeviceActionState, DeviceInfo, DeviceIntent, DeviceOption, DiscoveryState, Pairing,
+    ReconnectFailure, ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
 use crate::hostfix::{problems_payload, BluetoothHostFixes};
@@ -41,12 +42,15 @@ use crate::platform::audio;
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: true,
-    audio_reclaim: crate::audio_claim::RECLAIM_SUPPORTED,
+    audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
     settings_pairing: None,
     settings_pane: None,
 };
 
-static ADAPTER_SOURCE: OnceLock<fn() -> String> = OnceLock::new();
+const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
+    socket: SocketSource::EnvRequired,
+    support_replace_existing: true,
+};
 static DISCOVERY_STATE: LazyLock<RwLock<DiscoveryState>> =
     LazyLock::new(|| RwLock::new(DiscoveryState::default()));
 static DEVICE_ACTION_STATE: LazyLock<RwLock<Option<DeviceActionState>>> =
@@ -208,7 +212,8 @@ impl Display for DeviceActionTimeout {
 
 impl Error for DeviceActionTimeout {}
 
-pub enum DaemonCommand {
+#[derive(Clone, Copy)]
+enum DaemonCommand {
     Kill,
     SetAdapterPower(bool),
     Pair(Address),
@@ -220,8 +225,80 @@ pub enum DaemonCommand {
     StopSearch,
     ReconnectManaged,
     ReconnectTrusted,
-    Reload(ReconnectConfig),
+    Reload,
     Settings,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DaemonAction {
+    Ping,
+    Kill,
+    EnableAdapter,
+    DisableAdapter,
+    PairDevice,
+    TrustDevice,
+    UntrustDevice,
+    ConnectDevice,
+    DisconnectDevice,
+    ReclaimDevice,
+    RemoveDevice,
+    StartSearch,
+    StopSearch,
+    Devices,
+    NearbyDevices,
+    ManagedDeviceOptions,
+    AdapterOptions,
+    SearchStatus,
+    AdapterStatus,
+    Reconnect,
+    ReconnectTrusted,
+    Reload,
+    Settings,
+    HostFixes,
+    HostProblems,
+    ApplyHostFix,
+    HandoffState,
+    ReleaseForHandoff,
+    ResumeReconnect,
+}
+
+impl TryFrom<&str> for DaemonAction {
+    type Error = String;
+
+    fn try_from(action: &str) -> std::result::Result<Self, Self::Error> {
+        match action {
+            "ping" => Ok(Self::Ping),
+            "kill" => Ok(Self::Kill),
+            "enable_adapter" => Ok(Self::EnableAdapter),
+            "disable_adapter" => Ok(Self::DisableAdapter),
+            "pair_device" => Ok(Self::PairDevice),
+            "trust_device" => Ok(Self::TrustDevice),
+            "untrust_device" => Ok(Self::UntrustDevice),
+            "connect_device" => Ok(Self::ConnectDevice),
+            "disconnect_device" => Ok(Self::DisconnectDevice),
+            "reclaim_device" => Ok(Self::ReclaimDevice),
+            "remove_device" => Ok(Self::RemoveDevice),
+            "start_search" => Ok(Self::StartSearch),
+            "stop_search" => Ok(Self::StopSearch),
+            "devices" => Ok(Self::Devices),
+            "nearby_devices" => Ok(Self::NearbyDevices),
+            "managed_device_options" => Ok(Self::ManagedDeviceOptions),
+            "adapter_options" => Ok(Self::AdapterOptions),
+            "search_status" => Ok(Self::SearchStatus),
+            "adapter_status" => Ok(Self::AdapterStatus),
+            "reconnect" => Ok(Self::Reconnect),
+            "reconnect_trusted" => Ok(Self::ReconnectTrusted),
+            "reload" => Ok(Self::Reload),
+            "settings" => Ok(Self::Settings),
+            "host_fixes" => Ok(Self::HostFixes),
+            "host_problems" => Ok(Self::HostProblems),
+            "apply_host_fix" => Ok(Self::ApplyHostFix),
+            "handoff_state" => Ok(Self::HandoffState),
+            "release_for_handoff" => Ok(Self::ReleaseForHandoff),
+            "resume_reconnect" => Ok(Self::ResumeReconnect),
+            unknown => Err(format!("unknown Bluetooth action: {unknown}")),
+        }
+    }
 }
 
 pub fn list_devices() -> Result<Vec<DeviceInfo>> {
@@ -332,11 +409,18 @@ pub fn search_devices(config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
     })
 }
 
+pub fn stop_search() -> Result<()> {
+    if core_daemon::send_action(&DAEMON_CONFIG, "stop_search", true) {
+        return Ok(());
+    }
+    bail!("Bluetooth daemon is not reachable")
+}
+
 pub fn open_settings() -> Result<()> {
     bail!("BlueZ pairs devices here; there is no system Bluetooth settings pane to open")
 }
 
-pub fn devices_snapshot(managed_devices: &[String]) -> Result<serde_json::Value> {
+pub fn devices_snapshot() -> Result<serde_json::Value> {
     let devices = if adapter_available()? {
         list_devices()?
     } else {
@@ -349,7 +433,7 @@ pub fn devices_snapshot(managed_devices: &[String]) -> Result<serde_json::Value>
         .clone();
     let payload = devices_payload(
         &devices,
-        managed_devices,
+        &crate::config::load().managed_devices,
         &discovery,
         action.as_ref(),
         CAPABILITIES,
@@ -432,6 +516,32 @@ fn discovery_state() -> Result<DiscoveryState> {
         .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))
 }
 
+pub fn settings_query(query: &str) -> std::result::Result<serde_json::Value, String> {
+    match core_daemon::send_request(
+        &DAEMON_CONFIG,
+        query,
+        serde_json::Value::Null,
+        Duration::from_secs(2),
+    ) {
+        Ok(DaemonResponse::Handled { data: Some(data) }) => Ok(data),
+        Ok(DaemonResponse::Handled { data: None }) => Ok(serde_json::Value::Null),
+        Ok(DaemonResponse::Error { message }) => Err(message),
+        Ok(DaemonResponse::Fallback) => Err("Bluetooth daemon declined the query".into()),
+        Ok(DaemonResponse::NotReady { .. }) => Err("Bluetooth daemon is still starting".into()),
+        Err(error) => Err(format!("Bluetooth daemon query failed: {error}")),
+    }
+}
+
+pub fn settings_action(action: &str, input: serde_json::Value) -> std::result::Result<(), String> {
+    match core_daemon::send_request(&DAEMON_CONFIG, action, input, Duration::from_secs(2)) {
+        Ok(DaemonResponse::Handled { .. }) => Ok(()),
+        Ok(DaemonResponse::Error { message }) => Err(message),
+        Ok(DaemonResponse::Fallback) => Err("Bluetooth daemon declined the action".into()),
+        Ok(DaemonResponse::NotReady { .. }) => Err("Bluetooth daemon is still starting".into()),
+        Err(error) => Err(format!("Bluetooth daemon action failed: {error}")),
+    }
+}
+
 fn current_managed_device_options() -> Result<Vec<DeviceOption>> {
     if !adapter_available()? {
         return Ok(Vec::new());
@@ -443,15 +553,11 @@ fn current_adapter_options() -> Result<Vec<DeviceOption>> {
     Ok(adapter_options(&inventory::adapters()?))
 }
 
-pub fn run_daemon(
-    config: ReconnectConfig,
-    hooks: DaemonHooks,
-    listen: impl FnOnce(mpsc::Sender<DaemonCommand>) -> bool,
-) -> Result<()> {
+pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
     crate::hostfix::restore_claimed_managers();
     notify_adopted_managers();
     let (listener_tx, listener_rx) = mpsc::channel();
-    if !listen(listener_tx) {
+    if !core_daemon::start_request_listener(&DAEMON_CONFIG, listener_tx, parse_daemon_request) {
         bail!("{} daemon listener failed to start", crate::PLUGIN_ID);
     }
 
@@ -478,21 +584,10 @@ pub fn run_daemon(
             let _ = terminate.recv().await;
             let _ = signal_tx.send(DaemonCommand::Kill);
         });
-        resilient_daemon_loop(config, hooks, command_rx).await
+        resilient_daemon_loop(config, command_rx).await
     });
     crate::hostfix::restore_claimed_managers();
     outcome
-}
-
-pub fn set_adapter_source(source: fn() -> String) {
-    let _ = ADAPTER_SOURCE.set(source);
-}
-
-fn configured_adapter() -> String {
-    ADAPTER_SOURCE
-        .get()
-        .map(|source| source())
-        .unwrap_or_default()
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime> {
@@ -506,7 +601,7 @@ async fn default_adapter() -> Result<Adapter> {
     let session = Session::new()
         .await
         .context("failed to connect to the BlueZ system service")?;
-    let configured = configured_adapter();
+    let configured = crate::config::load().adapter;
     if configured.is_empty() {
         return session
             .default_adapter()
@@ -1276,16 +1371,23 @@ fn parse_address(value: &str) -> Result<Address> {
         .with_context(|| format!("failed to parse Bluetooth address `{value}`"))
 }
 
-pub fn dispatch_request(
+fn parse_daemon_request(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
+    let action = match DaemonAction::try_from(request.action.as_str()) {
+        Ok(action) => action,
+        Err(error) => return ReadResult::Error(error),
+    };
+    dispatch_daemon_action(action, request)
+}
+
+fn dispatch_daemon_action(
     action: DaemonAction,
     request: &DaemonRequest,
-    config: impl FnOnce() -> ReconnectConfig,
-) -> DaemonReply<DaemonCommand> {
+) -> ReadResult<DaemonCommand> {
     match action {
-        DaemonAction::Ping => DaemonReply::Handled,
-        DaemonAction::Kill => DaemonReply::Command(DaemonCommand::Kill),
-        DaemonAction::EnableAdapter => DaemonReply::Command(DaemonCommand::SetAdapterPower(true)),
-        DaemonAction::DisableAdapter => DaemonReply::Command(DaemonCommand::SetAdapterPower(false)),
+        DaemonAction::Ping => ReadResult::Handled,
+        DaemonAction::Kill => ReadResult::Command(DaemonCommand::Kill),
+        DaemonAction::EnableAdapter => ReadResult::Command(DaemonCommand::SetAdapterPower(true)),
+        DaemonAction::DisableAdapter => ReadResult::Command(DaemonCommand::SetAdapterPower(false)),
         DaemonAction::PairDevice => {
             device_daemon_command(request, DaemonCommand::Pair, DeviceIntent::Pair)
         }
@@ -1310,63 +1412,59 @@ pub fn dispatch_request(
             device_daemon_command(request, DaemonCommand::Remove, DeviceIntent::Remove)
         }
         DaemonAction::StartSearch => match mark_search_requested() {
-            Ok(()) => DaemonReply::Command(DaemonCommand::StartSearch),
-            Err(error) => DaemonReply::Error(error.to_string()),
+            Ok(()) => ReadResult::Command(DaemonCommand::StartSearch),
+            Err(error) => ReadResult::Error(error.to_string()),
         },
         DaemonAction::StopSearch => match mark_search_stopped() {
-            Ok(()) => DaemonReply::Command(DaemonCommand::StopSearch),
-            Err(error) => DaemonReply::Error(error.to_string()),
+            Ok(()) => ReadResult::Command(DaemonCommand::StopSearch),
+            Err(error) => ReadResult::Error(error.to_string()),
         },
-        DaemonAction::Devices => match devices_snapshot(&config().managed_devices) {
-            Ok(payload) => DaemonReply::Data(payload),
-            Err(error) => DaemonReply::Error(format!("{error:#}")),
+        DaemonAction::Devices => match devices_snapshot() {
+            Ok(payload) => ReadResult::HandledWithData(payload),
+            Err(error) => ReadResult::Error(format!("{error:#}")),
         },
         DaemonAction::NearbyDevices => match nearby_snapshot() {
-            Ok(payload) => DaemonReply::Data(payload),
-            Err(error) => DaemonReply::Error(format!("{error:#}")),
+            Ok(payload) => ReadResult::HandledWithData(payload),
+            Err(error) => ReadResult::Error(format!("{error:#}")),
         },
         DaemonAction::ManagedDeviceOptions => {
             match current_managed_device_options().and_then(|options| {
                 serde_json::to_value(options).context("failed to encode Bluetooth device options")
             }) {
-                Ok(payload) => DaemonReply::Data(payload),
-                Err(error) => DaemonReply::Error(format!("{error:#}")),
+                Ok(payload) => ReadResult::HandledWithData(payload),
+                Err(error) => ReadResult::Error(format!("{error:#}")),
             }
         }
         DaemonAction::AdapterOptions => {
             match current_adapter_options().and_then(|options| {
                 serde_json::to_value(options).context("failed to encode Bluetooth adapter options")
             }) {
-                Ok(payload) => DaemonReply::Data(payload),
-                Err(error) => DaemonReply::Error(format!("{error:#}")),
+                Ok(payload) => ReadResult::HandledWithData(payload),
+                Err(error) => ReadResult::Error(format!("{error:#}")),
             }
         }
         DaemonAction::SearchStatus => match search_status_snapshot() {
-            Ok(payload) => DaemonReply::Data(payload),
-            Err(error) => DaemonReply::Error(format!("{error:#}")),
+            Ok(payload) => ReadResult::HandledWithData(payload),
+            Err(error) => ReadResult::Error(format!("{error:#}")),
         },
         DaemonAction::AdapterStatus => match adapter_status_snapshot() {
-            Ok(payload) => DaemonReply::Data(payload),
-            Err(error) => DaemonReply::Error(format!("{error:#}")),
+            Ok(payload) => ReadResult::HandledWithData(payload),
+            Err(error) => ReadResult::Error(format!("{error:#}")),
         },
-        DaemonAction::Reconnect => DaemonReply::Command(DaemonCommand::ReconnectManaged),
-        DaemonAction::ReconnectTrusted => DaemonReply::Command(DaemonCommand::ReconnectTrusted),
-        DaemonAction::Reload => DaemonReply::Command(DaemonCommand::Reload(config())),
-        DaemonAction::Settings => DaemonReply::Command(DaemonCommand::Settings),
-        DaemonAction::OpenSystemSettings => match open_settings() {
-            Ok(()) => DaemonReply::Handled,
-            Err(error) => DaemonReply::Error(error.to_string()),
-        },
+        DaemonAction::Reconnect => ReadResult::Command(DaemonCommand::ReconnectManaged),
+        DaemonAction::ReconnectTrusted => ReadResult::Command(DaemonCommand::ReconnectTrusted),
+        DaemonAction::Reload => ReadResult::Command(DaemonCommand::Reload),
+        DaemonAction::Settings => ReadResult::Command(DaemonCommand::Settings),
         DaemonAction::HostFixes => {
-            DaemonReply::Data(findings_payload(&BluetoothHostFixes.detect()))
+            ReadResult::HandledWithData(findings_payload(&BluetoothHostFixes.detect()))
         }
-        DaemonAction::HostProblems => DaemonReply::Data(problems_payload()),
+        DaemonAction::HostProblems => ReadResult::HandledWithData(problems_payload()),
         DaemonAction::ApplyHostFix => match host_fix_id(request) {
             Ok(id) => {
                 spawn_host_fix(id);
-                DaemonReply::Handled
+                ReadResult::Handled
             }
-            Err(message) => DaemonReply::Error(message),
+            Err(message) => ReadResult::Error(message),
         },
         DaemonAction::HandoffState => handoff_result(request, |address| {
             list_devices().map(|devices| crate::handoff::state(address, &devices))
@@ -1381,13 +1479,13 @@ pub fn dispatch_request(
 fn handoff_result(
     request: &DaemonRequest,
     operation: impl FnOnce(&str) -> Result<serde_json::Value>,
-) -> DaemonReply<DaemonCommand> {
+) -> ReadResult<DaemonCommand> {
     match request_address(request) {
         Ok(address) => match operation(&address.to_string()) {
-            Ok(payload) => DaemonReply::Data(payload),
-            Err(error) => DaemonReply::Error(format!("{error:#}")),
+            Ok(payload) => ReadResult::HandledWithData(payload),
+            Err(error) => ReadResult::Error(format!("{error:#}")),
         },
-        Err(error) => DaemonReply::Error(error),
+        Err(error) => ReadResult::Error(error),
     }
 }
 
@@ -1426,13 +1524,13 @@ fn device_daemon_command(
     request: &DaemonRequest,
     command: fn(Address) -> DaemonCommand,
     intent: DeviceIntent,
-) -> DaemonReply<DaemonCommand> {
+) -> ReadResult<DaemonCommand> {
     match request_address(request) {
         Ok(address) => match begin_device_action(address, intent) {
-            Ok(()) => DaemonReply::Command(command(address)),
-            Err(error) => DaemonReply::Error(error.to_string()),
+            Ok(()) => ReadResult::Command(command(address)),
+            Err(error) => ReadResult::Error(error.to_string()),
         },
-        Err(error) => DaemonReply::Error(error),
+        Err(error) => ReadResult::Error(error),
     }
 }
 
@@ -1447,19 +1545,18 @@ fn request_address(request: &DaemonRequest) -> std::result::Result<Address, Stri
     parse_address(address).map_err(|error| error.to_string())
 }
 
-fn reclaim_daemon_result(request: &DaemonRequest) -> DaemonReply<DaemonCommand> {
+fn reclaim_daemon_result(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
     match request_address(request) {
-        Ok(address) => match crate::audio_claim::reclaim_output(&address.to_string()) {
-            Ok(()) => DaemonReply::Handled,
-            Err(error) => DaemonReply::Error(format!("{error:#}")),
+        Ok(address) => match crate::audio_claim::platform::reclaim_output(&address.to_string()) {
+            Ok(()) => ReadResult::Handled,
+            Err(error) => ReadResult::Error(format!("{error:#}")),
         },
-        Err(error) => DaemonReply::Error(error),
+        Err(error) => ReadResult::Error(error),
     }
 }
 
 async fn resilient_daemon_loop(
     mut config: ReconnectConfig,
-    hooks: DaemonHooks,
     mut commands: tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
 ) -> Result<()> {
     loop {
@@ -1470,7 +1567,7 @@ async fn resilient_daemon_loop(
                 reset_discovery_state("adapter_unavailable")?;
                 log::warn!("Bluetooth adapter unavailable; retrying: {error:#}");
                 qol_runtime::probe!("BLUETOOTH_ADAPTER", "available=false outcome=retrying");
-                if wait_without_adapter(&mut config, hooks, &mut commands).await? {
+                if wait_without_adapter(&mut config, &mut commands).await? {
                     return Ok(());
                 }
                 continue;
@@ -1483,13 +1580,13 @@ async fn resilient_daemon_loop(
                     ADAPTER_CONNECT_TIMEOUT.as_secs()
                 );
                 qol_runtime::probe!("BLUETOOTH_ADAPTER", "available=false outcome=timed_out");
-                if wait_without_adapter(&mut config, hooks, &mut commands).await? {
+                if wait_without_adapter(&mut config, &mut commands).await? {
                     return Ok(());
                 }
                 continue;
             }
         };
-        match daemon_loop(&mut config, hooks, &mut commands, adapter).await {
+        match daemon_loop(&mut config, &mut commands, adapter).await {
             Ok(()) => return Ok(()),
             Err(error) => {
                 set_adapter_state(None);
@@ -1498,7 +1595,7 @@ async fn resilient_daemon_loop(
                 qol_runtime::probe!("BLUETOOTH_ADAPTER", "available=false outcome=session_ended");
             }
         }
-        if wait_without_adapter(&mut config, hooks, &mut commands).await? {
+        if wait_without_adapter(&mut config, &mut commands).await? {
             return Ok(());
         }
     }
@@ -1506,7 +1603,6 @@ async fn resilient_daemon_loop(
 
 async fn wait_without_adapter(
     config: &mut ReconnectConfig,
-    hooks: DaemonHooks,
     commands: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
 ) -> Result<bool> {
     let delay = tokio::time::sleep(ADAPTER_RETRY_DELAY);
@@ -1524,13 +1620,13 @@ async fn wait_without_adapter(
                     DaemonCommand::Settings => {
                         if let Err(error) = spawn_settings_panel() {
                             log::warn!("failed to launch native Bluetooth settings: {error:#}");
-                            if let Err(error) = (hooks.open_settings_page)() {
+                            if let Err(error) = crate::settings::open_browser() {
                                 log::warn!("failed to open Bluetooth settings fallback: {error:#}");
                             }
                         }
                     }
-                    DaemonCommand::Reload(fresh) => {
-                        *config = fresh;
+                    DaemonCommand::Reload => {
+                        *config = crate::config::load();
                         qol_runtime::probe!(
                             "BLUETOOTH_RELOAD",
                             "managed={} adapter_available=false",
@@ -1555,7 +1651,7 @@ async fn wait_without_adapter(
 }
 
 fn fail_command_without_adapter(command: DaemonCommand) {
-    let Some((address, label, action)) = unavailable_device_command(&command) else {
+    let Some((address, label, action)) = unavailable_device_command(command) else {
         match command {
             DaemonCommand::SetAdapterPower(_)
             | DaemonCommand::ReconnectManaged
@@ -1579,9 +1675,9 @@ fn fail_command_without_adapter(command: DaemonCommand) {
 }
 
 fn unavailable_device_command(
-    command: &DaemonCommand,
+    command: DaemonCommand,
 ) -> Option<(Address, &'static str, &'static str)> {
-    match *command {
+    match command {
         DaemonCommand::Pair(address) => Some((address, "Pair", "pair")),
         DaemonCommand::Trust(address, true) => Some((address, "Trust", "trust")),
         DaemonCommand::Trust(address, false) => Some((address, "Untrust", "untrust")),
@@ -1594,14 +1690,13 @@ fn unavailable_device_command(
         | DaemonCommand::Kill
         | DaemonCommand::StartSearch
         | DaemonCommand::StopSearch
-        | DaemonCommand::Reload(_)
+        | DaemonCommand::Reload
         | DaemonCommand::Settings => None,
     }
 }
 
 async fn daemon_loop(
     config: &mut ReconnectConfig,
-    hooks: DaemonHooks,
     commands: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
     adapter: Adapter,
 ) -> Result<()> {
@@ -1632,7 +1727,7 @@ async fn daemon_loop(
     )
     .await;
     for address in known_addresses {
-        spawn_audio_profile_ensure(address, AudioAdoption::Keep, config.set_default_output);
+        spawn_audio_profile_ensure(address, AudioAdoption::Keep);
     }
     request_all(&mut retries, Instant::now());
     qol_runtime::probe!(
@@ -1657,7 +1752,7 @@ async fn daemon_loop(
                 if matches!(command, DaemonCommand::Settings) {
                     if let Err(error) = spawn_settings_panel() {
                         log::warn!("failed to launch native Bluetooth settings: {error:#}");
-                        if let Err(error) = (hooks.open_settings_page)() {
+                        if let Err(error) = crate::settings::open_browser() {
                             log::warn!("failed to open Bluetooth settings fallback: {error:#}");
                         }
                     }
@@ -1745,8 +1840,8 @@ async fn daemon_loop(
                     operations.remove(adapter.clone(), address);
                     continue;
                 }
-                if let DaemonCommand::Reload(fresh) = command {
-                    *config = fresh;
+                if matches!(command, DaemonCommand::Reload) {
+                    *config = crate::config::load();
                     retries = retry_map(config);
                     let known_addresses = adapter.device_addresses().await?;
                     subscribe_addresses(
@@ -1756,11 +1851,7 @@ async fn daemon_loop(
                         known_addresses.iter(),
                     ).await;
                     for address in known_addresses {
-                        spawn_audio_profile_ensure(
-                            address,
-                            AudioAdoption::Keep,
-                            config.set_default_output,
-                        );
+                        spawn_audio_profile_ensure(address, AudioAdoption::Keep);
                     }
                     request_all(&mut retries, Instant::now());
                     qol_runtime::probe!(
@@ -1788,11 +1879,7 @@ async fn daemon_loop(
                         if retries.contains_key(&address) {
                             retries.entry(address).or_default().request_when_idle(Instant::now());
                         }
-                        spawn_audio_profile_ensure(
-                            address,
-                            AudioAdoption::Adopt,
-                            config.set_default_output,
-                        );
+                        spawn_audio_profile_ensure(address, AudioAdoption::Adopt);
                         qol_runtime::probe!(
                             "BLUETOOTH_DEVICE_ADDED",
                             "device={} search_active={}",
@@ -1836,11 +1923,7 @@ async fn daemon_loop(
                 let (address, connected) = event;
                 let qol_in_flight = ConnectionFlightGuard::active(address);
                 if connected && !qol_in_flight {
-                    spawn_audio_profile_ensure(
-                        address,
-                        AudioAdoption::Adopt,
-                        config.set_default_output,
-                    );
+                    spawn_audio_profile_ensure(address, AudioAdoption::Adopt);
                 }
                 if !connected {
                     clear_adoption_retry(address);
@@ -1894,14 +1977,14 @@ async fn daemon_loop(
                 operations.start_due(&adapter, &retries);
             }
             completion = operations.next() => {
-                operations::complete(completion, &mut retries, config, hooks, &mut subscribed, &mut watch_states);
+                operations::complete(completion, &mut retries, config, &mut subscribed, &mut watch_states);
             }
             _ = manager_reconcile.tick() => {
                 notify_adopted_managers();
                 crate::hostfix::reconcile_claimed_managers();
             }
             _ = audio_watch.tick() => {
-                audio_watch_tick(&adapter, &mut watch_states, config.set_default_output).await;
+                audio_watch_tick(&adapter, &mut watch_states).await;
             }
         }
     }
@@ -2349,7 +2432,7 @@ impl Drop for AudioRepairGuard {
     }
 }
 
-fn spawn_audio_profile_ensure(address: Address, adoption: AudioAdoption, set_default_output: bool) {
+fn spawn_audio_profile_ensure(address: Address, adoption: AudioAdoption) {
     std::mem::drop(tokio::spawn(async move {
         let Some(_flight) = ConnectionFlightGuard::acquire(address) else {
             qol_runtime::probe!(
@@ -2369,7 +2452,7 @@ fn spawn_audio_profile_ensure(address: Address, adoption: AudioAdoption, set_def
         };
         match ensure_reconnected_audio_profile(address).await {
             Ok(AudioProfile::Active) => {
-                adopt_reconnected_output(address, adoption, "connect", set_default_output).await
+                adopt_reconnected_output(address, adoption, "connect").await
             }
             Ok(AudioProfile::Absent) => {}
             Err(error) => log::warn!(
@@ -2597,14 +2680,19 @@ async fn adopt_reconnected_output(
     address: Address,
     adoption: AudioAdoption,
     trigger: &'static str,
-    set_default_output: bool,
 ) {
     let effective = audio::request("read the machine default output", || {
         qol_audio::default_output::effective_identity(Direction::Output)
     })
     .await;
     let outputs = audio::request("inspect audio outputs", qol_audio::devices::list_outputs).await;
-    let decision = adoption_decision(adoption, set_default_output, address, effective, outputs);
+    let decision = adoption_decision(
+        adoption,
+        crate::config::load().set_default_output,
+        address,
+        effective,
+        outputs,
+    );
     match decision {
         AdoptionDecision::Adopt => match adopt_default_sink(address, trigger).await {
             Ok(AdoptionOutcome::Adopted) => clear_adoption_retry(address),
@@ -2626,11 +2714,7 @@ async fn adopt_reconnected_output(
     }
 }
 
-async fn audio_watch_tick(
-    adapter: &Adapter,
-    states: &mut HashMap<Address, AudioWatchState>,
-    set_default_output: bool,
-) {
+async fn audio_watch_tick(adapter: &Adapter, states: &mut HashMap<Address, AudioWatchState>) {
     for address in expire_adoption_retries() {
         log::warn!(
             "Bluetooth default output selection expired for {}: the retry window closed",
@@ -2664,13 +2748,8 @@ async fn audio_watch_tick(
                 adoption_retry_pending(address),
             ) {
                 WatchAction::Retry => {
-                    adopt_reconnected_output(
-                        address,
-                        AudioAdoption::Adopt,
-                        ADOPT_TRIGGER_RETRY,
-                        set_default_output,
-                    )
-                    .await;
+                    adopt_reconnected_output(address, AudioAdoption::Adopt, ADOPT_TRIGGER_RETRY)
+                        .await;
                     continue;
                 }
                 WatchAction::Idle => continue,
@@ -2725,7 +2804,7 @@ async fn audio_watch_tick(
                         redacted(address),
                         profile.as_deref().unwrap_or("none"),
                     );
-                    spawn_audio_profile_reconnect(address, set_default_output);
+                    spawn_audio_profile_reconnect(address);
                 }
                 RepairDecision::Cooldown => {
                     qol_runtime::probe!(
@@ -2747,7 +2826,7 @@ async fn audio_watch_tick(
     let _ = tokio::time::timeout(AUDIO_WATCH_TICK_BUDGET, scan).await;
 }
 
-fn spawn_audio_profile_reconnect(address: Address, set_default_output: bool) {
+fn spawn_audio_profile_reconnect(address: Address) {
     std::mem::drop(tokio::spawn(async move {
         let Some(_flight) = ConnectionFlightGuard::acquire(address) else {
             qol_runtime::probe!(
@@ -2772,13 +2851,7 @@ fn spawn_audio_profile_reconnect(address: Address, set_default_output: bool) {
         .await;
         match repair {
             Ok(Ok(AudioProfile::Active)) => {
-                adopt_reconnected_output(
-                    address,
-                    AudioAdoption::Adopt,
-                    "repair",
-                    set_default_output,
-                )
-                .await;
+                adopt_reconnected_output(address, AudioAdoption::Adopt, "repair").await;
             }
             Ok(Ok(AudioProfile::Absent)) => {}
             Ok(Err(error)) => log::warn!(
@@ -3003,15 +3076,14 @@ mod tests {
     use super::{
         active_card_profile, adopt_sink_wait, adoption_decision, adoption_retry_pending, audio,
         begin_device_action, card_for, clear_adoption_retry, complete_device_action_within,
-        dispatch_request, finish_device_action, parse_address, record_adoption_sink_absent,
+        finish_device_action, parse_address, parse_daemon_request, record_adoption_sink_absent,
         record_adoption_skip_blocked, record_adoption_skip_unverified, redacted, redacted_sink,
         register_adoption_retry, running_sink_except, runtime, set_device_action_state,
         source_in_use, source_index_matching, tolerated_profile_connect, transient_connect_error,
         watch_action, Address, AdoptionDecision, AdoptionRetries, AudioAdoption, AudioRepairGuard,
-        ConnectionFlightGuard, DaemonAction, DaemonCommand, DaemonReply, DeviceActionTimeout,
-        DeviceIntent, Duration, ErrorKind, Instant, ReconnectConfig, Result, RetryState,
-        WatchAction, ADOPTION_RETRY_WINDOW, ADOPT_TRIGGER_RETRY, DEVICE_ACTION_STATE,
-        PROFILE_CONNECT_TIMEOUT,
+        ConnectionFlightGuard, DaemonAction, DaemonCommand, DeviceActionTimeout, DeviceIntent,
+        Duration, ErrorKind, Instant, ReadResult, Result, RetryState, WatchAction,
+        ADOPTION_RETRY_WINDOW, ADOPT_TRIGGER_RETRY, DEVICE_ACTION_STATE, PROFILE_CONNECT_TIMEOUT,
     };
     use qol_audio::control::{Card, Sink, Source, SourceOutput};
     use qol_audio::devices::{AudioDevice, Identity, Kind, State};
@@ -3025,58 +3097,57 @@ mod tests {
         }
     }
 
-    fn test_config() -> ReconnectConfig {
-        ReconnectConfig {
-            adapter: String::new(),
-            managed_devices: Vec::new(),
-            power_on_adapter: true,
-            set_default_output: true,
-            retry_initial_seconds: 1.0,
-            retry_max_seconds: 60.0,
-        }
-    }
-
     #[test]
     fn adapter_power_actions_route_to_the_daemon_loop() {
-        let cases = [
-            (DaemonAction::EnableAdapter, "enable_adapter", true),
-            (DaemonAction::DisableAdapter, "disable_adapter", false),
-        ];
-        for (action, id, expected) in cases {
+        let cases = [("enable_adapter", true), ("disable_adapter", false)];
+        for (action, expected) in cases {
             assert!(matches!(
-                dispatch_request(action, &request(id), test_config),
-                DaemonReply::Command(DaemonCommand::SetAdapterPower(powered)) if powered == expected
+                parse_daemon_request(&request(action)),
+                ReadResult::Command(DaemonCommand::SetAdapterPower(powered)) if powered == expected
             ));
         }
     }
 
     #[test]
-    fn a_reload_carries_the_config_the_adapter_loaded() {
-        let loaded = ReconnectConfig {
-            adapter: "AA:BB:CC:DD:EE:FF".into(),
-            ..test_config()
-        };
-        let reply = dispatch_request(DaemonAction::Reload, &request("reload"), || loaded);
-        assert!(matches!(
-            reply,
-            DaemonReply::Command(DaemonCommand::Reload(config))
-                if config.adapter == "AA:BB:CC:DD:EE:FF"
-        ));
-    }
-
-    #[test]
-    fn bluez_has_no_system_settings_pane_to_open() {
-        let reply = dispatch_request(
-            DaemonAction::OpenSystemSettings,
-            &request("open_system_settings"),
-            test_config,
-        );
-        match reply {
-            DaemonReply::Error(message) => {
-                assert!(message.contains("no system Bluetooth settings pane"))
-            }
-            _ => panic!("open_system_settings must report that BlueZ has no pane"),
+    fn daemon_actions_parse_at_the_protocol_boundary() {
+        let cases = [
+            ("ping", DaemonAction::Ping),
+            ("kill", DaemonAction::Kill),
+            ("enable_adapter", DaemonAction::EnableAdapter),
+            ("disable_adapter", DaemonAction::DisableAdapter),
+            ("pair_device", DaemonAction::PairDevice),
+            ("trust_device", DaemonAction::TrustDevice),
+            ("untrust_device", DaemonAction::UntrustDevice),
+            ("connect_device", DaemonAction::ConnectDevice),
+            ("disconnect_device", DaemonAction::DisconnectDevice),
+            ("reclaim_device", DaemonAction::ReclaimDevice),
+            ("remove_device", DaemonAction::RemoveDevice),
+            ("start_search", DaemonAction::StartSearch),
+            ("stop_search", DaemonAction::StopSearch),
+            ("devices", DaemonAction::Devices),
+            ("nearby_devices", DaemonAction::NearbyDevices),
+            ("managed_device_options", DaemonAction::ManagedDeviceOptions),
+            ("adapter_options", DaemonAction::AdapterOptions),
+            ("search_status", DaemonAction::SearchStatus),
+            ("adapter_status", DaemonAction::AdapterStatus),
+            ("reconnect", DaemonAction::Reconnect),
+            ("reconnect_trusted", DaemonAction::ReconnectTrusted),
+            ("reload", DaemonAction::Reload),
+            ("settings", DaemonAction::Settings),
+            ("host_fixes", DaemonAction::HostFixes),
+            ("host_problems", DaemonAction::HostProblems),
+        ];
+        for (action, expected) in cases {
+            assert_eq!(
+                DaemonAction::try_from(action),
+                Ok(expected),
+                "action={action}"
+            );
         }
+        assert_eq!(
+            DaemonAction::try_from("unknown"),
+            Err("unknown Bluetooth action: unknown".into())
+        );
     }
 
     #[test]
@@ -3107,11 +3178,11 @@ mod tests {
     fn unavailable_adapter_maps_device_actions_to_stable_failures() {
         let address = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
         assert_eq!(
-            super::unavailable_device_command(&DaemonCommand::Connect(address)),
+            super::unavailable_device_command(DaemonCommand::Connect(address)),
             Some((address, "Connect", "connect"))
         );
         assert_eq!(
-            super::unavailable_device_command(&DaemonCommand::SetAdapterPower(true)),
+            super::unavailable_device_command(DaemonCommand::SetAdapterPower(true)),
             None
         );
     }

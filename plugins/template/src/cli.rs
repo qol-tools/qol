@@ -5,7 +5,7 @@ use qol_headless::{
     Command, CommandContext, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput,
 };
 
-use crate::PLUGIN_ID;
+const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)

@@ -54,8 +54,8 @@ impl HookStatus {
     }
 }
 
-pub(super) fn write(plugin_id: &str, status: &HookStatus) {
-    let Some(path) = path(plugin_id) else {
+pub(super) fn write(status: &HookStatus) {
+    let Some(path) = path() else {
         return;
     };
     let written = path
@@ -73,8 +73,8 @@ pub(super) fn write(plugin_id: &str, status: &HookStatus) {
     }
 }
 
-pub(super) fn read(plugin_id: &str) -> Option<HookStatus> {
-    serde_json::from_slice(&std::fs::read(path(plugin_id)?).ok()?).ok()
+pub(super) fn read() -> Option<HookStatus> {
+    serde_json::from_slice(&std::fs::read(path()?).ok()?).ok()
 }
 
 pub(super) fn unix_now() -> u64 {
@@ -83,11 +83,12 @@ pub(super) fn unix_now() -> u64 {
         .map_or(0, |elapsed| elapsed.as_secs())
 }
 
-fn path(plugin_id: &str) -> Option<PathBuf> {
+fn path() -> Option<PathBuf> {
+    let id = qol_config::plugin_id_from_env(crate::cli::PLUGIN_ID);
     Some(
         qol_config::data_dir()?
             .join("plugins")
-            .join(plugin_id)
+            .join(id)
             .join(STATUS_FILE),
     )
 }

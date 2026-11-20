@@ -14,6 +14,7 @@ use crate::display_color::classifier::{self, ColorShape};
 use crate::host_night_light::{
     HostNightLight, HostNightLightStatus, NoopHostNightLight, TakeoverOutcome,
 };
+use crate::hotkeys::PLUGIN_ID;
 use crate::monitor::layout::{
     layout_rows, mode_lists, mode_rows, placements_from_snapshots, resolve_arrange,
     resolve_config_layout, resolve_mode, snapshot_for, ArrangeRequest,
@@ -30,7 +31,6 @@ use crate::session::{
     LayoutSnapshot, LutProvider, ModeRecord, OwnedGamma, PlacementRecord, RestoreMode, Session,
     SessionStore, Snapshot,
 };
-use crate::PLUGIN_ID;
 use qol_windowing::display::{DisplayHandle, DisplayPlacement, DisplaySnapshot};
 
 pub const HOLD_DEBOUNCE: Duration = Duration::from_millis(70);
@@ -815,6 +815,7 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
         self
     }
 
+    #[cfg(test)]
     fn with_adoption_generation(mut self, generation: Option<String>) -> Self {
         self.session = self.session.with_adoption_generation(generation);
         self
@@ -2115,9 +2116,9 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 true
             }
             Command::Settings => {
-                if let Err(error) =
-                    qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::PLUGIN_ID)
-                {
+                if let Err(error) = qol_apps::desktop_integration::open_plugin_settings_via_tray(
+                    crate::hotkeys::PLUGIN_ID,
+                ) {
                     log::warn!("failed to open settings page: {error}");
                 }
                 true
@@ -2427,7 +2428,7 @@ pub fn run() -> Result<(), String> {
     set_live_state(Arc::clone(&runtime));
     let recovery = runtime.lock().unwrap().start(&device);
     trace_startup(&recovery);
-    let _sigterm = install_signal_handlers(tx, Command::Kill, Command::Handoff);
+    let _sigterm = install_signal_handlers(tx);
     run_loop(&runtime, &rx);
     core_daemon::cleanup(&DAEMON_CONFIG);
     Ok(())
@@ -2445,9 +2446,7 @@ fn build_runtime(
         let root = config_root.clone();
         move |preferred: &BTreeMap<String, u8>| config::save_preferred(root.as_deref(), preferred)
     };
-    let adoption_generation = std::env::var(qol_conventions::ENV_DEV_GENERATION_ID).ok();
-    let host_night_light =
-        crate::host_night_light::control(config_root.as_deref(), adoption_generation.clone());
+    let host_night_light = crate::host_night_light::control(config_root.as_deref());
     Runtime::new(
         control,
         store,
@@ -2457,7 +2456,6 @@ fn build_runtime(
         preferred_save,
         || HostResidency::current().is_resident(),
     )
-    .with_adoption_generation(adoption_generation)
     .with_host_night_light(host_night_light)
     .with_banner(qol_plugin_daemon::notification::send_banner)
     .with_applet(Arc::new(backends::AppletOwner::new(
@@ -7305,7 +7303,7 @@ mod tests {
             .unwrap();
         control.calls.lock().unwrap().clear();
         let (tx, rx) = mpsc::channel();
-        let _sigterm = install_signal_handlers(tx, Command::Kill, Command::Handoff);
+        let _sigterm = install_signal_handlers(tx);
         let loop_thread = std::thread::spawn(move || run_loop(&runtime, &rx));
         let status = std::process::Command::new("kill")
             .args(["-TERM", &std::process::id().to_string()])
@@ -7344,7 +7342,7 @@ mod tests {
             .unwrap();
         control.calls.lock().unwrap().clear();
         let (tx, rx) = mpsc::channel();
-        let _sighup = install_signal_handlers(tx, Command::Kill, Command::Handoff);
+        let _sighup = install_signal_handlers(tx);
         let loop_thread = std::thread::spawn(move || run_loop(&runtime, &rx));
         let status = std::process::Command::new("kill")
             .args(["-HUP", &std::process::id().to_string()])

@@ -12,7 +12,7 @@ use super::hotkeys::Hotkeys;
 use super::service::{self, Probe};
 use super::store::Store;
 use super::system_modifier_keys::{self, DeviceModifiers};
-use crate::config::KeyBackendChoice;
+use crate::platform::engine::config::KeyBackendChoice;
 use crate::platform::engine::remap::ResolvedConfig;
 use crate::platform::macos::input::selection::Availability;
 use crate::platform::macos::input::{BackendId, InputState};
@@ -440,7 +440,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::config::RemapConfig;
+    use crate::platform::engine::config::RemapConfig;
     use crate::platform::engine::remap;
     use crate::platform::macos::layout::CharTable;
 

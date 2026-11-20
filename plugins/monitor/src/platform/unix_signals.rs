@@ -1,10 +1,8 @@
 use std::sync::mpsc::Sender;
 
-pub(crate) fn install_signal_handlers<Message: Send + 'static>(
-    tx: Sender<Message>,
-    on_terminate: Message,
-    on_hangup: Message,
-) -> signal_hook::iterator::Handle {
+use crate::daemon::Command;
+
+pub(crate) fn install_signal_handlers(tx: Sender<Command>) -> signal_hook::iterator::Handle {
     let mut signals = signal_hook::iterator::Signals::new([
         signal_hook::consts::SIGTERM,
         signal_hook::consts::SIGHUP,
@@ -15,16 +13,14 @@ pub(crate) fn install_signal_handlers<Message: Send + 'static>(
         .name("monitor-signals".into())
         .spawn(move || {
             for signal in signals.forever() {
-                match signal {
-                    signal_hook::consts::SIGTERM => {
-                        let _ = tx.send(on_terminate);
-                        return;
-                    }
-                    signal_hook::consts::SIGHUP => {
-                        let _ = tx.send(on_hangup);
-                        return;
-                    }
-                    _ => {}
+                let command = match signal {
+                    signal_hook::consts::SIGTERM => Some(Command::Kill),
+                    signal_hook::consts::SIGHUP => Some(Command::Handoff),
+                    _ => None,
+                };
+                if let Some(command) = command {
+                    let _ = tx.send(command);
+                    return;
                 }
             }
         })

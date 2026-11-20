@@ -7,7 +7,6 @@ use qol_profile_sync::{device_local_dir, SyncPaths};
 use crate::monitor::layout::LayoutPosition;
 use crate::monitor::night::{Minute, NightState, Schedule, ScheduleError, ScheduleMode};
 use crate::monitor::BrightnessPolicy;
-use crate::PLUGIN_ID;
 
 pub const DEVICE_NAMESPACE: &str = "monitor";
 pub const DEVICE_CONFIG_FILE: &str = "config.json";
@@ -17,6 +16,7 @@ pub const SESSION_SUBDIR: &str = "session";
 const PREFERRED_MAX: u8 = 100;
 const NIGHT_MIN_KELVIN: u16 = 1500;
 const NIGHT_MAX_KELVIN: u16 = 6500;
+const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

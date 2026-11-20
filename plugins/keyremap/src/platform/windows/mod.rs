@@ -12,8 +12,6 @@ use qol_headless::{CommandResult, DoctorCheckResult};
 
 use super::engine;
 use super::{ConfigInspection, PlatformAdapter};
-use crate::config::Inspection;
-use crate::control::Host;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Adapter;
@@ -27,8 +25,8 @@ impl PlatformAdapter for Adapter {
         true
     }
 
-    fn launch(&self, host: &Host) -> Result<CommandResult> {
-        service::run(host)?;
+    fn launch(&self) -> Result<CommandResult> {
+        service::run()?;
         Ok(CommandResult::success(""))
     }
 
@@ -50,50 +48,48 @@ impl PlatformAdapter for Adapter {
         ))
     }
 
-    fn karabiner_rules(&self, _host: &Host) -> Result<CommandResult> {
+    fn karabiner_rules(&self) -> Result<CommandResult> {
         Ok(karabiner_is_macos_only())
     }
 
-    fn karabiner_sync(&self, _host: &Host) -> Result<CommandResult> {
+    fn karabiner_sync(&self) -> Result<CommandResult> {
         Ok(karabiner_is_macos_only())
     }
 
-    fn karabiner_remove(&self, _host: &Host) -> Result<CommandResult> {
+    fn karabiner_remove(&self) -> Result<CommandResult> {
         Ok(karabiner_is_macos_only())
     }
 
-    fn inspect_config(&self, inspected: &Inspection) -> Result<ConfigInspection> {
-        Ok(engine::inspection(inspected, keys::modifier_key_issues))
+    fn inspect_config(&self) -> Result<ConfigInspection> {
+        engine::inspection(keys::modifier_key_issues)
     }
 
     fn virtual_hid_driver(&self) -> Result<DoctorCheckResult> {
         Ok(doctor::driver())
     }
 
-    fn virtual_hid_daemon(&self, host: &Host) -> DoctorCheckResult {
-        doctor::daemon(&host.plugin_id)
+    fn virtual_hid_daemon(&self) -> DoctorCheckResult {
+        doctor::daemon()
     }
 
     fn hid_helper_state(&self) -> DoctorCheckResult {
         doctor::helper()
     }
 
-    fn key_backend(&self, _host: &Host) -> DoctorCheckResult {
+    fn key_backend(&self) -> DoctorCheckResult {
         doctor::key_backend()
     }
 
-    fn karabiner_block(&self, _host: &Host) -> DoctorCheckResult {
+    fn karabiner_block(&self) -> DoctorCheckResult {
         doctor::karabiner_rules()
     }
 
-    fn secure_input(&self, _host: &Host) -> DoctorCheckResult {
+    fn secure_input(&self) -> DoctorCheckResult {
         doctor::secure_input()
     }
 
-    fn layout_characters(&self, host: &Host) -> DoctorCheckResult {
-        doctor::layout(&engine::remap::character_targets(&service::resolve((host
-            .read_config)(
-        ))))
+    fn layout_characters(&self) -> DoctorCheckResult {
+        doctor::layout(&engine::remap::character_targets(&service::load()))
     }
 }
 

@@ -2,26 +2,31 @@ use std::sync::mpsc::Sender;
 
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 
-use crate::control::Command;
-
 const CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
     support_replace_existing: false,
 };
 
-pub(super) fn send_reload() -> bool {
+pub enum Command {
+    Reload,
+    Toggle,
+    Kill,
+    Settings,
+}
+
+pub fn send_reload() -> bool {
     core_daemon::send_action(&CONFIG, "reload", false)
 }
 
-pub(super) fn send_kill() -> bool {
+pub fn send_kill() -> bool {
     core_daemon::send_kill(&CONFIG)
 }
 
-pub(super) fn start_listener(tx: Sender<Command>) -> bool {
+pub fn start_listener(tx: Sender<Command>) -> bool {
     core_daemon::start_listener(&CONFIG, tx, parse_command)
 }
 
-pub(super) fn cleanup() {
+pub fn cleanup() {
     core_daemon::cleanup(&CONFIG);
 }
 

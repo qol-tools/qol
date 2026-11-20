@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub(crate) const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
-
-pub(crate) type Inspection = qol_config::PluginConfigInspection<RemapConfig>;
+const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -151,11 +150,13 @@ pub struct ScrollRule {
 }
 
 pub fn load_config() -> RemapConfig {
-    qol_config::load_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
+    qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }
 
-pub fn inspect_config() -> Result<Inspection, qol_config::PluginConfigInspectionError> {
-    qol_config::inspect_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
+pub fn inspect_config(
+) -> Result<qol_config::PluginConfigInspection<RemapConfig>, qol_config::PluginConfigInspectionError>
+{
+    qol_config::inspect_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_S, VK_SNAPSHOT, VK_SPACE, VK_T, VK_TAB, VK_U, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
 };
 
-use crate::config::{ModifierTarget, RemapConfig};
+use crate::platform::engine::config::{ModifierTarget, RemapConfig};
 
 pub(super) const UNMAPPED: u16 = u16::MAX;
 pub(super) const MASK_KEY: VIRTUAL_KEY = 0xE8;

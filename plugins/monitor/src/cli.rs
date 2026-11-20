@@ -18,7 +18,8 @@ use crate::monitor::{
     BrightnessState, DisplayControl, DisplaySnapshot, GrantBackend, I2cGrantState, MonitorError,
     RevokeOutcome, BRIGHTNESS_MAX, BRIGHTNESS_MIN, BRIGHTNESS_STEP,
 };
-use crate::PLUGIN_ID;
+
+const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     let args: Vec<String> = args.into_iter().collect();

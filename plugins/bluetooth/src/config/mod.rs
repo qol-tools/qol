@@ -36,6 +36,28 @@ pub(crate) fn without_managed(managed: &[String], address: &str) -> Option<Vec<S
     (kept.len() != managed.len()).then_some(kept)
 }
 
+static FORGET_WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub(crate) fn forget_managed(config: &ReconnectConfig, address: &str) {
+    if without_managed(&config.managed_devices, address).is_none() {
+        return;
+    }
+    let address = address.to_string();
+    std::mem::drop(std::thread::spawn(move || {
+        let _writing = FORGET_WRITES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(kept) = without_managed(&load().managed_devices, &address) else {
+            return;
+        };
+        let id = qol_config::plugin_id_from_env(crate::PLUGIN_ID);
+        let keys = serde_json::json!({ "managed_devices": kept });
+        if let Err(error) = qol_plugin_api::host_exec::save_plugin_config_keys(&id, &keys) {
+            log::warn!("Bluetooth could not drop a removed device from reconnecting: {error}");
+        }
+    }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,9 +2,6 @@ use anyhow::Result;
 use qol_headless::{CommandResult, DoctorCheckResult};
 use qol_platform::PermissionState;
 
-use crate::config::Inspection;
-use crate::control::Host;
-
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod engine;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -24,9 +21,9 @@ use fallback::NAME as ABSENT_NAME;
 use linux::NAME as ABSENT_NAME;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-use engine as runner;
+use engine as control;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-use virtual_keyboard_absent as runner;
+use virtual_keyboard_absent as control;
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::Adapter as Platform;
@@ -49,31 +46,31 @@ pub(crate) struct ConfigInspection {
 pub(crate) trait PlatformAdapter: Clone + Send + Sync + 'static {
     fn name(&self) -> &'static str;
     fn supported(&self) -> bool;
-    fn launch(&self, host: &Host) -> Result<CommandResult>;
-    fn reload(&self, host: &Host) -> Result<CommandResult> {
-        Ok(runner::reload(host))
+    fn launch(&self) -> Result<CommandResult>;
+    fn reload(&self) -> Result<CommandResult> {
+        Ok(control::reload())
     }
-    fn toggle(&self, host: &Host) -> Result<CommandResult> {
-        Ok(runner::toggle(host))
+    fn toggle(&self) -> Result<CommandResult> {
+        Ok(control::toggle())
     }
-    fn kill(&self, host: &Host) -> Result<CommandResult> {
-        Ok(runner::kill(host))
+    fn kill(&self) -> Result<CommandResult> {
+        Ok(control::kill())
     }
     fn hid_helper(&self) -> Result<CommandResult>;
     fn install_hid_helper(&self) -> Result<CommandResult>;
     fn uninstall_hid_helper(&self) -> Result<CommandResult>;
-    fn karabiner_rules(&self, host: &Host) -> Result<CommandResult>;
-    fn karabiner_sync(&self, host: &Host) -> Result<CommandResult>;
-    fn karabiner_remove(&self, host: &Host) -> Result<CommandResult>;
-    fn inspect_config(&self, inspected: &Inspection) -> Result<ConfigInspection>;
+    fn karabiner_rules(&self) -> Result<CommandResult>;
+    fn karabiner_sync(&self) -> Result<CommandResult>;
+    fn karabiner_remove(&self) -> Result<CommandResult>;
+    fn inspect_config(&self) -> Result<ConfigInspection>;
     fn input_permission(&self) -> PermissionState {
         qol_platform::permission_status(qol_platform::Permission::InputCapture)
     }
     fn virtual_hid_driver(&self) -> Result<DoctorCheckResult>;
-    fn virtual_hid_daemon(&self, host: &Host) -> DoctorCheckResult;
+    fn virtual_hid_daemon(&self) -> DoctorCheckResult;
     fn hid_helper_state(&self) -> DoctorCheckResult;
-    fn key_backend(&self, host: &Host) -> DoctorCheckResult;
-    fn karabiner_block(&self, host: &Host) -> DoctorCheckResult;
-    fn secure_input(&self, host: &Host) -> DoctorCheckResult;
-    fn layout_characters(&self, host: &Host) -> DoctorCheckResult;
+    fn key_backend(&self) -> DoctorCheckResult;
+    fn karabiner_block(&self) -> DoctorCheckResult;
+    fn secure_input(&self) -> DoctorCheckResult;
+    fn layout_characters(&self) -> DoctorCheckResult;
 }

@@ -30,7 +30,7 @@ use super::foreground::Foreground;
 use super::keys;
 use super::machine::{Decision, Event, Machine, Output};
 use super::status::{self, HookStatus};
-use crate::config::RemapConfig;
+use crate::platform::engine::daemon;
 use crate::platform::engine::remap::{modifiers_from_bits, MouseButton, ResolvedConfig};
 use crate::platform::engine::Remapper;
 
@@ -71,22 +71,18 @@ pub(super) struct Hooks {
 }
 
 impl Hooks {
-    pub(super) fn start(
-        config: ResolvedConfig,
-        send_kill: fn() -> bool,
-        plugin_id: String,
-    ) -> Result<Self> {
+    pub(super) fn start(config: ResolvedConfig) -> Result<Self> {
         if CONFIG.set(RwLock::new(Arc::new(config))).is_err() {
             bail!("the Windows input hooks are already installed");
         }
         let (ready_tx, ready_rx) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("keyremap-hooks".into())
-            .spawn(move || run(ready_tx, &plugin_id))?;
+            .spawn(move || run(ready_tx))?;
         match ready_rx.recv_timeout(READY_TIMEOUT) {
             Ok(Ok(thread_id)) => {
                 log::info!("Windows keyboard and mouse hooks installed");
-                watch_stop_request(thread_id, send_kill);
+                watch_stop_request(thread_id);
                 Ok(Self { thread_id, thread })
             }
             Ok(Err(message)) => bail!(message),
@@ -101,7 +97,7 @@ impl Hooks {
 }
 
 impl Remapper for Hooks {
-    fn swap_config(&self, config: ResolvedConfig, _raw: &RemapConfig) {
+    fn swap_config(&self, config: ResolvedConfig) {
         if let Some(lock) = CONFIG.get() {
             *lock
                 .write()
@@ -125,12 +121,12 @@ impl Remapper for Hooks {
     }
 }
 
-fn watch_stop_request(thread_id: u32, send_kill: fn() -> bool) {
+fn watch_stop_request(thread_id: u32) {
     let watcher = std::thread::Builder::new()
         .name("keyremap-stop".into())
         .spawn(move || {
             end_on_stop(qol_process::wait_for_stop_request(), || {
-                send_kill() || end_hook_thread(thread_id)
+                daemon::send_kill() || end_hook_thread(thread_id)
             })
         });
     if let Err(error) = watcher {
@@ -161,16 +157,13 @@ fn end_hook_thread(thread_id: u32) -> bool {
     unsafe { PostThreadMessageW(thread_id, WM_QUIT, 0, 0) != 0 }
 }
 
-fn run(ready: Sender<Result<u32, String>>, plugin_id: &str) {
+fn run(ready: Sender<Result<u32, String>>) {
     let mut message: MSG = unsafe { std::mem::zeroed() };
     unsafe { PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_NOREMOVE) };
     let mut hooks = match LowLevelHooks::arm(keyboard_hook, mouse_hook, MouseHook::Required) {
         Ok(hooks) => hooks,
         Err(error) => {
-            status::write(
-                plugin_id,
-                &HookStatus::failed(std::process::id(), error.clone()),
-            );
+            status::write(&HookStatus::failed(std::process::id(), error.clone()));
             let _ = ready.send(Err(error));
             return;
         }
@@ -178,7 +171,7 @@ fn run(ready: Sender<Result<u32, String>>, plugin_id: &str) {
     let own = process_elevated(std::process::id());
     STATE.with(|state| state.borrow_mut().foreground = Foreground::new(own));
     let mut hook_status = HookStatus::installed(std::process::id());
-    status::write(plugin_id, &hook_status);
+    status::write(&hook_status);
     if let Some(tick) = hooks::last_input_tick() {
         SEEN_INPUT.rearmed(tick);
     }
@@ -189,13 +182,13 @@ fn run(ready: Sender<Result<u32, String>>, plugin_id: &str) {
         if message.message == WM_TIMER && check_liveness(&mut hooks, last_arm.elapsed()) {
             last_arm = Instant::now();
             hook_status.rearmed(status::unix_now());
-            status::write(plugin_id, &hook_status);
+            status::write(&hook_status);
         }
     }
     hooks.unhook();
     let outputs = STATE.with(|state| state.borrow_mut().machine.release_all());
     send(&outputs, tag());
-    status::write(plugin_id, &hook_status.stopped());
+    status::write(&hook_status.stopped());
 }
 
 fn check_liveness(hooks: &mut LowLevelHooks, since_arm: Duration) -> bool {

@@ -113,9 +113,6 @@ impl HostNightLight for UnavailableHostNightLight {
     }
 }
 
-pub fn control(
-    config_root: Option<&Path>,
-    adoption_generation: Option<String>,
-) -> Arc<dyn HostNightLight> {
-    platform::control(config_root, adoption_generation)
+pub fn control(config_root: Option<&Path>) -> Arc<dyn HostNightLight> {
+    platform::control(config_root)
 }

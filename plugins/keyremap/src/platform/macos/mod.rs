@@ -12,10 +12,8 @@ mod virtual_hid;
 use anyhow::{Context, Result};
 use qol_headless::{CommandResult, DoctorCheckResult};
 
-use super::engine::{self, remap};
+use super::engine::{self, config, remap};
 use super::{ConfigInspection, PlatformAdapter};
-use crate::config::{Inspection, KeyBackendChoice};
-use crate::control::Host;
 use doctor::{KarabinerRules, LayoutGap, Probe};
 use input::selection::{self, Availability, Selection};
 use input::BackendId;
@@ -32,8 +30,8 @@ impl PlatformAdapter for Adapter {
         true
     }
 
-    fn launch(&self, host: &Host) -> Result<CommandResult> {
-        app::run(host)?;
+    fn launch(&self) -> Result<CommandResult> {
+        app::run()?;
         Ok(CommandResult::success(""))
     }
 
@@ -50,17 +48,17 @@ impl PlatformAdapter for Adapter {
         Ok(summary_result(hid_helper::install::uninstall()))
     }
 
-    fn karabiner_rules(&self, host: &Host) -> Result<CommandResult> {
-        let compiled = compiled_rules(host)?;
+    fn karabiner_rules(&self) -> Result<CommandResult> {
+        let compiled = compiled_rules()?;
         Ok(CommandResult::success(format!(
             "{}\n",
             serde_json::to_string_pretty(&karabiner::report(&compiled))?
         )))
     }
 
-    fn karabiner_sync(&self, host: &Host) -> Result<CommandResult> {
-        let compiled = compiled_rules(host)?;
-        let store = karabiner::store::Store::locate(&host.plugin_id)?;
+    fn karabiner_sync(&self) -> Result<CommandResult> {
+        let compiled = compiled_rules()?;
+        let store = karabiner::store::Store::locate()?;
         let synced = store.sync(&compiled)?;
         Ok(CommandResult::success(karabiner::sync_summary(
             &synced,
@@ -69,8 +67,8 @@ impl PlatformAdapter for Adapter {
         )))
     }
 
-    fn karabiner_remove(&self, host: &Host) -> Result<CommandResult> {
-        let store = karabiner::store::Store::locate(&host.plugin_id)?;
+    fn karabiner_remove(&self) -> Result<CommandResult> {
+        let store = karabiner::store::Store::locate()?;
         let removed = store.remove()?;
         Ok(CommandResult::success(karabiner::remove_summary(
             &removed,
@@ -78,8 +76,8 @@ impl PlatformAdapter for Adapter {
         )))
     }
 
-    fn inspect_config(&self, inspected: &Inspection) -> Result<ConfigInspection> {
-        Ok(engine::inspection(inspected, |_| Vec::new()))
+    fn inspect_config(&self) -> Result<ConfigInspection> {
+        engine::inspection(|_| Vec::new())
     }
 
     fn virtual_hid_driver(&self) -> Result<DoctorCheckResult> {
@@ -89,7 +87,7 @@ impl PlatformAdapter for Adapter {
         ))
     }
 
-    fn virtual_hid_daemon(&self, _host: &Host) -> DoctorCheckResult {
+    fn virtual_hid_daemon(&self) -> DoctorCheckResult {
         doctor::daemon_result(&virtual_hid::driver::daemon_running())
     }
 
@@ -97,36 +95,37 @@ impl PlatformAdapter for Adapter {
         doctor::helper_result(&hid_helper::query_status())
     }
 
-    fn key_backend(&self, host: &Host) -> DoctorCheckResult {
-        doctor::key_backend_result(&selected_backend(host, &hid_helper::query_status()))
+    fn key_backend(&self) -> DoctorCheckResult {
+        doctor::key_backend_result(&selected_backend(&hid_helper::query_status()))
     }
 
-    fn karabiner_block(&self, host: &Host) -> DoctorCheckResult {
-        let chosen = (host.read_config)().key_backend == KeyBackendChoice::KarabinerElements;
-        doctor::karabiner_rules_result(chosen, &karabiner_rules_probe(host))
+    fn karabiner_block(&self) -> DoctorCheckResult {
+        let chosen =
+            config::load_config().key_backend == config::KeyBackendChoice::KarabinerElements;
+        doctor::karabiner_rules_result(chosen, &karabiner_rules_probe())
     }
 
-    fn secure_input(&self, host: &Host) -> DoctorCheckResult {
+    fn secure_input(&self) -> DoctorCheckResult {
         let helper = hid_helper::query_status();
         let seized = matches!(
             &helper,
             Probe::Known(doctor::HelperState::Running(report)) if !report.seized.is_empty()
         );
-        let backend = match selected_backend(host, &helper).backend {
+        let backend = match selected_backend(&helper).backend {
             BackendId::HidHelper if !seized => BackendId::EventTap,
             backend => backend,
         };
         doctor::secure_input_result(&Probe::Known(qol_platform::secure_input_holder()), backend)
     }
 
-    fn layout_characters(&self, host: &Host) -> DoctorCheckResult {
-        doctor::layout_result(&layout_gaps(host))
+    fn layout_characters(&self) -> DoctorCheckResult {
+        doctor::layout_result(&layout_gaps())
     }
 }
 
-fn compiled_rules(host: &Host) -> Result<karabiner::compile::Compiled> {
+fn compiled_rules() -> Result<karabiner::compile::Compiled> {
     let snapshot = layout::LayoutSnapshot::read_current()?;
-    let resolved = remap::resolve(&(host.read_config)());
+    let resolved = remap::resolve(&config::load_config());
     let hotkeys = karabiner::hotkeys::from_tray().context(
         "qol-tray did not send its hotkeys; start qol-tray so they go into Karabiner-Elements with the rules",
     )?;
@@ -136,11 +135,11 @@ fn compiled_rules(host: &Host) -> Result<karabiner::compile::Compiled> {
         .with_hotkeys(&hotkeys, physical))
 }
 
-fn selected_backend(host: &Host, helper: &Probe<doctor::HelperState>) -> Selection {
-    selection::select((host.read_config)().key_backend, |backend| match backend {
+fn selected_backend(helper: &Probe<doctor::HelperState>) -> Selection {
+    selection::select(config::load_config().key_backend, |backend| match backend {
         BackendId::EventTap => Availability::Ready,
         BackendId::HidHelper => doctor::helper_availability(helper),
-        BackendId::KarabinerElements => match karabiner::store::Store::locate(&host.plugin_id) {
+        BackendId::KarabinerElements => match karabiner::store::Store::locate() {
             Ok(store) => karabiner::service::probe(&store).availability,
             Err(error) => Availability::Missing {
                 what: "a place for its rules".to_string(),
@@ -150,9 +149,9 @@ fn selected_backend(host: &Host, helper: &Probe<doctor::HelperState>) -> Selecti
     })
 }
 
-fn karabiner_rules_probe(host: &Host) -> Probe<KarabinerRules> {
-    let planned = compiled_rules(host).and_then(|compiled| {
-        let synced = karabiner::store::Store::locate(&host.plugin_id)?.plan(&compiled)?;
+fn karabiner_rules_probe() -> Probe<KarabinerRules> {
+    let planned = compiled_rules().and_then(|compiled| {
+        let synced = karabiner::store::Store::locate()?.plan(&compiled)?;
         Ok((compiled, synced))
     });
     match planned {
@@ -171,12 +170,12 @@ fn karabiner_rules_probe(host: &Host) -> Probe<KarabinerRules> {
     }
 }
 
-fn layout_gaps(host: &Host) -> Probe<Vec<LayoutGap>> {
+fn layout_gaps() -> Probe<Vec<LayoutGap>> {
     let snapshot = match layout::LayoutSnapshot::read_current() {
         Ok(snapshot) => snapshot,
         Err(error) => return Probe::Unknown(error.to_string()),
     };
-    let resolved = remap::resolve(&(host.read_config)());
+    let resolved = remap::resolve(&config::load_config());
     let gaps = remap::character_targets(&resolved)
         .into_iter()
         .flat_map(|(rule, text)| {

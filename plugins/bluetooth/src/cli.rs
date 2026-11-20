@@ -12,7 +12,6 @@ use crate::hostfix::{self, BluetoothHostFixes};
 use crate::{config, handoff, platform, PLUGIN_ID};
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
-    crate::app::use_configured_adapter();
     app().run(args)
 }
 
@@ -101,7 +100,7 @@ fn stop_search_command() -> Command {
         .exit_behavior("Exits non-zero when the Bluetooth daemon is not reachable.")
         .run_plain_text(|context| {
             reject_args(context.args())?;
-            crate::app::stop_search()?;
+            platform::stop_search()?;
             Ok(PlainTextOutput::empty())
         })
 }
@@ -266,14 +265,14 @@ fn reclaim_command() -> Command {
         .exit_behavior("Exits non-zero when no Bluetooth audio output is active for the device.")
         .run_plain_text(|context| {
             let address = one_address("reclaim", context.args())?;
-            crate::audio_claim::reclaim_output(&address)?;
+            crate::audio_claim::platform::reclaim_output(&address)?;
             Ok(PlainTextOutput::text(format!(
                 "Reclaimed audio for {address}"
             )))
         })
         .run_json(|context| {
             let address = one_address("reclaim", context.args())?;
-            crate::audio_claim::reclaim_output(&address)?;
+            crate::audio_claim::platform::reclaim_output(&address)?;
             Ok(serde_json::json!({
                 "address": address,
                 "reclaimed": true,
@@ -370,7 +369,7 @@ fn settings_command() -> Command {
         .exit_behavior("Exits non-zero if the settings surface cannot be opened.")
         .run_plain_text(|context| {
             reject_args(context.args())?;
-            crate::app::show_settings()?;
+            crate::show_settings()?;
             Ok(PlainTextOutput::empty())
         })
 }

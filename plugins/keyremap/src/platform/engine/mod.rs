@@ -1,3 +1,5 @@
+pub(crate) mod config;
+pub(crate) mod daemon;
 pub(crate) mod remap;
 
 use std::sync::mpsc::RecvTimeoutError;
@@ -7,26 +9,19 @@ use anyhow::Result;
 use qol_headless::CommandResult;
 
 use super::ConfigInspection;
-use crate::config::{Inspection, RemapConfig};
-use crate::control::{Command, Host};
 
 pub(crate) trait Remapper {
-    fn swap_config(&self, config: remap::ResolvedConfig, raw: &RemapConfig);
+    fn swap_config(&self, config: remap::ResolvedConfig);
     fn idle(&self);
     fn stop(self);
 }
 
 pub(crate) fn serve<R: Remapper>(
-    host: &Host,
     poll: Duration,
-    adjust: fn(RemapConfig) -> RemapConfig,
-    start: impl FnOnce(remap::ResolvedConfig, &RemapConfig) -> Result<R>,
+    load: impl Fn() -> remap::ResolvedConfig,
+    start: impl FnOnce(remap::ResolvedConfig) -> Result<R>,
 ) -> Result<()> {
-    let load = || {
-        let raw = adjust((host.read_config)());
-        (remap::resolve(&raw), raw)
-    };
-    let (resolved, raw) = load();
+    let resolved = load();
 
     log::info!(
         "loaded {} char rules, {} key rules, {} mouse rules, {} scroll rules, {} excluded apps",
@@ -38,11 +33,11 @@ pub(crate) fn serve<R: Remapper>(
     );
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let Some(started) = (host.listen)(tx).then(|| {
+    let Some(started) = daemon::start_listener(tx).then(|| {
         let current_key_rules = resolved.key_rules.clone();
-        start(resolved, &raw).map(|remapper| (current_key_rules, remapper))
+        start(resolved).map(|remapper| (current_key_rules, remapper))
     }) else {
-        if (host.send_reload)() {
+        if daemon::send_reload() {
             log::debug!("another instance running, sent reload");
         }
         return Ok(());
@@ -50,7 +45,7 @@ pub(crate) fn serve<R: Remapper>(
     let (mut current_key_rules, remapper) = match started {
         Ok(started) => started,
         Err(error) => {
-            (host.cleanup)();
+            daemon::cleanup();
             return Err(error);
         }
     };
@@ -66,14 +61,14 @@ pub(crate) fn serve<R: Remapper>(
             }
             Err(RecvTimeoutError::Disconnected) => break,
         };
-        if matches!(command, Command::Toggle) {
-            if let Err(message) = (host.flip_enabled)() {
+        if matches!(command, daemon::Command::Toggle) {
+            if let Err(message) = flip_enabled() {
                 log::warn!("{message}");
             }
         }
         match command {
-            Command::Reload | Command::Toggle => {
-                let (new_resolved, new_raw) = load();
+            daemon::Command::Reload | daemon::Command::Toggle => {
+                let new_resolved = load();
                 log::debug!(
                     "reloaded {} char rules, {} key rules, {} mouse rules, {} scroll rules",
                     new_resolved.char_rules.len(),
@@ -85,14 +80,16 @@ pub(crate) fn serve<R: Remapper>(
                     log::warn!("{warning}");
                 }
                 current_key_rules = new_resolved.key_rules.clone();
-                remapper.swap_config(new_resolved, &new_raw);
+                remapper.swap_config(new_resolved);
             }
-            Command::Kill => {
+            daemon::Command::Kill => {
                 log::info!("kill received, shutting down");
                 break;
             }
-            Command::Settings => {
-                if let Err(error) = (host.open_settings)() {
+            daemon::Command::Settings => {
+                if let Err(error) = qol_apps::desktop_integration::open_plugin_settings_via_tray(
+                    crate::cli::PLUGIN_ID,
+                ) {
                     log::warn!("failed to open settings page: {error}");
                 }
             }
@@ -101,20 +98,34 @@ pub(crate) fn serve<R: Remapper>(
     }
 
     remapper.stop();
-    (host.cleanup)();
+    daemon::cleanup();
     Ok(())
 }
 
-pub(crate) fn reload(host: &Host) -> CommandResult {
-    action_result((host.send_reload)(), "reload sent", "no daemon running")
+pub(crate) fn reload() -> CommandResult {
+    action_result(daemon::send_reload(), "reload sent", "no daemon running")
 }
 
-pub(crate) fn kill(host: &Host) -> CommandResult {
-    action_result((host.send_kill)(), "kill sent", "no daemon running")
+pub(crate) fn kill() -> CommandResult {
+    action_result(daemon::send_kill(), "kill sent", "no daemon running")
 }
 
-pub(crate) fn toggle(host: &Host) -> CommandResult {
-    let enabled = match (host.flip_enabled)() {
+fn flip_enabled() -> Result<bool, &'static str> {
+    let enabled = !config::load_config().enabled;
+    let mut stored = qol_runtime::plugin_config::load_json()
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+    let Some(fields) = stored.as_object_mut() else {
+        return Err("keyremap: stored config is not an object");
+    };
+    fields.insert("enabled".to_string(), serde_json::Value::Bool(enabled));
+    if !qol_runtime::plugin_config::save(&stored) {
+        return Err("keyremap: failed to persist the new remapping state");
+    }
+    Ok(enabled)
+}
+
+pub(crate) fn toggle() -> CommandResult {
+    let enabled = match flip_enabled() {
         Ok(enabled) => enabled,
         Err(message) => return CommandResult::runtime_error(message),
     };
@@ -123,16 +134,16 @@ pub(crate) fn toggle(host: &Host) -> CommandResult {
     } else {
         "key remapping disabled"
     };
-    action_result((host.send_reload)(), state, "no daemon running")
+    action_result(daemon::send_reload(), state, "no daemon running")
 }
 
 pub(crate) fn inspection(
-    inspected: &Inspection,
-    platform_issues: impl FnOnce(&RemapConfig) -> Vec<String>,
-) -> ConfigInspection {
+    platform_issues: impl FnOnce(&config::RemapConfig) -> Vec<String>,
+) -> Result<ConfigInspection> {
+    let inspected = config::inspect_config()?;
     let mut issues = remap::validation_issues(&inspected.config);
     issues.extend(platform_issues(&inspected.config));
-    ConfigInspection {
+    Ok(ConfigInspection {
         source: inspected.source.is_some(),
         enabled: inspected.config.enabled,
         char_rules: inspected.config.char_rules.len(),
@@ -141,7 +152,7 @@ pub(crate) fn inspection(
         mouse_rules: inspected.config.mouse_rules.len(),
         scroll_rules: inspected.config.scroll_rules.len(),
         issues,
-    }
+    })
 }
 
 fn action_result(sent: bool, success: &str, missing: &str) -> CommandResult {

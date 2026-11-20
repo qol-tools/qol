@@ -1,4 +1,3 @@
-pub mod app;
 pub mod audio_claim;
 pub mod bluetooth;
 pub mod cli;
@@ -7,6 +6,11 @@ mod connect;
 mod handoff;
 pub mod hostfix;
 pub mod platform;
+mod settings;
 
-pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 pub const SETTINGS_SURFACE_ARG: &str = "__qol-settings-surface";
+
+pub fn show_settings() -> anyhow::Result<()> {
+    settings::open_browser()
+}

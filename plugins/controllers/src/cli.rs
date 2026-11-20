@@ -82,7 +82,7 @@ fn settings_command() -> Command {
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero if the settings URL cannot be opened.")
         .run_plain_text(|_| {
-            app::open_settings()?;
+            crate::platform::open_settings()?;
             Ok(PlainTextOutput::empty())
         })
 }

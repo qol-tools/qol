@@ -203,11 +203,6 @@ fn capability_row(
     }
 }
 
-pub(crate) fn open_settings() -> Result<()> {
-    qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::PLUGIN_ID)
-        .context("failed to open settings URL")
-}
-
 pub fn run_from_env() -> Result<()> {
     core_daemon::run_stateful_listener(&DAEMON_CONFIG, DaemonRuntime::default(), handle_action)
         .context(format!("{} daemon listener failed", crate::PLUGIN_ID))
@@ -239,7 +234,7 @@ fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
             }
             Err(error) => ReadResult::Error(format!("{error:#}")),
         },
-        "settings" => match open_settings() {
+        "settings" => match platform::open_settings() {
             Ok(()) => ReadResult::Handled,
             Err(error) => ReadResult::Error(format!("{error:#}")),
         },

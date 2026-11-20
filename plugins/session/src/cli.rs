@@ -7,7 +7,8 @@ use qol_headless::{
 };
 
 use crate::lock::Availability;
-use crate::PLUGIN_ID;
+
+const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)

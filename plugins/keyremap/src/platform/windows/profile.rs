@@ -1,4 +1,4 @@
-use crate::config::{RemapConfig, CONFIG_CONTRACT};
+use crate::platform::engine::config::{RemapConfig, CONFIG_CONTRACT};
 
 pub(super) fn without_macos_profile(config: RemapConfig) -> RemapConfig {
     match qol_config::typed_defaults_from_contract::<RemapConfig>(CONFIG_CONTRACT) {
@@ -37,7 +37,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::config::builtin_defaults;
+    use crate::platform::engine::config::builtin_defaults;
 
     #[test]
     fn shipped_rules_are_skipped_and_user_rules_stay() {

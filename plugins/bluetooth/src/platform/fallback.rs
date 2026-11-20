@@ -1,16 +1,14 @@
 use anyhow::{bail, Result};
 use qol_headless::DoctorCheckResult;
-use qol_runtime::protocol::DaemonRequest;
 
 use crate::bluetooth::{
-    AdapterHealth, BackendCapabilities, DaemonAction, DaemonHooks, DaemonReply, DeviceInfo,
-    ReconnectReport, ReconnectSelection,
+    AdapterHealth, BackendCapabilities, DeviceInfo, ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: false,
-    audio_reclaim: crate::audio_claim::RECLAIM_SUPPORTED,
+    audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
     settings_pairing: None,
     settings_pane: None,
 };
@@ -76,11 +74,15 @@ pub fn search_devices(_config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
     bail!("{} is not implemented on this platform", crate::PLUGIN_ID)
 }
 
+pub fn stop_search() -> Result<()> {
+    bail!("{} is not implemented on this platform", crate::PLUGIN_ID)
+}
+
 pub fn open_settings() -> Result<()> {
     bail!("{} is not implemented on this platform", crate::PLUGIN_ID)
 }
 
-pub fn devices_snapshot(_managed_devices: &[String]) -> Result<serde_json::Value> {
+pub fn devices_snapshot() -> Result<serde_json::Value> {
     bail!("{} is not implemented on this platform", crate::PLUGIN_ID)
 }
 
@@ -88,25 +90,25 @@ pub fn search_status_snapshot() -> Result<serde_json::Value> {
     bail!("{} is not implemented on this platform", crate::PLUGIN_ID)
 }
 
-pub fn set_adapter_source(_source: fn() -> String) {}
-
-pub enum DaemonCommand {}
-
-pub fn dispatch_request(
-    _action: DaemonAction,
-    _request: &DaemonRequest,
-    _config: impl FnOnce() -> ReconnectConfig,
-) -> DaemonReply<DaemonCommand> {
-    DaemonReply::Error(format!(
-        "{} is not implemented on this platform",
+pub fn settings_query(_query: &str) -> std::result::Result<serde_json::Value, String> {
+    Err(format!(
+        "{} has no native settings on this platform",
         crate::PLUGIN_ID
-    ))
+    )
+    .into())
 }
 
-pub fn run_daemon(
-    _config: ReconnectConfig,
-    _hooks: DaemonHooks,
-    _listen: impl FnOnce(std::sync::mpsc::Sender<DaemonCommand>) -> bool,
-) -> Result<()> {
+pub fn settings_action(
+    _action: &str,
+    _input: serde_json::Value,
+) -> std::result::Result<(), String> {
+    Err(format!(
+        "{} has no native settings on this platform",
+        crate::PLUGIN_ID
+    )
+    .into())
+}
+
+pub fn run_daemon(_config: ReconnectConfig) -> Result<()> {
     bail!("{} is not implemented on this platform", crate::PLUGIN_ID)
 }
