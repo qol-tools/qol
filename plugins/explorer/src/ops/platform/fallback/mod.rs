@@ -1,7 +1,9 @@
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::Arc;
 
-use crate::ops::{Failure, NameProblem};
+use crate::ops::bin::{Bin, BinError, Held};
+use crate::ops::NameProblem;
 
 const MAX_NAME_BYTES: usize = 255;
 const NO_TRASH: &str = "this system has no Trash to use";
@@ -40,20 +42,18 @@ pub(crate) fn copy_link(_from: &Path, _to: &Path) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
 }
 
-pub(crate) fn trash_one(_path: &Path) -> Result<(), String> {
-    Err(NO_TRASH.into())
+struct NoBin;
+
+impl Bin for NoBin {
+    fn trash(&self, _path: &Path) -> Result<Option<Held>, BinError> {
+        Err(BinError::NoTrash(NO_TRASH.into()))
+    }
+
+    fn restore(&self, _held: &Held, _to: &Path) -> Result<(), BinError> {
+        Err(BinError::NoTrash(NO_TRASH.into()))
+    }
 }
 
-pub(crate) fn trash_locations(_originals: &[PathBuf]) -> Vec<(PathBuf, PathBuf)> {
-    Vec::new()
-}
-
-pub(crate) fn restore_trashed(paths: &[PathBuf]) -> Vec<Failure> {
-    paths
-        .iter()
-        .map(|path| Failure {
-            path: path.clone(),
-            reason: NO_TRASH.into(),
-        })
-        .collect()
+pub(crate) fn system_bin() -> Arc<dyn Bin> {
+    Arc::new(NoBin)
 }

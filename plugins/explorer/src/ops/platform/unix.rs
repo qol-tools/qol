@@ -4,6 +4,7 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{symlink, DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::time::SystemTime;
 
 use crate::ops::simple::plain;
 use crate::ops::NameProblem;
@@ -37,6 +38,14 @@ pub(crate) fn open_dir(path: &Path) -> io::Result<File> {
 pub(crate) fn keep_mode(file: &File, source: &Metadata) -> io::Result<()> {
     let mode = source.permissions().mode() & PLAIN_BITS;
     file.set_permissions(Permissions::from_mode(mode))
+}
+
+pub(crate) fn changed_at(meta: &Metadata) -> Option<(i64, i64)> {
+    Some((meta.ctime(), meta.ctime_nsec()))
+}
+
+pub(crate) fn born_at(meta: &Metadata) -> Option<SystemTime> {
+    meta.created().ok()
 }
 
 pub(super) fn euid() -> u32 {

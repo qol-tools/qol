@@ -5,11 +5,14 @@ Emits per-OS clippy/test argument strings to GITHUB_OUTPUT. The result is the
 set of changed crates plus every crate that (transitively) depends on them, so a
 shared-lib edit still rebuilds its dependents. A file a crate embeds with
 include_str! or include_bytes! counts as a change to that crate, wherever the
-file lives. Anything ambiguous - a global file changed, no usable base, cargo
+file lives, and so does a file its build script reads, which the crate declares
+as globs relative to itself under [package.metadata.qol] build-inputs. Anything
+ambiguous - a global file changed, no usable base, cargo
 metadata or the embedded file list unavailable - falls back to the full
 workspace. The bias is always toward over-building, never toward skipping
 something that should run.
 """
+import fnmatch
 import json
 import os
 import re
@@ -53,13 +56,11 @@ WORKTREE_HEAD = "WORKTREE"
 
 def plugin_platforms():
     for manifest in sorted(REPO_ROOT.glob("plugins/*/plugin.toml")):
-        platforms = (
-            tomllib.loads(manifest.read_text())
-            .get("plugin", {})
-            .get("platforms", ["linux"])
-        )
+        declared = tomllib.loads(manifest.read_text())
+        platforms = declared.get("plugin", {}).get("platforms", ["linux"])
+        tested = declared.get("build", {}).get("test_platforms", [])
         name = tomllib.loads((manifest.parent / "Cargo.toml").read_text())["package"]["name"]
-        yield name, platforms
+        yield name, [*platforms, *tested]
 
 
 def platform_sets():
@@ -302,6 +303,7 @@ def workspace_graph():
             "dir": rel,
             "deps": set(),
             "doctest": any(target["doctest"] for target in pkg["targets"]),
+            "build_inputs": build_inputs(pkg, rel),
         }
     names = set(pkgs)
     for pkg in data["packages"]:
@@ -311,6 +313,22 @@ def workspace_graph():
             if dep["name"] in names and dep["name"] != pkg["name"]:
                 pkgs[pkg["name"]]["deps"].add(dep["name"])
     return pkgs
+
+
+def build_inputs(pkg, directory):
+    declared = ((pkg.get("metadata") or {}).get("qol") or {}).get("build-inputs", [])
+    return [
+        os.path.normpath(os.path.join(directory, pattern)).replace(os.sep, "/")
+        for pattern in declared
+    ]
+
+
+def build_input_readers(path, pkgs):
+    return [
+        name
+        for name, info in pkgs.items()
+        if any(fnmatch.fnmatchcase(path, pattern) for pattern in info.get("build_inputs", ()))
+    ]
 
 
 def owning_package(path, pkgs):
@@ -422,7 +440,8 @@ def main():
 
     owners = [owning_package(f, pkgs) for f in files]
     owners += [owning_package(source, pkgs) for f in files for source in embedders[f]]
-    seeds = {owner for owner in owners if owner} | lock_seeds
+    owners += [reader for f in files for reader in build_input_readers(f, pkgs)]
+    seeds ={owner for owner in owners if owner} | lock_seeds
     if not seeds:
         return skip_all("no crate-owning changes (docs/non-build files only)")
 

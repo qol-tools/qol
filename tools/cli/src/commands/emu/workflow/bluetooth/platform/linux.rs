@@ -19,7 +19,7 @@ use super::Verdict;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(20);
 const DEVICE_ACTION_SETTLE_TIMEOUT: Duration = Duration::from_secs(60);
-const PLUGIN_ID: &str = "qol-bluetooth";
+const PLUGIN_ID: &str = qol_plugin_ids::bluetooth::ID;
 const CYCLE_COUNT: usize = 20;
 const QUERY_FLOOD_COUNT: usize = 40;
 const RACE_CYCLE_COUNT: usize = 10;

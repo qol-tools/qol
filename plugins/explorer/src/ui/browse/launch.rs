@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use super::Browser;
+use crate::relay::Message;
 
 impl Browser {
     pub fn cursor_file(&self) -> Option<PathBuf> {
@@ -12,8 +13,8 @@ impl Browser {
             .map(|entry| entry.path.clone())
     }
 
-    pub fn announce(&mut self, text: String) {
+    pub fn announce(&mut self, title: String) {
         self.failure = None;
-        self.ops.notice = Some(text);
+        self.post(Message::info(title, ""));
     }
 }

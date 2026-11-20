@@ -10,10 +10,16 @@ use qol_gpui::text_edit::MemoryClipboard;
 use super::counts::{self, LiveCounts};
 use super::{Browser, Drained, Opening, PathStep, REFRESH_QUIET, STALLED_AFTER};
 use crate::listing::{ItemCount, ListingState, SortBy, SortOrder};
+use crate::relay::Message;
 use crate::ui::keys::Step;
 
 fn touch(folder: &Path, name: &str) {
     fs::write(folder.join(name), name).unwrap();
+}
+
+fn touch_hidden(folder: &Path, name: &str) {
+    touch(folder, name);
+    crate::places::hide(&folder.join(name));
 }
 
 fn make_folder(folder: &Path, name: &str) -> PathBuf {
@@ -57,6 +63,14 @@ fn wait_within(
         assert!(Instant::now() < deadline, "{what} never happened");
         thread::sleep(drained.wake_in.unwrap_or(Duration::from_millis(2)));
     }
+}
+
+fn unshown(browser: &mut Browser, message: Message) {
+    let sink = browser.unshown_sink();
+    sink(message);
+    wait_until(browser, "the unshown message", |browser| {
+        browser.note().failure.is_some()
+    });
 }
 
 fn opened(folder: &Path) -> Browser {
@@ -366,7 +380,7 @@ fn picks_of_entries_that_vanish_are_dropped_and_picks_elsewhere_stay() {
 #[test]
 fn hiding_hidden_entries_drops_their_picks() {
     let temp = abc_folder();
-    touch(temp.path(), ".hidden");
+    touch_hidden(temp.path(), ".hidden");
     let mut browser = opened(temp.path());
     browser.toggle_hidden();
     let hidden = names(&browser).iter().position(|name| name == ".hidden");
@@ -390,7 +404,7 @@ fn hiding_hidden_entries_drops_their_picks() {
 #[test]
 fn hiding_hidden_entries_while_a_folder_loads_keeps_the_picks_not_listed_yet() {
     let temp = abc_folder();
-    touch(temp.path(), ".hidden");
+    touch_hidden(temp.path(), ".hidden");
     let inner = make_folder(temp.path(), "inner");
     let mut browser = opened(temp.path());
     browser.toggle_hidden();
@@ -549,16 +563,33 @@ fn space_toggles_ctrl_click_adds_ctrl_a_picks_all_and_esc_clears() {
 }
 
 #[test]
+fn a_message_no_notifier_showed_lands_in_the_failure_slot() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    assert_eq!(browser.note().failure, None);
+
+    unshown(
+        &mut browser,
+        Message::error("Could not open a.txt", "No app opens it."),
+    );
+
+    assert_eq!(
+        browser.note().failure.as_deref(),
+        Some("Could not open a.txt. No app opens it.")
+    );
+}
+
+#[test]
 fn escape_and_the_next_file_opened_drop_the_red_note() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
 
-    browser.fail("Could not open a.txt".into());
+    unshown(&mut browser, Message::error("Could not open a.txt", ""));
     assert!(browser.dismiss());
     assert_eq!(browser.note().failure, None);
     assert!(!browser.dismiss());
 
-    browser.fail("Could not open a.txt".into());
+    unshown(&mut browser, Message::error("Could not open a.txt", ""));
     browser.set_cursor(1);
     assert_eq!(browser.open(0.0), Opening::File(temp.path().join("b.txt")));
     assert_eq!(browser.note().failure, None);
@@ -667,7 +698,7 @@ fn enter_opens_a_folder_here_and_hands_a_file_to_the_caller() {
 #[test]
 fn hidden_files_come_and_go_and_the_cursor_stays_on_its_entry() {
     let temp = abc_folder();
-    touch(temp.path(), ".hidden");
+    touch_hidden(temp.path(), ".hidden");
     let mut browser = opened(temp.path());
     assert_eq!(names(&browser), ["a.txt", "b.txt", "c.txt", "d.txt"]);
     browser.set_cursor(2);
@@ -714,7 +745,7 @@ fn starting_on_a_file_opens_its_folder_with_the_file_under_the_cursor() {
 #[test]
 fn starting_on_a_hidden_file_shows_hidden_files_to_land_on_it() {
     let temp = abc_folder();
-    touch(temp.path(), ".hidden");
+    touch_hidden(temp.path(), ".hidden");
     let mut browser = Browser::new(
         temp.path().join(".hidden"),
         temp.path().to_path_buf(),
@@ -1298,7 +1329,7 @@ fn a_subfolder_count_follows_files_added_and_removed_inside_it() {
     wait_until(&mut browser, "the count watch", Browser::follows_counts);
 
     touch(&sub, "two");
-    touch(&sub, ".three");
+    touch_hidden(&sub, ".three");
     wait_until(&mut browser, "the count after files appeared", |browser| {
         browser.listing().item_count(&sub) == count(3, 2)
     });
@@ -1381,6 +1412,7 @@ fn a_folder_changing_all_the_time_is_read_again_at_most_twice_a_second() {
     assert!((1..=4).contains(&reads), "read {reads} times");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_folder_whose_grandparent_is_renamed_reports_it() {
     let temp = tempfile::tempdir().unwrap();

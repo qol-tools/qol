@@ -6,16 +6,17 @@ use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::{symlink_dir, symlink_file};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use trash::{Error, TrashItem};
 use windows_sys::Win32::Storage::FileSystem::{
     GetDiskFreeSpaceExW, GetVolumeInformationW, GetVolumePathNameW,
 };
 
-use super::bin;
+use crate::ops::bin::Bin;
 use crate::ops::simple::plain;
-use crate::ops::{Failure, NameProblem};
+use crate::ops::NameProblem;
 
+const NO_RESTORE: &str = "Windows does not let apps restore from the Recycle Bin, use its Restore";
 const MAX_NAME_UNITS: usize = 255;
 const ROOT_BUFFER: usize = 261;
 const RESERVED_CHARS: &str = "<>:\"/\\|?*";
@@ -140,22 +141,6 @@ pub(crate) fn copy_link(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
-pub(crate) fn trash_one(path: &Path) -> Result<(), String> {
-    bin::trash_one(path, os_error)
-}
-
-pub(crate) fn trash_locations(originals: &[PathBuf]) -> Vec<(PathBuf, PathBuf)> {
-    bin::locations(originals, trash::os_limited::list(), locate)
-}
-
-pub(crate) fn restore_trashed(paths: &[PathBuf]) -> Vec<Failure> {
-    bin::restore(paths, trash::os_limited::list(), locate)
-}
-
-fn os_error(_error: &Error) -> Option<String> {
-    None
-}
-
-fn locate(item: &TrashItem) -> PathBuf {
-    PathBuf::from(&item.id)
+pub(crate) fn system_bin() -> Arc<dyn Bin> {
+    super::bin::system_bin(NO_RESTORE)
 }

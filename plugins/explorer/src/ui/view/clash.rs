@@ -13,7 +13,7 @@ use qol_gpui::theme::{
 };
 use qol_gpui::Key;
 
-use super::choices::{choice_index, newer_here, newer_incoming, say, stamp_label, CHOICES};
+use super::choices::{choices, newer_here, newer_incoming, say, stamp_label};
 use super::pictogram::{named_pictogram, PictogramSize};
 use super::{ExplorerView, BAND};
 use crate::ops::{Clash, Room, Survey};
@@ -32,7 +32,7 @@ pub(super) fn render(
     let newer = survey
         .clashes
         .iter()
-        .filter(|clash| newer_here(clash))
+        .filter(|clash| !clash.merges() && clash.applies(&survey.clashes) && newer_here(clash))
         .count();
     let from = survey
         .transfer
@@ -41,7 +41,15 @@ pub(super) fn render(
         .and_then(|source| source.parent())
         .and_then(|parent| parent.file_name())
         .map_or_else(String::new, crate::listing::display_name);
-    let lines = say(view, survey);
+    let undo = view.browser.undo_asking();
+    let lines = if undo {
+        view.browser
+            .undo_lines()
+            .map(<[String]>::to_vec)
+            .unwrap_or_default()
+    } else {
+        say(view, survey)
+    };
     let apply = if clashes > 0 {
         "Apply choices"
     } else {
@@ -75,8 +83,8 @@ pub(super) fn render(
         .when(clashes > 0, |sheet| {
             sheet
                 .child(columns(kit, &from))
-                .child(table(view, survey, kit, cx))
-                .when(newer > 0, |sheet| sheet.child(hint(kit, newer)))
+                .child(table(view, survey, kit, undo, cx))
+                .when(newer > 0 && !undo, |sheet| sheet.child(hint(kit, newer)))
         })
         .when(clashes == 0, |sheet| sheet.child(div().flex_1()))
         .child(buttons(
@@ -132,6 +140,7 @@ fn table(
     view: &ExplorerView,
     survey: &Survey,
     kit: Kit,
+    undo: bool,
     cx: &mut Context<ExplorerView>,
 ) -> AnyElement {
     let clashes = survey.clashes.clone();
@@ -148,7 +157,14 @@ fn table(
                     let now = SystemTime::now();
                     rows.filter_map(|row| {
                         let clash = clashes.get(row)?;
-                        Some(clash_row(clash, row, row == selected, now, kit, cx))
+                        let applies = clash.applies(&clashes);
+                        let slot = Slot {
+                            row,
+                            selected: row == selected,
+                            applies,
+                            undo,
+                        };
+                        Some(clash_row(clash, slot, now, kit, cx))
                     })
                     .collect::<Vec<_>>()
                 }),
@@ -159,31 +175,48 @@ fn table(
         .into_any_element()
 }
 
-fn clash_row(
-    clash: &Clash,
+#[derive(Clone, Copy)]
+struct Slot {
     row: usize,
     selected: bool,
+    applies: bool,
+    undo: bool,
+}
+
+fn clash_row(
+    clash: &Clash,
+    slot: Slot,
     now: SystemTime,
     kit: Kit,
     cx: &mut Context<ExplorerView>,
 ) -> AnyElement {
+    let Slot {
+        row,
+        selected,
+        applies,
+        undo,
+    } = slot;
     let ground = kit.highlight_ground(selected);
     let name = clash
         .existing
         .file_name()
         .map_or_else(String::new, crate::listing::display_name);
-    let segments = CHOICES.iter().map(|(choice, text)| {
-        let choice = *choice;
-        kit.segment(*text, clash.choice == choice)
-            .id((
-                "explorer-clash-choice",
-                row * CHOICES.len() + choice_index(choice),
-            ))
-            .cursor_pointer()
-            .on_click(cx.listener(move |view, _, _window, cx| {
-                view.choose_clash(row, choice, cx);
-            }))
-    });
+    let choices = choices(clash, undo);
+    let per_row = choices.len();
+    let segments = choices
+        .into_iter()
+        .enumerate()
+        .map(|(index, (choice, text))| {
+            kit.segment(text, clash.choice == choice)
+                .id(("explorer-clash-choice", row * per_row + index))
+                .when(applies, |segment| {
+                    segment
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |view, _, _window, cx| {
+                            view.choose_clash(row, choice, cx);
+                        }))
+                })
+        });
     let element = div()
         .id(("explorer-clash", row))
         .w_full()
@@ -225,7 +258,10 @@ fn clash_row(
         )
         .on_click(cx.listener(move |view, _, _window, cx| {
             view.select_clash(row, cx);
-        }));
+        }))
+        .when(!applies, |element| {
+            element.opacity(qol_gpui::theme::OPACITY_DISABLED)
+        });
     kit.highlight(element, selected).into_any_element()
 }
 

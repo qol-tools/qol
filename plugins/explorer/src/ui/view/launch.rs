@@ -8,6 +8,7 @@ use qol_apps::desktop_integration::{self, OpenHandler};
 
 use super::menu::Menu;
 use super::ExplorerView;
+use crate::relay::Message;
 use crate::ui::PLUGIN_ID;
 
 pub(super) struct OpenWith {
@@ -67,8 +68,10 @@ impl ExplorerView {
                 "[{PLUGIN_ID}] could not open a terminal in {}: {error}",
                 folder.display()
             );
-            self.browser
-                .fail(format!("Could not open a terminal: {error}"));
+            self.browser.post(Message::error(
+                "Could not open a terminal",
+                error.to_string(),
+            ));
         }
         true
     }
@@ -167,7 +170,10 @@ impl ExplorerView {
     fn could_not_open_with(&mut self, paths: &[PathBuf], error: &io::Error) {
         log::warn!("[{PLUGIN_ID}] could not open with the chosen app: {error}");
         let name = paths.first().map(|path| display(path)).unwrap_or_default();
-        self.browser.fail(format!("Could not open {name}: {error}"));
+        self.browser.post(Message::error(
+            format!("Could not open {name}"),
+            error.to_string(),
+        ));
     }
 }
 

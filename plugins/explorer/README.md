@@ -22,7 +22,9 @@ Pictures and videos show a preview instead of their icon: a frame as wide as the
 
 Explorer remembers the row or icon size, whether hidden entries show and how the folder is sorted, and opens with them next time on every machine your profile syncs to. All of them are also on Explorer's settings page; a change there applies the next time Explorer opens. Drag any edge or corner to resize the window, down to 640 by 400, and it reopens where you left it at the size you left it. If Explorer is open when the tray restarts, it opens again afterwards. A wider window gives the sidebar and the Name column more room, up to a limit, so Kind and Size stay close to the names.
 
-Picks stay picked when you move to another folder, and the note beside the crumbs says how many sit in other folders. Enter opens a file in its default app, or says in red that no app could open it.
+Picks stay picked when you move to another folder, and the note beside the crumbs says how many sit in other folders. Enter opens a file in its default app, or tells you in a notification that no app could open it.
+
+What just happened shows as a qol notification card, or through the system's notifications when Explorer runs without qol: a copy or move that arrived or changed nothing, items moved to the trash or deleted for good, an undo or redo, and every failure. Messages of the same kind update one card, so ten Ctrl+Z presses do not stack ten, and a problem is never pushed off screen by a later success. Explorer shows a failure in its own window, beside the crumbs, only when nothing else could show it. What is still going on stays beside the crumbs: the progress of a running copy or move, the line for a running undo, the count of items and picks, and what you hold for a paste.
 
 ## Pinned folders
 
@@ -49,9 +51,9 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Alt+Left, Alt+Right | Back and forward |
 | Space | Pick or unpick the row under the cursor, or add a space to the letters typed when a name goes on with one |
 | Ctrl+A | Pick every row |
-| Esc | Drop the picks, a cut and the red note; while dragging, cancel the drag; while drawing a selection box, put the picks back as they were |
+| Esc | Drop the picks, a cut and a failure Explorer had to show in its own window; while dragging, cancel the drag; while drawing a selection box, put the picks back as they were |
 | Ctrl+C, Ctrl+X | Copy or cut the picks, or the row under the cursor when nothing is picked; cut rows fade until they are pasted |
-| Ctrl+V | Paste into the folder you are in |
+| Ctrl+V | Paste into the folder you clicked, reached with the keys or picked on its own; otherwise, as right after opening a folder or with several rows picked, into the folder you are in. A folder you cut or copied is never the target, and the note beside the crumbs names the folder when it is not the one you are in |
 | Delete | Move the picks, or the row under the cursor, to the trash |
 | Shift+Delete | Delete the picks, or the row under the cursor, for good after asking, since the trash cannot bring them back |
 | Ctrl+Alt+N | Make an empty file named New file, then rename it |
@@ -60,8 +62,9 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Ctrl+Shift+N | Make a new folder and rename it |
 | Ctrl+Shift+T | Open your terminal in the folder you are in |
 | Ctrl+Shift+C | Copy the full path of each pick, or of the row under the cursor, one per line |
-| Ctrl+Z | Undo the last copy, duplicate, move, rename, trash, new file or new folder, putting back anything a copy replaced |
-| Ctrl+J | Show or hide today's moves |
+| Ctrl+Z | Undo your last step in this window, one step per press: a copy, duplicate, move, rename, move to trash, new file or new folder |
+| Ctrl+Shift+Z, Ctrl+Y | Redo the step you last undid, one step per press; doing anything new clears what could be redone |
+| Ctrl+J | Show or hide today's moves, with a row for every undo and redo |
 | Menu key, Shift+F10 | Open the row menu at the cursor row; with other rows picked it acts on them all, otherwise it picks the cursor row first |
 | Alt+Enter | Show or hide properties for the row under the cursor, or a count and total size for the picks: kind, path, size (a folder's total is counted in the background), dates, permissions and owner on Linux and macOS or attributes on Windows, the link target, and a preview of png, jpg, gif, webp and svg images; Escape also closes it |
 | Ctrl+H | Show or hide hidden entries, also while editing the path; hiding them drops their picks |
@@ -80,11 +83,13 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 
 The rows drawn selected are always the rows an action acts on: the picks, or the cursor row when nothing is picked. While the window is not focused, or the folder or pin menu is open, they keep a faint wash instead.
 
-Right-click a row or icon to pick it and open a menu with Open, Cut, Copy, Paste, Rename, Move to trash, New folder and Undo, each showing its key. Right-clicking a row that is already picked keeps the picks, so the menu acts on all of them; Rename needs a single row and Paste needs something cut or copied. Right-click on empty space in the list, including the blank part of a row past its name and details, for Paste, New folder and Undo above the folder lines (pin, go to a path, hidden files, settings). Up and Down move through a menu, Enter runs the line and any other key closes it.
+Right-click a row or icon to pick it and open a menu with Open, Cut, Copy, Paste, Rename, Move to trash, New folder, Undo and Redo, each showing its key. Undo and Redo name the step they act on, as in Undo copy or Redo move, and are greyed when there is nothing to undo or redo. Right-clicking a row that is already picked keeps the picks, so the menu acts on all of them; Rename needs a single row and Paste needs something cut or copied. Paste on a folder pastes into it, unless other rows are picked with it. Right-click on empty space in the list, including the blank part of a row past its name and details, for Paste, which pastes into the folder you are in, New folder, Undo and Redo above the folder lines (pin, go to a path, hidden files, settings). Up and Down move through a menu, Enter runs the line and any other key closes it.
 
 Press anywhere in the list and move at once to draw a selection box: every row or icon it touches is picked while you drag, Ctrl or Shift keeps the picks you had, Esc puts them back, and the list scrolls when you pull past its top or bottom edge. A click on empty space drops the picks. Press a row and hold still for half a second and a circle grows beside the pointer, then the files lift and you can drag them. Drag rows onto a folder, a place in the sidebar or a folder in the path to move them there; hold Ctrl to copy instead. Rows dragged to another drive, and files dropped in from another app, are copied. The target says "move here" or "copy here", or "no room" or "copy only" when the drive is too full or the files cannot be removed from where they are.
 
-When a paste or a drop meets names that are already there, a sheet asks first and nothing moves until you apply it. Left and Right choose Keep this, Replace or Keep both for a row, with Shift for every row; Up and Down move between rows; Enter applies and Esc cancels. A replaced file goes to the trash.
+When a paste or a drop meets a name that is already there, file or folder, a sheet asks first and nothing moves until you apply it. Left and Right choose Keep this, Replace or Keep both for a file, or Keep this, Merge or Keep both for a folder, with Shift for every row; Up and Down move between rows; Enter applies and Esc cancels. A folder starts on Keep both, which puts it beside the one already there with (2) after its name, as in hello (2). Merge puts its contents into the folder that is there instead, and the files inside that differ get rows of their own, faded until you choose Merge. A replaced file goes to the trash.
+
+Undo never replaces or deletes anything. What it takes away goes to the trash, and an empty new folder is removed. A copy goes only while it and its original are unchanged; anything that changed since stays where it is, and the notification says so. When the name an item goes back to is taken, the same sheet asks with only Keep this, which leaves the item where it is, and Keep both, which puts it back with (2) after its name; Keep both is chosen to start with, and Esc leaves the step for the next Ctrl+Z. A step that changed nothing, such as Keep this, and Delete permanently say so and touch nothing. While a copy, move, trash or delete runs in any Explorer window, Ctrl+Z says so and does nothing, and Esc stops an undo or redo that runs. Ctrl+Shift+Z or Ctrl+Y redoes the step you last undid: it puts back what the undo took away, asks the same sheet when a name is taken, and waits for a running copy, move, trash or delete in the same way. Undo and redo report in a notification and name the key that reverses them, and each adds a row to today's moves, so a notification that fades is never the only record.
 
 ## License
 

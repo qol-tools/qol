@@ -64,6 +64,7 @@ impl ExplorerView {
             self.browser.holds(),
             self.browser.operands().len() == 1,
             self.browser.cursor_file().is_some(),
+            self.browser.stepping(),
             at,
         ));
         cx.notify();

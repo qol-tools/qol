@@ -6,30 +6,41 @@ use super::ExplorerView;
 use crate::ops::{Clash, Resolve, Room, Stamp, Survey};
 use crate::ui::browse::{copy_only_note, label_of, short_note};
 
-pub(super) const CHOICES: [(Resolve, &str); 3] = [
-    (Resolve::Keep, "Keep this"),
-    (Resolve::Replace, "Replace"),
-    (Resolve::KeepBoth, "Keep both"),
-];
 const MINUTE: u64 = 60;
 const HOUR: u64 = 60 * MINUTE;
 const DAY: u64 = 24 * HOUR;
 
-pub(super) fn choice_index(choice: Resolve) -> usize {
-    CHOICES
-        .iter()
-        .position(|(candidate, _)| *candidate == choice)
-        .unwrap_or(0)
+pub(super) fn choices(clash: &Clash, undo: bool) -> Vec<(Resolve, &'static str)> {
+    if undo {
+        return vec![
+            (Resolve::Keep, "Keep this"),
+            (Resolve::KeepBoth, "Keep both"),
+        ];
+    }
+    let middle = if clash.merges() {
+        (Resolve::Merge, "Merge")
+    } else {
+        (Resolve::Replace, "Replace")
+    };
+    vec![
+        (Resolve::Keep, "Keep this"),
+        middle,
+        (Resolve::KeepBoth, "Keep both"),
+    ]
 }
 
-fn stepped(choice: Resolve, forward: bool) -> Resolve {
-    let index = choice_index(choice);
+fn stepped(clash: &Clash, forward: bool, undo: bool) -> Resolve {
+    let choices = choices(clash, undo);
+    let index = choices
+        .iter()
+        .position(|(choice, _)| *choice == clash.choice)
+        .unwrap_or(0);
     let next = if forward {
-        (index + 1).min(CHOICES.len() - 1)
+        (index + 1).min(choices.len() - 1)
     } else {
         index.saturating_sub(1)
     };
-    CHOICES[next].0
+    choices[next].0
 }
 
 pub(super) fn newer_here(clash: &Clash) -> bool {
@@ -86,33 +97,42 @@ pub(super) fn say(view: &ExplorerView, survey: &Survey) -> Vec<String> {
     .into_iter()
     .flatten()
     .collect();
-    if !survey.clashes.is_empty() {
-        let differ = survey.clashes.len();
-        let single = survey.transfer.sources.len() == 1;
-        let head = if single {
-            format!("{} is already here.", label_of(&survey.transfer.sources))
-        } else {
-            "Some of these are already here.".to_string()
-        };
-        let same = if survey.same_inside > 0 {
-            format!(
-                " {} of {} {} files {} the same.",
-                survey.same_inside,
-                if single { "its" } else { "the" },
-                survey.same_inside + differ,
-                if survey.same_inside == 1 { "is" } else { "are" }
-            )
-        } else {
-            String::new()
-        };
-        let tail = if differ == 1 {
-            "This one differs:".to_string()
-        } else {
-            format!("These {differ} differ:")
-        };
-        lines.push(format!("{head}{same} {tail}"));
-    }
+    lines.extend(clash_sentence(survey));
     lines
+}
+
+fn clash_sentence(survey: &Survey) -> Option<String> {
+    if survey.clashes.is_empty() {
+        return None;
+    }
+    let differ = survey
+        .clashes
+        .iter()
+        .filter(|clash| !clash.merges())
+        .count();
+    let single = survey.transfer.sources.len() == 1;
+    let head = if single {
+        format!("{} is already here.", label_of(&survey.transfer.sources))
+    } else {
+        "Some of these are already here.".to_string()
+    };
+    let same = if survey.same_inside > 0 {
+        format!(
+            " {} of {} {} files {} the same.",
+            survey.same_inside,
+            if single { "its" } else { "the" },
+            survey.same_inside + differ,
+            if survey.same_inside == 1 { "is" } else { "are" }
+        )
+    } else {
+        String::new()
+    };
+    let tail = match differ {
+        0 => String::new(),
+        1 => " This one differs:".to_string(),
+        _ => format!(" These {differ} differ:"),
+    };
+    Some(format!("{head}{same}{tail}"))
 }
 
 impl ExplorerView {
@@ -162,13 +182,14 @@ impl ExplorerView {
             "down" => self.select_clash(self.clash_row + 1, cx),
             "left" | "right" => {
                 let forward = keystroke.key == "right";
-                let current = self
-                    .browser
-                    .surveyed()
-                    .and_then(|survey| survey.clashes.get(self.clash_row))
-                    .map(|clash| clash.choice);
-                if let Some(current) = current {
-                    let choice = stepped(current, forward);
+                let undo = self.browser.undo_asking();
+                let next = self.browser.surveyed().and_then(|survey| {
+                    let clash = survey.clashes.get(self.clash_row)?;
+                    clash
+                        .applies(&survey.clashes)
+                        .then(|| stepped(clash, forward, undo))
+                });
+                if let Some(choice) = next {
                     if shift {
                         self.browser.choose_all(choice);
                     } else {
@@ -185,19 +206,139 @@ impl ExplorerView {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
 
-    use super::{stepped, when, CHOICES};
-    use crate::ops::Resolve;
+    use super::{choices, clash_sentence, stepped, when};
+    use crate::ops::Resolve::{Keep, KeepBoth, Merge, Replace};
+    use crate::ops::{Clash, Resolve, Room, Stamp, Survey, Transfer, Verb};
+
+    fn clash(name: &str, folder: bool, choice: Resolve) -> Clash {
+        let stamp = Stamp {
+            bytes: 1,
+            modified: None,
+            folder,
+        };
+        Clash {
+            source: PathBuf::from("/from").join(name),
+            existing: PathBuf::from("/into").join(name),
+            here: stamp,
+            incoming: stamp,
+            same: false,
+            choice,
+        }
+    }
+
+    fn sheet(sources: &[&str], clashes: Vec<Clash>, same_inside: usize) -> Survey {
+        Survey {
+            transfer: Transfer {
+                verb: Verb::Move,
+                sources: sources
+                    .iter()
+                    .map(|name| PathBuf::from("/from").join(name))
+                    .collect(),
+                into: PathBuf::from("/into"),
+            },
+            clashes,
+            same_inside,
+            bytes: 0,
+            room: Room::Enough,
+            copy_only: Vec::new(),
+            crosses_volume: false,
+        }
+    }
 
     #[test]
     fn choices_step_left_and_right_and_stop_at_the_ends() {
-        assert_eq!(stepped(Resolve::Keep, false), Resolve::Keep);
-        assert_eq!(stepped(Resolve::Keep, true), Resolve::Replace);
-        assert_eq!(stepped(Resolve::Replace, true), Resolve::KeepBoth);
-        assert_eq!(stepped(Resolve::KeepBoth, true), Resolve::KeepBoth);
-        assert_eq!(stepped(Resolve::KeepBoth, false), Resolve::Replace);
-        assert_eq!(CHOICES.len(), 3);
+        let cases = [
+            (false, false, Keep, false, Keep),
+            (false, false, Keep, true, Replace),
+            (false, false, Replace, true, KeepBoth),
+            (false, false, KeepBoth, true, KeepBoth),
+            (false, false, KeepBoth, false, Replace),
+            (true, false, Keep, false, Keep),
+            (true, false, Keep, true, Merge),
+            (true, false, Merge, true, KeepBoth),
+            (true, false, KeepBoth, true, KeepBoth),
+            (true, false, KeepBoth, false, Merge),
+            (false, true, Keep, false, Keep),
+            (false, true, Keep, true, KeepBoth),
+            (false, true, KeepBoth, true, KeepBoth),
+            (false, true, KeepBoth, false, Keep),
+            (true, true, Keep, true, KeepBoth),
+            (true, true, KeepBoth, false, Keep),
+        ];
+        for (folder, undo, from, forward, expected) in cases {
+            let row = clash("docs", folder, from);
+            assert_eq!(
+                stepped(&row, forward, undo),
+                expected,
+                "{folder} {undo} {from:?} {forward}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_folder_onto_a_folder_offers_merge_where_a_file_offers_replace() {
+        let labels = |folder, undo| {
+            choices(&clash("docs", folder, Keep), undo)
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(labels(false, false), ["Keep this", "Replace", "Keep both"]);
+        assert_eq!(labels(true, false), ["Keep this", "Merge", "Keep both"]);
+    }
+
+    #[test]
+    fn the_undo_sheet_offers_only_keep_this_and_keep_both() {
+        for folder in [false, true] {
+            assert_eq!(
+                choices(&clash("docs", folder, KeepBoth), true),
+                [(Keep, "Keep this"), (KeepBoth, "Keep both")]
+            );
+        }
+    }
+
+    #[test]
+    fn the_sheet_says_what_is_already_here_and_what_differs() {
+        let cases = [
+            (
+                sheet(&["a.txt"], vec![clash("a.txt", false, Replace)], 0),
+                "a.txt is already here. This one differs:",
+            ),
+            (
+                sheet(&["hello"], vec![clash("hello", true, KeepBoth)], 0),
+                "hello is already here.",
+            ),
+            (
+                sheet(
+                    &["docs"],
+                    vec![
+                        clash("docs", true, KeepBoth),
+                        clash("docs/a", false, Replace),
+                        clash("docs/b", false, Keep),
+                    ],
+                    3,
+                ),
+                "docs is already here. 3 of its 5 files are the same. These 2 differ:",
+            ),
+            (
+                sheet(
+                    &["docs", "a.txt"],
+                    vec![
+                        clash("docs", true, KeepBoth),
+                        clash("a.txt", false, Replace),
+                    ],
+                    0,
+                ),
+                "Some of these are already here. This one differs:",
+            ),
+        ];
+        for (survey, expected) in cases {
+            assert_eq!(clash_sentence(&survey).as_deref(), Some(expected));
+        }
+        assert_eq!(clash_sentence(&sheet(&["a.txt"], Vec::new(), 0)), None);
     }
 
     #[test]

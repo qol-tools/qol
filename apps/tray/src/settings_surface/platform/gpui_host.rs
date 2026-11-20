@@ -16,7 +16,7 @@ use qol_gpui::settings_panel::{
 use qol_gpui::toast::{Toast, ToastHost, ToastLayout, ToastTone};
 use qol_host_defaults::RowControl;
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
-use qol_runtime::protocol::{DaemonRequest, DaemonResponse, NotificationLayout};
+use qol_runtime::protocol::{DaemonRequest, DaemonResponse, NotificationLayout, NotificationMeta};
 
 use crate::features::host_defaults::{self, PluginRow};
 use crate::settings_surface::{CoreTool, HostBoot};
@@ -41,6 +41,7 @@ struct ToastCommand {
     artifact: Option<String>,
     layout: Option<NotificationLayout>,
     activate: Option<ToastActivation>,
+    meta: NotificationMeta,
 }
 
 #[derive(Debug, PartialEq, serde::Deserialize)]
@@ -476,10 +477,11 @@ fn spawn_command_loop(
                         artifact,
                         layout,
                         activate,
+                        meta,
                     } = *toast;
                     show_toast_in_host(
                         toast_host, group, source, mark, title, body, level, action, artifact,
-                        layout, activate, &cx,
+                        layout, activate, meta, &cx,
                     );
                     LoopFlow::Continue
                 }
@@ -552,6 +554,7 @@ fn show_toast_in_host(
     artifact: Option<String>,
     layout: Option<NotificationLayout>,
     activate: Option<ToastActivation>,
+    meta: NotificationMeta,
     cx: &gpui::AsyncApp,
 ) {
     let result = cx.update(move |cx| {
@@ -593,12 +596,29 @@ fn show_toast_in_host(
                 Ok(())
             });
         }
+        let toast = apply_meta(toast, meta);
         if let Err(error) = toast_host.show(toast, cx) {
             log::warn!("[toast] render failed: {error:#}");
         }
     });
     if let Err(error) = result {
         log::warn!("[toast] app update failed: {error:#}");
+    }
+}
+
+fn apply_meta(toast: Toast, meta: NotificationMeta) -> Toast {
+    let toast = match meta.duration_ms {
+        Some(0) => toast.persistent(),
+        Some(ms) => toast.timeout(Duration::from_millis(ms)),
+        None => toast,
+    };
+    let toast = match meta.key {
+        Some(key) => toast.key(key),
+        None => toast,
+    };
+    match meta.image {
+        Some(path) => toast.image(path),
+        None => toast,
     }
 }
 
@@ -1212,6 +1232,7 @@ pub(in crate::settings_surface) fn show_toast(
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
     activate: Option<crate::settings_surface::ToastActivate<'_>>,
+    meta: NotificationMeta,
 ) -> anyhow::Result<bool> {
     let config = config();
     let action =
@@ -1241,6 +1262,7 @@ pub(in crate::settings_surface) fn show_toast(
                 "artifact": artifact,
                 "layout": layout,
                 "activate": activate,
+                "meta": meta,
             }),
             Duration::from_millis(500),
         ),
@@ -1299,6 +1321,7 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
                 .get("layout")
                 .and_then(|value| serde_json::from_value::<NotificationLayout>(value.clone()).ok());
             let activate = request.input.get("activate").and_then(validated_activation);
+            let meta = validated_meta(request.input.get("meta"));
             match (title, body, level) {
                 (Some(title), Some(body), Some(level)) => {
                     ReadResult::Command(Command::Toast(Box::new(ToastCommand {
@@ -1312,6 +1335,7 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
                         artifact,
                         layout,
                         activate,
+                        meta,
                     })))
                 }
                 _ => ReadResult::Error("toast requires title, body and level".into()),
@@ -1319,6 +1343,16 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
         }
         _ => ReadResult::Fallback,
     }
+}
+
+fn validated_meta(meta: Option<&serde_json::Value>) -> NotificationMeta {
+    let mut meta = meta
+        .and_then(|value| serde_json::from_value::<NotificationMeta>(value.clone()).ok())
+        .unwrap_or_default();
+    meta.image = meta
+        .image
+        .filter(|image| crate::paths::is_existing_absolute_path(image));
+    meta
 }
 
 fn validated_action(
@@ -1347,7 +1381,7 @@ fn activation_name(activation: SettingsActivation) -> &'static str {
 mod tests {
     use super::ToastCommand;
     use qol_plugin_daemon::daemon::ReadResult;
-    use qol_runtime::protocol::DaemonRequest;
+    use qol_runtime::protocol::{DaemonRequest, NotificationMeta};
 
     use super::{
         config, notice_timeout, parse_request, spawn_replacement_after_handover, Command,
@@ -2163,6 +2197,7 @@ items = []
                 artifact,
                 layout,
                 activate,
+                meta,
             } = parsed_toast(parse_request(&request));
             assert_eq!(activate, None);
             assert_eq!(group, "");
@@ -2174,6 +2209,7 @@ items = []
             assert_eq!(action, Some(("open".to_string(), payload)));
             assert_eq!(artifact, None);
             assert_eq!(layout, None);
+            assert_eq!(meta, NotificationMeta::default());
         }
 
         let incomplete = DaemonRequest {
@@ -2325,6 +2361,50 @@ items = []
         let missing = tmp.path().join("gone.png").to_string_lossy().into_owned();
         let artifact = parsed_toast(parse_request(&request_for(&missing))).artifact;
         assert_eq!(artifact, None);
+    }
+
+    #[test]
+    fn toast_protocol_reads_the_meta_and_keeps_only_an_existing_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("shot.png");
+        std::fs::write(&file, b"x").unwrap();
+        let existing = file.to_str().unwrap().to_string();
+        let missing = tmp.path().join("gone.png").to_string_lossy().into_owned();
+        let meta_of = |meta: Option<serde_json::Value>| {
+            let mut input = serde_json::json!({ "title": "t", "body": "b", "level": "info" });
+            if let Some(meta) = meta {
+                input["meta"] = meta;
+            }
+            let ToastCommand { meta, .. } = parsed_toast(parse_request(&DaemonRequest {
+                action: "toast".into(),
+                input,
+            }));
+            meta
+        };
+        let meta = |duration_ms, key: Option<&str>, image: Option<&str>| NotificationMeta {
+            duration_ms,
+            key: key.map(str::to_string),
+            image: image.map(str::to_string),
+        };
+        let cases = [
+            (None, meta(None, None, None)),
+            (
+                Some(serde_json::json!({ "duration_ms": 0, "key": "saved", "image": existing })),
+                meta(Some(0), Some("saved"), Some(existing.as_str())),
+            ),
+            (
+                Some(serde_json::json!({ "duration_ms": 2500, "image": missing })),
+                meta(Some(2500), None, None),
+            ),
+            (
+                Some(serde_json::json!({ "image": "shot.png" })),
+                meta(None, None, None),
+            ),
+            (Some(serde_json::json!("soon")), meta(None, None, None)),
+        ];
+        for (input, want) in cases {
+            assert_eq!(meta_of(input.clone()), want, "{input:?}");
+        }
     }
 
     #[test]

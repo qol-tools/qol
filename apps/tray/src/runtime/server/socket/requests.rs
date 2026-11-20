@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use qol_plugin_api::manifest::is_valid_plugin_id;
 use qol_runtime::local_ipc::LocalStream;
 use qol_runtime::protocol::{
-    ArmedLifelinesResponse, DaemonRequest, NotificationLayout, NotificationLevel,
+    ArmedLifelinesResponse, DaemonRequest, NotificationLayout, NotificationLevel, NotificationMeta,
     PluginConfigResponse, PushAck, RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
 };
 
@@ -81,9 +81,13 @@ fn handle_json_request(request: &str, writer: &mut LocalStream, shared: &SharedS
             artifact,
             layout,
             activate,
+            duration_ms,
+            key,
+            image,
         } => {
             let action = resolve_action(action_label.as_deref(), action_payload.as_deref());
             let artifact = resolve_artifact(artifact.as_deref());
+            let meta = notification_meta(duration_ms, key, image.as_deref());
             handle_push_notification(
                 writer,
                 &plugin_id,
@@ -93,7 +97,8 @@ fn handle_json_request(request: &str, writer: &mut LocalStream, shared: &SharedS
                 action,
                 artifact,
                 layout,
-                activate.as_ref(),
+                activate.as_deref(),
+                meta,
             )
         }
         RuntimeRequest::PushStatus { plugin_id, status } => {
@@ -115,6 +120,7 @@ fn handle_push_notification(
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
     activate: Option<&DaemonRequest>,
+    meta: NotificationMeta,
 ) {
     let accepted = push_plugin_known(plugin_id);
     if accepted && title.trim().is_empty() {
@@ -149,6 +155,7 @@ fn handle_push_notification(
         artifact,
         layout,
         activate,
+        meta,
     );
 }
 
@@ -178,6 +185,35 @@ fn resolve_artifact(artifact: Option<&str>) -> Option<&str> {
         return None;
     }
     Some(artifact)
+}
+
+fn notification_meta(
+    duration_ms: Option<u64>,
+    key: Option<String>,
+    image: Option<&str>,
+) -> NotificationMeta {
+    NotificationMeta {
+        duration_ms,
+        key: key.filter(|key| !key.trim().is_empty()),
+        image: resolve_image(image).map(str::to_string),
+    }
+}
+
+fn resolve_image(image: Option<&str>) -> Option<&str> {
+    let image = image?;
+    if !crate::paths::is_existing_absolute_path(image) {
+        log::warn!(
+            "[runtime/socket] PUSH notification image dropped: {image:?} is not an existing absolute path"
+        );
+        return None;
+    }
+    if qol_gpui::artifact::ArtifactKind::of(std::path::Path::new(image))
+        != qol_gpui::artifact::ArtifactKind::Image
+    {
+        log::warn!("[runtime/socket] PUSH notification image dropped: {image:?} is not a picture");
+        return None;
+    }
+    Some(image)
 }
 
 fn handle_push_status(writer: &mut LocalStream, plugin_id: &str, status: &serde_json::Value) {
@@ -590,6 +626,54 @@ mod tests {
         ];
         for (name, artifact) in cases {
             assert_eq!(resolve_artifact(artifact), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn image_resolves_only_for_an_existing_absolute_picture() {
+        let tmp = TempDir::new().expect("tempdir");
+        let picture = tmp.path().join("shot.png");
+        let document = tmp.path().join("notes.txt");
+        std::fs::write(&picture, b"x").expect("write picture");
+        std::fs::write(&document, b"x").expect("write document");
+        let existing = picture.to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_image(Some(existing.as_str())),
+            Some(existing.as_str()),
+            "an existing absolute picture must be kept"
+        );
+
+        let missing = tmp.path().join("gone.png").to_string_lossy().into_owned();
+        let document = document.to_string_lossy().into_owned();
+        let cases = [
+            ("missing file", Some(missing.as_str())),
+            ("relative path", Some("shot.png")),
+            ("non-picture extension", Some(document.as_str())),
+            ("no image", None),
+        ];
+        for (name, image) in cases {
+            assert_eq!(resolve_image(image), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn notification_meta_drops_blank_keys_and_unusable_images() {
+        let cases = [
+            (Some(0), Some("saved"), Some(0), Some("saved")),
+            (Some(2500), Some("  "), Some(2500), None),
+            (None, Some(""), None, None),
+            (None, None, None, None),
+        ];
+        for (duration_ms, key, want_duration, want_key) in cases {
+            let meta = notification_meta(duration_ms, key.map(str::to_string), Some("rel.png"));
+            assert_eq!(
+                meta,
+                NotificationMeta {
+                    duration_ms: want_duration,
+                    key: want_key.map(str::to_string),
+                    image: None,
+                }
+            );
         }
     }
 

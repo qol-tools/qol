@@ -4,9 +4,12 @@ uid = "2f4c2ef3-2e20-4be6-8c5f-183d28fbc59d"
 name = "Explorer"
 icon = "explorer"
 description = "Browse and pick files from the keyboard"
-version = "0.32.0"
+version = "0.34.1"
 author = "KMRH47"
 platforms = ["linux"]
+
+[build]
+test_platforms = ["macos", "windows"]
 
 [config.scope]
 view_size = "core"

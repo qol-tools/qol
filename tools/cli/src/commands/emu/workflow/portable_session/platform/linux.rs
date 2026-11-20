@@ -23,7 +23,7 @@ use super::Verdict;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(20);
-const PLUGIN_ID: &str = "qol-launcher";
+const PLUGIN_ID: &str = qol_plugin_ids::launcher::ID;
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
 const MOUNT_TIMEOUT: Duration = Duration::from_secs(30);
 const AUTOMOUNT_WAIT: Duration = Duration::from_secs(10);

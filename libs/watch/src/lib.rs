@@ -92,14 +92,16 @@ pub fn watch(
         })
         .map_err(WatchError::Watcher)?;
     let mut rejected = Vec::new();
+    let mut paths = watcher.paths_mut();
     for root in roots {
-        if let Err(error) = watcher.watch(&root.path, root.mode()) {
+        if let Err(error) = paths.add(&root.path, root.mode()) {
             rejected.push(RejectedRoot {
                 path: root.path.clone(),
                 reason: error.to_string(),
             });
         }
     }
+    paths.commit().map_err(WatchError::Watcher)?;
     if rejected.len() == roots.len() {
         let reason = rejected
             .into_iter()

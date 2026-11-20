@@ -216,6 +216,11 @@ pub fn is_hidden_item(item: &DirEntry) -> bool {
     platform::is_hidden_item(item)
 }
 
+#[cfg(test)]
+pub fn hide(path: &Path) {
+    platform::hide(path);
+}
+
 pub fn file_id(metadata: &Metadata) -> Option<(u64, u64)> {
     platform::file_id(metadata)
 }

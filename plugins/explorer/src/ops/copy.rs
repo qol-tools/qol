@@ -4,8 +4,10 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::platform;
+use super::run::partial_variant;
 
 const CHUNK: usize = 1 << 20;
+const PARTIAL_VARIANTS: u32 = 99;
 
 pub(super) const ALREADY_THERE: &str = "that folder is already there";
 
@@ -31,22 +33,58 @@ impl Copied {
     }
 }
 
-pub(super) fn copy_node(
+pub(super) fn copy_to(
     src: &Path,
-    dst: &Path,
+    target: &Path,
     meter: &mut dyn Meter,
-    copied: &mut Vec<Copied>,
-) -> io::Result<()> {
+    sync: bool,
+) -> io::Result<Vec<Copied>> {
     let meta = fs::symlink_metadata(src)?;
+    let (partial, created) = reserve(src, &meta, target)?;
+    let mut copied = Vec::new();
+    let outcome = fill(src, &partial, &meta, created, meter, &mut copied, sync)
+        .and_then(|()| qol_fs::rename_noreplace(&partial, target));
+    if let Err(error) = outcome {
+        let _ = remove_all(&partial);
+        return Err(error);
+    }
+    if sync {
+        if let Some(parent) = target.parent() {
+            let _ = qol_fs::sync_directory(parent);
+        }
+    }
+    Ok(copied)
+}
+
+enum Created {
+    File(File),
+    Folder,
+    Link,
+}
+
+fn reserve(src: &Path, meta: &Metadata, target: &Path) -> io::Result<(PathBuf, Created)> {
+    for number in 1..=PARTIAL_VARIANTS {
+        let partial = partial_variant(target, number)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "it has no name"))?;
+        match create(src, &partial, meta) {
+            Ok(created) => return Ok((partial, created)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "too many half-finished copies of it are already there",
+    ))
+}
+
+fn create(src: &Path, dst: &Path, meta: &Metadata) -> io::Result<Created> {
     if meta.file_type().is_symlink() {
         platform::copy_link(src, dst)?;
-        copied.push(Copied::entry(src, &meta));
-        return Ok(());
+        return Ok(Created::Link);
     }
     if meta.is_file() {
-        let read = copy_file(src, dst, meter)?;
-        copied.push(Copied::entry(src, &read));
-        return Ok(());
+        return platform::new_file(dst).map(Created::File);
     }
     if !meta.is_dir() {
         return Err(io::Error::new(
@@ -55,33 +93,66 @@ pub(super) fn copy_node(
         ));
     }
     platform::new_dir(dst)?;
-    copied.push(Copied::entry(src, &meta));
-    let mut children = fs::read_dir(src)?.collect::<io::Result<Vec<_>>>()?;
-    children.sort_by_key(|entry| entry.file_name());
-    for child in children {
-        copy_node(&child.path(), &dst.join(child.file_name()), meter, copied)?;
-    }
-    if let Ok(handle) = platform::open_dir(dst) {
-        platform::keep_mode(&handle, &meta)?;
-        if let Ok(modified) = meta.modified() {
-            let _ = handle.set_modified(modified);
+    Ok(Created::Folder)
+}
+
+fn copy_node(
+    src: &Path,
+    dst: &Path,
+    meter: &mut dyn Meter,
+    copied: &mut Vec<Copied>,
+    sync: bool,
+) -> io::Result<()> {
+    let meta = fs::symlink_metadata(src)?;
+    let created = create(src, dst, &meta)?;
+    fill(src, dst, &meta, created, meter, copied, sync)
+}
+
+fn fill(
+    src: &Path,
+    dst: &Path,
+    meta: &Metadata,
+    created: Created,
+    meter: &mut dyn Meter,
+    copied: &mut Vec<Copied>,
+    sync: bool,
+) -> io::Result<()> {
+    match created {
+        Created::Link => copied.push(Copied::entry(src, meta)),
+        Created::File(writer) => {
+            let read = write_verified(src, writer, meter, sync)?;
+            copied.push(Copied::entry(src, &read));
+        }
+        Created::Folder => {
+            copied.push(Copied::entry(src, meta));
+            let mut children = fs::read_dir(src)?.collect::<io::Result<Vec<_>>>()?;
+            children.sort_by_key(|entry| entry.file_name());
+            for child in children {
+                let inner = dst.join(child.file_name());
+                copy_node(&child.path(), &inner, meter, copied, sync)?;
+            }
+            if let Ok(handle) = platform::open_dir(dst) {
+                platform::keep_mode(&handle, meta)?;
+                if let Ok(modified) = meta.modified() {
+                    let _ = handle.set_modified(modified);
+                }
+            }
+            if sync {
+                let _ = qol_fs::sync_directory(dst);
+            }
         }
     }
     Ok(())
 }
 
-pub(super) fn copy_file(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Result<Metadata> {
-    let outcome = write_verified(src, dst, meter);
-    if outcome.is_err() {
-        let _ = fs::remove_file(dst);
-    }
-    outcome
-}
-
-fn write_verified(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Result<Metadata> {
+fn write_verified(
+    src: &Path,
+    mut writer: File,
+    meter: &mut dyn Meter,
+    sync: bool,
+) -> io::Result<Metadata> {
     let mut reader = File::open(src)?;
     let meta = reader.metadata()?;
-    let mut writer = platform::new_file(dst)?;
     let mut buffer = vec![0u8; CHUNK];
     let mut written = 0u64;
     loop {
@@ -103,6 +174,9 @@ fn write_verified(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Result<M
             io::ErrorKind::InvalidData,
             "the copy came out a different size",
         ));
+    }
+    if sync {
+        writer.sync_all()?;
     }
     Ok(meta)
 }

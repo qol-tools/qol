@@ -23,10 +23,9 @@ const KEY_SETTLE: Duration = Duration::from_millis(200);
 const POKE_SETTLE: Duration = Duration::from_secs(5);
 const ACTIVE_GRAB_WAIT: Duration = Duration::from_secs(120);
 const ACTIVE_GRAB_POLL: Duration = Duration::from_secs(3);
-const LAUNCHER_UID: &str = "5cc75f62-2e3b-463c-ac7b-ae269cff1ef1";
+const LAUNCHER_UID: &str = qol_plugin_ids::launcher::UID;
 const QOL_COMBO: &str = "Shift+Super+S";
 const GTK_COMBO: &str = "['<Shift><Super>s']";
-const DISPATCH_NEEDLE: &str = "uid=5cc75f62-2e3b-463c-ac7b-ae269cff1ef1 action=open";
 const EVENT_NEEDLE: &str = "phase=event-received";
 const MANAGED_KEY: &str = "/org/cinnamon/desktop/keybindings/custom-keybindings/custom9/binding";
 const DESKLETS_KEY: &str = "/org/cinnamon/desktop/keybindings/show-desklets";
@@ -38,6 +37,10 @@ const CUSTOM_LIST: &str = "/org/cinnamon/desktop/keybindings/custom-list";
 const CLAIMS_GLOB: &str = "*/host-takeover/qol-tray-hotkeys/takeover-*";
 const CLEARED: &str = "@as []";
 const DE_MARKER: &str = "/tmp/de-shadow-evidence";
+
+fn dispatch_needle() -> String {
+    format!("uid={LAUNCHER_UID} action=open")
+}
 
 pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     let mut guest = connect_desktop_guest(vm)?;
@@ -402,7 +405,7 @@ fn require_chord_reaches_qol(guest: &mut GuestControlClient) -> Result<()> {
                 guest,
                 cursor,
                 "HOTKEY_DISPATCH",
-                DISPATCH_NEEDLE,
+                &dispatch_needle(),
                 ACTION_TIMEOUT,
             ) {
                 Ok(_) => {
@@ -894,7 +897,7 @@ fn resend_chord(guest: &mut GuestControlClient, timeout: Duration) -> Result<boo
         guest,
         cursor,
         "HOTKEY_DISPATCH",
-        DISPATCH_NEEDLE,
+        &dispatch_needle(),
         ACTION_TIMEOUT,
     )
     .is_ok())
@@ -915,7 +918,7 @@ fn eavesdrop_chord(guest: &mut GuestControlClient) -> Result<(bool, String)> {
         guest,
         cursor,
         "HOTKEY_DISPATCH",
-        DISPATCH_NEEDLE,
+        &dispatch_needle(),
         CHORD_RETRY_TIMEOUT,
     )
     .is_ok();

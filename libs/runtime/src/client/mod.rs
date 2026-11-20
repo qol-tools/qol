@@ -1,4 +1,7 @@
+mod notification;
 pub(crate) mod peers;
+
+pub use notification::Notification;
 
 use crate::protocol::{
     ArmedLifelinesResponse, DaemonRequest, NotificationLayout, NotificationLevel,
@@ -145,7 +148,12 @@ impl PlatformStateClient {
         artifact: Option<&str>,
         layout: Option<NotificationLayout>,
     ) -> bool {
-        self.push_notification(title, body, level, action, artifact, layout, None)
+        self.push(&Notification {
+            action: action.map(|(label, payload)| (label.to_string(), payload.to_string())),
+            artifact: artifact.map(str::to_string),
+            layout,
+            ..Notification::new(title, body).level(level)
+        })
     }
 
     /// Pushes a notification whose click sends `activate` back to this
@@ -158,32 +166,15 @@ impl PlatformStateClient {
         layout: Option<NotificationLayout>,
         activate: DaemonRequest,
     ) -> bool {
-        self.push_notification(title, body, level, None, None, layout, Some(activate))
+        self.push(&Notification {
+            layout,
+            activate: Some(activate),
+            ..Notification::new(title, body).level(level)
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn push_notification(
-        &self,
-        title: &str,
-        body: &str,
-        level: NotificationLevel,
-        action: Option<(&str, &str)>,
-        artifact: Option<&str>,
-        layout: Option<NotificationLayout>,
-        activate: Option<DaemonRequest>,
-    ) -> bool {
-        let plugin_id = self.plugin_id_from_env();
-        let request = RuntimeRequest::PushNotification {
-            plugin_id,
-            title: title.to_string(),
-            body: body.to_string(),
-            level,
-            action_label: action.map(|(label, _)| label.to_string()),
-            action_payload: action.map(|(_, payload)| payload.to_string()),
-            artifact: artifact.map(str::to_string),
-            layout,
-            activate,
-        };
+    pub fn push(&self, notification: &Notification) -> bool {
+        let request = notification.request(self.plugin_id_from_env());
         matches!(self.request_json(&request), Some(PushAck::Handled))
     }
 

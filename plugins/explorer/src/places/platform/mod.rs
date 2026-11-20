@@ -27,3 +27,15 @@ pub(crate) use windows::{
     file_id, is_executable, is_hidden, is_hidden_item, is_link_loop, is_pseudo_fs, mounts,
     special_kind, system_root, user_folders,
 };
+
+#[cfg(all(
+    test,
+    not(any(target_os = "linux", target_os = "macos", target_os = "windows"))
+))]
+pub(crate) use fallback::hide;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use linux::hide;
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) use macos::hide;
+#[cfg(all(test, target_os = "windows"))]
+pub(crate) use windows::hide;

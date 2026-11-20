@@ -1,5 +1,6 @@
 use crate::manifest::{PluginManifest, CURRENT_MANIFEST_VERSION};
 use anyhow::{bail, Context, Result};
+use qol_platform::Os;
 
 impl PluginManifest {
     pub fn validate(&self) -> Result<()> {
@@ -34,6 +35,14 @@ impl PluginManifest {
             self.daemon.as_ref(),
         )?;
         super::dependency_rules::validate_optional_dependencies(self.dependencies.as_ref())?;
+        if let Some(unknown) = self
+            .build
+            .test_platforms
+            .iter()
+            .find(|platform| Os::from_name(platform).is_none())
+        {
+            bail!("build.test_platforms has unknown platform {unknown:?}");
+        }
         Ok(())
     }
 

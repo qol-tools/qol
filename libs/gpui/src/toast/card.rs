@@ -250,6 +250,15 @@ fn banner_title(row: &SlabSnapshotRow, banner: &Banner, ground: Ground) -> Div {
     let lit = rgb(qol_color::mix_rgb(ground.mark, ground.ink, banner.cool));
     let (before, value, after) =
         split_value(title, row.toast.value.as_ref().map(|value| value.as_ref()));
+    if value.is_empty() {
+        return div()
+            .w_full()
+            .text_center()
+            .text_scaled(TextStyle::Title, 1.0)
+            .text_color(lit)
+            .truncate()
+            .child(SharedString::from(title.to_string()));
+    }
     let rolling = banner.roll.as_ref().filter(|roll| roll.progress < 1.0);
     let value_chars = rolled(
         value,
@@ -263,15 +272,10 @@ fn banner_title(row: &SlabSnapshotRow, banner: &Banner, ground: Ground) -> Div {
         .overflow_hidden()
         .whitespace_nowrap()
         .text_scaled(TextStyle::Title, 1.0)
-        .text_color(rgb(ground.ink));
-    let line = if before.is_empty() && after.is_empty() && value.is_empty() {
-        line.text_color(lit)
-            .child(SharedString::from(title.to_string()))
-    } else {
-        line.child(SharedString::from(before.to_string()))
-            .child(value_chars.text_color(lit))
-            .child(SharedString::from(after.to_string()))
-    };
+        .text_color(rgb(ground.ink))
+        .child(SharedString::from(before.to_string()))
+        .child(value_chars.text_color(lit))
+        .child(SharedString::from(after.to_string()));
     div().w_full().flex().justify_center().child(line)
 }
 

@@ -83,6 +83,7 @@
     "use": "the qol_conventions constant or route builder that holds the value, or a new one there; a qol folder name comes from qol_config",
     "scope": "production",
     "const_texts": true,
+    "const_numbers": true,
     "prefixes": ["/api/"],
     "skip": [
       { "text": "dev", "why": "the Cargo feature name, which #[cfg(feature = ..)] attributes must spell out; commands and profiles use the word too" },
@@ -98,7 +99,8 @@
       { "text": "--quick", "why": "a flag that other commands may take with their own meaning" },
       { "text": "state.json", "why": "a file name that profile sync, peers and terminal sessions give their own state" },
       { "text": "127.0.0.1", "why": "the loopback address, which plugin listeners and local servers bind for their own sockets" },
-      { "text": "qol-launcher", "why": "the launcher plugin's id, which its plugin.toml owns" }
+      { "text": "qol-launcher", "why": "the launcher plugin's id, which its plugin.toml owns" },
+      { "text": "1", "why": "the artifact schema version, while other code uses 1 as a count, index or version with its own meaning" }
     ],
     "allow": []
   },

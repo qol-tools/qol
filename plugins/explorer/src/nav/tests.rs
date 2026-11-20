@@ -182,6 +182,75 @@ fn picks_are_counted_per_folder_through_every_change() {
     assert_eq!(picks.folder_count(), 0);
 }
 
+#[test]
+fn the_version_moves_exactly_when_the_picked_rows_change() {
+    type Change = fn(&mut Picks, &[PathBuf]);
+    let rows = folders(&["a", "b", "c"]);
+    let cases: [(&str, Change, bool); 12] = [
+        ("add a new row", |picks, rows| picks.add(&rows[2]), true),
+        ("add a picked row", |picks, rows| picks.add(&rows[0]), false),
+        (
+            "toggle a row off",
+            |picks, rows| picks.toggle(&rows[0]),
+            true,
+        ),
+        (
+            "toggle a row on",
+            |picks, rows| picks.toggle(&rows[2]),
+            true,
+        ),
+        ("pick every row", |picks, rows| picks.all(rows), true),
+        (
+            "pick the rows already picked",
+            |picks, rows| picks.all(&rows[..2]),
+            false,
+        ),
+        ("clear", |picks, _| picks.clear(), true),
+        ("keep every row", |picks, _| picks.retain(|_| true), false),
+        (
+            "drop a row",
+            |picks, rows| picks.retain(|path| path != rows[0]),
+            true,
+        ),
+        (
+            "rename a picked row",
+            |picks, rows| picks.rename(&rows[0], rows[2].clone()),
+            true,
+        ),
+        (
+            "rename a row not picked",
+            |picks, rows| picks.rename(&rows[2], rows[2].with_extension("x")),
+            false,
+        ),
+        (
+            "stretch a range",
+            |picks, rows| picks.extend_range(rows, 0, 2),
+            true,
+        ),
+    ];
+    for (what, change, moves) in cases {
+        let mut picks = Picks::new();
+        picks.add(&rows[0]);
+        picks.add(&rows[1]);
+        let before = picks.version();
+        change(&mut picks, &rows);
+        assert_eq!(picks.version() != before, moves, "{what}");
+    }
+
+    let mut empty = Picks::new();
+    let version = empty.version();
+    empty.clear();
+    empty.end_range();
+    assert_eq!(empty.version(), version);
+
+    let mut first = Picks::new();
+    first.add(&rows[0]);
+    let mut second = first.clone();
+    first.add(&rows[1]);
+    second.add(&rows[2]);
+    assert_ne!(first.version(), second.version());
+}
+
 fn merged_set(items: &[&'static str]) -> std::collections::HashSet<&'static str> {
     items.iter().copied().collect()
 }

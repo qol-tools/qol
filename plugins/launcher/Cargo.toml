@@ -1,6 +1,6 @@
 [package]
 name = "qol-launcher"
-version = "1.122.2"
+version = "1.122.3"
 edition = "2021"
 description = "Application and file launcher plugin for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -22,6 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 qol-plugin-api.workspace = true
 qol-plugin-daemon.workspace = true
+qol-plugin-ids.workspace = true
 qol-watch.workspace = true
 qol-gpui.workspace = true
 qol-headless.workspace = true
