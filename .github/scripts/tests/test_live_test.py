@@ -71,18 +71,43 @@ class PatternTests(unittest.TestCase):
 
 REPO = SCRIPTS.parents[1]
 PAGE_CONTENT = {"Page", "Group", "Row", "Notice", "Control", "Tone"}
-PAGES_USE = re.compile(r"\buse\s+qol_config::pages::(\{[^}]*\}|\w+)")
-PAGES_PATH = re.compile(r"\bpages::(?:" + "|".join(sorted(PAGE_CONTENT)) + r")\b")
+CONFIG_USE = re.compile(r"\buse\s+qol_config::([^;]+);")
+CONTENT = "|".join(sorted(PAGE_CONTENT))
 UI_FOLDER = re.compile(r"(?:^|/)src/(?:.+/)?ui/")
 
 
+def use_paths(tree: str) -> list[str]:
+    tree = " ".join(tree.split())
+    if "{" not in tree:
+        return [tree]
+    head, inner = tree.split("{", 1)
+    inner = inner[: inner.rfind("}")]
+    paths, depth, start = [], 0, 0
+    for index, char in enumerate(inner + ","):
+        depth += {"{": 1, "}": -1}.get(char, 0)
+        if char == "," and depth == 0:
+            part = inner[start:index].strip()
+            if part:
+                paths += [head + path for path in use_paths(part)]
+            start = index + 1
+    return paths
+
+
 def builds_pages(text: str) -> bool:
-    if "qol_config::pages" not in text:
-        return False
-    for found in PAGES_USE.finditer(text):
-        if PAGE_CONTENT & set(re.findall(r"\w+", found.group(1))):
-            return True
-    return bool(PAGES_PATH.search(text))
+    modules = set()
+    for found in CONFIG_USE.finditer(text):
+        for path in use_paths(found.group(1)):
+            name, _, alias = path.partition(" as ")
+            segments = [segment.strip() for segment in name.split("::")]
+            if segments[0] != "pages":
+                continue
+            if segments[1:] in ([], ["self"]):
+                modules.add(alias.strip() or "pages")
+            elif segments[1] == "*" or segments[1] in PAGE_CONTENT:
+                return True
+    if re.search(rf"\bqol_config::pages::(?:{CONTENT})\b", text):
+        return True
+    return any(re.search(rf"(?<![\w:]){re.escape(module)}::(?:{CONTENT})\b", text) for module in modules)
 
 
 def draws(path: str, text: str) -> bool:
@@ -102,6 +127,12 @@ class UiCoverageTests(unittest.TestCase):
             ("use qol_config::pages::{Go, Press, PressReply, Stack};", False),
             ("let pages: qol_config::pages::Pages = todo!();", False),
             ("use crate::pages::Row;", False),
+            ("use qol_config::{contract::PagesSpec, pages::{Group, Row}};", True),
+            ("use qol_config::pages::*;", True),
+            ("use qol_config::pages as p;\nfn f() { p::Row::new(\"a\", \"b\"); }", True),
+            ("use qol_config::pages::{self, Go};\nfn f() -> pages::Page { todo!() }", True),
+            ("use qol_config::pages::{Go, Press};\nuse crate::pages::Row;\nfn f(r: crate::pages::Row) {}", False),
+            ("use qol_config::pages as p;\nfn f(go: p::Go) {}", False),
         ]
         for text, expected in cases:
             with self.subTest(text=text):
@@ -122,6 +153,8 @@ class UiCoverageTests(unittest.TestCase):
         ).stdout.split("\0")
         drawing = []
         for path in filter(None, tracked):
+            if path.startswith("vendor/"):
+                continue
             file = REPO / path
             if not file.is_file():
                 continue
