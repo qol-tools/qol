@@ -13,9 +13,7 @@ use qol_terminal_sessions::{SessionBinding, SessionId};
 use crate::config;
 use crate::daemon::actions::{self, Command};
 use crate::daemon::reconcile;
-#[cfg(debug_assertions)]
-use crate::diagnostics::anomaly;
-use crate::diagnostics::snapshot;
+use crate::diagnostics::{anomaly, snapshot};
 use crate::host::TerminalHost;
 use crate::session::registry::Registry;
 use crate::session::service::{SharedSnapshotCache, SystemServiceProbe};

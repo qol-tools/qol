@@ -10,13 +10,13 @@ use tray_icon::Icon;
 pub(crate) const ICON_SIZE: u32 = 64;
 pub(crate) const ICON_SIDE_PADDING: u32 = 0;
 
-pub enum PlatformTray {}
+pub(crate) enum PlatformTray {}
 
 pub(crate) fn request_shutdown(shutdown_tx: &broadcast::Sender<()>) {
     let _ = shutdown_tx.send(());
 }
 
-pub fn create_tray(
+pub(crate) fn create_tray(
     _feature_registry: Arc<FeatureRegistry>,
     _shutdown_tx: broadcast::Sender<()>,
     _shutdown_rx: broadcast::Receiver<()>,
@@ -27,7 +27,7 @@ pub fn create_tray(
     Err(unsupported_error())
 }
 
-pub fn run_app<F>(_init: F) -> Result<()>
+pub(crate) fn run_app<F>(_init: F) -> Result<()>
 where
     F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
 {

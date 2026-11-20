@@ -15,7 +15,7 @@ static SHUTDOWN_FN: OnceLock<Mutex<Option<ShutdownFn>>> = OnceLock::new();
 pub(crate) const ICON_SIZE: u32 = 64;
 pub(crate) const ICON_SIDE_PADDING: u32 = 25;
 
-pub enum PlatformTray {
+pub(crate) enum PlatformTray {
     MacOS { _tray_icon: TrayIcon },
 }
 
@@ -24,7 +24,7 @@ pub(crate) fn request_shutdown(shutdown_tx: &broadcast::Sender<()>) {
     stop_event_loop();
 }
 
-pub fn create_tray(
+pub(crate) fn create_tray(
     feature_registry: Arc<FeatureRegistry>,
     shutdown_tx: broadcast::Sender<()>,
     shutdown_rx: broadcast::Receiver<()>,
@@ -45,7 +45,7 @@ pub fn create_tray(
     })
 }
 
-pub fn run_app<F>(init: F) -> Result<()>
+pub(crate) fn run_app<F>(init: F) -> Result<()>
 where
     F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
 {

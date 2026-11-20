@@ -18,7 +18,7 @@ pub(crate) const ICON_SIDE_PADDING: u32 = 0;
 const REFRESH_SECONDS: u32 = 10;
 const SLOW_STARTUP_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
-pub enum PlatformTray {
+pub(crate) enum PlatformTray {
     Linux,
 }
 
@@ -26,7 +26,7 @@ pub(crate) fn request_shutdown(shutdown_tx: &broadcast::Sender<()>) {
     let _ = shutdown_tx.send(());
 }
 
-pub fn create_tray(
+pub(crate) fn create_tray(
     feature_registry: Arc<FeatureRegistry>,
     shutdown_tx: broadcast::Sender<()>,
     shutdown_rx: broadcast::Receiver<()>,
@@ -45,7 +45,7 @@ pub fn create_tray(
     Ok(PlatformTray::Linux)
 }
 
-pub fn run_app<F>(init: F) -> Result<()>
+pub(crate) fn run_app<F>(init: F) -> Result<()>
 where
     F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
 {

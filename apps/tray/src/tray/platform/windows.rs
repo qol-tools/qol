@@ -23,7 +23,7 @@ static PUMP_THREAD: AtomicU32 = AtomicU32::new(0);
 pub(crate) const ICON_SIZE: u32 = 32;
 pub(crate) const ICON_SIDE_PADDING: u32 = 0;
 
-pub enum PlatformTray {
+pub(crate) enum PlatformTray {
     Windows { _tray_icon: TrayIcon },
 }
 
@@ -32,7 +32,7 @@ pub(crate) fn request_shutdown(shutdown_tx: &broadcast::Sender<()>) {
     signal_quit();
 }
 
-pub fn create_tray(
+pub(crate) fn create_tray(
     feature_registry: Arc<FeatureRegistry>,
     shutdown_tx: broadcast::Sender<()>,
     shutdown_rx: broadcast::Receiver<()>,
@@ -53,7 +53,7 @@ pub fn create_tray(
     })
 }
 
-pub fn run_app<F>(init: F) -> Result<()>
+pub(crate) fn run_app<F>(init: F) -> Result<()>
 where
     F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
 {

@@ -42,4 +42,5 @@ impl std::error::Error for DiscoveryError {}
 
 mod platform;
 
-pub use platform::{native, Platform};
+pub use native::Platform;
+pub use platform::native;
