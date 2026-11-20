@@ -4,8 +4,8 @@ use qol_config::pages::{Control, Enter, Go, Notice, Page, Pages};
 use super::{build, press, ROOT};
 use crate::session::{Act, Helper, InUse, Journal, Session, Task, MINT_DEFAULT};
 use crate::updates::{
-    Auto, Failure, Finish, Held, Hours, Mint, Package, Reason, Refusal, Run, RunBy, Unit, Update,
-    Updates,
+    Auto, AutoKey, ByHand, Cleaner, Cleanup, Failure, Finish, Held, Hours, Mint, Package, Reason,
+    Refusal, Run, RunBy, Unit, Update, Updates,
 };
 
 fn at(text: &str) -> NaiveDateTime {
@@ -113,6 +113,12 @@ fn mint() -> Session {
             spices: true,
             flatpak: false,
         },
+    });
+    session.host.cleanup = Some(Cleanup {
+        by: Cleaner::Mint,
+        on: true,
+        idle: false,
+        by_hand: Some(ByHand { on: false, kept: 0 }),
     });
     session
 }
@@ -335,7 +341,7 @@ fn the_first_page_reads_like_the_design() {
         .iter()
         .map(|group| group.title.as_str())
         .collect();
-    assert_eq!(titles, ["updates", "mint", "qol", "history"]);
+    assert_eq!(titles, ["updates", "mint", "cleanup", "qol", "history"]);
     assert!(root.groups.iter().all(|group| group.colophon.is_none()));
     assert_eq!(label(&pages, ROOT, "install"), "5 waiting");
     assert_eq!(
@@ -878,4 +884,132 @@ fn unknown_rows_answer_with_a_notice() {
     let outcome = press(&mut session, ROOT, "nowhere", now());
     assert!(matches!(outcome.notice, Some(Notice::Failure(_))));
     assert!(outcome.task.is_none());
+}
+
+#[test]
+fn old_kernels_switch_through_tasks_and_list_as_changes() {
+    let mut session = mint();
+    let pages = build(&session, now()).pages;
+    assert_eq!(label(&pages, ROOT, "kernels"), "Old kernels");
+    assert_eq!(value(&pages, ROOT, "kernels"), "removed weekly");
+    assert_eq!(
+        label(&pages, "kernels", "kernels"),
+        "Old kernels and leftovers"
+    );
+    assert_eq!(
+        detail(&pages, "kernels", "kernels"),
+        "Weekly and 3 hours after each startup. Also removes other packages nothing needs."
+    );
+    assert_eq!(
+        detail(&pages, "kernels", "by_hand"),
+        "A kernel installed from Mint's Update Manager window is never removed."
+    );
+    let switch = press(&mut session, "kernels", "by_hand", now());
+    let task = switch.task.expect("task");
+    assert_eq!(
+        task,
+        Task::Auto {
+            key: AutoKey::ByHand,
+            on: true,
+            was: false,
+        }
+    );
+    session.done(&task, Ok(()), now());
+    if let Some(cleanup) = session.host.cleanup.as_mut() {
+        cleanup.by_hand = Some(ByHand { on: true, kept: 0 });
+    }
+    let pages = build(&session, now()).pages;
+    assert_eq!(broken(&pages), Vec::<String>::new());
+    assert_eq!(value(&pages, ROOT, "changes"), "1");
+    assert_eq!(
+        label(&pages, "changes", "auto:by_hand"),
+        "Removing kernels installed by hand"
+    );
+    assert_eq!(value(&pages, "changes", "auto:by_hand"), "on");
+    let back = press(&mut session, "changes", "auto:by_hand", now());
+    assert!(matches!(
+        back.task,
+        Some(Task::Auto {
+            key: AutoKey::ByHand,
+            on: false,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn old_kernels_read_like_each_platform_removes_them() {
+    let mut session = mint();
+    if let Some(cleanup) = session.host.cleanup.as_mut() {
+        cleanup.by_hand = Some(ByHand { on: false, kept: 2 });
+    }
+    let pages = build(&session, now()).pages;
+    assert_eq!(
+        detail(&pages, "kernels", "by_hand"),
+        "2 kernels installed by hand are never removed."
+    );
+
+    let unattended = Cleanup {
+        by: Cleaner::Unattended,
+        on: true,
+        idle: false,
+        by_hand: None,
+    };
+    session.host.cleanup = Some(unattended);
+    let pages = build(&session, now()).pages;
+    assert_eq!(broken(&pages), Vec::<String>::new());
+    assert_eq!(value(&pages, ROOT, "kernels"), "removed with updates");
+    assert_eq!(label(&pages, "kernels", "kernels"), "Old kernels");
+    assert!(page(&pages, "kernels").row("by_hand").is_none());
+
+    session.host.cleanup = Some(Cleanup {
+        idle: true,
+        ..unattended
+    });
+    let pages = build(&session, now()).pages;
+    assert_eq!(value(&pages, ROOT, "kernels"), "kept");
+    assert_eq!(
+        detail(&pages, "kernels", "kernels"),
+        "Automatic updates are off here, so this never runs."
+    );
+
+    session.host.cleanup = None;
+    let pages = build(&session, now()).pages;
+    assert_eq!(broken(&pages), Vec::<String>::new());
+    assert_eq!(value(&pages, ROOT, "kernels"), "kept");
+    assert_eq!(
+        detail(&pages, ROOT, "kernels"),
+        "Nothing removes them on its own here"
+    );
+    assert!(pages.page("kernels").is_none());
+
+    session.host.cleanup = Some(unattended);
+    session.host.admin = false;
+    let pages = build(&session, now()).pages;
+    assert_eq!(broken(&pages), Vec::<String>::new());
+    assert!(pages.page("kernels").is_none());
+}
+
+#[test]
+fn a_borrowed_computer_asks_before_changing_the_owners_kernel_removal() {
+    let mut session = mint();
+    session.borrowed = true;
+    let outcome = press(&mut session, "kernels", "kernels", now());
+    assert_eq!(outcome.go, Some(Go::Open("ask".into())));
+    assert!(outcome.task.is_none());
+    let pages = build(&session, now()).pages;
+    assert_eq!(
+        page(&pages, "ask").groups[0].title,
+        "change the owner's old kernel removal switch?"
+    );
+    assert_eq!(value(&pages, "ask", "after"), "off");
+    let change = press(&mut session, "ask", "change", now());
+    assert!(matches!(
+        change.task,
+        Some(Task::Auto {
+            key: AutoKey::Kernels,
+            on: false,
+            was: true,
+        })
+    ));
 }

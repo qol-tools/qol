@@ -5,7 +5,7 @@ use qol_headless::{
     Command, CommandContext, DoctorCheck, DoctorCheckResult, Execution, HeadlessApp,
 };
 
-use crate::updates;
+use crate::updates::{self, AutoKey, Cleanup};
 use crate::PLUGIN_ID;
 
 const PLATFORM_SUPPORTED: &str = "platform_supported";
@@ -22,9 +22,9 @@ fn app() -> HeadlessApp {
         .about("See what updates wait, install them when you choose, and restart when it suits you.")
         .command(
             Command::new("status")
-                .about("List the updates that wait, what finishes at a restart, and what is skipped.")
+                .about("List the updates that wait, what finishes at a restart, what is skipped, and whether old kernels are removed.")
                 .usage(format!("{PLUGIN_ID} status"))
-                .output("One line per waiting update, then what a restart finishes, then the skipped entries.")
+                .output("One line per waiting update, then what a restart finishes, the skipped entries, and an `Old kernels:` line.")
                 .exit_behavior("Exits 64 on a usage error; 0 otherwise, with read problems on stderr.")
                 .run_result(status),
         )
@@ -82,8 +82,20 @@ fn status(context: &CommandContext) -> Result<Execution> {
     if !host.skips.is_empty() {
         out.push_str(&format!("Skipped: {}\n", host.skips.join(", ")));
     }
+    out.push_str(&format!("Old kernels: {}\n", kernels(host.cleanup)));
     let problems: Vec<String> = found.problems.into_iter().chain(host.problems).collect();
     Ok(Execution::new(out, problems.join("\n"), 0))
+}
+
+fn kernels(cleanup: Option<Cleanup>) -> String {
+    match cleanup {
+        None => "kept, nothing removes them on its own here".into(),
+        Some(cleanup) if !cleanup.removing() => "kept".into(),
+        Some(cleanup) if cleanup.get(AutoKey::ByHand) => {
+            format!("{}, kernels installed by hand too", cleanup.by.when())
+        }
+        Some(cleanup) => cleanup.by.when().into(),
+    }
 }
 
 fn press(_context: &CommandContext) -> Result<Execution> {
@@ -177,6 +189,35 @@ mod tests {
         assert_eq!(run(&["settings", "help"]), 0);
         assert_eq!(run(&["status", "--all"]), EXIT_USAGE);
         assert_eq!(run(&["press"]), 1);
+    }
+
+    #[test]
+    fn the_old_kernels_line_names_what_removes_them() {
+        use crate::updates::{ByHand, Cleaner};
+        let mint = Cleanup {
+            by: Cleaner::Mint,
+            on: true,
+            idle: false,
+            by_hand: Some(ByHand { on: false, kept: 2 }),
+        };
+        assert_eq!(kernels(Some(mint)), "removed weekly");
+        let all = Cleanup {
+            by_hand: Some(ByHand { on: true, kept: 0 }),
+            ..mint
+        };
+        assert_eq!(
+            kernels(Some(all)),
+            "removed weekly, kernels installed by hand too"
+        );
+        assert_eq!(kernels(Some(Cleanup { on: false, ..mint })), "kept");
+        let idle = Cleanup {
+            by: Cleaner::Unattended,
+            idle: true,
+            by_hand: None,
+            ..mint
+        };
+        assert_eq!(kernels(Some(idle)), "kept");
+        assert_eq!(kernels(None), "kept, nothing removes them on its own here");
     }
 
     #[test]

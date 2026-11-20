@@ -6,6 +6,7 @@ use qol_config::pages::{Go, Group, Notice, Page, Pages, Row};
 use crate::session::{Act, Session, Task};
 
 mod home;
+mod kernels;
 mod last;
 mod restart;
 mod settings;
@@ -149,6 +150,9 @@ pub(crate) fn build(session: &Session, now: NaiveDateTime) -> Board {
         board.add(sheet);
     }
     for sheet in settings::pages(session, now) {
+        board.add(sheet);
+    }
+    if let Some(sheet) = kernels::page(session) {
         board.add(sheet);
     }
     if let Some(sheet) = skipped::page(session) {
