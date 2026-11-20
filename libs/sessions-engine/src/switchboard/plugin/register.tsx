@@ -692,11 +692,13 @@ const placeFocus = async ($: EngineInterface): Promise<void> => {
 
 const TOOL_TEXT = 60
 
+const textIn = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? oneLine(value) : undefined)
+const pathIn = (input: Record<string, unknown>): string | undefined => textIn(input.file_path) ?? textIn(input.notebook_path) ?? textIn(input.path)
+
 const toolLabel = (tool: string, input: Record<string, unknown>): string => {
   const name = tool.replace(/^mcp__.+?__/, '')
-  const text = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? oneLine(value) : undefined)
-  const path = text(input.file_path) ?? text(input.notebook_path) ?? text(input.path)
-  const detail = text(input.description) ?? (path === undefined ? undefined : path.replace(/^.*[\\/]/, '')) ?? text(input.pattern) ?? text(input.command) ?? text(input.prompt)
+  const path = pathIn(input)
+  const detail = textIn(input.description) ?? (path === undefined ? undefined : path.replace(/^.*[\\/]/, '')) ?? textIn(input.pattern) ?? textIn(input.command) ?? textIn(input.prompt)
   return clip(detail === undefined ? name : `${name}: ${detail}`, TOOL_TEXT)
 }
 
@@ -712,6 +714,7 @@ const ACTION_WORDS: Record<ActionKind, (count: number) => string> = {
 }
 
 const doing = new Map<string, Doing>()
+const unfoldedRuns = new Set<string>()
 
 export const withAction = (done: Doing, tool: string, label: string): Doing => {
   const kind = KIND_OF[tool] ?? 'other'
@@ -3252,7 +3255,47 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
     if (viewedFork === undefined || e.props.isExpanded) return next(e)
-    return next({ ...e, props: { ...e.props, isExpanded: true } })
+    const { Box, Text, Button, Link } = $.ui.resolve(e)
+    const run = e.props.calls[0]?.tool_use_id
+    const show = (isShown: boolean) => () => {
+      if (run === undefined) return
+      if (isShown) unfoldedRuns.add(run)
+      else unfoldedRuns.delete(run)
+      $.ui.invalidate('ui.render')
+    }
+    if (run !== undefined && unfoldedRuns.has(run)) {
+      return (
+        <Box flexDirection="column">
+          <Button key={`fold-${run}`} plain dimColor onPress={show(false)}>
+            <Text underline>hide details</Text>
+          </Button>
+          {await next({ ...e, props: { ...e.props, isExpanded: true } })}
+        </Box>
+      )
+    }
+    const calls = e.props.calls.map(call => {
+      const input = (typeof call.input === 'object' && call.input !== null ? call.input : {}) as Record<string, unknown>
+      const path = pathIn(input)
+      return { call, label: toolLabel(call.tool, input), file: path?.startsWith('/') === true ? `file://${path}` : undefined }
+    })
+    const done = calls.reduce((sum, one) => withAction(sum, one.call.tool, one.label), NOTHING_DONE)
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row" gap={1}>
+          <Text dimColor wrap="truncate">{doneSoFar(done)}</Text>
+          {run !== undefined && (
+            <Button key={`unfold-${run}`} plain dimColor onPress={show(true)}>
+              <Text underline>details</Text>
+            </Button>
+          )}
+        </Box>
+        {calls.slice(-ACTIONS_KEPT).map((one, index) => (
+          <Text key={`call-${index}`} dimColor={!one.call.isErrored && !one.call.isRunning} {...(one.call.isErrored ? { color: 'error' as const } : {})} wrap="truncate">
+            └ {one.file === undefined ? one.label : <Link href={one.file}>{one.label}</Link>}
+          </Text>
+        ))}
+      </Box>
+    )
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: PANE }, async $ => {

@@ -4649,33 +4649,52 @@ test('a restart puts each fork the switchboard started back in the agent list wi
   ])
 })
 
-test("a fork's view shows each tool call as its own row, and a run of calls in the switchboard's own view stays one count line", async ($, on) => {
+test("a fork's view sums a run of tool calls up as a count line and its last four calls, a file's one a link, and details shows every call; the switchboard's own view keeps its one count line", async ($, on) => {
   engine(on)
   on('ui.render', ($: any, e: any) => {
     const { Box, Text } = $.ui.resolve(e)
-    return e.props.isExpanded ? <Text>rows</Text> : <Box />
+    return e.props.isExpanded ? <Text>every call</Text> : <Box />
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'busy-fork: works')
-  const group = (isActive: boolean, isExpanded = false) =>
-    ({ plugin: 'qol-switchboard', surface: 'terminal', component: 'ToolGroup', props: { calls: [{ tool: 'Bash', input: { command: 'ls' }, isRunning: isActive }], isActive, isExpanded } }) as const
-  const unfolds = async (isActive: boolean, isExpanded = false) => {
-    const mounted = await $.ui.mount(group(isActive, isExpanded))
-    const found = (await mounted.find({ type: 'Text' })) !== undefined
-    await mounted.unmount()
-    return found
-  }
+  const call = (tool: string, input: object, isErrored = false) => ({ tool_use_id: `${tool}-${JSON.stringify(input)}`, tool, input, isRunning: false, isErrored, isInterrupted: false })
+  const calls = [
+    call('Read', { file_path: '/work/first.c' }),
+    call('Grep', { pattern: 'fire', path: 'native' }),
+    call('Read', { file_path: '/work/native/cadence.h' }),
+    call('Bash', { command: 'make', description: 'Build the pak' }, true),
+    call('Bash', { command: 'ls -la' }),
+    call('Glob', { pattern: '*.lua', path: '/work/scripts' }),
+  ]
+  const group = (isExpanded = false) => ({ plugin: 'qol-switchboard', surface: 'terminal', component: 'ToolGroup', props: { calls, isActive: false, isExpanded } }) as const
+  const texts = async (mounted: any) => (await mounted.findAll({ type: 'Text' })).map((one: any) => one.text)
   const main = await $.ui.mount(promptBand(false))
   await settle()
-  expect(await unfolds(true)).toBe(false)
-  expect(await unfolds(false)).toBe(false)
-  expect(await unfolds(false, true)).toBe(true)
+  const folded = await $.ui.mount(group())
+  expect(await texts(folded)).toEqual([])
+  await folded.unmount()
+  const verbose = await $.ui.mount(group(true))
+  expect(await texts(verbose)).toEqual(['every call'])
+  await verbose.unmount()
   await main.unmount()
   const inFork = await $.ui.mount({ ...promptBand(false), props: { ...promptBand(false).props, view: { agentId: 'a8' } } })
   await settle()
-  expect(await unfolds(true)).toBe(true)
-  expect(await unfolds(false)).toBe(true)
-  expect(await unfolds(false, true)).toBe(true)
+  const summed = await $.ui.mount(group())
+  expect((await summed.find({ type: 'Text', text: /^Searched/ }))?.text).toBe('Searched for 2 patterns, read 2 files, ran 2 shell commands')
+  expect((await summed.findAll({ type: 'Text', text: /^└/ })).map((one: any) => /[A-Z][a-z]+: [^:]+$/.exec(one.text)?.[0])).toEqual(['Read: cadence.h', 'Bash: Build the pak', 'Bash: ls -la', 'Glob: scripts'])
+  expect((await summed.findAll({ type: 'Link' })).map((one: any) => [one.props.href, one.text.slice(one.props.href.length)])).toEqual([['file:///work/native/cadence.h', 'Read: cadence.h'], ['file:///work/scripts', 'Glob: scripts']])
+  expect(await summed.find({ type: 'Text', text: 'every call' })).toBeUndefined()
+  await summed.press({ key: `unfold-${calls[0].tool_use_id}` })
+  await settle()
+  expect(await texts(summed)).toEqual(['hide details', 'every call'])
+  await summed.press({ key: `fold-${calls[0].tool_use_id}` })
+  await settle()
+  expect(await summed.find({ type: 'Text', text: 'every call' })).toBeUndefined()
+  expect((await summed.find({ type: 'Text', text: /^Searched/ }))?.text).toBe('Searched for 2 patterns, read 2 files, ran 2 shell commands')
+  await summed.unmount()
+  const verboseInFork = await $.ui.mount(group(true))
+  expect(await texts(verboseInFork)).toEqual(['every call'])
+  await verboseInFork.unmount()
   await inFork.unmount()
 })
 
