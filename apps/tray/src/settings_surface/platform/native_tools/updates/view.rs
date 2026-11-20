@@ -73,7 +73,7 @@ impl PageRow {
     fn action_label(&self) -> Option<&'static str> {
         match self {
             PageRow::Header { .. } => None,
-            PageRow::Summary(summary) => summary.action_label,
+            PageRow::Summary(summary) => summary.action.as_ref().and(summary.action_label),
             PageRow::Check(target) | PageRow::Host(target) | PageRow::Plugin(target) => {
                 target.action.as_ref().and(target.action_label)
             }
@@ -557,6 +557,7 @@ impl UpdatesView {
                         ground,
                         kit,
                     )
+                    .when(summary.dimmed(), |control| control.opacity(DIMMED_OPACITY))
                 })),
             )
             .into_any_element()
