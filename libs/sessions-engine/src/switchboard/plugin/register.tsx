@@ -446,7 +446,7 @@ export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
     }
     const words = role === 'user' ? userWords(text) : [text, ...handedBack(toolUses)].filter(part => part.trim() !== '').join('\n\n')
     const shown = plainText(words)
-    if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown))) || (role === 'assistant' && isHeldReply(shown))) return []
+    if (shown === '' || (role === 'user' && (/^<[a-z-]+\/?>/.test(shown) || isPluginNote(shown))) || (role === 'assistant' && isHeldReply(shown))) return []
     return [{ isUser: role === 'user', text: clipSaid(shown) }]
   })
   return said.slice(-kept)
@@ -3266,9 +3266,11 @@ export const register: Register = on => {
     if (run !== undefined && unfoldedRuns.has(run)) {
       return (
         <Box flexDirection="column">
-          <Button key={`fold-${run}`} plain dimColor onPress={show(false)}>
-            <Text underline>hide details</Text>
-          </Button>
+          <Box paddingLeft={2}>
+            <Button key={`fold-${run}`} plain dimColor onPress={show(false)}>
+              <Text underline>hide details</Text>
+            </Button>
+          </Box>
           {await next({ ...e, props: { ...e.props, isExpanded: true } })}
         </Box>
       )
@@ -3280,7 +3282,7 @@ export const register: Register = on => {
     })
     const done = calls.reduce((sum, one) => withAction(sum, one.call.tool, one.label), NOTHING_DONE)
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" paddingLeft={2}>
         <Box flexDirection="row" gap={1}>
           <Text dimColor wrap="truncate">{doneSoFar(done)}</Text>
           {run !== undefined && (
