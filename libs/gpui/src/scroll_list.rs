@@ -71,6 +71,12 @@ pub fn clamp_offset_y(offset: gpui::Pixels, max: gpui::Pixels) -> gpui::Pixels {
     offset.clamp(-max, gpui::px(0.))
 }
 
+pub fn scroll_handle_by(handle: &ScrollHandle, delta: gpui::Pixels) {
+    let mut offset = handle.offset();
+    offset.y = clamp_offset_y(offset.y - delta, handle.max_offset().height);
+    handle.set_offset(offset);
+}
+
 impl SelectionScroll {
     pub fn new() -> Self {
         Self::default()
