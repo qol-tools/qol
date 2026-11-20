@@ -62,7 +62,7 @@ pub fn survey(transfer: Transfer) -> io::Result<Survey> {
                 if same_object(source, &existing) {
                     return Err(invalid(ALREADY_THERE));
                 }
-                merge(source, &existing, &mut tally)?
+                folder_clash(source, &existing, &meta, &here, &mut tally)?
             }
             Ok(here) => top_level(source, &existing, &meta, &here, &mut tally),
         }
@@ -129,6 +129,30 @@ fn top_level(source: &Path, existing: &Path, meta: &Metadata, here: &Metadata, t
     });
 }
 
+fn folder_clash(
+    source: &Path,
+    existing: &Path,
+    meta: &Metadata,
+    here: &Metadata,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    let incoming = stamp(source, meta);
+    tally.bytes += incoming.bytes;
+    tally.clashes.push(Clash {
+        source: source.to_path_buf(),
+        existing: existing.to_path_buf(),
+        here: stamp(existing, here),
+        incoming,
+        same: false,
+        choice: Resolve::KeepBoth,
+    });
+    let mut inside = Tally::default();
+    merge(source, existing, &mut inside)?;
+    tally.clashes.append(&mut inside.clashes);
+    tally.same_inside += inside.same_inside;
+    Ok(())
+}
+
 fn merge(source: &Path, existing: &Path, tally: &mut Tally) -> io::Result<()> {
     let mut children = fs::read_dir(source)?.collect::<io::Result<Vec<_>>>()?;
     children.sort_by_key(|entry| entry.file_name());
@@ -175,7 +199,7 @@ fn merge(source: &Path, existing: &Path, tally: &mut Tally) -> io::Result<()> {
     Ok(())
 }
 
-fn stamp(path: &Path, meta: &Metadata) -> Stamp {
+pub(super) fn stamp(path: &Path, meta: &Metadata) -> Stamp {
     let folder = meta.is_dir();
     Stamp {
         bytes: if folder { tree_bytes(path) } else { meta.len() },

@@ -5,6 +5,7 @@ pub mod nav;
 pub mod ops;
 pub mod places;
 pub mod props;
+pub mod relay;
 pub mod thumbs;
 pub mod ui;
 

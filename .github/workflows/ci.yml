@@ -128,14 +128,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/queue_verdict.py
 
+      # A pull request run is a merge commit, so the diff against its first
+      # parent is the pull request's own change, on the main commit the next
+      # step records as tested. The event's base sha stays at main as it was
+      # when the pull request opened, so a diff against it also planned
+      # everything that merged since: 10 of 83 runs in five days built up to 48
+      # crates, one of them the whole workspace, where their own change reached
+      # 1 to 3. A run with no first parent to read plans the whole workspace.
       - name: Compute affected crates
         id: affected
         if: github.event_name != 'merge_group'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_SHA: ${{ github.event.before }}
           HEAD_SHA: ${{ github.sha }}
           QOL_AFFECTED_OUTPUT: ${{ runner.temp }}/affected.json
-        run: python3 .github/scripts/affected_crates.py
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            BASE_SHA="$(git rev-parse --verify --quiet HEAD^1 || true)"
+          fi
+          python3 .github/scripts/affected_crates.py
 
       - name: Record what this run tests
         if: github.event_name == 'pull_request'
@@ -232,13 +243,13 @@ jobs:
 
       - name: Install cargo-hakari
         if: runner.os == 'Linux' && matrix.lint_skip != 'true'
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: cargo-hakari
 
       - name: Install cargo-nextest
         if: matrix.skip != 'true'
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39
         with:
           tool: cargo-nextest@0.9.143
 

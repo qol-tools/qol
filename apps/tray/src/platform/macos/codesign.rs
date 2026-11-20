@@ -188,10 +188,16 @@ fn write_identity(path: &Path, identity: &str) {
     if qol_config::codesign_identity_at(path).as_deref() == Some(identity) {
         return;
     }
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    let written = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(path, identity));
+    if let Err(error) = written {
+        log::warn!(
+            "Failed to save the signing identity to {}: {error}",
+            path.display()
+        );
     }
-    let _ = std::fs::write(path, identity);
 }
 
 #[cfg(test)]

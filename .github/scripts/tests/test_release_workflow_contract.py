@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -363,10 +364,14 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         for contract in [
             "if: github.event_name != 'merge_group'",
             "QOL_AFFECTED_OUTPUT: ${{ runner.temp }}/affected.json",
-            "run: python3 .github/scripts/affected_crates.py",
+            "BASE_SHA: ${{ github.event.before }}",
+            'if [ "$GITHUB_EVENT_NAME" = pull_request ]; then',
+            'BASE_SHA="$(git rev-parse --verify --quiet HEAD^1 || true)"',
+            "python3 .github/scripts/affected_crates.py",
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, affected)
+        self.assertNotIn("pull_request.base.sha", plan)
         record = named_step(plan, "Record what this run tests", "      ")
         for contract in [
             "if: github.event_name == 'pull_request'",
@@ -947,9 +952,11 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("[advisories]", config)
         self.assertIn('yanked = "deny"', config)
         self.assertIn('unknown-git = "deny"', config)
-        for ignored in re.findall(r'\{ id = "(RUSTSEC-[0-9-]+)", reason = "([^"]*)"', config):
-            with self.subTest(advisory=ignored[0]):
-                self.assertIn("T12", ignored[1])
+        for ignored in tomllib.loads(config)["advisories"]["ignore"]:
+            with self.subTest(advisory=ignored):
+                self.assertIsInstance(ignored, dict)
+                self.assertEqual(sorted(ignored), ["id", "reason"])
+                self.assertRegex(ignored["reason"], r"\((?:security review T12|#[0-9]+)\)$")
         self.assertNotIn('"vendor/**"', codeql)
         self.assertIn('"vendor/ravif/**"', codeql)
 
@@ -1106,7 +1113,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         release = workflow.split("  release:\n", 1)[1]
         self.assertIn("needs: gate", release)
         self.assertIn("for platform in linux macos windows; do", named_step(release, "Require every platform", "      "))
-        updater = (ROOT / "apps/tray/src/updates/platform/windows.rs").read_text()
+        updater = (ROOT / "apps/tray/src/updates/platform/windows/mod.rs").read_text()
         self.assertIn('format!("qol-tray-windows-{}.exe", std::env::consts::ARCH)', updater)
 
     def test_merge_queue_builds_windows_release_binaries(self):

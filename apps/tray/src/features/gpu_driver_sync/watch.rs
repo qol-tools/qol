@@ -1,6 +1,6 @@
 use super::{platform, policy, trace, Observation, PolicyIntent};
 use crate::surfaces::show_plugin_notification;
-use qol_runtime::protocol::NotificationLevel;
+use qol_runtime::protocol::{NotificationLevel, NotificationMeta};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -483,6 +483,7 @@ fn send_notification(observation: &Observation, intent: &PolicyIntent) {
             None,
             None,
             None,
+            NotificationMeta::default(),
         );
         trace::notify("sent", Some(loaded), Some(on_disk), Some(intent.as_str()));
     }

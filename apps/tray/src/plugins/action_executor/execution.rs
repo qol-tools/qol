@@ -82,7 +82,7 @@ fn trace_window_action_dispatch(
     let Some(direction) = resolved.action_id.strip_prefix("glide-") else {
         return;
     };
-    if resolved.plugin_id.as_str() != "qol-window-actions" {
+    if resolved.plugin_id.as_str() != qol_plugin_ids::window_actions::ID {
         return;
     }
     let phase = input

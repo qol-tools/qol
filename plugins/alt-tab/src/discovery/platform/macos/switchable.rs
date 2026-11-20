@@ -1,6 +1,6 @@
 use crate::config::SwitchablePanelOverride;
 
-pub(crate) const QOL_SWITCHABLE_PANELS: &[&str] = &["qol-cli-sessions"];
+pub(crate) const QOL_SWITCHABLE_PANELS: &[&str] = &[qol_plugin_ids::cli_sessions::ID];
 
 #[derive(Debug, Clone)]
 pub(crate) struct SwitchablePanels(Vec<String>);

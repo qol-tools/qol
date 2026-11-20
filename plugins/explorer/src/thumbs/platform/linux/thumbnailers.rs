@@ -174,7 +174,9 @@ fn unlock(dir: &Path) {
     if !dir.symlink_metadata().is_ok_and(|meta| meta.is_dir()) {
         return;
     }
-    let _ = fs::set_permissions(dir, Permissions::from_mode(WORK_MODE));
+    if let Err(error) = fs::set_permissions(dir, Permissions::from_mode(WORK_MODE)) {
+        log::debug!("could not unlock {}: {error}", dir.display());
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };

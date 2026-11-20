@@ -78,6 +78,32 @@
       { "path": "plugins/os-themes/src/theme/platform/linux/mod.rs", "text": "gsettings", "why": "a test puts a fake gsettings on PATH to record the owner's calls" }
     ]
   },
+  "conventions values": {
+    "owner": "libs/conventions/src/",
+    "use": "the qol_conventions constant or route builder that holds the value, or a new one there; a qol folder name comes from qol_config",
+    "scope": "production",
+    "const_texts": true,
+    "const_numbers": true,
+    "prefixes": ["/api/"],
+    "skip": [
+      { "text": "dev", "why": "the Cargo feature name, which #[cfg(feature = ..)] attributes must spell out; commands and profiles use the word too" },
+      { "text": "sandbox", "why": "the Cargo feature name, which #[cfg(feature = ..)] attributes must spell out; emu intents use the word too" },
+      { "text": "core", "why": "a plain word that profile folders, log filters and route segments use with their own meaning" },
+      { "text": "check", "why": "a plain word that other commands and step labels use with their own meaning" },
+      { "text": "fix", "why": "a plain word that other commands and step labels use with their own meaning" },
+      { "text": "placement", "why": "a plain word that the config contract's field kinds and emu step labels use with their own meaning" },
+      { "text": "probe", "why": "a plain word that the host-defaults topic and the voice CLI's command use with their own meaning" },
+      { "text": "shadow", "why": "a plain word that emu step labels use with their own meaning" },
+      { "text": "--json", "why": "a flag that other qol commands and gh take with their own meaning" },
+      { "text": "--id", "why": "a flag that cli-sessions and emu take with their own meaning" },
+      { "text": "--quick", "why": "a flag that other commands may take with their own meaning" },
+      { "text": "state.json", "why": "a file name that profile sync, peers and terminal sessions give their own state" },
+      { "text": "127.0.0.1", "why": "the loopback address, which plugin listeners and local servers bind for their own sockets" },
+      { "text": "qol-launcher", "why": "the launcher plugin's id, which its plugin.toml owns" },
+      { "text": "1", "why": "the artifact schema version, while other code uses 1 as a count, index or version with its own meaning" }
+    ],
+    "allow": []
+  },
   "action marks": {
     "owner": "libs/gpui/",
     "use": "a kit part in libs/gpui that draws the mark: › is the only mark a settings row ends in and means enter opens a page, a list or another app, and a row that acts right here ends in nothing; elsewhere + adds, ⋯ more, the dots are busy, the tick is the one in use, × closes, the reveal and copy marks belong to launcher and screenshot actions (qol_gpui::ActionMark names them); a row never carries a button",
@@ -87,5 +113,32 @@
       "Busy::ring", "Busy::new"
     ],
     "allow": []
+  },
+  "process liveness": {
+    "owner": "libs/process/src/",
+    "use": "qol_process::is_pid_gone, which counts a zombie as gone; a check with another meaning becomes a function in libs/process",
+    "scope": "production",
+    "paths": ["is_pid_alive", "is_pid_zombie"],
+    "allow": []
+  },
+  "temp folder": {
+    "owner": "libs/config/src/",
+    "use": "qol_config::runtime_dir() or qol_config::data_subdir(), the per-user qol-tray folders; another local account can plant or read a fixed name in the shared temp folder",
+    "scope": "production",
+    "paths": ["env::temp_dir"],
+    "allow": []
+  },
+  "daemon launch env": {
+    "owner": ["libs/plugin-daemon/src/", "libs/conventions/src/", "apps/tray/src/plugins/daemon_lifecycle/"],
+    "use": "qol_plugin_daemon::daemon::launched_as_daemon, which a plugin asks before it runs its daemon, or qol_plugin_daemon::daemon::handed_socket and qol_plugin_daemon::daemon::asked_to_replace_existing; qol-tray's daemon spawn sets the variables and plugin-daemon reads them",
+    "scope": "production",
+    "paths": ["ENV_DAEMON_INSTANCE", "ENV_DAEMON_SOCKET", "ENV_DAEMON_REPLACE_EXISTING", "ENV_DAEMON_LISTENER_FD", "ENV_DAEMON_PORT_FD"],
+    "allow": [
+      { "path": "apps/tray/src/plugins/action_executor/execution.rs", "text": "ENV_DAEMON_SOCKET", "why": "hands an action the socket of its plugin's daemon" },
+      { "path": "apps/tray/src/settings_surface/platform/gpui_host.rs", "text": "ENV_DAEMON_SOCKET", "why": "keeps the settings host, which is no daemon, from inheriting a daemon's socket" },
+      { "path": "apps/tray/src/settings_surface/platform/gpui_host.rs", "text": "ENV_DAEMON_LISTENER_FD", "why": "keeps the settings host, which is no daemon, from inheriting a daemon's listener" },
+      { "path": "apps/tray/src/settings_surface/platform/gpui_host.rs", "text": "ENV_DAEMON_REPLACE_EXISTING", "why": "keeps the settings host, which is no daemon, from replacing a running daemon" },
+      { "path": "plugins/pointz/src/doctor/mod.rs", "text": "ENV_DAEMON_SOCKET", "why": "the doctor report names the variable qol-tray hands the socket in" }
+    ]
   }
 }

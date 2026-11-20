@@ -1,4 +1,8 @@
+use std::fs;
+
 use super::*;
+use crate::ops::bin::{BinError, Held};
+use crate::ops::print::Print;
 
 fn forbidden(name: &str) -> String {
     match name_problem(name) {
@@ -44,4 +48,18 @@ fn free_bytes_and_volume_work_on_a_real_folder() {
         volume_of(dir.path()).unwrap(),
         volume_of(&dir.path().join("not-yet")).unwrap()
     );
+}
+
+#[test]
+fn restore_says_plainly_that_it_cannot() {
+    let dir = tempfile::tempdir().unwrap();
+    let item = dir.path().join("a");
+    fs::write(&item, "").unwrap();
+    let held = Held {
+        before: Print::read(&item).unwrap(),
+        item,
+        sidecar: None,
+    };
+    let result = system_bin().restore(&held, &dir.path().join("b"));
+    assert_eq!(result, Err(BinError::Failed(NO_RESTORE.into())));
 }

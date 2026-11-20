@@ -6,7 +6,7 @@ pub mod tone;
 use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
 use crate::plugins::PluginManager;
-use qol_runtime::protocol::NotificationLevel;
+use qol_runtime::protocol::{NotificationLevel, NotificationMeta};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -113,6 +113,7 @@ fn report_missing_icon(error: &anyhow::Error) {
             None,
             None,
             None,
+            NotificationMeta::default(),
         );
     });
 }

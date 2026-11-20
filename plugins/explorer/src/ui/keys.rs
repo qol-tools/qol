@@ -1,6 +1,38 @@
+use std::time::{Duration, Instant};
+
 use gpui::{Keystroke, Modifiers};
 
 use crate::listing::SortBy;
+
+const REPEAT_PAIR: Duration = Duration::from_millis(30);
+const REPEAT_LOST_UP: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Repeat {
+    last_down: Option<Instant>,
+    last_up: Option<Instant>,
+    released: bool,
+}
+
+impl Repeat {
+    pub fn down(&mut self, held: bool, now: Instant) -> bool {
+        let unreleased_again = !self.released
+            && self
+                .last_down
+                .is_some_and(|at| now.saturating_duration_since(at) < REPEAT_LOST_UP);
+        let right_after_up = self
+            .last_up
+            .is_some_and(|at| now.saturating_duration_since(at) < REPEAT_PAIR);
+        self.last_down = Some(now);
+        self.released = false;
+        held || unreleased_again || right_after_up
+    }
+
+    pub fn up(&mut self, now: Instant) {
+        self.last_up = Some(now);
+        self.released = true;
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -53,6 +85,7 @@ pub enum Action {
     OpenTerminal,
     CopyPath,
     Undo,
+    Redo,
     Moves,
     ContextMenu,
     Props,
@@ -127,6 +160,7 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("t", (true, false, true)) => Action::OpenTerminal,
         ("c", (true, false, true)) => Action::CopyPath,
         ("z", (true, false, false)) => Action::Undo,
+        ("z", (true, false, true)) | ("y", (true, false, false)) => Action::Redo,
         ("j", (true, false, false)) => Action::Moves,
         ("menu", (false, false, false)) | ("f10", (false, false, true)) => Action::ContextMenu,
         _ => typed(keystroke).map_or(Action::Nothing, Action::Jump),
@@ -160,6 +194,9 @@ pub fn leaves(action: Action) -> bool {
 }
 
 pub fn waits(action: Action, arriving: bool, stalled: bool, queued: bool) -> bool {
+    if matches!(action, Action::Undo | Action::Redo) {
+        return false;
+    }
     if stalled && leaves(action) {
         return false;
     }
@@ -221,7 +258,9 @@ fn typed(keystroke: &Keystroke) -> Option<char> {
 mod tests {
     use gpui::{Keystroke, Modifiers};
 
-    use super::{action, click, leaves, waits, Action, Click, Resize, Step};
+    use std::time::{Duration, Instant};
+
+    use super::{action, click, leaves, waits, Action, Click, Repeat, Resize, Step};
     use crate::listing::SortBy;
 
     fn key(key: &str, modifiers: Modifiers, key_char: Option<&str>) -> Keystroke {
@@ -345,6 +384,11 @@ mod tests {
                 key("z", Modifiers::secondary_key(), Some("z")),
                 Action::Undo,
             ),
+            (key("z", secondary_shift, Some("Z")), Action::Redo),
+            (
+                key("y", Modifiers::secondary_key(), Some("y")),
+                Action::Redo,
+            ),
             (
                 key("j", Modifiers::secondary_key(), Some("j")),
                 Action::Moves,
@@ -360,6 +404,14 @@ mod tests {
 
     #[test]
     fn file_operation_keys_with_the_wrong_modifiers_do_nothing_or_jump() {
+        let secondary_shift = || Modifiers {
+            shift: true,
+            ..Modifiers::secondary_key()
+        };
+        let secondary_alt = || Modifiers {
+            alt: true,
+            ..Modifiers::secondary_key()
+        };
         let cases = [
             (key("c", Modifiers::none(), Some("c")), Action::Jump('c')),
             (
@@ -370,12 +422,19 @@ mod tests {
             (plain("f10"), Action::Nothing),
             (key("menu", shift(), None), Action::Nothing),
             (key("z", alt(), Some("z")), Action::Nothing),
+            (key("y", Modifiers::none(), Some("y")), Action::Jump('y')),
+            (key("y", alt(), Some("y")), Action::Nothing),
+            (key("y", secondary_shift(), Some("Y")), Action::Nothing),
+            (key("z", secondary_alt(), Some("z")), Action::Nothing),
+            (key("z", shift(), Some("Z")), Action::Jump('Z')),
         ];
         for (keystroke, expected) in cases {
             assert_eq!(action(&keystroke, false), expected, "{keystroke:?}");
         }
         for keystroke in [
             key("c", Modifiers::secondary_key(), Some("c")),
+            key("y", Modifiers::secondary_key(), Some("y")),
+            key("z", secondary_shift(), Some("Z")),
             plain("delete"),
             plain("f2"),
         ] {
@@ -553,7 +612,6 @@ mod tests {
             Action::PathField,
             Action::TogglePin,
             Action::Settings,
-            Action::Undo,
             Action::Moves,
         ];
         for action in on_rows {
@@ -566,6 +624,94 @@ mod tests {
             assert!(waits(action, false, false, true), "{action:?}");
         }
         assert!(!waits(Action::Nothing, true, false, true));
+    }
+
+    #[test]
+    fn undo_and_redo_never_wait_for_a_folder_or_behind_queued_keys() {
+        for (arriving, stalled, queued) in [
+            (false, false, false),
+            (true, false, false),
+            (true, true, false),
+            (false, false, true),
+            (true, false, true),
+            (true, true, true),
+        ] {
+            for action in [Action::Undo, Action::Redo] {
+                assert!(
+                    !waits(action, arriving, stalled, queued),
+                    "{action:?} {arriving} {stalled} {queued}"
+                );
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum Event {
+        Down(u64),
+        Held(u64),
+        Up(u64),
+    }
+
+    fn repeats(events: &[Event]) -> Vec<bool> {
+        let origin = Instant::now();
+        let at = |ms: u64| origin + Duration::from_millis(ms);
+        let mut filter = Repeat::default();
+        let mut seen = Vec::new();
+        for event in events {
+            match *event {
+                Event::Down(ms) => seen.push(filter.down(false, at(ms))),
+                Event::Held(ms) => seen.push(filter.down(true, at(ms))),
+                Event::Up(ms) => filter.up(at(ms)),
+            }
+        }
+        seen
+    }
+
+    #[test]
+    fn a_held_key_is_one_press_whatever_the_way_the_system_repeats_it() {
+        use Event::{Down, Held, Up};
+        let cases: [(&str, &[Event], &[bool]); 9] = [
+            ("fresh press", &[Down(0)], &[false]),
+            ("tap then release", &[Down(0), Up(80)], &[false]),
+            (
+                "repeats without key ups",
+                &[Down(0), Down(30), Down(60), Down(90)],
+                &[false, true, true, true],
+            ),
+            (
+                "repeats as up and down pairs",
+                &[Down(0), Up(500), Down(502), Up(530), Down(532), Up(560)],
+                &[false, true, true],
+            ),
+            (
+                "a fast but real double tap",
+                &[Down(0), Up(50), Down(100), Up(150)],
+                &[false, false],
+            ),
+            (
+                "a press long after the last one",
+                &[Down(0), Up(80), Down(5000)],
+                &[false, false],
+            ),
+            (
+                "a lost key up recovers after a second",
+                &[Down(0), Down(1000), Down(1030)],
+                &[false, false, true],
+            ),
+            (
+                "just under a second without a key up is still a repeat",
+                &[Down(0), Down(999)],
+                &[false, true],
+            ),
+            (
+                "a reported held press is a repeat",
+                &[Down(0), Up(80), Down(1000), Held(1500)],
+                &[false, false, true],
+            ),
+        ];
+        for (name, events, expected) in cases {
+            assert_eq!(repeats(events), expected, "{name}");
+        }
     }
 
     #[test]

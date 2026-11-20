@@ -12,6 +12,7 @@ mod menu;
 mod moves;
 mod pictogram;
 mod press;
+mod preview_images;
 mod previews;
 mod props;
 mod rail;
@@ -32,9 +33,9 @@ use futures::channel::oneshot;
 use futures::StreamExt;
 use gpui::{
     div, point, px, rgb, AnyElement, AsyncApp, ClickEvent, Context, ElementId, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollDelta, ScrollHandle,
-    Styled, Subscription, UniformListScrollHandle, WeakEntity, Window,
+    Focusable, InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render,
+    ScrollDelta, ScrollHandle, Styled, Subscription, UniformListScrollHandle, WeakEntity, Window,
 };
 use qol_gpui::icon::icon;
 use qol_gpui::kit::kit;
@@ -48,7 +49,9 @@ use super::browse::{Browser, Held, Opening, PathStep};
 use super::keys::{self, Action, Click, Resize, Step};
 use crate::config::{ConfigSaver, ExplorerConfig, Pin, ViewSize};
 use crate::listing::{ListingState, SortBy, SortOrder};
+use crate::ops::Transfer;
 use crate::places::{self, Device, Place};
+use crate::relay::{self, QolNotifications};
 use crate::ui::trail::{self, Crumb};
 use crate::PLUGIN_ID;
 use grid::Layout;
@@ -105,6 +108,7 @@ pub struct ExplorerView {
     slider_hovered: bool,
     slider_dragging: bool,
     waiting: VecDeque<Keystroke>,
+    history_key: keys::Repeat,
     drag_gesture: Rc<RefCell<DragGestureState>>,
     pressing: press::PressState,
     title: String,
@@ -124,11 +128,12 @@ impl ExplorerView {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.on_release(|_, cx| cx.quit()).detach();
-        let (previews, readies) = Previews::new();
+        let (previews, readies) = Previews::new(cx);
         let mut view = Self {
             browser: {
                 let mut browser = Browser::new(start, home, config.show_hidden);
                 browser.resort(SortOrder::new(config.sort_by, config.sort_descending));
+                start_relay(&mut browser);
                 browser
             },
             pins: config.pins.clone(),
@@ -157,6 +162,7 @@ impl ExplorerView {
             slider_hovered: false,
             slider_dragging: false,
             waiting: VecDeque::new(),
+            history_key: keys::Repeat::default(),
             drag_gesture: Rc::new(RefCell::new(DragGestureState::new(DRAG_THRESHOLD))),
             pressing: press::PressState::new(),
             title: WINDOW_TITLE.to_string(),
@@ -322,6 +328,7 @@ impl ExplorerView {
                 shows_hidden,
                 order,
                 self.browser.holds(),
+                self.browser.stepping(),
                 at,
             )
         } else {
@@ -389,7 +396,10 @@ impl ExplorerView {
                 self.browser.hold(Held::Copied);
             }
             Command::Paste => {
-                self.paste();
+                self.paste(Browser::paste);
+            }
+            Command::PasteHere => {
+                self.paste(Browser::paste_here);
             }
             Command::RenameItem => {
                 self.browser.rename_open();
@@ -401,7 +411,10 @@ impl ExplorerView {
                 self.revealed(Browser::new_folder);
             }
             Command::Undo => {
-                self.browser.undo();
+                self.browser.undo(!self.waiting.is_empty());
+            }
+            Command::Redo => {
+                self.browser.redo(!self.waiting.is_empty());
             }
             Command::OpenWith(index) => self.open_with_choice(index, cx),
             Command::ChooseApp => {
@@ -764,6 +777,11 @@ impl ExplorerView {
             cx.stop_propagation();
             return;
         }
+        if event.keystroke.key == "escape" && self.browser.stop_undo() {
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self.menu.is_some() {
             self.menu_key(&event.keystroke, cx);
             return;
@@ -796,6 +814,12 @@ impl ExplorerView {
             return;
         }
         let action = keys::action(&event.keystroke, self.browser.path_open());
+        if matches!(action, Action::Undo | Action::Redo)
+            && self.history_key.down(event.is_held, Instant::now())
+        {
+            cx.stop_propagation();
+            return;
+        }
         if self.browser.props_open() && !matches!(action, Action::Unpick | Action::Props) {
             cx.stop_propagation();
             return;
@@ -823,6 +847,12 @@ impl ExplorerView {
         }
         cx.stop_propagation();
         cx.notify();
+    }
+
+    fn on_key_up(&mut self, event: &KeyUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        if matches!(event.keystroke.key.as_str(), "z" | "y") {
+            self.history_key.up(Instant::now());
+        }
     }
 
     fn replay(&mut self, cx: &mut Context<Self>) {
@@ -887,7 +917,7 @@ impl ExplorerView {
             Action::Resize(resize) => self.resize(self.stop.resized(resize)),
             Action::Copy => self.browser.hold(Held::Copied),
             Action::Cut => self.browser.hold(Held::Cut),
-            Action::Paste => self.paste(),
+            Action::Paste => self.paste(Browser::paste),
             Action::Trash => self.browser.trash_picks(),
             Action::Rename => self.browser.rename_open(),
             Action::NewFolder => self.revealed(Browser::new_folder),
@@ -897,7 +927,8 @@ impl ExplorerView {
             Action::OpenWith => self.open_with(cx),
             Action::OpenTerminal => self.open_terminal_here(),
             Action::CopyPath => self.copy_path(cx),
-            Action::Undo => self.browser.undo(),
+            Action::Undo => self.browser.undo(!self.waiting.is_empty()),
+            Action::Redo => self.browser.redo(!self.waiting.is_empty()),
             Action::Moves => self.browser.toggle_moves(),
             Action::ContextMenu => self.open_cursor_menu(cx),
             Action::Props => self.browser.toggle_props(),
@@ -905,8 +936,8 @@ impl ExplorerView {
         }
     }
 
-    fn paste(&mut self) -> bool {
-        let Some(transfer) = self.browser.paste() else {
+    fn paste(&mut self, into: impl FnOnce(&mut Browser) -> Option<Transfer>) -> bool {
+        let Some(transfer) = into(&mut self.browser) else {
             return false;
         };
         self.browser.begin(transfer);
@@ -1097,6 +1128,12 @@ pub(super) fn more_button(
         .into_any_element()
 }
 
+fn start_relay(browser: &mut Browser) {
+    if let Some(messages) = browser.take_messages() {
+        relay::start(messages, QolNotifications, browser.unshown_sink());
+    }
+}
+
 fn rail_width(window_width: f32) -> f32 {
     (RAIL + (window_width - WINDOW_WIDTH) / RAIL_GROWTH).clamp(RAIL_MIN, RAIL_MAX)
 }
@@ -1149,6 +1186,7 @@ impl Render for ExplorerView {
         kit.window()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
+            .on_key_up(cx.listener(Self::on_key_up))
             .on_modifiers_changed(cx.listener(
                 |view, event: &ModifiersChangedEvent, _window, cx| {
                     view.drop_modifiers_changed(event.modifiers.control, cx);
@@ -1174,7 +1212,30 @@ impl Render for ExplorerView {
 
 #[cfg(test)]
 mod tests {
-    use super::{rail_width, MIN_WIDTH, RAIL, RAIL_MAX, RAIL_MIN, WINDOW_WIDTH};
+    use gpui::{Keystroke, Modifiers};
+
+    use super::{rail_width, ExplorerView, MIN_WIDTH, RAIL, RAIL_MAX, RAIL_MIN, WINDOW_WIDTH};
+
+    #[test]
+    fn the_filter_field_keeps_undo_and_redo_keys_for_its_own_text() {
+        let secondary_shift = Modifiers {
+            shift: true,
+            ..Modifiers::secondary_key()
+        };
+        let keystrokes = [
+            ("z", Modifiers::secondary_key(), "z"),
+            ("z", secondary_shift, "Z"),
+            ("y", Modifiers::secondary_key(), "y"),
+        ];
+        for (key, modifiers, key_char) in keystrokes {
+            let keystroke = Keystroke {
+                modifiers,
+                key: key.to_string(),
+                key_char: Some(key_char.to_string()),
+            };
+            assert!(!ExplorerView::filter_yields(&keystroke), "{keystroke:?}");
+        }
+    }
 
     #[test]
     fn the_rail_keeps_its_width_at_the_opening_size_and_follows_the_window() {

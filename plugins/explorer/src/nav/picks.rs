@@ -1,12 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_VERSION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Default)]
 pub struct Picks {
     picked: HashSet<PathBuf>,
     folders: HashMap<PathBuf, usize>,
     range: Option<Range>,
+    version: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +48,14 @@ impl Picks {
         self.folders.len()
     }
 
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    fn changed(&mut self) {
+        self.version = NEXT_VERSION.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn toggle(&mut self, path: &Path) {
         self.range = None;
         if !self.remove(path) {
@@ -68,13 +80,21 @@ impl Picks {
 
     pub fn clear(&mut self) {
         self.range = None;
+        if self.picked.is_empty() {
+            return;
+        }
         self.picked.clear();
         self.folders.clear();
+        self.changed();
     }
 
     pub fn retain(&mut self, keep: impl Fn(&Path) -> bool) {
+        let before = self.picked.len();
         self.picked.retain(|path| keep(path));
-        self.recount();
+        if self.picked.len() != before {
+            self.recount();
+            self.changed();
+        }
         if let Some(range) = self.range.as_mut() {
             range.base.retain(|path| keep(path));
         }
@@ -118,6 +138,7 @@ impl Picks {
         );
         self.picked = picked;
         self.recount();
+        self.changed();
     }
 
     pub fn end_range(&mut self) {
@@ -138,12 +159,14 @@ impl Picks {
             tally(&mut self.folders, folder);
         }
         self.picked.insert(path);
+        self.changed();
     }
 
     fn remove(&mut self, path: &Path) -> bool {
         if !self.picked.remove(path) {
             return false;
         }
+        self.changed();
         let Some(folder) = path.parent() else {
             return true;
         };

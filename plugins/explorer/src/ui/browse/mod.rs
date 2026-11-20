@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::TryRecvError;
+use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -32,8 +32,10 @@ use crate::listing::{
 };
 use crate::nav::{merged, History, Jump, Picks, Spot};
 use crate::props::Props;
+use crate::relay::{Level, Message};
 use counts::LiveCounts;
-pub use ops::{Held, MoveRecord, MoveState};
+use ops::Work;
+pub use ops::{Held, MoveRecord, MoveState, Stepping};
 pub(crate) use ops_text::{copy_only_note, erase_lines, label_of, short_note};
 use pace::Pace;
 use path_field::PathField;
@@ -75,6 +77,7 @@ pub struct Note {
 pub struct Selection {
     picks: Picks,
     cursor: usize,
+    chosen: Option<PathBuf>,
 }
 
 pub struct Browser {
@@ -84,6 +87,7 @@ pub struct Browser {
     read: Option<ListingRead>,
     rows: Vec<usize>,
     cursor: usize,
+    chosen: Option<PathBuf>,
     picks: Picks,
     jump: Jump,
     show_hidden: bool,
@@ -105,6 +109,8 @@ pub struct Browser {
     watch: FolderWatch,
     wake: UnboundedSender<()>,
     wakes: Option<UnboundedReceiver<()>>,
+    outbox: Sender<Message>,
+    messages: Option<Receiver<Message>>,
     ops: ops::Ops,
     props: Option<Props>,
 }
@@ -113,6 +119,7 @@ impl Browser {
     pub fn new(start: PathBuf, home: PathBuf, show_hidden: bool) -> Self {
         let (start, landing, hidden_file) = folder_showing(start);
         let (wake, wakes) = mpsc::unbounded();
+        let (outbox, messages) = std::sync::mpsc::channel();
         let mut browser = Self {
             home,
             history: History::new(start.clone()),
@@ -120,6 +127,7 @@ impl Browser {
             read: None,
             rows: Vec::new(),
             cursor: 0,
+            chosen: None,
             picks: Picks::new(),
             jump: Jump::new(),
             show_hidden: show_hidden || hidden_file,
@@ -141,6 +149,8 @@ impl Browser {
             watch: FolderWatch::default(),
             wake,
             wakes: Some(wakes),
+            outbox,
+            messages: Some(messages),
             ops: ops::Ops::new(),
             props: None,
         };
@@ -155,6 +165,36 @@ impl Browser {
 
     pub fn waker(&self) -> impl Fn() + Send + Clone + 'static {
         waker(&self.wake)
+    }
+
+    pub fn take_messages(&mut self) -> Option<Receiver<Message>> {
+        self.messages.take()
+    }
+
+    pub fn post(&mut self, message: Message) {
+        let Err(SendError(message)) = self.outbox.send(message) else {
+            return;
+        };
+        if message.level != Level::Info {
+            self.failure = Some(message.line());
+        }
+    }
+
+    pub fn unshown_sink(&self) -> impl Fn(Message) + Send + 'static {
+        let sender = self.ops.sender();
+        let wake = self.waker();
+        move |message| {
+            let _ = sender.send(Work::Unshown(message));
+            wake();
+        }
+    }
+
+    #[cfg(test)]
+    pub fn posted(&self) -> Vec<Message> {
+        self.messages
+            .as_ref()
+            .map(|messages| messages.try_iter().collect())
+            .unwrap_or_default()
     }
 
     pub fn home(&self) -> &Path {
@@ -234,12 +274,14 @@ impl Browser {
         Selection {
             picks: self.picks.clone(),
             cursor: self.cursor,
+            chosen: self.chosen.clone(),
         }
     }
 
     pub fn restore(&mut self, selection: &Selection, scroll: f32) {
         self.picks = selection.picks.clone();
         self.place_cursor(selection.cursor, scroll);
+        self.chosen = selection.chosen.clone();
     }
 
     pub fn pick_boxed(&mut self, base: &Selection, touched: &[usize], additive: bool) {
@@ -251,12 +293,9 @@ impl Browser {
         self.picks.set(merged(kept, boxed, additive));
     }
 
-    pub fn clear_picks(&mut self) {
+    pub fn clear_selection(&mut self) {
         self.picks.clear();
-    }
-
-    pub fn is_picked(&self, entry: &Entry) -> bool {
-        self.picks.is_picked(&entry.path)
+        self.chosen = None;
     }
 
     pub fn jump_run(&self, now: Instant) -> &str {
@@ -344,8 +383,8 @@ impl Browser {
         }
     }
 
-    pub fn fail(&mut self, message: String) {
-        self.failure = Some(message);
+    pub fn fail(&mut self, title: String) {
+        self.post(Message::error(title, ""));
     }
 
     pub fn drain(&mut self, now: Instant) -> Drained {
@@ -462,17 +501,26 @@ impl Browser {
         self.jump.reset();
         if let Some(spot) = self.arriving.as_mut() {
             spot.cursor = row;
-            spot.entry = Some(entry);
+            spot.entry = Some(entry.clone());
             spot.scroll = scroll;
             self.landing = None;
         }
         self.cursor = row;
+        self.chosen = Some(entry);
         true
     }
 
     pub fn move_cursor(&mut self, step: Step, page: usize, columns: usize) -> bool {
         self.jump.reset();
-        self.set_cursor(self.stepped(step, page, columns))
+        let moved = self.set_cursor(self.stepped(step, page, columns));
+        if moved {
+            self.choose_cursor();
+        }
+        moved
+    }
+
+    fn choose_cursor(&mut self) {
+        self.chosen = self.entry(self.cursor).map(|entry| entry.path.clone());
     }
 
     pub fn extend_range(&mut self, step: Step, page: usize, columns: usize) -> bool {
@@ -496,6 +544,7 @@ impl Browser {
         let rows = Self::shown_of(&self.rows, &self.listing);
         self.picks.extend_range(&rows, self.cursor, row);
         self.cursor = row;
+        self.choose_cursor();
         true
     }
 
@@ -568,6 +617,7 @@ impl Browser {
             });
         if let Some(row) = found {
             self.cursor = row;
+            self.choose_cursor();
         }
         true
     }
@@ -757,6 +807,7 @@ impl Browser {
         self.listing = Listing::new(spot.folder.clone());
         self.rows.clear();
         self.cursor = 0;
+        self.chosen = None;
         self.jump.reset();
         self.picks.end_range();
         self.failure = None;
@@ -864,10 +915,16 @@ impl Browser {
         let at = self
             .entry(self.cursor)
             .map(|entry| (entry.path.clone(), entry.id));
+        let was_chosen = at
+            .as_ref()
+            .is_some_and(|(path, _)| self.chosen.as_ref() == Some(path));
         let before = mem::replace(&mut self.listing, fresh);
         self.refresh_rows();
         if let Some(row) = at.and_then(|(path, id)| self.row_following(&path, id, &before)) {
             self.cursor = row;
+            if was_chosen {
+                self.choose_cursor();
+            }
         }
         let failed = matches!(self.listing.state(), ListingState::Failed(_));
         if !failed {

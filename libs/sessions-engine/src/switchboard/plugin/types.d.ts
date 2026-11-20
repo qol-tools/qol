@@ -21,6 +21,8 @@ export type Entry = {
   key?: string
   isDone?: boolean
   hasNewReply?: boolean
+  task?: string
+  doneWhen?: string
 }
 
 export type Pull = {
@@ -45,6 +47,7 @@ export type PullDetail = {
   review?: CheckResult
   liveTest?: 'needed' | 'not needed'
   merge?: 'auto' | 'queued'
+  title?: string
 }
 
 export type ModelChoice = { model?: string; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; at: number }
@@ -70,6 +73,7 @@ declare module 'claude-code' {
       focusActivity: string
       freshReply: string
       focusShown: { id: string; prevId: string; agentId: string; key: string; rows: { isUser: boolean; text: string }[] }
+      rowsCapped: boolean
       starting: string
       current: string
     }

@@ -1,6 +1,6 @@
 [package]
 name = "qol-input"
-version = "0.25.1"
+version = "0.25.2"
 edition = "2021"
 
 [dependencies]
@@ -9,7 +9,6 @@ qol-log.workspace = true
 anyhow = "1"
 qol-apps.workspace = true
 qol-config.workspace = true
-qol-conventions.workspace = true
 qol-headless.workspace = true
 qol-host-fixes.workspace = true
 qol-host-session.workspace = true

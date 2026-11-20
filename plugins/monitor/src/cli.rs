@@ -22,7 +22,7 @@ use crate::PLUGIN_ID;
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     let args: Vec<String> = args.into_iter().collect();
-    if args.is_empty() && std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some() {
+    if qol_plugin_daemon::daemon::launched_as_daemon(&args) {
         return app().run(vec!["daemon".to_string()]);
     }
     app().run(args)

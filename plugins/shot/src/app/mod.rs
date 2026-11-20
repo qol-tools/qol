@@ -94,7 +94,7 @@ impl Drop for ShotFlowGuard {
 pub fn should_run_daemon(args: &[String]) -> bool {
     should_run_daemon_with_env(
         args.is_empty(),
-        std::env::var_os(qol_conventions::ENV_DAEMON_REPLACE_EXISTING).is_some(),
+        qol_plugin_daemon::daemon::asked_to_replace_existing(),
     )
 }
 

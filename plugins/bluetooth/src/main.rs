@@ -15,7 +15,7 @@ fn main() -> ExitCode {
             }
         };
     }
-    if args.is_empty() && std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some() {
+    if qol_plugin_daemon::daemon::launched_as_daemon(&args) {
         return match qol_bluetooth::app::run_daemon() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {

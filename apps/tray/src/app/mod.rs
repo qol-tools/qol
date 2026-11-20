@@ -755,11 +755,23 @@ fn is_first_run() -> bool {
 
 fn show_first_run_welcome() {
     if let Some(path) = first_run_marker_path() {
-        let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new("/")));
-        let _ = std::fs::write(&path, "");
+        record_first_run(&path);
     }
 
     qol_tray::surfaces::native_notifications::show_first_run();
+}
+
+fn record_first_run(marker: &std::path::Path) {
+    let recorded = marker
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(marker, ""));
+    if let Err(error) = recorded {
+        log::warn!(
+            "Failed to record the first run in {}: {error}",
+            marker.display()
+        );
+    }
 }
 
 fn confirm_host_update() {
@@ -781,6 +793,7 @@ fn confirm_host_update() {
         None,
         None,
         None,
+        qol_runtime::protocol::NotificationMeta::default(),
     );
     if let Err(error) = qol_tray::settings_surface::open_updates() {
         log::warn!("Failed to reopen the Updates page after the update: {error:#}");

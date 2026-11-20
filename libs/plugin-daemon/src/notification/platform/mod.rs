@@ -6,6 +6,8 @@ mod linux;
 mod macos;
 #[cfg(any(target_os = "windows", test))]
 mod toast_identity;
+#[cfg(any(target_os = "windows", test))]
+mod toast_xml;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -27,8 +29,10 @@ pub use macos::NotificationInhibit;
 #[cfg(target_os = "windows")]
 pub use windows::NotificationInhibit;
 
+use qol_runtime::Notification;
+
 pub(super) trait NotificationPlatform {
-    fn send_notification(&self, title: &str, message: &str) -> bool;
+    fn send(&self, notification: &Notification) -> bool;
     fn os_do_not_disturb(&self) -> Option<bool>;
     fn os_banners_showing(&self) -> Option<bool>;
     fn set_os_banners(&self, showing: bool);
@@ -38,8 +42,12 @@ pub(super) trait NotificationPlatform {
     fn uninstall_toast_identity(&self) -> std::io::Result<()>;
 }
 
+pub fn send(notification: &Notification) -> bool {
+    imp::Platform.send(notification)
+}
+
 pub fn send_notification(title: &str, message: &str) -> bool {
-    imp::Platform.send_notification(title, message)
+    send(&Notification::new(title, message))
 }
 
 pub fn os_do_not_disturb() -> Option<bool> {

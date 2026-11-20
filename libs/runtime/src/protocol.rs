@@ -108,7 +108,13 @@ pub enum RuntimeRequest {
         /// notification is clicked, through the same route as any other
         /// plugin action. The plugin decides what "take me there" means.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        activate: Option<DaemonRequest>,
+        activate: Option<Box<DaemonRequest>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image: Option<String>,
     },
     PushStatus {
         plugin_id: String,
@@ -151,6 +157,16 @@ impl NotificationLayout {
             ..Default::default()
         }
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
 }
 
 /// Ack for the plugin-to-host push requests (`PushNotification`, `PushStatus`).
@@ -371,6 +387,9 @@ mod tests {
             artifact: None,
             layout: None,
             activate: None,
+            duration_ms: None,
+            key: None,
+            image: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
         assert!(wire.contains("\"cmd\":\"push_notification\""));
@@ -386,6 +405,9 @@ mod tests {
             artifact,
             layout,
             activate,
+            duration_ms,
+            key,
+            image,
         } = serde_json::from_str(&wire).expect("deserialize")
         else {
             panic!("variant mismatch");
@@ -400,6 +422,10 @@ mod tests {
         assert_eq!(layout, None);
         assert!(activate.is_none());
         assert!(!wire.contains("activate"));
+        assert_eq!((duration_ms, key, image), (None, None, None));
+        for field in ["duration_ms", "key", "image"] {
+            assert!(!wire.contains(field), "{field} in {wire}");
+        }
     }
 
     #[test]
@@ -413,10 +439,13 @@ mod tests {
             action_payload: None,
             artifact: None,
             layout: None,
-            activate: Some(DaemonRequest {
+            activate: Some(Box::new(DaemonRequest {
                 action: "focus".to_string(),
                 input: serde_json::json!({ "session": "kitty:42" }),
-            }),
+            })),
+            duration_ms: None,
+            key: None,
+            image: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
         assert!(wire.contains(r#""activate":{"action":"focus","input":{"session":"kitty:42"}}"#));
@@ -443,6 +472,9 @@ mod tests {
             artifact: None,
             layout: None,
             activate: None,
+            duration_ms: None,
+            key: None,
+            image: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
         assert!(wire.contains("\"action_label\":\"Open Folder\""));
@@ -478,6 +510,9 @@ mod tests {
             artifact: Some("/home/u/Pictures/shot.png".to_string()),
             layout: None,
             activate: None,
+            duration_ms: None,
+            key: None,
+            image: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
         assert!(wire.contains("\"artifact\":\"/home/u/Pictures/shot.png\""));
@@ -501,6 +536,9 @@ mod tests {
             artifact,
             layout,
             activate,
+            duration_ms,
+            key,
+            image,
             ..
         } = serde_json::from_str(wire).expect("deserialize")
         else {
@@ -513,6 +551,74 @@ mod tests {
         assert_eq!(artifact, None);
         assert_eq!(layout, None);
         assert!(activate.is_none());
+        assert_eq!((duration_ms, key, image), (None, None, None));
+    }
+
+    #[test]
+    fn push_notification_with_meta_round_trips() {
+        let cases = [
+            (Some(0), Some("copy"), Some("/tmp/a.png")),
+            (Some(2500), None, None),
+            (None, Some("k"), None),
+            (None, None, Some("/tmp/b.png")),
+        ];
+        for (duration_ms, key, image) in cases {
+            let request = RuntimeRequest::PushNotification {
+                plugin_id: "plugin-foo".to_string(),
+                title: "t".to_string(),
+                body: "b".to_string(),
+                level: NotificationLevel::Warn,
+                action_label: None,
+                action_payload: None,
+                artifact: None,
+                layout: None,
+                activate: None,
+                duration_ms,
+                key: key.map(str::to_string),
+                image: image.map(str::to_string),
+            };
+            let wire = serde_json::to_string(&request).expect("serialize");
+            assert_eq!(
+                wire.contains("duration_ms"),
+                duration_ms.is_some(),
+                "{wire}"
+            );
+            assert_eq!(wire.contains("\"key\""), key.is_some(), "{wire}");
+            assert_eq!(wire.contains("\"image\""), image.is_some(), "{wire}");
+
+            let RuntimeRequest::PushNotification {
+                duration_ms: parsed_duration,
+                key: parsed_key,
+                image: parsed_image,
+                ..
+            } = serde_json::from_str(&wire).expect("deserialize")
+            else {
+                panic!("variant mismatch");
+            };
+            assert_eq!(parsed_duration, duration_ms);
+            assert_eq!(parsed_key.as_deref(), key);
+            assert_eq!(parsed_image.as_deref(), image);
+        }
+    }
+
+    #[test]
+    fn notification_meta_defaults_and_skips_empty_fields() {
+        assert_eq!(
+            serde_json::to_string(&NotificationMeta::default()).unwrap(),
+            "{}"
+        );
+        let meta: NotificationMeta = serde_json::from_str("{}").unwrap();
+        assert_eq!(meta, NotificationMeta::default());
+        let meta = NotificationMeta {
+            duration_ms: Some(0),
+            key: Some("k".to_string()),
+            image: Some("/tmp/a.png".to_string()),
+        };
+        let wire = serde_json::to_string(&meta).unwrap();
+        assert_eq!(
+            serde_json::from_str::<NotificationMeta>(&wire).unwrap(),
+            meta
+        );
     }
 
     #[test]
@@ -533,6 +639,9 @@ mod tests {
                 value: None,
             }),
             activate: None,
+            duration_ms: None,
+            key: None,
+            image: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
         assert!(wire.contains("\"layout\":{\"anchor\":\"bottom-right\""));

@@ -650,3 +650,45 @@ fn operation_capability_is_advertised_only_by_the_active_ready_boundary() {
         );
     }
 }
+
+#[test]
+fn a_handed_socket_and_no_arguments_launch_the_daemon() {
+    let _lock = daemon_listener_fd_env_lock();
+    std::env::set_var(qol_conventions::ENV_DAEMON_SOCKET, "/tmp/host.sock");
+    let handed = (
+        launched_as_daemon(&[]),
+        launched_as_daemon(&["settings".to_string()]),
+        handed_socket().ok(),
+    );
+    std::env::remove_var(qol_conventions::ENV_DAEMON_SOCKET);
+    let missing = (
+        launched_as_daemon(&[]),
+        handed_socket().map_err(|error| error.to_string()),
+    );
+
+    assert_eq!(
+        handed,
+        (
+            true,
+            false,
+            Some(std::path::PathBuf::from("/tmp/host.sock"))
+        )
+    );
+    assert_eq!(
+        missing,
+        (
+            false,
+            Err(format!("{} is not set", qol_conventions::ENV_DAEMON_SOCKET))
+        )
+    );
+}
+
+#[test]
+fn replace_existing_is_asked_only_while_its_variable_is_set() {
+    let _lock = daemon_listener_fd_env_lock();
+    std::env::set_var(qol_conventions::ENV_DAEMON_REPLACE_EXISTING, "1");
+    let asked = asked_to_replace_existing();
+    std::env::remove_var(qol_conventions::ENV_DAEMON_REPLACE_EXISTING);
+
+    assert_eq!((asked, asked_to_replace_existing()), (true, false));
+}

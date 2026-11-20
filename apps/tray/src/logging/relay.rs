@@ -59,7 +59,13 @@ fn daemon_log_sink(
     > = std::sync::OnceLock::new();
     SINK.get_or_init(|| {
         let dir = qol_log::log_dir();
-        let _ = std::fs::create_dir_all(&dir);
+        if let Err(error) = std::fs::create_dir_all(&dir) {
+            log::warn!(
+                "Failed to create the daemon log folder {}: {error}",
+                dir.display()
+            );
+            return None;
+        }
         qol_log::remove_unrotated(&dir, "qol-daemons");
         qol_log::rolling(&dir, "qol-daemons")
             .ok()

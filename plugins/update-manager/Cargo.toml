@@ -1,6 +1,6 @@
 [package]
 name = "qol-update-manager"
-version = "0.30.1"
+version = "0.30.2"
 edition = "2021"
 
 [dependencies]
@@ -12,7 +12,6 @@ indexmap = "2.12"
 qol-apps.workspace = true
 qol-audio.workspace = true
 qol-config.workspace = true
-qol-conventions.workspace = true
 qol-fs.workspace = true
 qol-headless.workspace = true
 qol-host-fixes.workspace = true

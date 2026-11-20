@@ -47,6 +47,7 @@ const goldens = [
   ['qol-toasts', () => pic.qolToasts()],
   ['system-bubbles', () => pic.systemBubbles()],
   ['both-notices', () => pic.bothNotices()],
+  ['no-bubbles', () => pic.noBubbles()],
   ['launch-app', () => pic.launchApp()],
   ['open-url', () => pic.openUrl()],
   ['bundle-ref', () => pic.bundleRef('com.example.App')],

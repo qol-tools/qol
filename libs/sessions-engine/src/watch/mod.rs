@@ -2222,11 +2222,17 @@ fn record_wake_failure(
         "error": error,
         "at": chrono::Utc::now().to_rfc3339(),
     });
-    let _ = std::fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new(".")));
-    let _ = std::fs::write(
-        &path,
-        serde_json::to_string_pretty(&record).unwrap_or_default(),
-    );
+    let body = serde_json::to_string_pretty(&record).unwrap_or_default();
+    let written = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&path, body));
+    if let Err(write_error) = written {
+        log::warn!(
+            "failed to record the wake failure in {}: {write_error}",
+            path.display()
+        );
+    }
 }
 
 fn composer_holds_draft_or_unreadable(

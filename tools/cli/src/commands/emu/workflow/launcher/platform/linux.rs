@@ -20,7 +20,7 @@ use super::Verdict;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(20);
-const PLUGIN_ID: &str = "qol-launcher";
+const PLUGIN_ID: &str = qol_plugin_ids::launcher::ID;
 const FLOW_FILE: &str = "/home/qol/Documents/qol-launcher-flow-fresh.txt";
 const CYCLE_COUNT: usize = 40;
 
@@ -147,13 +147,13 @@ fn test_cold_open(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
 }
 
 fn test_repeated_activation(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
-    let pid_before = plugin_daemon_pid(guest, &["-x", "qol-launcher"], "Launcher daemon")?;
+    let pid_before = plugin_daemon_pid(guest, &["-x", PLUGIN_ID], "Launcher daemon")?;
     let fds_before = fd_count(guest, &pid_before)?;
     for _ in 0..CYCLE_COUNT {
         open_launcher(guest, auth)?;
         dismiss_launcher(guest)?;
     }
-    let pid_after = plugin_daemon_pid(guest, &["-x", "qol-launcher"], "Launcher daemon")?;
+    let pid_after = plugin_daemon_pid(guest, &["-x", PLUGIN_ID], "Launcher daemon")?;
     if pid_before != pid_after {
         bail!("Launcher restarted during retained activation cycles");
     }
@@ -326,7 +326,7 @@ fn test_http_guards(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
 }
 
 fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
-    let before = plugin_daemon_pid(guest, &["-x", "qol-launcher"], "Launcher daemon")?;
+    let before = plugin_daemon_pid(guest, &["-x", PLUGIN_ID], "Launcher daemon")?;
     require_exec(
         guest,
         command("/usr/bin/kill", &["--signal", "KILL", &before]),
@@ -336,7 +336,7 @@ fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()>
     let cursor = dispatch(guest, auth, "open")?;
     let after = wait_for_command(
         guest,
-        command("/usr/bin/pgrep", &["-x", "qol-launcher"]),
+        command("/usr/bin/pgrep", &["-x", PLUGIN_ID]),
         ACTION_TIMEOUT,
         |outcome| {
             let pid = outcome.stdout.lines().next().map(str::trim);

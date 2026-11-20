@@ -7,14 +7,16 @@ pub use platform::{
     release_toast_identity, set_os_banners, uninstall_toast_identity, NotificationInhibit,
 };
 
-use qol_runtime::protocol::{DaemonRequest, NotificationLayout, NotificationLevel};
+pub use qol_runtime::protocol::{NotificationLayout, NotificationLevel, NotificationMeta};
+pub use qol_runtime::Notification;
+
+use qol_runtime::protocol::DaemonRequest;
 use qol_runtime::PlatformStateClient;
 
-/// Delivers a notification, push-first: sends it to the tray host over the
-/// runtime state socket when one is reachable, and falls back to the
-/// platform notifier (`notify-send` on Linux, `osascript` on macOS, a toast on
-/// Windows) and finally to the process log when the push is unavailable or
-/// rejected.
+/// Delivers a notification through [`send`]: the tray host over the runtime
+/// state socket when one is reachable, else the platform notifier
+/// (`notify-send` on Linux, `osascript` on macOS, a toast on Windows), else
+/// the process log. Nothing is shown while notifications are switched off.
 /// Callers pass no urgency, so the push always carries
 /// [`NotificationLevel::Info`].
 pub fn send_notification(title: &str, message: &str) {
@@ -26,15 +28,9 @@ pub fn send_notification_with_layout(
     message: &str,
     layout: Option<NotificationLayout>,
 ) {
-    deliver(title, message, |client| {
-        client.send_notification_with_layout(
-            title,
-            message,
-            NotificationLevel::Info,
-            None,
-            None,
-            layout,
-        )
+    send(&Notification {
+        layout,
+        ..Notification::new(title, message)
     });
 }
 
@@ -51,24 +47,43 @@ pub fn send_activatable_notification(
     layout: Option<NotificationLayout>,
     activate: DaemonRequest,
 ) {
-    deliver(title, message, |client| {
-        client.send_activatable_notification(
-            title,
-            message,
-            NotificationLevel::Info,
-            layout,
-            activate,
-        )
+    send(&Notification {
+        layout,
+        activate: Some(activate),
+        ..Notification::new(title, message)
     });
 }
 
-fn deliver(title: &str, message: &str, push: impl FnOnce(&PlatformStateClient) -> bool) {
-    if push(&PlatformStateClient::from_env()) {
-        return;
+pub fn send(notification: &Notification) -> bool {
+    deliver_in_order(
+        gate::enabled_now(),
+        notification,
+        |notification| PlatformStateClient::from_env().push(notification),
+        platform::send,
+    )
+}
+
+fn deliver_in_order(
+    enabled: bool,
+    notification: &Notification,
+    push: impl FnOnce(&Notification) -> bool,
+    os: impl FnOnce(&Notification) -> bool,
+) -> bool {
+    if !enabled {
+        log::info!(
+            "notifications are switched off: {}: {}",
+            notification.title,
+            notification.body
+        );
+        return false;
     }
-    if gate::native_allowed_now() && platform::send_notification(title, message) {
-        return;
+    if push(notification) || os(notification) {
+        return true;
     }
 
-    log::info!("{title}: {message}");
+    log::info!("{}: {}", notification.title, notification.body);
+    false
 }
+
+#[cfg(test)]
+mod tests;
