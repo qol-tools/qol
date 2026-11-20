@@ -28,7 +28,10 @@ qol-update-manager doctor
   - Include kernels installed by hand adds `qol-kernels-by-hand.conf` to that cleanup, so kernels installed from Mint's Update Manager window are removed too. It is off until you switch it on, so a kernel kept on purpose stays.
   - On Ubuntu and Debian it is the unattended-upgrades setting that removes unused kernels, written to `/etc/apt/apt.conf.d/90qol-update-manager-kernels`. It runs only while automatic updates are on.
   - Anywhere else the row says nothing removes old kernels on its own.
-- `status` ends with an `Old kernels:` line.
+- `status` ends with an `Old kernels:` line. It says unknown when Mint's removal timer and its flag file disagree.
+- `cleanup` lists what updates left behind on Linux: old kernels, kernels installed by hand, packages nothing needs, downloaded packages, unused Flatpak runtimes and old snap versions. Each line gives the kind's id and its size, which is exact, dpkg's estimate, or unknown with the reason. The total counts a package two kinds list once. The daemon measures every 6 hours and after each change, never while it reads updates.
+- `cleanup remove <kind>` removes one kind, and `cleanup remove all` removes every kind except old snap versions and kernels installed by hand. Those two need `--confirm`, since one is the last way back and the other was kept on purpose.
+- `doctor` has one line per kind.
 - Wait while in use and Hold all are qol's rules, and they end when qol stops.
 - History lists each run with who started it; a run's page lists what it installed.
 

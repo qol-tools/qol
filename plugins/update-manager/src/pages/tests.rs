@@ -2,10 +2,14 @@ use chrono::NaiveDateTime;
 use qol_config::pages::{Control, Enter, Go, Notice, Page, Pages};
 
 use super::{build, press, ROOT};
+use crate::cleanup::fake::{
+    self, found, BY_HAND, EXTRA, MINT_BY_HAND, MINT_KERNELS, UNATTENDED_KERNELS,
+};
+use crate::cleanup::{Live, State};
 use crate::session::{Act, Helper, InUse, Journal, Session, Task, MINT_DEFAULT};
 use crate::updates::{
-    Auto, AutoKey, ByHand, Cleaner, Cleanup, Failure, Finish, Held, Hours, Mint, Package, Reason,
-    Refusal, Run, RunBy, Unit, Update, Updates,
+    Auto, AutoKey, Failure, Finish, Held, Hours, Mint, Package, Reason, Refusal, Run, RunBy, Unit,
+    Update, Updates,
 };
 
 fn at(text: &str) -> NaiveDateTime {
@@ -114,12 +118,7 @@ fn mint() -> Session {
             flatpak: false,
         },
     });
-    session.host.cleanup = Some(Cleanup {
-        by: Cleaner::Mint,
-        on: true,
-        idle: false,
-        by_hand: Some(ByHand { on: false, kept: 0 }),
-    });
+    session.host.switches = fake::mint();
     session
 }
 
@@ -909,15 +908,13 @@ fn old_kernels_switch_through_tasks_and_list_as_changes() {
     assert_eq!(
         task,
         Task::Auto {
-            key: AutoKey::ByHand,
+            key: AutoKey::Switch(&MINT_BY_HAND),
             on: true,
             was: false,
         }
     );
     session.done(&task, Ok(()), now());
-    if let Some(cleanup) = session.host.cleanup.as_mut() {
-        cleanup.by_hand = Some(ByHand { on: true, kept: 0 });
-    }
+    session.host.switches[1].state = State::On { idle: false };
     let pages = build(&session, now()).pages;
     assert_eq!(broken(&pages), Vec::<String>::new());
     assert_eq!(value(&pages, ROOT, "changes"), "1");
@@ -929,43 +926,39 @@ fn old_kernels_switch_through_tasks_and_list_as_changes() {
     let back = press(&mut session, "changes", "auto:by_hand", now());
     assert!(matches!(
         back.task,
-        Some(Task::Auto {
-            key: AutoKey::ByHand,
-            on: false,
-            ..
-        })
+        Some(Task::Auto { key, on: false, .. }) if key == AutoKey::Switch(&MINT_BY_HAND)
     ));
 }
 
 #[test]
 fn old_kernels_read_like_each_platform_removes_them() {
     let mut session = mint();
-    if let Some(cleanup) = session.host.cleanup.as_mut() {
-        cleanup.by_hand = Some(ByHand { on: false, kept: 2 });
-    }
+    session.survey = Some(fake::survey(vec![found(
+        &BY_HAND,
+        2,
+        &[("linux-image-1", 1), ("linux-image-2", 1)],
+    )]));
     let pages = build(&session, now()).pages;
     assert_eq!(
         detail(&pages, "kernels", "by_hand"),
         "2 kernels installed by hand are never removed."
     );
 
-    let unattended = Cleanup {
-        by: Cleaner::Unattended,
-        on: true,
-        idle: false,
-        by_hand: None,
+    let unattended = Live {
+        switch: &UNATTENDED_KERNELS,
+        state: State::On { idle: false },
     };
-    session.host.cleanup = Some(unattended);
+    session.host.switches = vec![unattended];
     let pages = build(&session, now()).pages;
     assert_eq!(broken(&pages), Vec::<String>::new());
     assert_eq!(value(&pages, ROOT, "kernels"), "removed with updates");
     assert_eq!(label(&pages, "kernels", "kernels"), "Old kernels");
     assert!(page(&pages, "kernels").row("by_hand").is_none());
 
-    session.host.cleanup = Some(Cleanup {
-        idle: true,
+    session.host.switches = vec![Live {
+        state: State::On { idle: true },
         ..unattended
-    });
+    }];
     let pages = build(&session, now()).pages;
     assert_eq!(value(&pages, ROOT, "kernels"), "kept");
     assert_eq!(
@@ -973,7 +966,7 @@ fn old_kernels_read_like_each_platform_removes_them() {
         "Automatic updates are off here, so this never runs."
     );
 
-    session.host.cleanup = None;
+    session.host.switches.clear();
     let pages = build(&session, now()).pages;
     assert_eq!(broken(&pages), Vec::<String>::new());
     assert_eq!(value(&pages, ROOT, "kernels"), "kept");
@@ -983,7 +976,7 @@ fn old_kernels_read_like_each_platform_removes_them() {
     );
     assert!(pages.page("kernels").is_none());
 
-    session.host.cleanup = Some(unattended);
+    session.host.switches = vec![unattended];
     session.host.admin = false;
     let pages = build(&session, now()).pages;
     assert_eq!(broken(&pages), Vec::<String>::new());
@@ -1004,12 +997,36 @@ fn a_borrowed_computer_asks_before_changing_the_owners_kernel_removal() {
     );
     assert_eq!(value(&pages, "ask", "after"), "off");
     let change = press(&mut session, "ask", "change", now());
-    assert!(matches!(
+    assert_eq!(
         change.task,
         Some(Task::Auto {
-            key: AutoKey::Kernels,
+            key: AutoKey::Switch(&MINT_KERNELS),
             on: false,
             was: true,
         })
-    ));
+    );
+}
+
+#[test]
+fn an_extra_kind_in_the_survey_adds_no_row() {
+    let mut session = mint();
+    let before = build(&session, now()).pages;
+    let rows = |pages: &Pages, id: &str| -> Vec<String> {
+        page(pages, id)
+            .groups
+            .iter()
+            .flat_map(|group| {
+                group
+                    .rows
+                    .iter()
+                    .map(|row| format!("{}={}", row.id, row.label))
+            })
+            .collect()
+    };
+    session.survey = Some(fake::survey(vec![found(&EXTRA, 3, &[("extra-1", 10)])]));
+    let after = build(&session, now()).pages;
+    for id in [ROOT, "kernels"] {
+        assert_eq!(rows(&after, id), rows(&before, id), "page `{id}`");
+    }
+    assert_eq!(broken(&after), Vec::<String>::new());
 }

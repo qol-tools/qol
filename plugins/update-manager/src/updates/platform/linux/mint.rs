@@ -227,7 +227,7 @@ pub(super) fn set_auto(key: AutoKey, on: bool) -> Result<(), Refusal> {
         }
         AutoKey::Spices => "auto-update-cinnamon-spices",
         AutoKey::Flatpak => "auto-update-flatpaks",
-        AutoKey::Kernels | AutoKey::ByHand => {
+        AutoKey::Switch(_) => {
             return Err(Refusal::Failed(format!(
                 "{} is not one of Mint's install switches",
                 key.name()

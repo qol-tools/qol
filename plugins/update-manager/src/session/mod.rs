@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDateTime;
 
+use crate::cleanup::{Live, Survey};
 use crate::updates::{
-    visible, Auto, AutoKey, Cleanup, Clock, Failure, Finish, Holding, Host, Hours, Mint, Refusal,
-    Update, Updates,
+    visible, Auto, AutoKey, Clock, Failure, Finish, Holding, Host, Hours, Mint, Refusal, Update,
+    Updates,
 };
 
 mod journal;
@@ -118,6 +119,7 @@ pub(crate) struct Session {
     pub(crate) updates: Option<Updates>,
     read: Vec<Update>,
     pub(crate) host: Host,
+    pub(crate) survey: Option<Survey>,
     pub(crate) checked: Option<NaiveDateTime>,
     pub(crate) job: Option<Job>,
     pub(crate) failed: Option<Failed>,
@@ -138,6 +140,7 @@ impl Session {
             updates: None,
             read: Vec::new(),
             host: Host::default(),
+            survey: None,
             checked: None,
             job: None,
             failed: None,
@@ -213,13 +216,16 @@ impl Session {
         self.mint().map(|mint| mint.auto).unwrap_or_default()
     }
 
-    pub(crate) fn cleanup(&self) -> Option<Cleanup> {
-        self.host.cleanup
+    pub(crate) fn switches(&self) -> &[Live] {
+        &self.host.switches
     }
 
     pub(crate) fn switch(&self, key: AutoKey) -> bool {
-        if key.removes() {
-            return self.cleanup().is_some_and(|cleanup| cleanup.get(key));
+        if let AutoKey::Switch(switch) = key {
+            return self
+                .switches()
+                .iter()
+                .any(|live| live.switch == switch && live.state.on());
         }
         self.auto().get(key)
     }

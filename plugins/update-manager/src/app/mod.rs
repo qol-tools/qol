@@ -12,6 +12,7 @@ use qol_host_fixes::residency::HostResidency;
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use serde::Serialize;
 
+use crate::cleanup;
 use crate::pages;
 use crate::session::{Helper as HelperState, InUse, Journal, Rules, Session, Task};
 use crate::updates::{self, Failure, Helper, Reason, Refusal};
@@ -23,6 +24,7 @@ const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
 const HOST_EVERY: Duration = Duration::from_secs(60);
 const UPDATES_EVERY: Duration = Duration::from_secs(15 * 60);
 const RULES_EVERY: Duration = Duration::from_secs(5);
+const SURVEY_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const RELEASE_WAIT: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +41,7 @@ struct State {
     want_updates: bool,
     want_host: bool,
     want_rules: bool,
+    want_survey: bool,
     stop: bool,
 }
 
@@ -97,6 +100,7 @@ pub fn run() -> ExitCode {
             want_updates: true,
             want_host: true,
             want_rules: true,
+            want_survey: true,
             stop: false,
         }),
         wake: Condvar::new(),
@@ -106,6 +110,9 @@ pub fn run() -> ExitCode {
     if let Err(error) = spawn("refresh", &shared, refresh) {
         log::error!("update-manager: cannot start reading updates: {error}");
         return ExitCode::FAILURE;
+    }
+    if let Err(error) = spawn("survey", &shared, survey) {
+        log::warn!("update-manager: cannot start measuring what updates left behind: {error}");
     }
     let (released, done) = mpsc::channel();
     let watcher = Arc::clone(&shared);
@@ -270,6 +277,7 @@ fn work(shared: &Shared, task: Task) {
             shared.save(&state.session);
             state.want_updates = true;
             state.want_host = true;
+            state.want_survey = true;
             shared.wake.notify_all();
             return;
         }
@@ -299,6 +307,7 @@ fn work(shared: &Shared, task: Task) {
     state.session.done(&task, result, now());
     shared.save(&state.session);
     state.want_host = true;
+    state.want_survey = true;
     shared.wake.notify_all();
 }
 
@@ -351,6 +360,26 @@ fn refresh(shared: &Shared) {
                 state.want_updates = true;
             }
         }
+    }
+}
+
+fn survey(shared: &Shared) {
+    let mut next = Instant::now();
+    loop {
+        {
+            let mut state = shared.lock();
+            while !state.stop && !state.want_survey && Instant::now() < next {
+                let wait = next.saturating_duration_since(Instant::now());
+                state = shared.wait(state, wait);
+            }
+            if state.stop {
+                return;
+            }
+            state.want_survey = false;
+        }
+        let found = cleanup::survey(now());
+        next = Instant::now() + SURVEY_EVERY;
+        shared.lock().session.survey = Some(found);
     }
 }
 
@@ -471,6 +500,7 @@ mod tests {
                 want_updates: false,
                 want_host: false,
                 want_rules: false,
+                want_survey: false,
                 stop: false,
             }),
             wake: Condvar::new(),
