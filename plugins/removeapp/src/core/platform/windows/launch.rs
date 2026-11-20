@@ -6,10 +6,9 @@ use anyhow::{anyhow, bail, Result};
 use qol_platform::native::shell::{ShellProcess, ShellSpawn};
 use windows_sys::Win32::Foundation::ERROR_CANCELLED;
 
-use crate::cli::PLUGIN_ID;
-
 use crate::core::platform::uninstall_wait::{step, Limits, Observation, Step};
 use crate::core::platform::windows_paths::{same_path, Launch};
+use crate::PLUGIN_ID;
 
 const POLL: Duration = Duration::from_millis(250);
 const SUCCESS_CODES: &[u32] = &[0, 1605, 1614, 1641, 3010];

@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use serialport::SerialPortInfo;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -37,8 +36,6 @@ pub(crate) use windows::{
     enumerate_serial_metadata, inspect_serial_access, serial_port_present,
 };
 
-use crate::config::store::PLUGIN_ID;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DoctorPlatformMetadata {
     pub name: &'static str,
@@ -57,9 +54,4 @@ pub(crate) struct SerialAccess {
     pub path: String,
     pub readable_writable: bool,
     pub issue: Option<String>,
-}
-
-pub fn open_settings() -> Result<()> {
-    qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
-        .context("failed to open settings URL")
 }

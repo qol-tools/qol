@@ -61,7 +61,11 @@ pub fn run(intent: StartupIntent) {
         spawn_command_poll(entries.clone(), active.clone(), rx, focus_cache.clone(), cx);
         let (published, snapshots) = mpsc::channel();
         qol_gpui::command_loop::spawn_receiver_loop(cx, snapshots, warm_icons);
-        discovery::start(entries.clone(), published);
+        discovery::start(
+            entries.clone(),
+            published,
+            crate::config::load_launcher_config().extra_file_scan_roots,
+        );
 
         if show_immediately {
             #[cfg(debug_assertions)]
@@ -146,7 +150,7 @@ async fn show_launcher(
 
 async fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
     let opened = qol_gpui::settings_panel::open_plugin_settings(
-        crate::config::plugin_id(),
+        crate::PLUGIN_ID,
         "Launcher Settings",
         crate::config::contract(),
         focus_cache,
@@ -157,7 +161,7 @@ async fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
     if let Err(error) = opened {
         log::warn!("settings panel failed, opening browser: {error:#}");
         if let Err(error) =
-            qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::config::plugin_id())
+            qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::PLUGIN_ID)
         {
             log::warn!("failed to open settings page: {error}");
         }

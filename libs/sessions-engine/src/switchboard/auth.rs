@@ -56,7 +56,7 @@ struct Listing {
     profiles: Vec<Row>,
 }
 
-pub(super) fn run(args: &[OsString]) -> Result<()> {
+pub(super) fn run(args: &[OsString], warn: &mut dyn FnMut(String)) -> Result<Vec<String>> {
     let words = args
         .iter()
         .map(|arg| {
@@ -66,8 +66,8 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     match words.as_slice() {
         [] | ["--list"] => list(),
-        [REOPEN] => reopen(),
-        [name] if !name.starts_with('-') => switch(name),
+        [REOPEN] => reopen(warn).map(|()| Vec::new()),
+        [name] if !name.starts_with('-') => switch(name, warn),
         _ => bail!("usage: qol sessions switchboard auth [--list | <profile>]"),
     }
 }
@@ -133,7 +133,7 @@ fn status_line(row: &Row) -> String {
         .join(" · ")
 }
 
-fn list() -> Result<()> {
+fn list() -> Result<Vec<String>> {
     let registry = Registry::load();
     let current = current(&registry);
     let rows = shown(candidates(&registry), current.as_deref());
@@ -144,11 +144,10 @@ fn list() -> Result<()> {
             .map(|row| row.name.clone()),
         profiles: rows,
     };
-    crate::cli::line(serde_json::to_string(&listing)?);
-    Ok(())
+    Ok(vec![serde_json::to_string(&listing)?])
 }
 
-fn switch(name: &str) -> Result<()> {
+fn switch(name: &str, warn: &mut dyn FnMut(String)) -> Result<Vec<String>> {
     let registry = Registry::load();
     let all = candidates(&registry);
     let Some(target) = all.iter().find(|candidate| candidate.name == name) else {
@@ -162,7 +161,7 @@ fn switch(name: &str) -> Result<()> {
         );
     };
     let switchboard = super::neutral_cwd()?;
-    let previous = paths::config_dir(&switchboard, None);
+    let previous = paths::config_dir(&switchboard, None, warn);
     if current(&registry) == target.config_dir && previous == target.config_dir {
         bail!("the switchboard already runs on `{name}`");
     }
@@ -178,14 +177,14 @@ fn switch(name: &str) -> Result<()> {
         paths::set_recorded_config_dir(&switchboard, previous.as_deref())?;
         return Err(error).context("failed to start the switchboard on the new profile");
     }
-    crate::cli::line(serde_json::json!({
+    let switching = serde_json::json!({
         "switching": name,
         "message": format!("Switching the switchboard to {name}: it closes and opens again on that login."),
-    }));
-    Ok(())
+    });
+    Ok(vec![switching.to_string()])
 }
 
-fn reopen() -> Result<()> {
+fn reopen(warn: &mut dyn FnMut(String)) -> Result<()> {
     std::thread::sleep(CLOSE_SETTLE);
     let terminals = super::super::service()?;
     let interpreter = CliSessionInterpreter::system();
@@ -209,7 +208,7 @@ fn reopen() -> Result<()> {
         }
         std::thread::sleep(CLOSE_POLL);
     }
-    open_on(&Profile::default(), Some(SWITCHBOARD_SURFACE)).map(drop)
+    open_on(&Profile::default(), Some(SWITCHBOARD_SURFACE), warn).map(drop)
 }
 
 fn current(registry: &Registry) -> Option<PathBuf> {
@@ -468,7 +467,7 @@ mod tests {
     #[test]
     fn auth_takes_a_list_a_profile_or_nothing() {
         let words = |values: &[&str]| values.iter().map(OsString::from).collect::<Vec<_>>();
-        assert!(run(&words(&["-x"])).is_err());
-        assert!(run(&words(&["a", "b"])).is_err());
+        assert!(run(&words(&["-x"]), &mut |_| {}).is_err());
+        assert!(run(&words(&["a", "b"]), &mut |_| {}).is_err());
     }
 }

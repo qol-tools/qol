@@ -1,6 +1,6 @@
-use super::AltTabApp;
 use crate::actions;
 use crate::picker::layout::picker_layout;
+use crate::picker::{AltTabApp, PICKER_VISIBLE};
 use gpui::{Context, Window};
 
 pub(crate) fn handle_key_down(
@@ -9,7 +9,7 @@ pub(crate) fn handle_key_down(
     window: &mut Window,
     cx: &mut Context<AltTabApp>,
 ) {
-    let visible = crate::app::PICKER_VISIBLE.load(std::sync::atomic::Ordering::Relaxed);
+    let visible = PICKER_VISIBLE.load(std::sync::atomic::Ordering::Relaxed);
     #[cfg(debug_assertions)]
     let focused = this.focus_handle.is_focused(window);
     #[cfg(debug_assertions)]

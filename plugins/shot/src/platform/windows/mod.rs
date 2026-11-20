@@ -3,17 +3,18 @@ mod clipboard;
 mod display;
 mod ffmpeg;
 mod recording;
-mod selector;
 mod system;
 
 pub use capture::{capture_frozen_frame, capture_screenshot, grab_preview_rgba};
 pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
-pub use display::{full_screen_bounds, get_monitors};
+pub use display::{full_screen_bounds, get_monitors, monitor_capture_rect};
+pub(crate) use display::{
+    logical_cursor, logical_rect, monitor_from_rect, native_displays, NativeDisplay,
+};
 pub use recording::{
     recording_format, recording_started, recording_stopped, start_capture, stop_capture,
     watch_daemon_stop,
 };
-pub use selector::{monitor_capture_rect, select_region, select_region_in_app};
 pub use system::{
     external_services_check, list_audio_apps, list_audio_sinks, list_audio_sources,
     platform_supported_check, process_alive, required_binaries_check,
@@ -22,8 +23,6 @@ pub use system::{
 pub fn directory_is_read_only(_metadata: &std::fs::Metadata) -> bool {
     false
 }
-
-pub fn pre_create_selector(_cx: &mut gpui::App) {}
 
 pub(crate) fn reassert_parked(_title: &str, _cx: &mut gpui::App) {}
 
@@ -43,10 +42,6 @@ pub(crate) fn register_pin_transition(
 }
 
 pub(crate) fn complete_pin_transition(_title: &str, _succeeded: bool) {}
-
-pub fn pre_create_pins(cx: &mut gpui::App) {
-    crate::ui::pinned::pre_create(cx);
-}
 
 pub fn pin_cache_enabled() -> bool {
     false

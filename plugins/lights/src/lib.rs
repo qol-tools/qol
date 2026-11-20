@@ -8,3 +8,5 @@ pub mod platform;
 pub mod runtime;
 pub mod service;
 pub mod znp;
+
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");

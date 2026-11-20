@@ -53,7 +53,7 @@ use crate::ops::Transfer;
 use crate::places::{self, Device, Place};
 use crate::relay::{self, QolNotifications};
 use crate::ui::trail::{self, Crumb};
-use crate::ui::PLUGIN_ID;
+use crate::PLUGIN_ID;
 use grid::Layout;
 use menu::{Command, Menu, Owner};
 use previews::Previews;
@@ -169,7 +169,7 @@ impl ExplorerView {
             dismisser,
             wake_at: None,
             folds_open: false,
-            saver: ConfigSaver::start(),
+            saver: ConfigSaver::start(save_settings_keys),
             previews,
         };
         view.listen(cx);
@@ -1140,6 +1140,15 @@ fn start_relay(browser: &mut Browser) {
 
 fn rail_width(window_width: f32) -> f32 {
     (RAIL + (window_width - WINDOW_WIDTH) / RAIL_GROWTH).clamp(RAIL_MIN, RAIL_MAX)
+}
+
+fn save_settings_keys(keys: &serde_json::Value) -> Result<(), String> {
+    let id = qol_config::plugin_id_from_env(PLUGIN_ID);
+    qol_plugin_api::host_exec::save_plugin_config_keys(&id, keys).map_err(|error| {
+        let error = error.to_string();
+        log::warn!("[explorer] settings were not saved: {error}");
+        error
+    })
 }
 
 impl Focusable for ExplorerView {

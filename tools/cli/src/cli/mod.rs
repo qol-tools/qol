@@ -2,6 +2,9 @@ use anyhow::{anyhow, bail, Result};
 use std::ffi::OsString;
 
 mod contract;
+mod dispatch;
+
+pub(crate) use dispatch::run;
 
 pub(crate) struct CliArgs {
     pub(crate) values: Vec<OsString>,

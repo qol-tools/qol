@@ -128,7 +128,6 @@ fn default_reset_selection_on_open() -> bool {
     true
 }
 
-pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 pub(crate) type ConfigInspection = qol_config::PluginConfigInspection<AltTabConfig>;
 
@@ -138,7 +137,7 @@ pub(crate) fn contract() -> &'static str {
 
 pub fn load_alt_tab_config() -> AltTabConfig {
     let config: AltTabConfig =
-        qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT);
+        qol_config::load_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT);
     #[cfg(debug_assertions)]
     log::debug!(
         "config: action_mode={:?} max_columns={} card_scale={} dynamic_card_scale={} card_padding={} icon_position={:?} reset_selection_on_open={} open_behavior={:?}",
@@ -155,7 +154,7 @@ pub fn load_alt_tab_config() -> AltTabConfig {
 }
 
 pub(crate) fn inspect() -> Result<ConfigInspection, qol_config::PluginConfigInspectionError> {
-    qol_config::inspect_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
+    qol_config::inspect_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
 }
 
 #[cfg(test)]

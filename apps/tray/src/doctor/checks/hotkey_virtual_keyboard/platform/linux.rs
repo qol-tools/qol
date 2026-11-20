@@ -1,8 +1,6 @@
 use super::super::VirtualKeyboardProbe;
 use super::super::VirtualKeyboardScan;
-use crate::hotkeys::capture::platform::linux::classify::{
-    classify, DeviceCapabilities, DeviceClass, SkipReason,
-};
+use crate::platform::linux::classify::{classify, DeviceCapabilities, DeviceClass, SkipReason};
 
 pub(super) fn virtual_keyboard_probe() -> VirtualKeyboardScan {
     use std::collections::HashSet;
@@ -42,5 +40,5 @@ pub(super) fn virtual_keyboard_probe() -> VirtualKeyboardScan {
 }
 
 pub(super) fn keycode_display_name(code: u16) -> String {
-    crate::hotkeys::capture::platform::linux::evdev_backend::keycode_name(code).to_string()
+    crate::platform::linux::keycode::keycode_name(code).to_string()
 }

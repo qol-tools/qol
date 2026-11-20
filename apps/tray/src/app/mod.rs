@@ -1,4 +1,9 @@
 mod host_cli;
+mod startup_env;
+
+pub(crate) use startup_env::{
+    drop_launching_claude_session_env, scrub_inherited_daemon_handoff_env,
+};
 
 use anyhow::{Context, Result};
 use qol_tray::daemon::Daemon;

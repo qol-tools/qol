@@ -25,9 +25,15 @@ enum StartedFeedback {
     Countdown,
 }
 
-pub fn toggle_recording(config: &Config) -> Result<()> {
+pub(crate) fn toggle_recording(
+    config: &Config,
+    select_region: impl FnOnce(
+        crate::capture::space::CaptureKind,
+        Option<crate::capture::frozen_frame::FrozenFrame>,
+    ) -> Result<Option<Rect>>,
+) -> Result<()> {
     toggle_recording_area(config, || {
-        platform::select_region(crate::capture::space::CaptureKind::Recording, None)
+        select_region(crate::capture::space::CaptureKind::Recording, None)
     })
 }
 

@@ -3,12 +3,11 @@ mod cli;
 mod config;
 mod cursor;
 mod doctor;
+mod platform;
 mod session;
-mod settings;
 mod theme;
 
-#[cfg(all(test, target_os = "linux"))]
-pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 fn main() -> std::process::ExitCode {
     qol_log::init_stderr();

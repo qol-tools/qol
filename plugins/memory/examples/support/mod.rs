@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
-use qol_memory::app::{request, warm::WarmState};
+use qol_memory::app::request;
 use qol_memory::store::Store;
+use qol_memory::warm::WarmState;
 use qol_plugin_daemon::daemon::ReadResult;
 use qol_runtime::protocol::DaemonRequest;
 use serde::Deserialize;

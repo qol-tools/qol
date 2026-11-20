@@ -7,7 +7,7 @@ use std::thread;
 
 pub use qol::QolNotifications;
 
-use crate::cli::PLUGIN_ID;
+use crate::PLUGIN_ID;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {

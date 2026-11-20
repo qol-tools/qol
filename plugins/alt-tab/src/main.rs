@@ -4,9 +4,12 @@ mod capture;
 mod config;
 mod discovery;
 mod picker;
+mod platform;
 mod preview_plane;
 mod rendering;
 mod runtime;
+
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 fn main() -> std::process::ExitCode {
     qol_log::init_stderr();

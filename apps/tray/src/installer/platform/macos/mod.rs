@@ -1,11 +1,10 @@
-pub(crate) mod codesign;
-
 use anyhow::{anyhow, Context, Result};
 use qol_apps::tray_install::InstallProfile;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::InstallerOps;
+use crate::platform::macos::codesign;
 
 const ICNS_DATA: &[u8] = include_bytes!("../../../../assets/qol-tray.icns");
 const APP_NAME: &str = "QoL Tray";
@@ -76,6 +75,10 @@ impl InstallerOps for Platform {
         if legacy_marker.exists() {
             let _ = std::fs::remove_file(&legacy_marker);
         }
+    }
+
+    fn refresh_after_update(&self, _binary_path: &Path, _installer: Option<&Path>) -> Result<()> {
+        Ok(())
     }
 
     fn uninstall(&self, binary_path: &Path, profile: InstallProfile) -> Result<()> {

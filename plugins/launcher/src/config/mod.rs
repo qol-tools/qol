@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::PLUGIN_ID;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DisplayConfig {
     pub ghost_opacity: Option<f32>,
@@ -25,14 +27,9 @@ fn enabled() -> bool {
 }
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
-const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 pub(crate) fn contract() -> &'static str {
     CONFIG_CONTRACT
-}
-
-pub(crate) fn plugin_id() -> &'static str {
-    PLUGIN_ID
 }
 
 pub fn load_launcher_config() -> LauncherConfig {

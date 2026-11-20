@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use qol_memory::app::warm::WarmState;
 use qol_memory::verification::{ollama::Ollama, Fact};
 use qol_memory::verification::{service::Verifier, Prediction};
+use qol_memory::warm::WarmState;
 use serde::Deserialize;
 use serde_json::json;
 

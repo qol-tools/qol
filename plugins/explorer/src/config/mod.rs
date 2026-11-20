@@ -6,8 +6,8 @@ use futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::cli::PLUGIN_ID;
 use crate::listing::SortBy;
+use crate::PLUGIN_ID;
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 
@@ -104,18 +104,8 @@ pub struct ConfigSaver {
 }
 
 impl ConfigSaver {
-    pub fn start() -> Self {
-        Self::with_writer(
-            |keys| {
-                let id = qol_config::plugin_id_from_env(PLUGIN_ID);
-                qol_plugin_api::host_exec::save_plugin_config_keys(&id, keys).map_err(|error| {
-                    let error = error.to_string();
-                    log::warn!("[explorer] settings were not saved: {error}");
-                    error
-                })
-            },
-            load,
-        )
+    pub fn start(write: impl Fn(&Value) -> Result<(), String> + Send + 'static) -> Self {
+        Self::with_writer(write, load)
     }
 
     fn with_writer(

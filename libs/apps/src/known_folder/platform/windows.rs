@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use windows_sys::core::{GUID, PWSTR};
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::UI::Shell::{
-    FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures,
-    FOLDERID_Programs, FOLDERID_Videos, SHGetKnownFolderPath,
+    FOLDERID_CommonPrograms, FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads,
+    FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Programs, FOLDERID_Videos, SHGetKnownFolderPath,
 };
 
 pub(crate) fn known_folder(id: &GUID) -> Option<PathBuf> {
@@ -52,6 +52,10 @@ pub fn videos_dir() -> Option<PathBuf> {
 
 pub fn programs_dir() -> Option<PathBuf> {
     known_folder(&FOLDERID_Programs)
+}
+
+pub fn common_programs_dir() -> Option<PathBuf> {
+    known_folder(&FOLDERID_CommonPrograms)
 }
 
 #[cfg(test)]

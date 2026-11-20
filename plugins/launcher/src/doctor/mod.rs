@@ -126,7 +126,9 @@ fn required_binaries_check() -> Result<DoctorCheckResult> {
 }
 
 fn discovery_state_check() -> Result<DoctorCheckResult> {
-    discovery_state_result(crate::discovery::paths())
+    discovery_state_result(crate::discovery::paths(
+        crate::config::load_launcher_config().extra_file_scan_roots,
+    ))
 }
 
 fn discovery_state_result(paths: crate::discovery::DiscoveryPaths) -> Result<DoctorCheckResult> {

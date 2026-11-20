@@ -5,7 +5,7 @@ use crate::config::AltTabConfig;
 use crate::discovery::{Platform, WindowDiscovery, WindowInfo};
 use crate::picker::gather::{build_icon_cache, PreviewCaptureScheduler};
 use crate::picker::{LiveFrameMap, PickerWindowState, SharedIconCache};
-use crate::runtime::daemon;
+use futures::future::LocalBoxFuture;
 use gpui::*;
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
@@ -15,7 +15,27 @@ use std::sync::{mpsc, Arc, Mutex};
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 pub(crate) type SharedPreviewCache = Arc<Mutex<crate::picker::PreviewMap>>;
+pub(crate) type ConfigLoader = fn() -> AltTabConfig;
+pub(crate) type SettingsOpener = fn(AsyncApp, MonitorTracker) -> LocalBoxFuture<'static, ()>;
 static NEXT_SHOW_ID: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) enum PickerCommand {
+    Show,
+    ShowReverse,
+    Reload,
+    Settings,
+    Kill,
+    Theme {
+        native: Option<String>,
+        accent: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PickerHost {
+    pub(crate) load_config: ConfigLoader,
+    pub(crate) open_settings: SettingsOpener,
+}
 
 #[derive(Clone)]
 pub(super) struct PickerCaches {
@@ -36,6 +56,7 @@ struct PickerState {
     tracker: MonitorTracker,
     caches: PickerCaches,
     has_shown_once: Arc<AtomicBool>,
+    host: PickerHost,
 }
 
 impl PickerCaches {
@@ -86,14 +107,15 @@ fn next_show_id() -> u64 {
 
 pub(crate) fn run_app(
     config: AltTabConfig,
-    rx: mpsc::Receiver<daemon::Command>,
+    rx: mpsc::Receiver<PickerCommand>,
     show_on_start: bool,
+    host: PickerHost,
 ) {
     let app = Application::new();
 
     app.run(move |cx: &mut App| {
         qol_gpui::fonts::install(cx);
-        qol_gpui::keepalive::open_keepalive(cx, Some(crate::config::PLUGIN_ID));
+        qol_gpui::keepalive::open_keepalive(cx, Some(crate::PLUGIN_ID));
         super::platform::set_accessory_policy();
 
         let state = PickerState {
@@ -101,6 +123,7 @@ pub(crate) fn run_app(
             tracker: MonitorTracker::start(cx),
             caches: PickerCaches::new(),
             has_shown_once: Arc::new(AtomicBool::new(false)),
+            host,
         };
 
         super::monitor_listener::spawn(
@@ -116,6 +139,7 @@ pub(crate) fn run_app(
                 show_id: state.caches.show_id.clone(),
                 capture_scheduler: state.caches.capture_scheduler.clone(),
                 warmer: state.caches.warmer.clone(),
+                load_config: state.host.load_config,
             },
         );
         super::platform::pre_create(
@@ -173,28 +197,28 @@ fn picker_window_state() -> PickerWindowState {
     ))
 }
 
-fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: PickerState) {
+fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<PickerCommand>, state: PickerState) {
     qol_gpui::command_loop::spawn_command_loop(cx, rx, move |cx, cmd| {
         let state = state.clone();
         async move {
             match cmd {
-                daemon::Command::Show => {
+                PickerCommand::Show => {
                     dispatch_show(&cx, false, &state).await;
                     LoopFlow::Continue
                 }
-                daemon::Command::ShowReverse => {
+                PickerCommand::ShowReverse => {
                     dispatch_show(&cx, true, &state).await;
                     LoopFlow::Continue
                 }
-                daemon::Command::Reload => {
+                PickerCommand::Reload => {
                     dispatch_reload(&cx, &state).await;
                     LoopFlow::Continue
                 }
-                daemon::Command::Settings => {
+                PickerCommand::Settings => {
                     dispatch_settings(&cx, &state).await;
                     LoopFlow::Continue
                 }
-                daemon::Command::Theme { native, accent } => {
+                PickerCommand::Theme { native, accent } => {
                     qol_gpui::theme::set_runtime_theme_override(
                         native.as_deref(),
                         accent.as_deref(),
@@ -202,37 +226,25 @@ fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: P
                     let _ = cx.update(|cx| cx.refresh_windows());
                     LoopFlow::Continue
                 }
-                daemon::Command::Kill => LoopFlow::Stop,
+                PickerCommand::Kill => LoopFlow::Stop,
             }
         }
     });
 }
 
 async fn dispatch_settings(cx: &AsyncApp, state: &PickerState) {
-    let opened = qol_gpui::settings_panel::open_plugin_settings(
-        crate::config::PLUGIN_ID,
-        "Alt Tab Settings",
-        crate::config::contract(),
-        state.tracker.clone(),
-        qol_gpui::settings_panel::SettingsRuntime::empty(),
-        cx,
-    )
-    .await;
-    if let Err(error) = opened {
-        log::warn!("settings panel failed, opening browser: {error:#}");
-        crate::runtime::open_settings_page();
-    }
+    (state.host.open_settings)(cx.clone(), state.tracker.clone()).await;
 }
 
 async fn dispatch_reload(cx: &AsyncApp, state: &PickerState) {
-    let config = crate::config::load_alt_tab_config();
+    let config = (state.host.load_config)();
     let current = state.current.clone();
     let _ = cx.update(move |_cx| {
         qol_gpui::popup_window::set_ghost_debug(
             config.display.ghost_opacity,
             config.display.ghost_debug_color.as_deref(),
         );
-        if crate::app::PICKER_VISIBLE.load(Ordering::Relaxed) {
+        if crate::picker::PICKER_VISIBLE.load(Ordering::Relaxed) {
             return;
         }
         let keys = current.borrow().keys();
@@ -248,16 +260,16 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     state.caches.record_show(show_id);
     qol_runtime::probe!("SHOW_RECV", "show_id={show_id} reverse={reverse}");
 
-    if crate::app::PICKER_VISIBLE.load(Ordering::Relaxed) {
+    if crate::picker::PICKER_VISIBLE.load(Ordering::Relaxed) {
         let state_fast = state.clone();
         let cycled = cx
             .update(move |app_cx| {
                 #[cfg(debug_assertions)]
-                crate::app::set_cycle_origin(t_total);
+                crate::picker::set_cycle_origin(t_total);
                 let cycled =
                     super::try_cycle_visible(&state_fast.current, reverse, show_id, app_cx);
                 #[cfg(debug_assertions)]
-                crate::app::clear_cycle_origin();
+                crate::picker::clear_cycle_origin();
                 cycled
             })
             .unwrap_or(false);
@@ -294,7 +306,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
 
     #[cfg(debug_assertions)]
     let t_config = std::time::Instant::now();
-    let config = crate::config::load_alt_tab_config();
+    let config = (state.host.load_config)();
     #[cfg(debug_assertions)]
     let config_ms = t_config.elapsed().as_millis();
     qol_gpui::popup_window::set_ghost_debug(
@@ -351,10 +363,10 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
             commit_icons_to_shared_cache(&state_for_update.caches.icon_cache, icons, app_cx);
         }
         #[cfg(debug_assertions)]
-        crate::app::set_cycle_origin(t_total);
+        crate::picker::set_cycle_origin(t_total);
         state_for_update.open_picker(&config, reverse, show_id, app_cx);
         #[cfg(debug_assertions)]
-        crate::app::clear_cycle_origin();
+        crate::picker::clear_cycle_origin();
     });
     if let Some((wid, shot)) = fresh_shot {
         land_fresh_frame_capture(cx, state.current.clone(), open, wid, shot);
@@ -385,7 +397,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     );
 }
 
-fn picker_handles(current: &PickerWindowState) -> Vec<WindowHandle<crate::app::AltTabApp>> {
+fn picker_handles(current: &PickerWindowState) -> Vec<WindowHandle<crate::picker::AltTabApp>> {
     current
         .borrow()
         .iter()

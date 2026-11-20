@@ -162,13 +162,18 @@ impl LaunchPlan {
         }
     }
 
-    fn system(profile: &Profile, ledger: &SpawnLedger, path: Option<String>) -> Result<Self> {
+    fn system(
+        profile: &Profile,
+        ledger: &SpawnLedger,
+        path: Option<String>,
+        warn: &mut dyn FnMut(String),
+    ) -> Result<Self> {
         let cwd = neutral_cwd()?;
-        let config_dir = paths::config_dir(&cwd, paths::caller_config_dir());
+        let config_dir = paths::config_dir(&cwd, paths::caller_config_dir(), warn);
         let config_home = config_dir.clone().unwrap_or_else(paths::claude_home);
         let watches = crate::fork_watch::WatchStore::system().ok();
         Ok(Self {
-            fork: agents::ForkAgent::system(),
+            fork: agents::ForkAgent::system(warn),
             config_dir,
             config_home,
             watches: watches.map(|store| store.dir().to_path_buf()),
@@ -561,49 +566,49 @@ fn fold_command(plan: &LaunchPlan) -> Command {
     command
 }
 
-fn fold_transcripts(plan: &LaunchPlan) {
+fn fold_transcripts(plan: &LaunchPlan, warn: &mut dyn FnMut(String)) {
     match fold_command(plan).spawn() {
         Ok(mut folding) => {
             std::thread::spawn(move || {
                 let _ = folding.wait();
             });
         }
-        Err(error) => crate::cli::warn(format!(
+        Err(error) => warn(format!(
             "the earlier copies of fork conversations stay on disk: {error}"
         )),
     }
 }
 
-fn prepare(plan: &LaunchPlan) -> Result<()> {
+fn prepare(plan: &LaunchPlan, warn: &mut dyn FnMut(String)) -> Result<()> {
     agents::write_agent_files(&plan.cwd, &plan.fork)?;
     let marks = marks_dir(&plan.cwd);
     std::fs::create_dir_all(&marks)
         .with_context(|| format!("failed to create {}", marks.display()))?;
     plugin::write(&plugin::dir(&plan.cwd))?;
     for failure in resume::unpin_forks(&plan.config_home, &plan.cwd) {
-        crate::cli::warn(format!(
+        warn(format!(
             "a fork keeps its worktree pin, so it cannot be resumed: {failure}"
         ));
     }
     for failure in resume::key_forks(&plan.config_home, &plan.cwd, &record_descriptions()) {
-        crate::cli::warn(format!(
+        warn(format!(
             "a fork's agent list row could not get its key-name: {failure}"
         ));
     }
     if let Some(sessions) = qol_config::data_subdir("sessions") {
         if let Err(error) = hooks::remove_retired_pins(&sessions) {
-            crate::cli::warn(format!(
+            warn(format!(
                 "failed to remove the retired fork pins in {}: {error}",
                 sessions.display()
             ));
         }
     }
-    fold_transcripts(plan);
+    fold_transcripts(plan, warn);
     let retired = plan.cwd.join(RETIRED_WAKE_FILE);
     match std::fs::remove_file(&retired) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => crate::cli::warn(format!(
+        Err(error) => warn(format!(
             "failed to remove the retired {}: {error}",
             retired.display()
         )),
@@ -633,6 +638,7 @@ pub(super) fn launch(
     surface: Option<&str>,
     cap: Option<&SpawnCapConfig>,
     dispatch: &AgentDispatch,
+    warn: &mut dyn FnMut(String),
 ) -> Result<SwitchboardOutcome> {
     let snapshot = terminals.snapshot().context("session discovery failed")?;
     if let Some(held) = live_switchboard(interpreter, snapshot.sessions()) {
@@ -648,7 +654,7 @@ pub(super) fn launch(
             plan.cwd.display()
         )
     })?;
-    prepare(plan)?;
+    prepare(plan, warn)?;
     let launched = launch_detached(
         terminals,
         interpreter,
@@ -686,10 +692,16 @@ pub(super) fn launch(
 }
 
 pub fn open(profile: &Profile) -> Result<Opened> {
-    open_on(profile, Some(SWITCHBOARD_SURFACE))
+    open_on(profile, Some(SWITCHBOARD_SURFACE), &mut |text| {
+        log::warn!("{text}")
+    })
 }
 
-fn open_on(profile: &Profile, surface: Option<&str>) -> Result<Opened> {
+fn open_on(
+    profile: &Profile,
+    surface: Option<&str>,
+    warn: &mut dyn FnMut(String),
+) -> Result<Opened> {
     let terminals = super::service()?;
     let interpreter = CliSessionInterpreter::system();
     let snapshot = terminals.snapshot().ok();
@@ -703,13 +715,18 @@ fn open_on(profile: &Profile, surface: Option<&str>) -> Result<Opened> {
         }),
         OpenStep::Launch => {
             let ledger = SpawnLedger::system()?;
-            let mut plan = LaunchPlan::system(profile, &ledger, login_shell_path())?;
-            plan.chords = chords::bind_for(&interpreter, SWITCHBOARD_TOOL, &plan.config_home);
-            let outcome = launch_on(&terminals, &interpreter, &ledger, &plan, surface)
-                .inspect_err(|_| chords::hand_back(&plan.chords))?;
-            chords::pass(&terminals, &plan.chords);
+            let mut plan = LaunchPlan::system(profile, &ledger, login_shell_path(), warn)?;
+            plan.chords = chords::bind_for(&interpreter, SWITCHBOARD_TOOL, &plan.config_home, warn);
+            let outcome = match launch_on(&terminals, &interpreter, &ledger, &plan, surface, warn) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    chords::hand_back(&plan.chords, warn);
+                    return Err(error);
+                }
+            };
+            chords::pass(&terminals, &plan.chords, warn);
             if let Err(error) = focus_launched(&terminals, &interpreter) {
-                crate::cli::warn(format!(
+                warn(format!(
                     "the switchboard opened but kept in the background: {error:#}"
                 ));
             }
@@ -724,6 +741,7 @@ fn launch_on(
     ledger: &SpawnLedger,
     plan: &LaunchPlan,
     surface: Option<&str>,
+    warn: &mut dyn FnMut(String),
 ) -> Result<SwitchboardOutcome> {
     launch(
         terminals,
@@ -734,6 +752,7 @@ fn launch_on(
         surface,
         resolve_spawn_cap(config_spawn_cap()?).as_ref(),
         &system_dispatch()?,
+        warn,
     )
 }
 
@@ -760,7 +779,7 @@ fn focus_launched(
 struct Detached(Option<PathBuf>);
 
 impl Detached {
-    fn register() -> Self {
+    fn register(warn: &mut dyn FnMut(String)) -> Self {
         let runtime_dir = qol_config::runtime_dir();
         let registered = runtime_dir
             .as_deref()
@@ -771,7 +790,7 @@ impl Detached {
         match registered {
             Ok(()) => Self(runtime_dir),
             Err(error) => {
-                crate::cli::warn(format!(
+                warn(format!(
                     "the switchboard is not registered as detached, so a tray restart may stop it: {error:#}"
                 ));
                 Self(None)
@@ -791,6 +810,10 @@ impl Drop for Detached {
 /// Runs the switchboard in the calling kitty window and returns its exit code once it
 /// exits, or returns None without starting anything when a switchboard is already live.
 pub fn here(profile: &Profile) -> Result<Option<u8>> {
+    here_with(profile, &mut |text| log::warn!("{text}"))
+}
+
+fn here_with(profile: &Profile, warn: &mut dyn FnMut(String)) -> Result<Option<u8>> {
     let terminals = super::service()?;
     let interpreter = CliSessionInterpreter::system();
     let locks = SpawnLocks::system()?;
@@ -809,21 +832,21 @@ pub fn here(profile: &Profile) -> Result<Option<u8>> {
                 .with_context(|| {
                     format!("--here makes this kitty window the switchboard, but {KITTY_WINDOW_ENV} is not set; run it inside kitty")
                 })?;
-            let mut plan = LaunchPlan::system(profile, &SpawnLedger::system()?, path)?;
+            let mut plan = LaunchPlan::system(profile, &SpawnLedger::system()?, path, warn)?;
             let (model, _) = admitted_model(&system_dispatch()?, &plan)?;
-            plan.chords = chords::bind_for(&interpreter, SWITCHBOARD_TOOL, &plan.config_home);
+            plan.chords = chords::bind_for(&interpreter, SWITCHBOARD_TOOL, &plan.config_home, warn);
             let _chords = chords::ReleaseAtExit::of(&plan.chords);
             let launch = here_launch(&plan, &model, &LaneExecCommand::current(LANE_EXEC_PREFIX)?)?;
-            prepare(&plan)?;
+            prepare(&plan, warn)?;
             // The window outlives the switchboard (a wrapper's shell), so its tag is removed
             // on exit; a kept tag makes the next chat in the window pass for the switchboard.
             // An interrupt or terminate signal therefore only ends claude, never this wait.
             qol_process::CancellationToken::install()
                 .context("failed to hold off interrupts while the switchboard runs")?;
             tag_window(&tag_args(&window))?;
-            chords::pass(&terminals, &plan.chords);
+            chords::pass(&terminals, &plan.chords, warn);
             drop(guard);
-            let detached = Detached::register();
+            let detached = Detached::register(warn);
             let mut switchboard = Command::new(&launch.program);
             qol_agent_homes::scrub_claude_session_env(&mut switchboard);
             let ran = switchboard
@@ -834,7 +857,7 @@ pub fn here(profile: &Profile) -> Result<Option<u8>> {
                 .with_context(|| format!("failed to run {SWITCHBOARD_TOOL}"));
             drop(detached);
             if let Err(error) = tag_window(&untag_args(&window)) {
-                crate::cli::warn(format!("the switchboard window kept its tag: {error:#}"));
+                warn(format!("the switchboard window kept its tag: {error:#}"));
             }
             Ok(Some(
                 ran?.code()
@@ -845,16 +868,16 @@ pub fn here(profile: &Profile) -> Result<Option<u8>> {
     }
 }
 
-pub(super) fn run(args: &[OsString]) -> Result<()> {
+pub(super) fn run(args: &[OsString], warn: &mut dyn FnMut(String)) -> Result<Vec<String>> {
     if let Some((hook, rest)) = args.split_first() {
         if hook == HOOK {
-            return hooks::run(rest);
+            return hooks::run(rest, warn);
         }
         if hook == adopt::ADOPT {
-            return adopt::run(rest);
+            return adopt::run(rest, warn);
         }
         if hook == auth::AUTH {
-            return auth::run(rest);
+            return auth::run(rest, warn);
         }
         if hook == commands::COMMANDS {
             return commands::run(rest);
@@ -862,22 +885,21 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     }
     let parsed = parse_args(args)?;
     if parsed.help {
-        crate::cli::line(help());
-        return Ok(());
+        return Ok(vec![help()]);
     }
     if parsed.here {
-        return match here(&parsed.profile())? {
+        return match here_with(&parsed.profile(), warn)? {
             None => bail!("a switchboard is already live, so this window started nothing"),
-            Some(0) => Ok(()),
+            Some(0) => Ok(Vec::new()),
             Some(code) => bail!("the switchboard exited {code}"),
         };
     }
     let outcome = open_on(
         &parsed.profile(),
         Some(parsed.surface.as_deref().unwrap_or(SWITCHBOARD_SURFACE)),
+        warn,
     )?;
-    crate::cli::line(serde_json::to_string_pretty(&outcome)?);
-    Ok(())
+    Ok(vec![serde_json::to_string_pretty(&outcome)?])
 }
 
 pub(super) fn help() -> String {

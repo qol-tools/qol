@@ -91,6 +91,17 @@ impl Drop for ShotFlowGuard {
     }
 }
 
+pub fn should_run_daemon(args: &[String]) -> bool {
+    should_run_daemon_with_env(
+        args.is_empty(),
+        qol_plugin_daemon::daemon::asked_to_replace_existing(),
+    )
+}
+
+fn should_run_daemon_with_env(args_empty: bool, daemon_spawn: bool) -> bool {
+    args_empty && daemon_spawn
+}
+
 pub fn run() {
     qol_runtime::probe!("SHOT_DAEMON_START", "pid={}", std::process::id());
     let (tx, rx) = mpsc::channel();
@@ -120,8 +131,8 @@ pub fn run() {
         if state.windows.borrow().is_empty() {
             spawn_prewarm_retry(state.windows.clone(), state.tracker.clone(), cx);
         }
-        crate::platform::pre_create_selector(cx);
-        crate::platform::pre_create_pins(cx);
+        crate::ui::region_selector::pre_create_selector(cx);
+        crate::ui::pinned::pre_create(cx);
         spawn_screenshot_loop(rx, state, cx);
         qol_runtime::probe!("SHOT_DAEMON_APP", "state=ready");
     });
@@ -316,6 +327,7 @@ async fn capture_area_and_preview(
             crate::capture::screenshot::capture_selected_for_preview(
                 selected,
                 frozen_frame.as_ref(),
+                crate::config::load().capture.open_folder_after_save,
             )
         })
         .await;
@@ -676,7 +688,7 @@ async fn select_region(
     qol_runtime::probe!("SHOT_SELECT_REQUEST", "source=daemon-app");
     if let Some(rx) = cx
         .update(move |cx| {
-            crate::platform::select_region_in_app(
+            crate::ui::region_selector::select_region_in_app(
                 cx,
                 kind,
                 tracker.snapshot_cursor(),
@@ -695,7 +707,7 @@ async fn select_region(
 
     let selected = cx
         .background_spawn(async move {
-            crate::platform::select_region(kind, frozen_frame)
+            crate::ui::region_selector::select_region(kind, frozen_frame)
                 .ok()
                 .flatten()
         })
@@ -897,7 +909,7 @@ mod tests {
 
     use futures::channel::mpsc;
 
-    use super::{daemon, drain_stale_screenshot_commands, CaptureArea};
+    use super::{daemon, drain_stale_screenshot_commands, should_run_daemon_with_env, CaptureArea};
 
     fn drained(queued: Vec<daemon::Command>) -> (usize, Vec<String>) {
         let (tx, mut rx) = mpsc::unbounded();
@@ -968,6 +980,13 @@ mod tests {
             assert_eq!(dropped, expected_dropped, "dropped: {name}");
             assert_eq!(kept, expected_kept, "kept: {name}");
         }
+    }
+
+    #[test]
+    fn no_args_run_daemon_only_for_host_daemon_spawn() {
+        assert!(should_run_daemon_with_env(true, true));
+        assert!(!should_run_daemon_with_env(true, false));
+        assert!(!should_run_daemon_with_env(false, true));
     }
 
     #[test]

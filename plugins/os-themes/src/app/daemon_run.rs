@@ -36,7 +36,7 @@ fn supervise_effect(control: Arc<RunState>) -> Result<()> {
 
     loop {
         control.reset();
-        let config = crate::config::load();
+        let config = crate::config::load(&qol_config::plugin_id_from_env(crate::PLUGIN_ID));
         let result = effect.run(&config, control.as_ref());
         if control.reload_requested() {
             continue;

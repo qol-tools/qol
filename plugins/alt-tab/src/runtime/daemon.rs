@@ -2,22 +2,12 @@ use std::sync::mpsc::Sender;
 
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 
+use crate::picker::run::PickerCommand as Command;
+
 pub(crate) const CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
     support_replace_existing: false,
 };
-
-pub enum Command {
-    Show,
-    ShowReverse,
-    Reload,
-    Settings,
-    Kill,
-    Theme {
-        native: Option<String>,
-        accent: Option<String>,
-    },
-}
 
 pub fn send_show() -> bool {
     core_daemon::send_action(&CONFIG, "show", false)
@@ -31,7 +21,7 @@ pub fn send_kill() -> bool {
     core_daemon::send_kill(&CONFIG)
 }
 
-pub fn start_listener(tx: Sender<Command>) -> bool {
+pub(crate) fn start_listener(tx: Sender<Command>) -> bool {
     core_daemon::start_listener(&CONFIG, tx, parse_command)
 }
 

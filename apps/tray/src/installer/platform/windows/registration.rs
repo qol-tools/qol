@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 use super::registry::{self, Value};
-use super::shortcut::{self, Shortcut};
+use crate::platform::windows::shortcut::{self, Shortcut};
 
 pub(super) const UNINSTALL_KEY: &str =
     r"Software\Microsoft\Windows\CurrentVersion\Uninstall\qol-tray";
@@ -24,7 +24,7 @@ impl Layout {
         let dir = binary
             .parent()
             .context("Installed binary has no parent directory")?;
-        let programs = crate::paths::platform::windows::start_menu_programs_dir()?;
+        let programs = crate::paths::start_menu_programs_dir()?;
         Ok(Self {
             binary: binary.to_path_buf(),
             uninstaller: dir.join(uninstaller_filename()),
@@ -87,7 +87,7 @@ fn unless_missing(removed: std::io::Result<()>, path: &Path) -> Result<()> {
 }
 
 fn write_toast_identity() -> Result<()> {
-    qol_plugin_daemon::notification::platform::install_toast_identity()
+    qol_plugin_daemon::notification::install_toast_identity()
         .context("Failed to register the QoL Tray notification identity")
 }
 

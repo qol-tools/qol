@@ -18,6 +18,17 @@ pub const PRESET_ACTIONS: &[&str] = &[
     actions::SET_PRESET_COLORTEMP,
 ];
 
+const APPLY_ACTIONS: [&str; PRESET_COUNT] = [
+    actions::PRESET_1,
+    actions::PRESET_2,
+    actions::PRESET_3,
+    actions::PRESET_4,
+    actions::PRESET_5,
+    actions::PRESET_6,
+    actions::PRESET_7,
+    actions::PRESET_8,
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetEdit {
     Name(String),
@@ -33,6 +44,13 @@ pub fn any_enabled(presets: &PresetConfig) -> bool {
 
 pub fn is_preset_action(action: &str) -> bool {
     PRESET_ACTIONS.contains(&action)
+}
+
+pub fn slot_for_apply_action(action: &str) -> Option<usize> {
+    APPLY_ACTIONS
+        .iter()
+        .position(|id| *id == action)
+        .map(|index| index + 1)
 }
 
 pub fn apply(
@@ -348,5 +366,15 @@ mod tests {
             assert!(is_preset_action(action));
         }
         assert!(!is_preset_action(actions::PRESET_1));
+    }
+
+    #[test]
+    fn every_apply_action_maps_to_its_slot_number() {
+        for (index, action) in APPLY_ACTIONS.iter().enumerate() {
+            assert!(actions::is_run_action(action), "{action}");
+            assert_eq!(slot_for_apply_action(action), Some(index + 1));
+        }
+        assert_eq!(slot_for_apply_action(actions::PAIR), None);
+        assert_eq!(slot_for_apply_action(actions::ADD_PRESET), None);
     }
 }

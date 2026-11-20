@@ -329,7 +329,7 @@ fn read_payload() -> Result<Payload> {
     serde_json::from_str(&raw).context("the hook payload is not valid JSON")
 }
 
-pub(super) fn run(args: &[OsString]) -> Result<()> {
+pub(super) fn run(args: &[OsString], warn: &mut dyn FnMut(String)) -> Result<Vec<String>> {
     let name = args.first().and_then(|arg| arg.to_str()).ok_or_else(|| {
         anyhow!(
             "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}|{FORK_STATES}|{FORK_SAID}|{FOLD_TRANSCRIPTS} DIR|{RELEASE_CHORDS} LAUNCH|{ADMIT_MODEL} MODEL>"
@@ -342,16 +342,14 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
             std::io::stdin()
                 .read_to_string(&mut raw)
                 .context("failed to read the fork states payload")?;
-            crate::cli::line(fork_states(&raw)?);
-            Ok(())
+            Ok(vec![fork_states(&raw)?])
         }
         FORK_SAID => {
             let mut raw = String::new();
             std::io::stdin()
                 .read_to_string(&mut raw)
                 .context("failed to read the fork said payload")?;
-            crate::cli::line(fork_said(&raw)?);
-            Ok(())
+            Ok(vec![fork_said(&raw)?])
         }
         FOLD_TRANSCRIPTS => {
             let conversations = args
@@ -364,27 +362,30 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
                     conversations.display()
                 );
             }
-            crate::cli::line(serde_json::to_string(&super::fold::fold(&conversations))?);
-            Ok(())
+            let folded = serde_json::to_string(&super::fold::fold(&conversations))?;
+            Ok(vec![folded])
         }
-        RELEASE_CHORDS => super::chords::run_release(&args[1..]),
+        RELEASE_CHORDS => {
+            super::chords::run_release(&args[1..], warn)?;
+            Ok(Vec::new())
+        }
         ADMIT_MODEL => {
             let model = args
                 .get(1)
                 .and_then(|arg| arg.to_str())
                 .ok_or_else(|| anyhow!("{ADMIT_MODEL} takes a model id"))?;
-            crate::cli::line(model_verdict(model, &model_admitted_as));
-            Ok(())
+            Ok(vec![model_verdict(model, &model_admitted_as)])
         }
-        RETIRED_POST_AGENT => Ok(()),
+        RETIRED_POST_AGENT => Ok(Vec::new()),
         RETIRED_WORKTREE_CREATE => bail!(
             "this switchboard was started by an older CLI Sessions whose forks ran in worktree isolation; close the switchboard and open it again to start forks"
         ),
         PRE_AGENT => {
+            let mut lines = Vec::new();
             if let Verdict::Deny(reason) = pre_agent(&read_payload()?, &admit_model) {
-                crate::cli::line(deny_json(&reason));
+                lines.push(deny_json(&reason));
             }
-            Ok(())
+            Ok(lines)
         }
         FORK_CONTEXT => {
             let part = args
@@ -393,12 +394,9 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
                 .and_then(|arg| arg.parse::<usize>().ok())
                 .ok_or_else(|| anyhow!("{FORK_CONTEXT} takes a part number"))?;
             let payload = read_payload()?;
-            if let Some(line) =
-                fork_context(part, &payload, &claude_home(), switchboard_dir().as_deref())?
-            {
-                crate::cli::line(line);
-            }
-            Ok(())
+            let context =
+                fork_context(part, &payload, &claude_home(), switchboard_dir().as_deref())?;
+            Ok(context.into_iter().collect())
         }
         ROLE_REFRESH => {
             let part = args
@@ -413,12 +411,8 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
                 .and_then(|path| fs::read_to_string(path).ok())
                 .unwrap_or_default();
             let role = || current_role(payload.cwd.as_deref());
-            if let Some(line) =
-                role_refresh(part, &payload, &transcript, &super::role_revision(), &role)
-            {
-                crate::cli::line(line);
-            }
-            Ok(())
+            let refresh = role_refresh(part, &payload, &transcript, &super::role_revision(), &role);
+            Ok(refresh.into_iter().collect())
         }
         other => bail!("unknown switchboard hook `{other}`"),
     }
@@ -708,15 +702,17 @@ mod tests {
 
     #[test]
     fn the_retired_worktree_hooks_tell_an_old_switchboard_to_restart() {
-        run(&[OsString::from("post-agent")]).unwrap();
-        let error = run(&[OsString::from("worktree-create")])
+        run(&[OsString::from("post-agent")], &mut |_| {}).unwrap();
+        let error = run(&[OsString::from("worktree-create")], &mut |_| {})
             .unwrap_err()
             .to_string();
         assert!(
             error.contains("close the switchboard and open it again"),
             "{error}"
         );
-        let error = run(&[OsString::from("bogus")]).unwrap_err().to_string();
+        let error = run(&[OsString::from("bogus")], &mut |_| {})
+            .unwrap_err()
+            .to_string();
         assert!(
             error.contains("unknown switchboard hook `bogus`"),
             "{error}"
@@ -826,7 +822,7 @@ mod tests {
 
     #[test]
     fn the_usage_names_every_hook_verb() {
-        let error = run(&[]).unwrap_err().to_string();
+        let error = run(&[], &mut |_| {}).unwrap_err().to_string();
         for verb in [
             PRE_AGENT,
             FORK_CONTEXT,

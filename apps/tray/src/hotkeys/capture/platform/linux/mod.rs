@@ -3,7 +3,6 @@ use super::super::{OnFire, RebuildBindings};
 use anyhow::Result;
 use crossbeam_channel::Receiver;
 
-pub(crate) mod classify;
 pub(crate) mod evdev_backend;
 mod heal;
 mod matcher;
@@ -37,3 +36,5 @@ pub(crate) fn cancel_recording(session_id: u64) {
 pub(crate) fn release_held_keys() {
     evdev_backend::release_held_keys();
 }
+
+pub(crate) fn release_tap() {}

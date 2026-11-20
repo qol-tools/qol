@@ -28,7 +28,7 @@ pub(super) fn install_signal_handler(
         .spawn(move || {
             if let Some(signal) = signals.forever().next() {
                 log::info!("[lifecycle] graceful shutdown requested by signal {signal}");
-                crate::tray::platform::request_shutdown(&shutdown_tx);
+                crate::tray::request_shutdown(&shutdown_tx);
             }
         });
     let thread = match thread {

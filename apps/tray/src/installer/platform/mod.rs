@@ -13,6 +13,7 @@ trait InstallerOps {
     fn ensure_desktop_registration(&self) -> Result<()>;
     fn warn_system_install_conflict(&self);
     fn remove_legacy_install(&self);
+    fn refresh_after_update(&self, binary_path: &Path, installer: Option<&Path>) -> Result<()>;
     fn uninstall(&self, binary_path: &Path, profile: InstallProfile) -> Result<()>;
 }
 
@@ -76,6 +77,10 @@ pub(super) fn warn_system_install_conflict() {
 
 pub(super) fn remove_legacy_install() {
     Platform.remove_legacy_install();
+}
+
+pub(super) fn refresh_after_update(binary_path: &Path, installer: Option<&Path>) -> Result<()> {
+    Platform.refresh_after_update(binary_path, installer)
 }
 
 pub(super) fn uninstall(binary_path: &Path, profile: InstallProfile) -> Result<()> {

@@ -45,11 +45,11 @@ fn global() -> &'static HandoffRegistry {
     GLOBAL.get_or_init(HandoffRegistry::default)
 }
 
-pub(crate) fn register(fd: RawFd) {
+pub fn register(fd: RawFd) {
     global().register(fd);
 }
 
-pub(crate) fn unregister(fd: RawFd) {
+pub fn unregister(fd: RawFd) {
     global().unregister(fd);
 }
 

@@ -17,7 +17,9 @@ use qol_conventions::{ENV_PLUGIN_ID, ENV_STATE_SOCKET};
 
 /// Connection abstraction shared with `broker::client` (the event bus
 /// client connects to the broker socket the same way).
-pub(crate) mod platform;
+mod platform;
+
+pub(crate) use platform::{connect, Connection};
 
 const TIMEOUT: Duration = Duration::from_millis(50);
 

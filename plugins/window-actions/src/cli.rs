@@ -3,51 +3,62 @@ use std::sync::Arc;
 
 use qol_headless::{Command, CommandResult, HeadlessApp};
 
-pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-const ACTIONS: [ActionSpec; 13] = [
-    ActionSpec::ordinary("snap-left", "Snap the focused window to the left."),
-    ActionSpec::ordinary("snap-right", "Snap the focused window to the right."),
-    ActionSpec::ordinary("snap-bottom", "Snap the focused window to the bottom."),
-    ActionSpec::ordinary("maximize", "Maximize the focused window."),
-    ActionSpec::ordinary("minimize", "Minimize and remember the focused window."),
-    ActionSpec::ordinary("restore", "Restore the most recently minimized window."),
-    ActionSpec::ordinary("center", "Center and resize the focused window."),
-    ActionSpec::ordinary(
-        "move-monitor-left",
-        "Move the focused window to the previous monitor.",
-    ),
-    ActionSpec::ordinary(
-        "move-monitor-right",
-        "Move the focused window to the next monitor.",
-    ),
-    ActionSpec::continuous("glide-left", "Continuously move a window left."),
-    ActionSpec::continuous("glide-right", "Continuously move a window right."),
-    ActionSpec::continuous("glide-up", "Continuously move a window up."),
-    ActionSpec::continuous("glide-down", "Continuously move a window down."),
+use crate::action::WindowAction;
+use crate::glide::Direction;
+use crate::PLUGIN_ID;
+
+const ACTIONS: [WindowAction; 13] = [
+    WindowAction::SnapLeft,
+    WindowAction::SnapRight,
+    WindowAction::SnapBottom,
+    WindowAction::Maximize,
+    WindowAction::Minimize,
+    WindowAction::Restore,
+    WindowAction::Center,
+    WindowAction::MoveMonitorLeft,
+    WindowAction::MoveMonitorRight,
+    WindowAction::Glide(Direction::Left),
+    WindowAction::Glide(Direction::Right),
+    WindowAction::Glide(Direction::Up),
+    WindowAction::Glide(Direction::Down),
 ];
 
-#[derive(Clone, Copy)]
-pub(crate) struct ActionSpec {
-    name: &'static str,
-    about: &'static str,
-    continuous: bool,
+pub(crate) fn parse_action(id: &str) -> Option<WindowAction> {
+    match id {
+        "snap-left" => Some(WindowAction::SnapLeft),
+        "snap-right" => Some(WindowAction::SnapRight),
+        "snap-bottom" => Some(WindowAction::SnapBottom),
+        "maximize" => Some(WindowAction::Maximize),
+        "minimize" => Some(WindowAction::Minimize),
+        "restore" => Some(WindowAction::Restore),
+        "center" => Some(WindowAction::Center),
+        "move-monitor-left" => Some(WindowAction::MoveMonitorLeft),
+        "move-monitor-right" => Some(WindowAction::MoveMonitorRight),
+        "glide-left" => Some(WindowAction::Glide(Direction::Left)),
+        "glide-right" => Some(WindowAction::Glide(Direction::Right)),
+        "glide-up" => Some(WindowAction::Glide(Direction::Up)),
+        "glide-down" => Some(WindowAction::Glide(Direction::Down)),
+        "print-work-areas" => Some(WindowAction::PrintWorkAreas),
+        _ => None,
+    }
 }
 
-impl ActionSpec {
-    pub(crate) const fn ordinary(name: &'static str, about: &'static str) -> Self {
-        Self {
-            name,
-            about,
-            continuous: false,
-        }
-    }
-
-    const fn continuous(name: &'static str, about: &'static str) -> Self {
-        Self {
-            name,
-            about,
-            continuous: true,
-        }
+fn about(action: WindowAction) -> &'static str {
+    match action {
+        WindowAction::SnapLeft => "Snap the focused window to the left.",
+        WindowAction::SnapRight => "Snap the focused window to the right.",
+        WindowAction::SnapBottom => "Snap the focused window to the bottom.",
+        WindowAction::Maximize => "Maximize the focused window.",
+        WindowAction::Minimize => "Minimize and remember the focused window.",
+        WindowAction::Restore => "Restore the most recently minimized window.",
+        WindowAction::Center => "Center and resize the focused window.",
+        WindowAction::MoveMonitorLeft => "Move the focused window to the previous monitor.",
+        WindowAction::MoveMonitorRight => "Move the focused window to the next monitor.",
+        WindowAction::Glide(Direction::Left) => "Continuously move a window left.",
+        WindowAction::Glide(Direction::Right) => "Continuously move a window right.",
+        WindowAction::Glide(Direction::Up) => "Continuously move a window up.",
+        WindowAction::Glide(Direction::Down) => "Continuously move a window down.",
+        WindowAction::PrintWorkAreas => "Print each display's work area as x,y,w,h lines.",
     }
 }
 
@@ -62,7 +73,7 @@ fn app() -> HeadlessApp {
 fn app_with_handlers<Daemon, Action>(daemon: Daemon, action: Action) -> HeadlessApp
 where
     Daemon: Fn() -> CommandResult + Send + Sync + 'static,
-    Action: Fn(&str) -> CommandResult + Send + Sync + 'static,
+    Action: Fn(WindowAction) -> CommandResult + Send + Sync + 'static,
 {
     let daemon = Arc::new(daemon);
     let action = Arc::new(action);
@@ -72,11 +83,11 @@ where
         .command(daemon_command(daemon))
         .doctor_checks(crate::doctor::checks());
 
-    for spec in ACTIONS {
-        app = app.command(action_command(spec, Arc::clone(&action)));
+    for window_action in ACTIONS {
+        app = app.command(action_command(window_action, Arc::clone(&action)));
     }
-    for spec in crate::platform::DIAGNOSTIC_ACTIONS {
-        app = app.command(action_command(*spec, Arc::clone(&action)));
+    for window_action in crate::platform::DIAGNOSTIC_ACTIONS {
+        app = app.command(action_command(*window_action, Arc::clone(&action)));
     }
     app.command(settings_command())
 }
@@ -95,21 +106,22 @@ where
         .run_result(move |_| Ok(handler()))
 }
 
-fn action_command<Action>(spec: ActionSpec, handler: Arc<Action>) -> Command
+fn action_command<Action>(action: WindowAction, handler: Arc<Action>) -> Command
 where
-    Action: Fn(&str) -> CommandResult + Send + Sync + 'static,
+    Action: Fn(WindowAction) -> CommandResult + Send + Sync + 'static,
 {
-    let mut command = Command::new(spec.name)
-        .about(spec.about)
-        .usage(format!("{PLUGIN_ID} {}", spec.name))
+    let name = action.id();
+    let mut command = Command::new(name)
+        .about(about(action))
+        .usage(format!("{PLUGIN_ID} {name}"))
         .output("No stdout on success; diagnostics are written to stderr.")
         .exit_behavior("Exits non-zero if the platform cannot perform the action.");
-    if spec.continuous {
+    if matches!(action, WindowAction::Glide(_)) {
         command = command.detail(
             "qol-tray sends start, heartbeat, and stop phases to the running daemon for this action.",
         );
     }
-    command.run_result(move |_| Ok(handler(spec.name)))
+    command.run_result(move |_| Ok(handler(action)))
 }
 
 fn settings_command() -> Command {
@@ -130,12 +142,12 @@ fn run_daemon() -> CommandResult {
     result_for(crate::app::run())
 }
 
-fn execute_action(action: &str) -> CommandResult {
+fn execute_action(action: WindowAction) -> CommandResult {
     let store = crate::restore::state_store::FileMinimizedStateStore::new(
         crate::platform::state_file_path(),
     );
     let config = crate::config::load_config();
-    let timer = crate::diagnostics::ActionTimer::start(action);
+    let timer = crate::diagnostics::ActionTimer::start(action.id());
     let result = crate::platform::execute_action(action, &store, &config);
     timer.finish(&result);
     result_for(result)
@@ -177,7 +189,7 @@ mod tests {
                     .actions
                     .lock()
                     .unwrap()
-                    .push(action.to_string());
+                    .push(action.id().to_string());
                 CommandResult::success("")
             },
         )
@@ -198,18 +210,60 @@ mod tests {
             assert!(calls.actions.lock().unwrap().is_empty());
         }
 
-        for spec in ACTIONS {
+        for action in ACTIONS {
             let calls = Arc::new(OperationCalls::default());
-            let execution = sentinel_app(Arc::clone(&calls)).execute([spec.name.to_string()]);
+            let execution = sentinel_app(Arc::clone(&calls)).execute([action.id().to_string()]);
 
-            assert_eq!(execution.exit_code, EXIT_SUCCESS, "action={}", spec.name);
+            assert_eq!(execution.exit_code, EXIT_SUCCESS, "action={}", action.id());
             assert_eq!(calls.daemon.load(Ordering::SeqCst), 0);
             assert_eq!(
                 calls.actions.lock().unwrap().as_slice(),
-                [spec.name],
+                [action.id()],
                 "action={}",
-                spec.name
+                action.id()
             );
+        }
+    }
+
+    #[test]
+    fn parse_action_round_trips_every_known_id() {
+        let ids = [
+            "snap-left",
+            "snap-right",
+            "snap-bottom",
+            "maximize",
+            "minimize",
+            "restore",
+            "center",
+            "move-monitor-left",
+            "move-monitor-right",
+            "glide-left",
+            "glide-right",
+            "glide-up",
+            "glide-down",
+            "print-work-areas",
+        ];
+        for id in ids {
+            assert_eq!(parse_action(id).map(WindowAction::id), Some(id), "{id}");
+        }
+        for action in ACTIONS {
+            assert_eq!(parse_action(action.id()), Some(action));
+        }
+    }
+
+    #[test]
+    fn parse_action_maps_glide_ids_to_directions() {
+        let cases = [
+            ("glide-left", Some(WindowAction::Glide(Direction::Left))),
+            ("glide-right", Some(WindowAction::Glide(Direction::Right))),
+            ("glide-up", Some(WindowAction::Glide(Direction::Up))),
+            ("glide-down", Some(WindowAction::Glide(Direction::Down))),
+            ("snap-left", Some(WindowAction::SnapLeft)),
+            ("settings", None),
+            ("nope", None),
+        ];
+        for (id, expected) in cases {
+            assert_eq!(parse_action(id), expected, "{id}");
         }
     }
 

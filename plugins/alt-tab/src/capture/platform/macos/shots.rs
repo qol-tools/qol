@@ -1,4 +1,4 @@
-use crate::discovery::platform::macos::ffi::{CFRelease, CFRetain};
+use crate::platform::macos::ffi::{CFRelease, CFRetain};
 use objc2::msg_send;
 use objc2::rc::autoreleasepool;
 use objc2::runtime::{AnyClass, AnyObject};

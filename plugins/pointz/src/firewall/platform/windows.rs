@@ -72,7 +72,7 @@ fn check_result(id: &str, state: FirewallState) -> DoctorCheckResult {
             )
             .with_fix(format!(
                 "Run `{} allow-firewall --public` to admit phones on public networks too",
-                env!("QOL_PLUGIN_ID")
+                crate::PLUGIN_ID
             )),
             "public_left_out",
         ),
@@ -83,7 +83,7 @@ fn check_result(id: &str, state: FirewallState) -> DoctorCheckResult {
             )
             .with_fix(format!(
                 "Run `{} allow-firewall` and approve the administrator prompt",
-                env!("QOL_PLUGIN_ID")
+                crate::PLUGIN_ID
             )),
             "missing",
         ),
@@ -126,7 +126,7 @@ pub(crate) fn allow(public: bool) -> Result<String, String> {
         Ok(FirewallState::PublicLeftOut) => Ok(format!(
             "Windows Firewall now admits PointZ on {} on private and domain networks; this network is public, so phones on it stay blocked until you run `{} allow-firewall --public`",
             ports_label(),
-            env!("QOL_PLUGIN_ID")
+            crate::PLUGIN_ID
         )),
         Ok(_) => Err("The firewall rule was not applied".into()),
         Err(error) => Err(error.to_string()),

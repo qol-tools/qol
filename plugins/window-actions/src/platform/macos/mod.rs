@@ -12,6 +12,7 @@ use std::process::Command;
 
 use qol_windowing::{WindowId, WindowOps, WindowRect};
 
+use crate::action::WindowAction;
 use crate::config::WindowActionsConfig;
 use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 use crate::restore::WindowSystem;
@@ -52,33 +53,29 @@ impl GlideController {
     }
 }
 
-pub(crate) const DIAGNOSTIC_ACTIONS: &[crate::cli::ActionSpec] =
-    &[crate::cli::ActionSpec::ordinary(
-        screen::SCREENS_ACTION,
-        "Print each display's work area as x,y,w,h lines.",
-    )];
+pub(crate) const DIAGNOSTIC_ACTIONS: &[WindowAction] = &[WindowAction::PrintWorkAreas];
 
 pub(crate) fn execute_action(
-    action: &str,
+    action: WindowAction,
     store: &FileMinimizedStateStore,
     config: &WindowActionsConfig,
 ) -> Result<(), String> {
     let system = MacWindowSystem;
     match action {
-        "snap-left" => snap_left(config),
-        "snap-right" => snap_right(config),
-        "snap-bottom" => snap_bottom(config),
-        "maximize" => maximize(),
-        "minimize" => crate::restore::minimize_window(&system, store),
-        "restore" => crate::restore::restore_window(&system, store),
-        "center" => center(config),
-        "move-monitor-left" => move_monitor_left(),
-        "move-monitor-right" => move_monitor_right(),
-        screen::SCREENS_ACTION => {
+        WindowAction::SnapLeft => snap_left(config),
+        WindowAction::SnapRight => snap_right(config),
+        WindowAction::SnapBottom => snap_bottom(config),
+        WindowAction::Maximize => maximize(),
+        WindowAction::Minimize => crate::restore::minimize_window(&system, store),
+        WindowAction::Restore => crate::restore::restore_window(&system, store),
+        WindowAction::Center => center(config),
+        WindowAction::MoveMonitorLeft => move_monitor_left(),
+        WindowAction::MoveMonitorRight => move_monitor_right(),
+        WindowAction::PrintWorkAreas => {
             screen_cli::print_work_areas();
             Ok(())
         }
-        _ => Err(format!("Unknown action: {action}")),
+        WindowAction::Glide(_) => Err(action.unknown_message()),
     }
 }
 
