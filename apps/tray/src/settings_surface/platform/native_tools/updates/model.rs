@@ -1149,7 +1149,7 @@ mod tests {
     }
 
     #[test]
-    fn the_status_row_offers_updates_and_the_last_checked_row_offers_a_check() {
+    fn the_status_row_and_the_last_checked_row_both_offer_a_check() {
         let mut disabled = snapshot(
             target("qol-tray", "qol-tray", TargetState::DevBuild),
             vec![target("cli", "CLI Sessions", TargetState::Unchecked)],
@@ -1159,7 +1159,8 @@ mod tests {
         disabled.check_error = Some("No connection to GitHub".to_string());
         let row = summary(&disabled);
         assert_eq!(row.label, "Couldn't check for updates");
-        assert_eq!(row.action, None);
+        assert_eq!(row.action, Some(RowAction::Check));
+        assert_eq!(row.action_label, Some("Try again"));
         let check = check_row(&disabled);
         assert_eq!(check.name, "Last checked");
         assert_eq!(check.value, "Never");
@@ -1189,7 +1190,7 @@ mod tests {
         let row = summary(&disabled);
         assert_eq!(row.label, "Plugins are up to date");
         assert_eq!(row.description, "1 plugin.");
-        assert_eq!(row.action, None);
+        assert_eq!(row.action, Some(RowAction::Check));
 
         let failed = UpdatesSnapshot {
             check_error: Some("Couldn't reach GitHub".to_string()),
