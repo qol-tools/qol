@@ -418,12 +418,16 @@ fn survey(shared: &Shared) {
                 SURVEY_EVERY
             };
         let mut state = shared.lock();
-        if state.session.job.is_none() {
-            state.session.survey = Some(found);
-        }
-        state.surveying = false;
+        store(&mut state, found);
         shared.wake.notify_all();
     }
+}
+
+fn store(state: &mut State, found: cleanup::Survey) {
+    if state.session.job.is_none() {
+        state.session.survey = Some(found);
+    }
+    state.surveying = false;
 }
 
 fn may_read_updates(state: &State) -> bool {
@@ -604,6 +608,30 @@ mod tests {
         assert!(may_read_updates(&shared.lock()));
         shared.lock().surveying = true;
         assert!(!may_read_updates(&shared.lock()), "never while measuring");
+    }
+
+    #[test]
+    fn a_survey_an_install_overlaps_is_dropped() {
+        let shared = shared();
+        let survey = || crate::cleanup::fake::survey(Vec::new());
+        {
+            let mut state = shared.lock();
+            state.surveying = true;
+            state.session.job = Some(crate::session::Job {
+                updates: Vec::new(),
+                done: 0,
+                started: false,
+            });
+            store(&mut state, survey());
+            assert!(
+                state.session.survey.is_none(),
+                "the install changed what is left"
+            );
+            assert!(!state.surveying);
+            state.session.job = None;
+            store(&mut state, survey());
+            assert!(state.session.survey.is_some());
+        }
     }
 
     #[test]

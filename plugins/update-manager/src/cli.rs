@@ -646,6 +646,30 @@ mod tests {
     }
 
     #[test]
+    fn a_named_kind_that_asks_is_told_to_add_confirm() {
+        use crate::cleanup::fake::{found, LAST};
+        let execution = remove_kinds(
+            &[&LAST],
+            true,
+            Consent::All,
+            false,
+            |kind| found(kind, 1, &[("x", 1)]),
+            cleanup::remove,
+        );
+        assert_eq!(execution.exit_code, 1);
+        assert!(
+            execution
+                .stderr
+                .starts_with("last: they are the last way back to ")
+                && execution
+                    .stderr
+                    .ends_with(", so they are removed only when confirmed; add --confirm\n"),
+            "{}",
+            execution.stderr
+        );
+    }
+
+    #[test]
     fn remove_all_leaves_out_kinds_that_ask_and_one_kind_takes_its_consent() {
         use crate::cleanup::fake::{ALONG, BY_HAND, LAST, OLD, ORPHANS};
         static TABLE: [&Leftover; 5] = [&OLD, &BY_HAND, &ORPHANS, &LAST, &ALONG];

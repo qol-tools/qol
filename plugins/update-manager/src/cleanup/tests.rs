@@ -208,7 +208,7 @@ fn the_last_way_back_and_kinds_installed_by_hand_ask_first() {
         assert!(consent::allows(kind, Consent::All).is_err(), "{}", kind.id);
         let refused = remove(&found(kind, 1, &[("x", 1)]), Consent::All);
         assert!(
-            matches!(refused, Err(Refusal::Failed(ref reason)) if reason.contains("only when asked for by name")),
+            matches!(refused, Err(Refusal::Failed(ref reason)) if reason.contains("only when confirmed")),
             "{} went into remove all: {refused:?}",
             kind.id
         );

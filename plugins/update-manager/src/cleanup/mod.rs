@@ -388,7 +388,7 @@ fn remove_by(
     };
     consent::allows(leftover, consent).map_err(|why| {
         Refusal::Failed(format!(
-            "they {why}, so they are removed only when asked for by name"
+            "they {why}, so they are removed only when confirmed"
         ))
     })?;
     let unlisted = |why: &Why| {
