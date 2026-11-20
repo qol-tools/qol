@@ -11,10 +11,3 @@ pub use linux as native;
 pub use macos as native;
 #[cfg(target_os = "windows")]
 pub use windows as native;
-
-#[cfg(target_os = "linux")]
-pub use linux::Platform;
-#[cfg(target_os = "macos")]
-pub use macos::Platform;
-#[cfg(target_os = "windows")]
-pub use windows::Platform;
