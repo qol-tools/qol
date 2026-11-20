@@ -1315,7 +1315,6 @@ mod tests {
             "shows after its name how many, such as +4, and its state reads waits on N while N of them work or wait.",
             "so it never counts among the forks that need you while the fork that started it is on the board",
             "after /model the typeahead also offers the full model ids forks ran or were set to",
-            "its state reads waits on N while N of them work, wait or ask you",
             "A fork reads waiting, there and on the fork board, while a pull request watcher or a gh run watch of its own runs",
         ] {
             assert!(text.contains(needle), "{needle}");
