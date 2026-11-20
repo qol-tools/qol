@@ -77,11 +77,17 @@ impl LauncherView {
             })
             .collect();
         let cue = kit.scroll_cue(
-            ScrollSource::Window {
-                first: range.start,
-                shown: range.len(),
+            "launcher-flow-bar",
+            ScrollSource::window(
+                range.start,
+                range.len(),
                 total,
-            },
+                cx.listener(|this: &mut Self, at: &f32, _, cx: &mut Context<Self>| {
+                    let count = this.state.flow_result_count();
+                    this.state.scroll_list.seek(*at, count);
+                    cx.notify();
+                }),
+            ),
             kit.grounds.pane,
         );
         results

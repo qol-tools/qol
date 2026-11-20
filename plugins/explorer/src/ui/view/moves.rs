@@ -48,7 +48,7 @@ pub(super) fn render(view: &ExplorerView) -> AnyElement {
                             .map(|(index, record)| row(index, record, kit)),
                     ),
             )
-            .child(kit.scroll_cue(source, pane))
+            .child(kit.scroll_cue("explorer-moves-bar", source, pane))
             .into_any_element()
     };
     div()

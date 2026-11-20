@@ -784,6 +784,7 @@ pub fn detail_body(
                 .when(!detail.is_empty(), |body| body.child(fields)),
         )
         .child(kit.scroll_cue(
+            "launcher-detail-bar",
             qol_gpui::scrollbar::ScrollSource::Handle {
                 handle: scroll.clone(),
                 children: 1 + usize::from(!detail.is_empty()),

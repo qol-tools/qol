@@ -568,11 +568,17 @@ impl LauncherView {
     ) -> Stateful<Div> {
         let kit = qol_gpui::kit::kit();
         let cue = kit.scroll_cue(
-            qol_gpui::scrollbar::ScrollSource::Window {
-                first: scroll_offset,
-                shown: visible,
-                total: result_count,
-            },
+            "launcher-results-bar",
+            qol_gpui::scrollbar::ScrollSource::window(
+                scroll_offset,
+                visible,
+                result_count,
+                cx.listener(|this: &mut Self, at: &f32, _, cx: &mut Context<Self>| {
+                    let count = this.store.result_count();
+                    this.state.scroll_list.seek(*at, count);
+                    cx.notify();
+                }),
+            ),
             kit.grounds.pane,
         );
         let (wheel_row, beside) = if files_mode {
