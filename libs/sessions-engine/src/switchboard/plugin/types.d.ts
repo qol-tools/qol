@@ -56,6 +56,12 @@ export type ModelSeen = { model: string; effort?: string; at: number }
 
 export type RunState = { state: string; pulls?: string[] }
 
+export type ActionKind = 'search' | 'read' | 'edit' | 'shell' | 'other'
+
+export type Doing = { counts: Partial<Record<ActionKind, number>>; recent: string[] }
+
+export type Lit = { writing?: string; writingUnder?: string[] }
+
 declare module 'claude-code' {
   interface PluginState {
     'qol-switchboard': {
@@ -70,7 +76,8 @@ declare module 'claude-code' {
       forkStates: Record<string, RunState>
       idleShown: boolean
       closedShown: boolean
-      focusActivity: string
+      focusDoing: Doing
+      litRows: Lit
       freshReply: string
       focusShown: { id: string; prevId: string; agentId: string; key: string; rows: { isUser: boolean; text: string }[] }
       rowsCapped: boolean

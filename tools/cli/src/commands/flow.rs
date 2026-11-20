@@ -144,7 +144,6 @@ struct FlowPayload {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DesktopPayloadRecipe {
     companion: Option<DesktopCompanionRecipe>,
-    tray_features: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2818,9 +2817,6 @@ fn prepare_desktop_workflow_payload(
         build.args(["--bin", "qol-tray-install"]);
         build.arg("--locked");
     }
-    if let Some(features) = recipe.tray_features {
-        build.args(["--features", features]);
-    }
     if let Some(companion) = recipe.companion {
         let plugin_id = companion.id();
         build.arg("-p").arg(&plugin_id).arg("--bin").arg(&plugin_id);
@@ -3101,7 +3097,6 @@ fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
             companion: Some(DesktopCompanionRecipe {
                 plugin_dir: "launcher",
             }),
-            tray_features: Some("linux_evdev"),
         });
     }
     let companion = match workflow_id {
@@ -3118,16 +3113,10 @@ fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
             DesktopCompanionRecipe { plugin_dir: "shot" }
         }
         "qol-install-cold-boot" => {
-            return Some(DesktopPayloadRecipe {
-                companion: None,
-                tray_features: Some("linux_evdev"),
-            });
+            return Some(DesktopPayloadRecipe { companion: None });
         }
         "shortcut-storm" => {
-            return Some(DesktopPayloadRecipe {
-                companion: None,
-                tray_features: None,
-            });
+            return Some(DesktopPayloadRecipe { companion: None });
         }
         "window-actions-storm" => DesktopCompanionRecipe {
             plugin_dir: "window-actions",
@@ -3136,7 +3125,6 @@ fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
     };
     Some(DesktopPayloadRecipe {
         companion: Some(companion),
-        tray_features: None,
     })
 }
 
@@ -4827,7 +4815,6 @@ mod tests {
                     companion: Some(DesktopCompanionRecipe {
                         plugin_dir: "alt-tab",
                     }),
-                    tray_features: None,
                 },
             ),
             (
@@ -4836,7 +4823,6 @@ mod tests {
                     companion: Some(DesktopCompanionRecipe {
                         plugin_dir: "alt-tab",
                     }),
-                    tray_features: None,
                 },
             ),
             (
@@ -4845,7 +4831,6 @@ mod tests {
                     companion: Some(DesktopCompanionRecipe {
                         plugin_dir: "bluetooth",
                     }),
-                    tray_features: None,
                 },
             ),
             (
@@ -4854,7 +4839,6 @@ mod tests {
                     companion: Some(DesktopCompanionRecipe {
                         plugin_dir: "launcher",
                     }),
-                    tray_features: Some("linux_evdev"),
                 },
             ),
             (
@@ -4863,7 +4847,6 @@ mod tests {
                     companion: Some(DesktopCompanionRecipe {
                         plugin_dir: "launcher",
                     }),
-                    tray_features: Some("linux_evdev"),
                 },
             ),
             (
@@ -4872,7 +4855,6 @@ mod tests {
                     companion: Some(DesktopCompanionRecipe {
                         plugin_dir: "launcher",
                     }),
-                    tray_features: Some("linux_evdev"),
                 },
             ),
             (
@@ -4881,7 +4863,6 @@ mod tests {
                     companion: Some(DesktopCompanionRecipe {
                         plugin_dir: "launcher",
                     }),
-                    tray_features: None,
                 },
             ),
             (
@@ -4890,51 +4871,37 @@ mod tests {
                     companion: Some(DesktopCompanionRecipe {
                         plugin_dir: "launcher",
                     }),
-                    tray_features: None,
                 },
             ),
             (
                 "qol-install-cold-boot",
-                DesktopPayloadRecipe {
-                    companion: None,
-                    tray_features: Some("linux_evdev"),
-                },
+                DesktopPayloadRecipe { companion: None },
             ),
             (
                 "qol-shot-capture",
                 DesktopPayloadRecipe {
                     companion: Some(DesktopCompanionRecipe { plugin_dir: "shot" }),
-                    tray_features: None,
                 },
             ),
             (
                 "qol-shot-cold-boot",
                 DesktopPayloadRecipe {
                     companion: Some(DesktopCompanionRecipe { plugin_dir: "shot" }),
-                    tray_features: None,
                 },
             ),
             (
                 "qol-shot-storm",
                 DesktopPayloadRecipe {
                     companion: Some(DesktopCompanionRecipe { plugin_dir: "shot" }),
-                    tray_features: None,
                 },
             ),
-            (
-                "shortcut-storm",
-                DesktopPayloadRecipe {
-                    companion: None,
-                    tray_features: None,
-                },
-            ),
+            ("shortcut-storm", DesktopPayloadRecipe { companion: None }),
             (
                 "window-actions-storm",
                 DesktopPayloadRecipe {
                     companion: Some(DesktopCompanionRecipe {
                         plugin_dir: "window-actions",
                     }),
-                    tray_features: None,
                 },
             ),
         ];

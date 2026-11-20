@@ -1,6 +1,4 @@
-#[cfg(feature = "linux_evdev")]
 pub(crate) mod classify;
-#[cfg(feature = "linux_evdev")]
 pub(crate) mod keycode;
 
 pub(crate) const APP_DESKTOP_ENTRY: &str = "qol-tray.desktop";

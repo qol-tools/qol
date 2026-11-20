@@ -9,10 +9,10 @@ use crate::{
 use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
 use super::{
-    ChatTurn, CliComposer, CliConversation, CliConversationMatch, CliDraftStash, CliLaunchProgram,
-    CliModelCatalog, CliRemoteControlToggle, CliResumeSettings, CliRuntimeState, CliScreenEvidence,
-    CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription,
-    CliSessionSubscriptionError, CliTool, CliToolId,
+    ChatTurn, CliChordBinder, CliComposer, CliConversation, CliConversationMatch, CliDraftStash,
+    CliLaunchProgram, CliModelCatalog, CliRemoteControlToggle, CliResumeSettings, CliRuntimeState,
+    CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy,
+    CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliToolId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -205,6 +205,13 @@ impl CliSessionInterpreter {
             .iter()
             .find(|strategy| &strategy.tool().id == tool)
             .and_then(|strategy| strategy.resume_args(external_id))
+    }
+
+    pub fn chord_binder_for(&self, tool: &CliToolId) -> Option<&dyn CliChordBinder> {
+        self.strategies
+            .iter()
+            .find(|strategy| &strategy.tool().id == tool)
+            .and_then(|strategy| strategy.chord_binder())
     }
 
     pub fn can_resume(&self, tool: &CliToolId) -> bool {

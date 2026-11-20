@@ -1,6 +1,7 @@
 mod activity;
 mod builtins;
 mod chat;
+mod chords;
 mod composer;
 mod evidence;
 mod guard;
@@ -22,6 +23,9 @@ pub use builtins::{
     KIMI_TOOL_ACCENT, KIMI_TOOL_ID, PI_TOOL_ACCENT, PI_TOOL_ID,
 };
 pub use chat::{ChatRole, ChatTurn, COMPACTED_SUMMARY_HEADER};
+pub use chords::{
+    CliChordBinder, CliChordBinding, CliChordFileError, CliChordRelease, CliTakenChord,
+};
 pub use composer::is_rule;
 pub use evidence::{
     CliActivityEvidence, CliComposer, CliDraftStash, CliLaunchProgram, CliModelCatalog,
@@ -188,6 +192,10 @@ pub trait CliSessionStrategy: Send + Sync {
     }
 
     fn resume_args(&self, _external_id: &str) -> Option<Vec<String>> {
+        None
+    }
+
+    fn chord_binder(&self) -> Option<&dyn CliChordBinder> {
         None
     }
 

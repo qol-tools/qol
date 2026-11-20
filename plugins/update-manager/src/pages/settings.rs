@@ -109,7 +109,7 @@ fn press_hours(
     }
 }
 
-fn press_auto(sheet: &mut Sheet, session: &Session, row: Row, key: AutoKey, on: bool) {
+pub(super) fn press_auto(sheet: &mut Sheet, session: &Session, row: Row, key: AutoKey, on: bool) {
     if session.borrowed {
         sheet.press_then(row, Act::Ask(Proposal::Auto(key)), Go::Open("ask".into()));
     } else {
@@ -261,11 +261,12 @@ fn auto(session: &Session) -> Sheet {
     } else {
         "mint's switches"
     });
-    for key in AutoKey::ALL {
+    for key in AutoKey::INSTALLS {
         let on = auto.get(key);
         let value = match key {
             AutoKey::Packages => "in hours",
             AutoKey::Spices | AutoKey::Flatpak => "at login",
+            AutoKey::Kernels | AutoKey::ByHand => "weekly",
         };
         let row = with_error(
             Row::new(key.id(), key.name())
@@ -285,7 +286,7 @@ fn changes(session: &Session, now: NaiveDateTime) -> Sheet {
     let mut sheet = Sheet::new("changes", "what qol changed");
     sheet.group(
         "stays when qol stops",
-        "your settings, written with mint's own tools.",
+        "your settings, written with the system's own tools.",
     );
     let mut any = false;
     if ours(session) {
@@ -321,20 +322,16 @@ fn changes(session: &Session, now: NaiveDateTime) -> Sheet {
             Act::Tonight(false),
         );
     }
-    let auto = session.auto();
     for (key, was) in session.auto_changed() {
         any = true;
         let detail = match session.journal.auto.iter().find(|change| change.key == key) {
             Some(change) => format!("Set by you {}. Was {}.", day(change.at, now), on_off(was)),
             None => format!("Was {}.", on_off(was)),
         };
-        let row = Row::new(
-            format!("auto:{}", key.id()),
-            format!("{} on their own", key.name()),
-        )
-        .detail(detail)
-        .value(on_off(auto.get(key)))
-        .button("set back");
+        let row = Row::new(format!("auto:{}", key.id()), key.changed())
+            .detail(detail)
+            .value(on_off(session.switch(key)))
+            .button("set back");
         press_auto(&mut sheet, session, row, key, was);
     }
     if !any {
@@ -351,6 +348,8 @@ fn lower(key: AutoKey) -> &'static str {
         AutoKey::Packages => "system packages",
         AutoKey::Spices => "Cinnamon add-ons",
         AutoKey::Flatpak => "Flatpak",
+        AutoKey::Kernels => "old kernel removal",
+        AutoKey::ByHand => "hand-installed kernel removal",
     }
 }
 
@@ -440,7 +439,7 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
             );
         }
         Proposal::Auto(key) => {
-            let on = session.auto().get(key);
+            let on = session.switch(key);
             sheet = Sheet::new("ask", "the owner's switch");
             sheet.group(
                 format!("change the owner's {} switch?", lower(key)),
@@ -464,7 +463,11 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
             );
             sheet.press_then(
                 Row::new("change", "Change the owner's switch")
-                    .detail("Writes Mint's own setting. It stays after you leave.")
+                    .detail(if key.removes() {
+                        "Writes the system's own setting. It stays after you leave."
+                    } else {
+                        "Writes Mint's own setting. It stays after you leave."
+                    })
                     .button("change"),
                 Act::Auto(key, !on),
                 Go::Back,

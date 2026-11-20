@@ -1128,25 +1128,18 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs read and write access to /dev/uinput"]
     fn loopback_virtual_device_relays_the_heal_key_up() {
         let keys = AttributeSet::from_iter([KeyCode::KEY_DOWN, KeyCode::KEY_A]);
-        let mut device = match build_virtual_device_named(&keys, "qol-tray-loopback-test") {
-            Ok(device) => device,
-            Err(error) => {
-                eprintln!("skipping loopback stuck-key test: {error}");
-                return;
-            }
-        };
-        let Some(node_path) = device
+        let mut device = build_virtual_device_named(&keys, "qol-tray-loopback-test")
+            .expect("build the loopback uinput device");
+        let node_path = device
             .enumerate_dev_nodes_blocking()
             .into_iter()
             .flatten()
             .flatten()
             .next()
-        else {
-            eprintln!("skipping loopback stuck-key test: no dev node enumerated");
-            return;
-        };
+            .expect("enumerate the loopback uinput node");
         use std::os::unix::fs::OpenOptionsExt;
         let open_deadline = std::time::Instant::now() + Duration::from_secs(5);
         let node_file = loop {
@@ -1164,10 +1157,10 @@ mod tests {
             match attempt {
                 Ok(file) => break file,
                 Err(error) => {
-                    if std::time::Instant::now() >= open_deadline {
-                        eprintln!("skipping loopback stuck-key test: {error}");
-                        return;
-                    }
+                    assert!(
+                        std::time::Instant::now() < open_deadline,
+                        "open the loopback uinput node: {error}"
+                    );
                     std::thread::sleep(Duration::from_millis(50));
                 }
             }

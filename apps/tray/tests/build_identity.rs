@@ -162,9 +162,6 @@ fn every_deployable_binary_embeds_its_typed_identity() {
     if cfg!(feature = "sandbox") {
         expected_features.push("sandbox".to_string());
     }
-    if cfg!(feature = "linux_evdev") {
-        expected_features.push("linux_evdev".to_string());
-    }
     expected_features.sort();
     let expected_source = expected_source();
 

@@ -7,10 +7,6 @@ impl BuildPlatform for Platform {
         std::time::Duration::ZERO
     }
 
-    fn tray_dev_features(&self) -> &'static str {
-        "dev"
-    }
-
     fn executable_suffix(&self) -> &'static str {
         ""
     }

@@ -8,7 +8,7 @@ use qol_platform::windows_path::strip_verbatim;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use super::agents::admit_model;
+use super::agents::{admit_model, model_admitted_as};
 use super::context;
 use super::fork_state::{self, ForkState};
 use super::paths::{claude_home, switchboard_dir};
@@ -22,6 +22,8 @@ pub(super) const FORK_STATES: &str = "fork-states";
 pub(super) const FOLD_TRANSCRIPTS: &str = "fold-transcripts";
 pub(super) const FORK_SAID: &str = "fork-said";
 pub(super) const ROLE_REFRESH: &str = "role-refresh";
+const RELEASE_CHORDS: &str = super::chords::RELEASE;
+const ADMIT_MODEL: &str = "admit-model";
 pub(super) const ROLE_REFRESH_SLOTS: usize = 3;
 pub(super) const ROLE_REFRESH_SOURCES: &str = "resume|compact";
 const COMPACT_BOUNDARY: &str = "\"compact_boundary\"";
@@ -138,6 +140,18 @@ fn model_line(prompt: &str) -> Option<&str> {
         .strip_prefix(MODEL_PREFIX)?
         .trim_matches(is_plugin_space);
     is_model_id(id).then_some(id)
+}
+
+fn model_verdict(model: &str, admit: &dyn Fn(&str) -> Result<String>) -> String {
+    let admitted = if is_model_id(model) {
+        admit(model)
+    } else {
+        Err(anyhow!("`{model}` is not a model id"))
+    };
+    match admitted {
+        Ok(id) => json!({ "model": id }).to_string(),
+        Err(error) => json!({ "refused": format!("{error:#}") }).to_string(),
+    }
 }
 
 fn pre_agent(payload: &Payload, admit: &dyn Fn(&str) -> Result<()>) -> Verdict {
@@ -315,10 +329,10 @@ fn read_payload() -> Result<Payload> {
     serde_json::from_str(&raw).context("the hook payload is not valid JSON")
 }
 
-pub(super) fn run(args: &[OsString]) -> Result<Vec<String>> {
+pub(super) fn run(args: &[OsString], warn: &mut dyn FnMut(String)) -> Result<Vec<String>> {
     let name = args.first().and_then(|arg| arg.to_str()).ok_or_else(|| {
         anyhow!(
-            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}|{FORK_STATES}|{FORK_SAID}|{FOLD_TRANSCRIPTS} DIR>"
+            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}|{FORK_STATES}|{FORK_SAID}|{FOLD_TRANSCRIPTS} DIR|{RELEASE_CHORDS} LAUNCH|{ADMIT_MODEL} MODEL>"
         )
     })?;
     match name {
@@ -350,6 +364,17 @@ pub(super) fn run(args: &[OsString]) -> Result<Vec<String>> {
             }
             let folded = serde_json::to_string(&super::fold::fold(&conversations))?;
             Ok(vec![folded])
+        }
+        RELEASE_CHORDS => {
+            super::chords::run_release(&args[1..], warn)?;
+            Ok(Vec::new())
+        }
+        ADMIT_MODEL => {
+            let model = args
+                .get(1)
+                .and_then(|arg| arg.to_str())
+                .ok_or_else(|| anyhow!("{ADMIT_MODEL} takes a model id"))?;
+            Ok(vec![model_verdict(model, &model_admitted_as)])
         }
         RETIRED_POST_AGENT => Ok(Vec::new()),
         RETIRED_WORKTREE_CREATE => bail!(
@@ -804,8 +829,39 @@ mod tests {
             FORK_STATES,
             FORK_SAID,
             FOLD_TRANSCRIPTS,
+            RELEASE_CHORDS,
+            ADMIT_MODEL,
         ] {
             assert!(error.contains(verb), "{verb}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_model_is_answered_with_the_id_it_runs_as_or_with_why_it_may_not_run() {
+        type Admit<'a> = &'a dyn Fn(&str) -> Result<String>;
+        fn as_opus(_model: &str) -> Result<String> {
+            Ok("claude-opus-5-5".to_owned())
+        }
+        fn refuse(model: &str) -> Result<String> {
+            bail!("model {model} is not allowed")
+        }
+        let cases: [(&str, Admit, Value); 4] = [
+            ("opus-5.5", &as_opus, json!({ "model": "claude-opus-5-5" })),
+            (
+                "gpt-9-turbo",
+                &refuse,
+                json!({ "refused": "model gpt-9-turbo is not allowed" }),
+            ),
+            (
+                "two words",
+                &as_opus,
+                json!({ "refused": "`two words` is not a model id" }),
+            ),
+            ("", &as_opus, json!({ "refused": "`` is not a model id" })),
+        ];
+        for (model, admit, verdict) in cases {
+            let answered: Value = serde_json::from_str(&model_verdict(model, admit)).unwrap();
+            assert_eq!(answered, verdict, "{model}");
         }
     }
 

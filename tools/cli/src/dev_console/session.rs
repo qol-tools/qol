@@ -91,6 +91,7 @@ pub(crate) fn run_session(
     dash.boot_rx = boot;
     start_trace(&mut dash);
     dash.disk_scan_pending = true;
+    let log_pause = LogPause::begin();
     let mut terminal = if resuming {
         let mut terminal = ratatui::try_init_with_options(ratatui::TerminalOptions {
             viewport: ratatui::Viewport::Fullscreen,
@@ -113,6 +114,7 @@ pub(crate) fn run_session(
     if should_restore(&result) {
         ratatui::restore();
     }
+    drop(log_pause);
     if let Ok(SessionEnd::ChildExited(status)) = &result {
         if !status.success() {
             print_crash_tail(&dash.logs.ring);
@@ -404,6 +406,22 @@ pub(super) enum SelfRestartDecision {
 
 fn should_restore(result: &Result<SessionEnd>) -> bool {
     !matches!(result, Ok(SessionEnd::SelfRestart { .. }))
+}
+
+struct LogPause(log::LevelFilter);
+
+impl LogPause {
+    fn begin() -> Self {
+        let level = log::max_level();
+        log::set_max_level(log::LevelFilter::Off);
+        Self(level)
+    }
+}
+
+impl Drop for LogPause {
+    fn drop(&mut self) {
+        log::set_max_level(self.0);
+    }
 }
 
 fn drain_pending_input() {

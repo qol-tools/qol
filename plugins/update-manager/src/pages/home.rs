@@ -1,6 +1,7 @@
 use chrono::NaiveDateTime;
 use qol_config::pages::{Row, Tone};
 
+use super::kernels;
 use super::last::{names, who};
 use super::settings::{hours_value, rules};
 use super::updates::{failed_line, install_row, row, skipped_row, sorted, total, SHOWN};
@@ -15,6 +16,8 @@ pub(super) fn page(session: &Session, now: NaiveDateTime) -> Sheet {
     notes(&mut sheet, session);
     status(&mut sheet, session, now);
     owner(&mut sheet, session);
+    sheet.heading("cleanup");
+    kernels::row(&mut sheet, session);
     sheet.heading("qol");
     rules(&mut sheet, session);
     sheet.row(
