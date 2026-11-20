@@ -4649,7 +4649,7 @@ test('a restart puts each fork the switchboard started back in the agent list wi
   ])
 })
 
-test("a fork's view shows each call of the run the fork is in the middle of, and a finished run and the switchboard's own stay one count line", async ($, on) => {
+test("a fork's view shows each tool call as its own row, and a run of calls in the switchboard's own view stays one count line", async ($, on) => {
   engine(on)
   on('ui.render', ($: any, e: any) => {
     const { Box, Text } = $.ui.resolve(e)
@@ -4668,12 +4668,13 @@ test("a fork's view shows each call of the run the fork is in the middle of, and
   const main = await $.ui.mount(promptBand(false))
   await settle()
   expect(await unfolds(true)).toBe(false)
+  expect(await unfolds(false)).toBe(false)
   expect(await unfolds(false, true)).toBe(true)
   await main.unmount()
   const inFork = await $.ui.mount({ ...promptBand(false), props: { ...promptBand(false).props, view: { agentId: 'a8' } } })
   await settle()
   expect(await unfolds(true)).toBe(true)
-  expect(await unfolds(false)).toBe(false)
+  expect(await unfolds(false)).toBe(true)
   expect(await unfolds(false, true)).toBe(true)
   await inFork.unmount()
 })

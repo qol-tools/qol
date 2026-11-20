@@ -3251,7 +3251,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
-    if (viewedFork === undefined || !e.props.isActive || e.props.isExpanded) return next(e)
+    if (viewedFork === undefined || e.props.isExpanded) return next(e)
     return next({ ...e, props: { ...e.props, isExpanded: true } })
   }).catch(($, e, next) => next(e))
 
