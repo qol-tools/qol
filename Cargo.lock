@@ -6463,7 +6463,7 @@ dependencies = [
 
 [[package]]
 name = "qol-bluetooth"
-version = "0.86.3"
+version = "0.86.4"
 dependencies = [
  "anyhow",
  "bluer",
@@ -6630,7 +6630,7 @@ dependencies = [
 
 [[package]]
 name = "qol-controllers"
-version = "0.76.3"
+version = "0.76.4"
 dependencies = [
  "anyhow",
  "evdev",
@@ -6927,7 +6927,7 @@ dependencies = [
 
 [[package]]
 name = "qol-input"
-version = "0.25.3"
+version = "0.25.4"
 dependencies = [
  "anyhow",
  "libc",
@@ -6954,7 +6954,7 @@ dependencies = [
 
 [[package]]
 name = "qol-keyremap"
-version = "1.90.3"
+version = "1.90.4"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.0",
@@ -7134,7 +7134,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.58.4"
+version = "0.58.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7470,7 +7470,7 @@ dependencies = [
 
 [[package]]
 name = "qol-session"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "qol-conventions",
@@ -7554,7 +7554,7 @@ dependencies = [
 
 [[package]]
 name = "qol-sound"
-version = "0.45.3"
+version = "0.45.4"
 dependencies = [
  "anyhow",
  "log",
@@ -7724,7 +7724,7 @@ dependencies = [
 
 [[package]]
 name = "qol-update-manager"
-version = "0.31.1"
+version = "0.31.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7749,7 +7749,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.85.3"
+version = "0.85.4"
 dependencies = [
  "anyhow",
  "candle-core",
