@@ -8,7 +8,8 @@ use qol_headless::{
 };
 
 use crate::cleanup::{
-    self, asks, leftovers, primary, Consent, Found, Leftover, Live, Origin, Size, State, Survey,
+    self, asks, leftovers, primary, Consent, Found, Leftover, Live, Measure, Origin, Size, State,
+    Survey,
 };
 use crate::platform::Refusal;
 use crate::updates;
@@ -145,33 +146,61 @@ fn cleanup_command(context: &CommandContext) -> Result<Execution> {
         Ok(chosen) => chosen,
         Err(problem) => return Ok(Execution::usage(format!("{problem}\n{usage}"))),
     };
+    Ok(remove_kinds(
+        &kinds,
+        target != "all",
+        consent,
+        confirm,
+        cleanup::find,
+        cleanup::remove,
+    ))
+}
+
+fn remove_kinds(
+    kinds: &[&'static Leftover],
+    named: bool,
+    consent: Consent,
+    confirm: bool,
+    find: impl Fn(&'static Leftover) -> Found,
+    remove: impl Fn(&Found, Consent) -> Result<(), Refusal>,
+) -> Execution {
     let mut out = String::new();
-    let mut failed = Vec::new();
-    for kind in kinds {
-        let found = cleanup::find(kind);
+    let mut failed = String::new();
+    for kind in kinds.iter().copied() {
+        let found = find(kind);
         if empty(&found) {
-            if target != "all" {
+            if named {
                 out.push_str(&format!("Nothing to remove: {}\n", kind.name));
             }
             continue;
         }
-        match cleanup::remove(&found, consent) {
+        match remove(&found, consent) {
+            Ok(()) if unmeasured(&found) => {
+                out.push_str(&format!("Removed any there were: {}\n", kind.name))
+            }
             Ok(()) => out.push_str(&format!("Removed: {}\n", kind.name)),
             Err(refusal) if asks(kind) && !confirm => {
-                failed.push(format!("{}: {refusal}; add --confirm", kind.name))
+                failed.push_str(&format!("{}: {refusal}; add --confirm\n", kind.name))
             }
             Err(refusal @ (Refusal::Dismissed | Refusal::Denied | Refusal::TimedOut)) => {
-                failed.push(format!(
-                    "{}: {refusal}, so nothing more was removed",
+                failed.push_str(&format!(
+                    "{}: {refusal}, so nothing more was removed\n",
                     kind.name
                 ));
                 break;
             }
-            Err(refusal) => failed.push(format!("{}: {refusal}", kind.name)),
+            Err(refusal) => failed.push_str(&format!("{}: {refusal}\n", kind.name)),
         }
     }
     let code = u8::from(!failed.is_empty());
-    Ok(Execution::new(out, failed.join("\n"), code))
+    Execution::new(out, failed, code)
+}
+
+fn unmeasured(found: &Found) -> bool {
+    found
+        .amount
+        .as_ref()
+        .is_some_and(|amount| matches!(amount.size, Size::Unknown(_)))
 }
 
 fn choose(
@@ -305,7 +334,7 @@ fn kind_check(kind: &'static Leftover) -> DoctorCheck {
     DoctorCheck::new(
         id.clone(),
         format!(
-            "Answer whether qol can measure {} here; `{PLUGIN_ID} cleanup` measures them. {}",
+            "Answer whether qol can find {} here; `{PLUGIN_ID} cleanup` measures them. {}",
             kind.name.to_lowercase(),
             kind.what
         ),
@@ -314,9 +343,13 @@ fn kind_check(kind: &'static Leftover) -> DoctorCheck {
 }
 
 fn kind_result(id: &str, kind: &Leftover, missing: Option<String>) -> DoctorCheckResult {
-    let message = match missing {
-        Some(missing) => format!("{}: not here, {missing}", kind.name),
-        None => format!("{}: `{PLUGIN_ID} cleanup` measures them", kind.name),
+    let message = match (missing, kind.measure) {
+        (Some(missing), _) => format!("{}: not here, {missing}", kind.name),
+        (None, Measure::Unknown(why)) => format!(
+            "{}: `{PLUGIN_ID} cleanup` can remove them but not measure them: {why}",
+            kind.name
+        ),
+        (None, _) => format!("{}: `{PLUGIN_ID} cleanup` measures them", kind.name),
     };
     DoctorCheckResult::ok(id, message)
 }
@@ -485,12 +518,25 @@ mod tests {
     #[test]
     fn a_kind_check_only_says_whether_the_kind_can_be_measured() {
         use crate::cleanup::fake::OLD;
-        let here = kind_result("cleanup_kernels", &OLD, None);
+        let measured = Leftover {
+            measure: Measure::Files {
+                dir: "/var/cache/apt/archives",
+                suffix: ".deb",
+            },
+            ..OLD
+        };
+        let here = kind_result("cleanup_kernels", &measured, None);
         assert_eq!(here.status, DoctorStatus::Ok);
-        assert!(
-            here.message.contains("cleanup` measures them"),
-            "{}",
-            here.message
+        assert_eq!(
+            here.message,
+            format!("kernels: `{PLUGIN_ID} cleanup` measures them")
+        );
+        let blind = kind_result("cleanup_kernels", &OLD, None);
+        assert_eq!(
+            blind.message,
+            format!(
+                "kernels: `{PLUGIN_ID} cleanup` can remove them but not measure them: a fake kind"
+            )
         );
         let gone = kind_result(
             "cleanup_kernels",
@@ -499,6 +545,101 @@ mod tests {
         );
         assert_eq!(gone.status, DoctorStatus::Ok);
         assert_eq!(gone.message, "kernels: not here, apt-get is not installed");
+    }
+
+    #[test]
+    fn a_closed_password_prompt_stops_remove_all() {
+        use std::cell::RefCell;
+
+        use crate::cleanup::fake::{found, OLD, ORPHANS};
+        let asked = RefCell::new(Vec::new());
+        let execution = remove_kinds(
+            &[&OLD, &ORPHANS],
+            false,
+            Consent::All,
+            false,
+            |kind| found(kind, 1, &[("x", 1)]),
+            |found, _| {
+                asked.borrow_mut().push(found.leftover.id);
+                Err(Refusal::Dismissed)
+            },
+        );
+        assert_eq!(*asked.borrow(), ["kernels"], "orphans were never tried");
+        assert_eq!(execution.exit_code, 1);
+        assert_eq!(
+            execution.stderr,
+            format!(
+                "kernels: {}, so nothing more was removed\n",
+                Refusal::Dismissed
+            )
+        );
+
+        let asked = RefCell::new(Vec::new());
+        let execution = remove_kinds(
+            &[&OLD, &ORPHANS],
+            false,
+            Consent::All,
+            false,
+            |kind| found(kind, 1, &[("x", 1)]),
+            |found, _| {
+                asked.borrow_mut().push(found.leftover.id);
+                Err(Refusal::Failed("apt is locked".into()))
+            },
+        );
+        assert_eq!(*asked.borrow(), ["kernels", "orphans"], "a failure goes on");
+        assert_eq!(
+            execution.stderr,
+            "kernels: apt is locked\norphans: apt is locked\n"
+        );
+    }
+
+    #[test]
+    fn a_kind_that_cannot_be_measured_is_not_reported_as_removed_things() {
+        use crate::cleanup::fake::{found, LAST, OLD};
+        let unknown = |kind| Found {
+            leftover: kind,
+            amount: Some(Amount::unknown(Why::Cannot("no dry run"))),
+        };
+        let execution = remove_kinds(&[&OLD], true, Consent::All, false, unknown, |_, _| Ok(()));
+        assert_eq!(execution.stdout, "Removed any there were: kernels\n");
+        let execution = remove_kinds(
+            &[&OLD],
+            true,
+            Consent::All,
+            false,
+            |kind| found(kind, 1, &[("x", 1)]),
+            |_, _| Ok(()),
+        );
+        assert_eq!(execution.stdout, "Removed: kernels\n");
+        let execution = remove_kinds(
+            &[&OLD, &LAST],
+            true,
+            Consent::All,
+            false,
+            |kind| found(kind, 0, &[]),
+            |_, _| panic!("nothing to remove"),
+        );
+        assert_eq!(
+            execution.stdout,
+            "Nothing to remove: kernels\nNothing to remove: last\n"
+        );
+    }
+
+    #[test]
+    fn only_a_measured_empty_kind_or_an_absent_one_is_skipped() {
+        use crate::cleanup::fake::{found, OLD};
+        assert!(empty(&found(&OLD, 0, &[])));
+        assert!(empty(&Found {
+            leftover: &OLD,
+            amount: None,
+        }));
+        assert!(!empty(&found(&OLD, 1, &[("x", 1)])));
+        for why in [Why::NeedsAdmin, Why::Failed("apt is locked".into())] {
+            assert!(!empty(&Found {
+                leftover: &OLD,
+                amount: Some(Amount::unknown(why)),
+            }));
+        }
     }
 
     #[test]

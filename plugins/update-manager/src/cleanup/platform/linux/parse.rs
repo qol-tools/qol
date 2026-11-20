@@ -1,7 +1,7 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::platform::linux::packages::{base, kernel_abi, version_key};
+use crate::platform::linux::packages::{base, kernel_abi, version_key, versioned_abi};
 
 const NEWEST_KEPT: usize = 2;
 
@@ -9,7 +9,6 @@ const NEWEST_KEPT: usize = 2;
 pub(super) struct ByHand {
     pub(super) packages: Vec<String>,
     pub(super) kernels: usize,
-    pub(super) present: usize,
 }
 
 pub(super) fn removals(simulated: &str) -> Vec<String> {
@@ -24,22 +23,12 @@ pub(super) fn removals(simulated: &str) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn beyond<'a>(planned: &'a [String], listed: &[String]) -> Option<&'a str> {
+pub(super) fn plans_beyond(simulated: &str, listed: &[String]) -> bool {
     let listed: BTreeSet<&str> = listed.iter().map(|package| base(package)).collect();
-    planned
-        .iter()
-        .map(|package| base(package))
-        .find(|package| !listed.contains(package))
-}
-
-pub(super) fn versioned_abi(package: &str) -> Option<String> {
-    let rest = base(package).strip_prefix("linux-")?;
-    let parts: Vec<&str> = rest.split('-').collect();
-    parts.windows(2).find_map(|pair| {
-        let numbers: Vec<&str> = pair[0].split('.').collect();
-        let dotted = numbers.len() == 3 && numbers.iter().all(|part| part.parse::<u32>().is_ok());
-        (dotted && pair[1].parse::<u32>().is_ok()).then(|| format!("{}-{}", pair[0], pair[1]))
-    })
+    simulated.lines().any(|line| line.starts_with("Inst "))
+        || removals(simulated)
+            .iter()
+            .any(|package| !listed.contains(base(package)))
 }
 
 pub(super) fn kernels(packages: &[String]) -> usize {
@@ -80,16 +69,18 @@ pub(super) fn by_hand(
         .filter(|package| versioned_abi(package).is_some_and(|abi| !kept.contains(&abi)))
         .map(|package| package.to_string())
         .collect();
-    let present = manual
-        .iter()
-        .filter_map(|package| kernel_abi(package))
-        .filter(|abi| abi != running)
-        .count();
     Ok(Some(ByHand {
         kernels: kernels(&packages),
         packages,
-        present,
     }))
+}
+
+pub(super) fn kept(manual: &str, running: Option<&str>) -> usize {
+    manual
+        .lines()
+        .filter_map(|package| kernel_abi(package.trim()))
+        .filter(|abi| Some(abi.as_str()) != running)
+        .count()
 }
 
 pub(super) fn sizes(listing: &str) -> BTreeMap<String, u64> {
@@ -153,21 +144,6 @@ mod tests {
     }
 
     #[test]
-    fn only_versioned_kernel_packages_carry_an_abi() {
-        assert_eq!(
-            versioned_abi("linux-hwe-6.8-headers-6.8.0-111").as_deref(),
-            Some("6.8.0-111")
-        );
-        assert_eq!(
-            versioned_abi("linux-modules-extra-6.8.0-111-generic:amd64").as_deref(),
-            Some("6.8.0-111")
-        );
-        assert_eq!(versioned_abi("linux-image-generic"), None);
-        assert_eq!(versioned_abi("linux-firmware"), None);
-        assert_eq!(versioned_abi("libfoo1"), None);
-    }
-
-    #[test]
     fn kernels_kept_by_hand_leave_out_the_running_one_the_two_newest_and_meta_packages() {
         let manual = "firefox\nlinux-generic\nlinux-image-generic\nlinux-image-6.8.0-90-generic\nlinux-image-6.8.0-111-generic\nlinux-image-6.8.0-111-lowlatency\nlinux-modules-6.8.0-111-generic\nlinux-image-6.8.0-149-lowlatency\nlinux-image-6.8.0-152-generic\nlinux-headers-6.8.0-111\nlinux-lowlatency-headers-6.8.0-100\n";
         let images = || {
@@ -198,7 +174,17 @@ mod tests {
             ]
         );
         assert_eq!(by_hand.kernels, 3, "6.8.0-100, 6.8.0-111 and 6.8.0-149");
-        assert_eq!(by_hand.present, 4, "every manual image but the running one");
+        assert_eq!(
+            kept(manual, Some("6.8.0-90")),
+            4,
+            "every manual image but the running one"
+        );
+        assert_eq!(
+            kept(manual, None),
+            5,
+            "an unknown running kernel keeps every image counted"
+        );
+        assert_eq!(kept("firefox\n", Some("6.8.0-90")), 0);
     }
 
     #[test]
@@ -215,7 +201,7 @@ mod tests {
             .expect("listed")
             .expect("a running kernel");
         assert!(by_hand.packages.is_empty(), "{:?}", by_hand.packages);
-        assert_eq!(by_hand.present, 2);
+        assert_eq!(kept(manual, Some("6.8.0-149")), 2);
     }
 
     #[test]
@@ -236,15 +222,24 @@ mod tests {
     }
 
     #[test]
-    fn a_purge_that_takes_packages_beyond_the_list_is_caught() {
-        let planned = removals(
-            "Purg linux-image-6.8.0-111-generic [6.8.0-111.111]\n\
-             Purg linux-generic [6.8.0.111]\n",
-        );
-        assert_eq!(planned, ["linux-image-6.8.0-111-generic", "linux-generic"]);
+    fn a_purge_that_takes_or_installs_packages_beyond_the_list_is_caught() {
         let listed = vec!["linux-image-6.8.0-111-generic:amd64".to_string()];
-        assert_eq!(beyond(&planned, &listed), Some("linux-generic"));
-        assert_eq!(beyond(&planned[..1], &listed), None);
+        let alone = "Purg linux-image-6.8.0-111-generic [6.8.0-111.111]\n";
+        assert_eq!(removals(alone), ["linux-image-6.8.0-111-generic"]);
+        assert!(!plans_beyond(alone, &listed));
+        assert!(plans_beyond(
+            &format!("{alone}Purg linux-generic [6.8.0.111]\n"),
+            &listed
+        ));
+        assert!(
+            plans_beyond(
+                &format!(
+                    "Inst linux-image-unsigned-6.8.0-111-generic (6.8.0-111.111 Ubuntu:24.04/noble-updates [amd64])\n{alone}"
+                ),
+                &listed
+            ),
+            "a purge that swaps in the unsigned image to keep a dependency is caught"
+        );
     }
 
     #[test]

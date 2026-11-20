@@ -11,9 +11,23 @@ mod platform;
 
 pub(crate) use clock::Clock;
 pub(crate) use platform::{
-    boot_id, install, is_mint, missing, read_host, read_updates, restart_now, schedule_restart,
-    set_auto, set_hours, set_skips, supported, Helper,
+    boot_id, install, is_mint, missing, read_updates, restart_now, schedule_restart, set_hours,
+    set_skips, supported, Helper,
 };
+
+pub(crate) fn read_host() -> Host {
+    Host {
+        switches: cleanup::read_switches(),
+        ..platform::read_host()
+    }
+}
+
+pub(crate) fn set_auto(key: AutoKey, on: bool) -> Result<(), Refusal> {
+    match key {
+        AutoKey::Switch(switch) => cleanup::set_switch(switch, on),
+        AutoKey::Packages | AutoKey::Spices | AutoKey::Flatpak => platform::set_auto(key, on),
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Updates {

@@ -296,7 +296,14 @@ impl Survey {
 }
 
 pub(crate) fn switch(id: &str) -> Option<&'static Switch> {
-    platform::switches().iter().find(|switch| switch.id == id)
+    named(platform::switches(), id)
+}
+
+fn named(switches: &'static [Switch], id: &str) -> Option<&'static Switch> {
+    let mut rows = switches.iter().filter(|switch| switch.id == id).peekable();
+    let first = rows.peek().copied();
+    rows.find(|switch| switch.requires.missing().is_none())
+        .or(first)
 }
 
 pub(crate) fn read_switches() -> Vec<Live> {
@@ -319,8 +326,12 @@ fn live(switches: &'static [Switch]) -> Vec<Live> {
 }
 
 pub(crate) fn set_switch(switch: &Switch, on: bool) -> Result<(), Refusal> {
-    let live = read_switches()
-        .into_iter()
+    set_live(&read_switches(), switch, on)
+}
+
+fn set_live(live: &[Live], switch: &Switch, on: bool) -> Result<(), Refusal> {
+    let live = live
+        .iter()
         .find(|live| live.switch.id == switch.id)
         .ok_or_else(|| Refusal::Failed(format!("{} is not on this computer", switch.name)))?;
     (live.switch.set)(on)
@@ -350,21 +361,16 @@ pub(crate) fn survey(at: NaiveDateTime) -> Survey {
 pub(crate) fn remove(found: &Found, consent: Consent) -> Result<(), Refusal> {
     let leftover = found.leftover;
     let Some(amount) = found.amount.as_ref() else {
-        return Err(Refusal::Failed(format!(
-            "{} are not on this computer",
-            leftover.name
-        )));
+        return Err(Refusal::Failed("they are not on this computer".into()));
     };
     consent::allows(leftover, consent).map_err(|why| {
         Refusal::Failed(format!(
-            "{} {why}, so they are removed only when asked for by name",
-            leftover.name
+            "they {why}, so they are removed only when asked for by name"
         ))
     })?;
     let unlisted = |why: &Why| {
         Err(Refusal::Failed(format!(
-            "{} could not be listed, so nothing was removed: {}",
-            leftover.name,
+            "they could not be listed, so nothing was removed: {}",
             why.reason()
         )))
     };

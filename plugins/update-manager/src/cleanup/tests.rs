@@ -71,6 +71,13 @@ fn every_switch_fills_its_words_and_covers_kinds_of_its_own_table() {
             assert!(word(text), "switch `{}` has an empty word", switch.id);
         }
         assert!(!switch.covers.is_empty(), "switch `{}`", switch.id);
+        assert!(
+            crate::updates::AutoKey::INSTALLS
+                .iter()
+                .all(|key| key.id() != switch.id),
+            "switch `{}` would decode as an install switch",
+            switch.id
+        );
         for kind in switch.covers {
             assert!(
                 leftovers().iter().any(|known| known.id == kind.id),
@@ -203,6 +210,49 @@ fn a_kind_that_could_not_be_listed_is_not_reported_removed() {
     );
 }
 
+#[test]
+fn a_kind_that_takes_a_list_refuses_when_its_list_is_unknown_for_any_reason() {
+    for (kind, why) in [
+        (
+            &LISTED,
+            Why::Cannot("apt would remove other packages with them"),
+        ),
+        (&LISTED, Why::NeedsAdmin),
+        (&SCRIPTED, Why::Cannot("snap is not answering")),
+    ] {
+        let unknown = Found {
+            leftover: kind,
+            amount: Some(Amount::unknown(why.clone())),
+        };
+        assert_eq!(
+            remove(&unknown, Consent::All),
+            Err(Refusal::Failed(format!(
+                "they could not be listed, so nothing was removed: {}",
+                why.reason()
+            ))),
+            "{} with {why:?}",
+            kind.id
+        );
+    }
+}
+
+#[test]
+fn only_a_failed_measure_asks_for_the_quick_retry() {
+    let unknown = |why: Why| Found {
+        leftover: &OLD,
+        amount: Some(Amount::unknown(why)),
+    };
+    assert!(fake::survey(vec![unknown(Why::Failed("apt is locked".into()))]).failed());
+    assert!(!fake::survey(vec![unknown(Why::NeedsAdmin)]).failed());
+    assert!(!fake::survey(vec![unknown(Why::Cannot("no dry run"))]).failed());
+    assert!(!fake::survey(vec![found(&OLD, 1, &[("x", 1)])]).failed());
+    let absent = Found {
+        leftover: &OLD,
+        amount: None,
+    };
+    assert!(!fake::survey(vec![absent]).failed());
+}
+
 fn on() -> Option<State> {
     Some(State::On { idle: false })
 }
@@ -215,7 +265,16 @@ fn refuse(_on: bool) -> Result<(), Refusal> {
     Err(Refusal::Denied)
 }
 
-const fn row(name: &'static str, requires: Requires, read: fn() -> Option<State>) -> Switch {
+fn accept(_on: bool) -> Result<(), Refusal> {
+    Ok(())
+}
+
+const fn row(
+    name: &'static str,
+    requires: Requires,
+    read: fn() -> Option<State>,
+    set: fn(bool) -> Result<(), Refusal>,
+) -> Switch {
     Switch {
         id: "kernels",
         owner: Owner {
@@ -234,15 +293,20 @@ const fn row(name: &'static str, requires: Requires, read: fn() -> Option<State>
         covers: &[],
         requires,
         read,
-        set: refuse,
+        set,
     }
 }
 
 static ROWS: [Switch; 4] = [
-    row("missing", Requires::Path("/nowhere/qol-cleanup"), on),
-    row("unread", Requires::Path("/"), unread),
-    row("live", Requires::Path("/"), on),
-    row("second", Requires::Path("/"), on),
+    row(
+        "missing",
+        Requires::Path("/nowhere/qol-cleanup"),
+        on,
+        refuse,
+    ),
+    row("unread", Requires::Path("/"), unread, refuse),
+    row("live", Requires::Path("/"), on, accept),
+    row("second", Requires::Path("/"), on, refuse),
 ];
 
 #[test]
@@ -250,6 +314,30 @@ fn the_first_present_row_that_reads_is_the_live_one_for_its_id() {
     let rows = live(&ROWS);
     let names: Vec<&str> = rows.iter().map(|live| live.switch.name).collect();
     assert_eq!(names, ["live"]);
+    assert_eq!(
+        named(&ROWS, "kernels").map(|switch| switch.name),
+        Some("unread"),
+        "a journal id names the first row present on this computer"
+    );
+    assert_eq!(
+        named(&ROWS[..1], "kernels").map(|switch| switch.name),
+        Some("missing")
+    );
+    assert!(named(&ROWS, "by_hand").is_none());
+}
+
+#[test]
+fn a_switch_change_goes_to_the_row_live_on_this_computer() {
+    let rows = live(&ROWS);
+    assert_eq!(
+        set_live(&rows, &ROWS[0], true),
+        Ok(()),
+        "the missing row would refuse; the live row accepts"
+    );
+    assert_eq!(
+        set_live(&[], &ROWS[2], true),
+        Err(Refusal::Failed("live is not on this computer".into()))
+    );
 }
 
 #[test]

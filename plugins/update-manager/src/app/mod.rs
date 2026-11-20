@@ -389,17 +389,11 @@ fn survey(shared: &Shared) {
                 }
                 let busy = state.reading || state.session.job.is_some();
                 let changed = seen.as_ref().is_some_and(|seen| *seen != cleanup::stamp());
-                let due = state.want_survey || changed || Instant::now() >= next;
-                if due && !busy {
-                    break;
+                let left = next.saturating_duration_since(Instant::now());
+                match survey_wait(state.want_survey, busy, changed, left) {
+                    None => break,
+                    Some(wait) => state = shared.wait(state, wait),
                 }
-                let wait = if busy {
-                    SURVEY_RETRY
-                } else {
-                    next.saturating_duration_since(Instant::now())
-                        .min(SURVEY_CHECK)
-                };
-                state = shared.wait(state, wait);
             }
             state.want_survey = false;
             state.surveying = true;
@@ -419,6 +413,16 @@ fn survey(shared: &Shared) {
         state.surveying = false;
         shared.wake.notify_all();
     }
+}
+
+fn survey_wait(want: bool, busy: bool, changed: bool, left: Duration) -> Option<Duration> {
+    if busy {
+        return Some(SURVEY_RETRY);
+    }
+    if want || changed || left.is_zero() {
+        return None;
+    }
+    Some(left.min(SURVEY_CHECK))
 }
 
 fn rules(shared: &Shared) {
@@ -567,6 +571,28 @@ mod tests {
             )
         );
         assert!(state.want_survey, "an install measures leftovers again");
+    }
+
+    #[test]
+    fn the_survey_waits_for_reads_and_installs_and_wakes_for_package_changes() {
+        let hour = Duration::from_secs(3600);
+        assert_eq!(survey_wait(false, false, false, hour), Some(SURVEY_CHECK));
+        assert_eq!(survey_wait(false, false, true, hour), None, "dpkg changed");
+        assert_eq!(survey_wait(true, false, false, hour), None, "asked for");
+        assert_eq!(
+            survey_wait(false, false, false, Duration::ZERO),
+            None,
+            "due"
+        );
+        assert_eq!(
+            survey_wait(false, false, false, Duration::from_secs(5)),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(
+            survey_wait(true, true, true, Duration::ZERO),
+            Some(SURVEY_RETRY),
+            "never while updates are read or installed"
+        );
     }
 
     #[test]

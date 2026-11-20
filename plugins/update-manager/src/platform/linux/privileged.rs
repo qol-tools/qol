@@ -97,9 +97,6 @@ fn follow(mut child: Child, limit: Duration) -> Result<(), Refusal> {
     if status.success() {
         return Ok(());
     }
-    if matches!(status.code(), Some(126 | 127)) {
-        return Err(refusal(status));
-    }
     let said = last.recv_timeout(DRAIN_WAIT).ok().flatten();
     Err(Refusal::Failed(
         said.unwrap_or_else(|| format!("it stopped with {status}")),
@@ -140,6 +137,16 @@ mod tests {
                 long
             ),
             Err(Refusal::Failed("E: it broke".into()))
+        );
+        assert_eq!(
+            follow(
+                authorized("echo ready; echo 'env: snap: No such file or directory'; exit 127"),
+                long
+            ),
+            Err(Refusal::Failed(
+                "env: snap: No such file or directory".into()
+            )),
+            "after the password, a missing program is the script's failure, not a closed prompt"
         );
         let started = Instant::now();
         let stopped = follow(

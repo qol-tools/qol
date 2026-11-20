@@ -80,7 +80,6 @@ pub(crate) fn read_host() -> Host {
             RUNS_SHOWN,
         ),
         mint: mint::read(),
-        switches: crate::cleanup::read_switches(),
         admin: groups
             .split_whitespace()
             .any(|group| ADMIN_GROUPS.contains(&group)),
@@ -88,6 +87,7 @@ pub(crate) fn read_host() -> Host {
         log: Path::new(HISTORY).exists().then(|| HISTORY.to_string()),
         skips: skips::read(),
         problems: Vec::new(),
+        switches: Vec::new(),
     }
 }
 
@@ -164,9 +164,6 @@ pub(crate) fn install(
 }
 
 pub(crate) fn set_auto(key: AutoKey, on: bool) -> Result<(), Refusal> {
-    if let AutoKey::Switch(switch) = key {
-        return crate::cleanup::set_switch(switch, on);
-    }
     mint::set_auto(key, on)
 }
 

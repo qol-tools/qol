@@ -51,10 +51,10 @@ pub(super) fn finish(running: &Running, now: NaiveDateTime) -> Vec<Finish> {
     });
     let images = installed_images().unwrap_or_default();
     if let (Some(current), Some(flavor)) = (running.kernel.as_deref(), flavor.as_deref()) {
-        if let Some(newest) = newest_kernel(&images, flavor)
-            .filter(|newest| version_key(newest) > version_key(current))
+        if let Some((newest, package)) = newest_kernel(&images, flavor)
+            .filter(|(newest, _)| version_key(newest) > version_key(current))
         {
-            let installed = modified(&format!("{DPKG_INFO}/linux-image-{newest}-{flavor}.list"))
+            let installed = modified(&format!("{DPKG_INFO}/{package}.list"))
                 .map(|time| format!(" {}", when(time, now)))
                 .unwrap_or_default();
             let label = format!("Linux kernel {newest}");
@@ -116,12 +116,12 @@ fn modified(path: &str) -> Option<NaiveDateTime> {
     Some(DateTime::<Local>::from(time).naive_local())
 }
 
-pub(super) fn newest_kernel(images: &[String], flavor: &str) -> Option<String> {
+pub(super) fn newest_kernel(images: &[String], flavor: &str) -> Option<(String, String)> {
     images
         .iter()
         .filter(|package| package.ends_with(&format!("-{flavor}")))
-        .filter_map(|package| kernel_abi(package))
-        .max_by_key(|abi| version_key(abi))
+        .filter_map(|package| Some((kernel_abi(package)?, package.clone())))
+        .max_by_key(|(abi, _)| version_key(abi))
 }
 
 pub(super) fn installed_driver(listing: &str) -> Option<String> {
@@ -151,13 +151,21 @@ mod tests {
         ]
         .map(String::from)
         .to_vec();
+        let newest = |flavor| newest_kernel(&images, flavor);
         assert_eq!(
-            newest_kernel(&images, "lowlatency").as_deref(),
-            Some("6.8.0-147")
+            newest("lowlatency"),
+            Some((
+                "6.8.0-147".to_string(),
+                "linux-image-6.8.0-147-lowlatency".to_string()
+            ))
         );
         assert_eq!(
-            newest_kernel(&images, "generic").as_deref(),
-            Some("6.8.0-150")
+            newest("generic"),
+            Some((
+                "6.8.0-150".to_string(),
+                "linux-image-unsigned-6.8.0-150-generic".to_string()
+            )),
+            "an unsigned image keeps its own package name, so its install time is found"
         );
     }
 

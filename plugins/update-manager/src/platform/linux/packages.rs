@@ -15,13 +15,20 @@ pub(crate) fn base(package: &str) -> &str {
 }
 
 pub(crate) fn kernel_abi(package: &str) -> Option<String> {
-    let rest = base(package).strip_prefix("linux-image-")?;
-    let rest = rest.strip_prefix("unsigned-").unwrap_or(rest);
-    let mut parts = rest.splitn(3, '-');
-    let version = parts.next()?;
-    let build = parts.next()?;
-    (version.split('.').all(|part| part.parse::<u32>().is_ok()) && build.parse::<u32>().is_ok())
-        .then(|| format!("{version}-{build}"))
+    base(package)
+        .starts_with("linux-image-")
+        .then(|| versioned_abi(package))
+        .flatten()
+}
+
+pub(crate) fn versioned_abi(package: &str) -> Option<String> {
+    let rest = base(package).strip_prefix("linux-")?;
+    let parts: Vec<&str> = rest.split('-').collect();
+    parts.windows(2).find_map(|pair| {
+        let numbers: Vec<&str> = pair[0].split('.').collect();
+        let dotted = numbers.len() == 3 && numbers.iter().all(|part| part.parse::<u32>().is_ok());
+        (dotted && pair[1].parse::<u32>().is_ok()).then(|| format!("{}-{}", pair[0], pair[1]))
+    })
 }
 
 pub(crate) fn version_key(abi: &str) -> Vec<u32> {
@@ -70,6 +77,21 @@ mod tests {
     }
 
     #[test]
+    fn only_versioned_kernel_packages_carry_an_abi() {
+        assert_eq!(
+            versioned_abi("linux-hwe-6.8-headers-6.8.0-111").as_deref(),
+            Some("6.8.0-111")
+        );
+        assert_eq!(
+            versioned_abi("linux-modules-extra-6.8.0-111-generic:amd64").as_deref(),
+            Some("6.8.0-111")
+        );
+        assert_eq!(versioned_abi("linux-image-generic"), None);
+        assert_eq!(versioned_abi("linux-firmware"), None);
+        assert_eq!(versioned_abi("libfoo1"), None);
+    }
+
+    #[test]
     fn kernel_packages_name_their_abi() {
         assert_eq!(
             kernel_abi("linux-image-6.8.0-147-lowlatency:amd64").as_deref(),
@@ -81,6 +103,11 @@ mod tests {
         );
         assert_eq!(kernel_abi("linux-image-lowlatency"), None);
         assert_eq!(kernel_abi("linux-image-unsigned-generic"), None);
+        assert_eq!(
+            kernel_abi("linux-modules-6.8.0-152-generic"),
+            None,
+            "only an image names a kernel"
+        );
         assert_eq!(base("bluez:amd64"), "bluez");
         assert!(version_key("6.8.0-147") > version_key("6.8.0-146"));
         assert!(version_key("6.10.0-1") > version_key("6.8.0-147"));

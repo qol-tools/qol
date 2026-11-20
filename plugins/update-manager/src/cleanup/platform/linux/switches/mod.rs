@@ -1,5 +1,6 @@
 use super::{KERNELS, KERNELS_BY_HAND, ORPHANS};
 use crate::cleanup::{Owner, Requires, Switch, Words};
+use crate::platform::linux;
 
 mod mint;
 mod unattended;
@@ -12,7 +13,7 @@ const UNATTENDED: Owner = Owner {
     title: "automatic updates",
     colophon: "automatic updates, unattended-upgrades. it stays when qol stops.",
 };
-const MINT_AUTOMATION: Requires = Requires::Path("/usr/bin/mintupdate-automation");
+const ON_MINT: Requires = Requires::Path(linux::MINT_AUTOMATION);
 const KEPT: &str = "Old kernels stay until you remove them.";
 const MINT_ON: &str =
     "Weekly and 3 hours after each startup. Also removes other packages nothing needs.";
@@ -33,7 +34,7 @@ static SWITCHES: [Switch; 3] = [
             off: KEPT,
         },
         covers: &[&KERNELS, &ORPHANS],
-        requires: MINT_AUTOMATION,
+        requires: ON_MINT,
         read: mint::removals,
         set: mint::set_removals,
     },
@@ -50,7 +51,7 @@ static SWITCHES: [Switch; 3] = [
             off: "A kernel installed from Mint's Update Manager window is never removed.",
         },
         covers: &[&KERNELS_BY_HAND],
-        requires: MINT_AUTOMATION,
+        requires: ON_MINT,
         read: mint::by_hand,
         set: mint::set_by_hand,
     },

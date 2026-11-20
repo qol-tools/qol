@@ -5,7 +5,7 @@ use crate::cleanup::{
     Amount, Item, Leftover, Measure, Noun, Origin, Remove, Requires, Size, WayBack, Why,
 };
 use crate::platform::linux::command;
-use crate::platform::linux::packages::{base, installed_images, running_kernel};
+use crate::platform::linux::packages::{base, installed_images, running_kernel, versioned_abi};
 use crate::platform::linux::privileged::run_long_script;
 use crate::platform::Refusal;
 
@@ -17,7 +17,8 @@ pub(crate) use switches::switches;
 
 const REMOVE: Duration = Duration::from_secs(3600);
 const SNAPS: &str = "/var/lib/snapd/snaps";
-const CHANGES: [&str; 3] = ["/var/lib/dpkg/status", "/var/cache/apt/archives", SNAPS];
+const ARCHIVES: &str = "/var/cache/apt/archives";
+const CHANGES: [&str; 3] = ["/var/lib/dpkg/status", ARCHIVES, SNAPS];
 const APT: Requires = Requires::Program("apt-get");
 const SIMULATE: &[&str] = &["apt-get", "-s", "autoremove"];
 const PURGE: [&str; 3] = ["apt-get", "purge", "-y"];
@@ -25,7 +26,9 @@ const DPKG: &str = "dpkg's estimate; apt's own count needs an administrator";
 const EXEC_SH: &str = "exec env DEBIAN_FRONTEND=noninteractive LANG=C LC_ALL=C \"$@\"";
 const UNKNOWN_RUNNING: &str =
     "the running kernel's version does not read as a packaged kernel, so none are listed";
-const TAKES_MORE: &str = "apt would remove other packages with them, so none are listed";
+const TAKES_MORE: &str = "apt would remove or install other packages with them, so none are listed";
+const REFUSED: &str =
+    "apt would remove or install other packages with them, so nothing was removed";
 const SNAP_SH: &str = r#"for item in "$@"; do
   snap remove "${item%_*}" --revision="${item##*_}" || exit 3
 done
@@ -103,7 +106,7 @@ static PACKAGE_CACHE: Leftover = Leftover {
     },
     requires: APT,
     measure: Measure::Files {
-        dir: "/var/cache/apt/archives",
+        dir: ARCHIVES,
         suffix: ".deb",
     },
     remove: Remove::Command(&["apt-get", "clean"]),
@@ -182,10 +185,17 @@ pub(crate) fn output(argv: &[&str]) -> Result<String, String> {
 }
 
 pub(crate) fn run(remove: &Remove, items: &[String], admin: bool) -> Result<(), Refusal> {
-    if *remove == Remove::Packages && takes_more(items).map_err(Refusal::Failed)? {
-        return Err(Refusal::Failed(
-            "apt would remove other packages with them, so nothing was removed".into(),
-        ));
+    run_checked(remove, items, admin, simulate_purge)
+}
+
+fn run_checked(
+    remove: &Remove,
+    items: &[String],
+    admin: bool,
+    simulate: impl FnOnce(&[String]) -> Result<String, String>,
+) -> Result<(), Refusal> {
+    if *remove == Remove::Packages && !alone(items, simulate).map_err(Refusal::Failed)? {
+        return Err(Refusal::Failed(REFUSED.into()));
     }
     let (script, args) = script(remove, items);
     if admin {
@@ -200,42 +210,61 @@ pub(crate) fn run(remove: &Remove, items: &[String], admin: bool) -> Result<(), 
 }
 
 fn script(remove: &Remove, items: &[String]) -> (String, Vec<String>) {
-    match remove {
-        Remove::Command(argv) => (EXEC_SH.into(), words(argv)),
-        Remove::Packages => {
-            let mut args = words(&PURGE);
-            args.extend(items.iter().cloned());
-            (EXEC_SH.into(), args)
-        }
-        Remove::Script(script) => ((*script).into(), items.to_vec()),
+    let argv: &[&str] = match remove {
+        Remove::Command(argv) => argv,
+        Remove::Packages => &PURGE,
+        Remove::Script(script) => return ((*script).into(), items.to_vec()),
+    };
+    let mut args: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
+    if *remove == Remove::Packages {
+        args.extend(items.iter().cloned());
     }
+    (EXEC_SH.into(), args)
 }
 
-fn words(argv: &[&str]) -> Vec<String> {
-    argv.iter().map(|arg| arg.to_string()).collect()
-}
-
-fn takes_more(packages: &[String]) -> Result<bool, String> {
+fn simulate_purge(packages: &[String]) -> Result<String, String> {
     let mut args = vec!["-s", "purge"];
     args.extend(packages.iter().map(String::as_str));
-    let planned = command::output("apt-get", &args)?;
-    Ok(parse::beyond(&parse::removals(&planned), packages).is_some())
+    command::output("apt-get", &args)
 }
 
-fn listed(packages: Vec<String>, count: usize, present: usize) -> Result<Amount, String> {
-    if !packages.is_empty() && takes_more(&packages)? {
-        return Ok(Amount::unknown(Why::Cannot(TAKES_MORE)));
+fn alone(
+    packages: &[String],
+    simulate: impl FnOnce(&[String]) -> Result<String, String>,
+) -> Result<bool, String> {
+    Ok(!parse::plans_beyond(&simulate(packages)?, packages))
+}
+
+fn listed(
+    packages: Vec<String>,
+    count: usize,
+    present: usize,
+    simulate: impl FnOnce(&[String]) -> Result<String, String>,
+) -> Amount {
+    if packages.is_empty() {
+        return dpkg_sized(packages, count, present);
     }
-    Ok(dpkg_sized(packages, count, present))
+    match alone(&packages, simulate) {
+        Ok(true) => dpkg_sized(packages, count, present),
+        Ok(false) => unknown(Why::Cannot(TAKES_MORE), present),
+        Err(reason) => unknown(Why::Failed(reason), present),
+    }
+}
+
+fn unknown(why: Why, present: usize) -> Amount {
+    Amount {
+        present,
+        ..Amount::unknown(why)
+    }
 }
 
 fn old_kernels(simulated: &str) -> Result<Amount, String> {
     let packages: Vec<String> = parse::removals(simulated)
         .into_iter()
-        .filter(|package| parse::versioned_abi(package).is_some())
+        .filter(|package| versioned_abi(package).is_some())
         .collect();
     let count = parse::kernels(&packages);
-    listed(packages, count, count)
+    Ok(listed(packages, count, count, simulate_purge))
 }
 
 fn orphans(simulated: &str) -> Result<Amount, String> {
@@ -245,10 +274,15 @@ fn orphans(simulated: &str) -> Result<Amount, String> {
 }
 
 fn kernels_by_hand(manual: &str) -> Result<Amount, String> {
-    match parse::by_hand(manual, running_kernel().as_deref(), installed_images)? {
-        Some(by_hand) => listed(by_hand.packages, by_hand.kernels, by_hand.present),
-        None => Ok(Amount::unknown(Why::Cannot(UNKNOWN_RUNNING))),
-    }
+    let running = running_kernel();
+    let present = parse::kept(manual, running.as_deref());
+    Ok(
+        match parse::by_hand(manual, running.as_deref(), installed_images) {
+            Ok(Some(by_hand)) => listed(by_hand.packages, by_hand.kernels, present, simulate_purge),
+            Ok(None) => unknown(Why::Cannot(UNKNOWN_RUNNING), present),
+            Err(reason) => unknown(Why::Failed(reason), present),
+        },
+    )
 }
 
 fn snaps(listing: &str) -> Result<Amount, String> {
@@ -333,6 +367,62 @@ mod tests {
             .map(|leftover| leftover.id)
             .collect();
         assert_eq!(asking, ["kernels_by_hand", "snap"]);
+    }
+
+    #[test]
+    fn the_page_fakes_carry_the_real_kernel_nouns() {
+        use crate::cleanup::fake;
+        assert_eq!(fake::OLD.noun, KERNELS.noun);
+        assert_eq!(fake::BY_HAND.noun, KERNELS_BY_HAND.noun);
+    }
+
+    const ALONE: &str = "Purg linux-image-6.8.0-111-generic [6.8.0-111.111]\n";
+
+    fn kernel() -> Vec<String> {
+        vec!["linux-image-6.8.0-111-generic".to_string()]
+    }
+
+    fn unasked(_: &[String]) -> Result<String, String> {
+        panic!("nothing to simulate")
+    }
+
+    #[test]
+    fn kernels_are_listed_only_when_the_purge_plan_takes_nothing_else() {
+        assert_eq!(alone(&kernel(), |_| Ok(ALONE.into())), Ok(true));
+        assert_eq!(
+            alone(&kernel(), |_| Ok(format!(
+                "{ALONE}Purg linux-generic [6.8.0.111]\n"
+            ))),
+            Ok(false)
+        );
+        assert_eq!(
+            alone(&kernel(), |_| Err("apt is locked".into())),
+            Err("apt is locked".to_string())
+        );
+        let more = listed(kernel(), 1, 3, |_| {
+            Ok(format!(
+                "Inst linux-image-unsigned-6.8.0-111-generic\n{ALONE}"
+            ))
+        });
+        assert_eq!(more, unknown(Why::Cannot(TAKES_MORE), 3));
+        assert!(more.items.is_empty(), "nothing is listed for removal");
+        let failed = listed(kernel(), 1, 3, |_| Err("apt is locked".into()));
+        assert_eq!(failed, unknown(Why::Failed("apt is locked".into()), 3));
+        let none = listed(Vec::new(), 0, 3, unasked);
+        assert_eq!((none.size, none.present), (Size::Exact(0), 3));
+    }
+
+    #[test]
+    fn a_purge_that_would_take_more_is_refused_before_anything_runs() {
+        let absent = vec!["qol-cleanup-test-no-such-package".to_string()];
+        let refused = run_checked(&Remove::Packages, &absent, false, |_| {
+            Ok("Purg qol-cleanup-test-no-such-package\nPurg linux-generic\n".into())
+        });
+        assert_eq!(refused, Err(Refusal::Failed(REFUSED.into())));
+        let unread = run_checked(&Remove::Packages, &absent, false, |_| {
+            Err("apt is locked".into())
+        });
+        assert_eq!(unread, Err(Refusal::Failed("apt is locked".into())));
     }
 
     #[test]
