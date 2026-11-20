@@ -1,3 +1,5 @@
+use crate::platform::linux::packages::{base, kernel_abi};
+
 const RESTARTS: [&str; 7] = [
     "glibc",
     "systemd",
@@ -21,10 +23,6 @@ pub(super) struct Naming {
     pub(super) restart: bool,
     pub(super) stops_sound: bool,
     pub(super) caution: Option<(String, String)>,
-}
-
-pub(super) fn base(package: &str) -> &str {
-    package.split(':').next().unwrap_or(package)
 }
 
 pub(super) fn is_kernel(source: &str) -> bool {
@@ -64,15 +62,6 @@ pub(super) fn two_parts(version: &str) -> String {
         .take(2)
         .collect::<Vec<_>>()
         .join(".")
-}
-
-pub(super) fn kernel_abi(package: &str) -> Option<String> {
-    let rest = base(package).strip_prefix("linux-image-")?;
-    let mut parts = rest.splitn(3, '-');
-    let version = parts.next()?;
-    let build = parts.next()?;
-    (version.split('.').all(|part| part.parse::<u32>().is_ok()) && build.parse::<u32>().is_ok())
-        .then(|| format!("{version}-{build}"))
 }
 
 pub(super) fn naming(source: &str, version: &str, packages: &[String]) -> Naming {
@@ -231,11 +220,6 @@ mod tests {
         )
         .caution
         .is_some());
-        assert_eq!(
-            kernel_abi("linux-image-6.8.0-147-lowlatency:amd64").as_deref(),
-            Some("6.8.0-147")
-        );
-        assert_eq!(kernel_abi("linux-image-lowlatency"), None);
     }
 
     #[test]

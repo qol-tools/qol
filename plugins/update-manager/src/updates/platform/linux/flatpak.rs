@@ -1,4 +1,4 @@
-use super::output;
+use crate::platform::linux::command::{found, output};
 use crate::updates::{Package, Unit, Update};
 
 const GL_NVIDIA: &str = "org.freedesktop.Platform.GL.nvidia-";
@@ -54,7 +54,7 @@ pub(super) fn parse_size(text: &str) -> Option<u64> {
 }
 
 pub(super) fn read() -> Result<Vec<Update>, String> {
-    if !super::found("flatpak") {
+    if !found("flatpak") {
         return Ok(Vec::new());
     }
     Ok(updates(parse(&output(

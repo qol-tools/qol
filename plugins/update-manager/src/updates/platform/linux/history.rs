@@ -1,7 +1,8 @@
 use chrono::{Duration, NaiveDateTime};
 use indexmap::IndexMap;
 
-use super::names::{family, kernel_abi};
+use super::names::family;
+use crate::platform::linux::packages::kernel_abi;
 use crate::updates::{Run, RunBy};
 
 pub(super) const MARK: &str = "qol::update-manager";

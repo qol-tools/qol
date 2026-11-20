@@ -1,5 +1,5 @@
-use super::super::lenient;
-use super::super::privileged::run_script;
+use crate::platform::linux::command::lenient;
+use crate::platform::linux::privileged::run_script;
 use crate::updates::{Cleaner, Cleanup, Refusal};
 
 const PERIODIC: &str = "APT::Periodic::Unattended-Upgrade";
