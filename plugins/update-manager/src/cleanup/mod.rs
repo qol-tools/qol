@@ -5,7 +5,7 @@ use std::path::Path;
 
 use chrono::NaiveDateTime;
 
-use crate::updates::Refusal;
+use crate::platform::Refusal;
 
 mod consent;
 mod measure;

@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use qol_host_fixes::elevation::wait_until_authorized;
 
 use crate::platform::linux::privileged::{classify, refusal, spawn};
-use crate::updates::{Failure, Holding, Reason, Refusal};
+use crate::platform::Refusal;
+use crate::updates::{Failure, Holding, Reason};
 
 const STOP_WAIT: Duration = Duration::from_secs(5);
 const READY: &str = "ready";

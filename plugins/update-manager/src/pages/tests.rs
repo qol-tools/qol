@@ -6,10 +6,11 @@ use crate::cleanup::fake::{
     self, found, BY_HAND, EXTRA, MINT_BY_HAND, MINT_KERNELS, UNATTENDED_KERNELS,
 };
 use crate::cleanup::{Live, State};
+use crate::platform::Refusal;
 use crate::session::{Act, Helper, InUse, Journal, Session, Task, MINT_DEFAULT};
 use crate::updates::{
-    Auto, AutoKey, Failure, Finish, Held, Hours, Mint, Package, Reason, Refusal, Run, RunBy, Unit,
-    Update, Updates,
+    Auto, AutoKey, Failure, Finish, Held, Hours, Mint, Package, Reason, Run, RunBy, Unit, Update,
+    Updates,
 };
 
 fn at(text: &str) -> NaiveDateTime {

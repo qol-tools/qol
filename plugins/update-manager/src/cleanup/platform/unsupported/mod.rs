@@ -1,5 +1,5 @@
 use crate::cleanup::{Leftover, Remove, Switch};
-use crate::updates::Refusal;
+use crate::platform::Refusal;
 
 const UNSUPPORTED: &str = "Update Manager reads what updates leave behind on Linux only so far";
 

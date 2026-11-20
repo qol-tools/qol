@@ -5,7 +5,7 @@ use qol_desktop_settings::gsettings;
 
 use crate::platform::linux::command::READ;
 use crate::platform::linux::privileged::run_script;
-use crate::updates::Refusal;
+use crate::platform::Refusal;
 
 const SCHEMA: &str = "com.linuxmint.updates";
 const KEY: &str = "blacklisted-packages";

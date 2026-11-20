@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::NaiveDateTime;
 
 use crate::cleanup::{Live, Survey};
+use crate::platform::Refusal;
 use crate::updates::{
-    visible, Auto, AutoKey, Clock, Failure, Finish, Holding, Host, Hours, Mint, Refusal, Update,
-    Updates,
+    visible, Auto, AutoKey, Clock, Failure, Finish, Holding, Host, Hours, Mint, Update, Updates,
 };
 
 mod journal;

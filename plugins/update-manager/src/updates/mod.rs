@@ -1,10 +1,10 @@
-use std::fmt;
-
 use chrono::{Datelike, NaiveDateTime};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::cleanup::{self, Live, Switch};
+
+use crate::platform::Refusal;
 
 mod clock;
 mod platform;
@@ -142,14 +142,6 @@ pub(crate) enum AutoKey {
 pub(crate) enum Holding {
     Ours,
     Theirs,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Refusal {
-    Dismissed,
-    Denied,
-    TimedOut,
-    Failed(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -435,17 +427,6 @@ impl<'de> Deserialize<'de> for AutoKey {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let id = String::deserialize(deserializer)?;
         Self::from_id(&id).ok_or_else(|| D::Error::custom(format!("unknown switch `{id}`")))
-    }
-}
-
-impl fmt::Display for Refusal {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Dismissed => formatter.write_str("the password prompt was closed"),
-            Self::Denied => formatter.write_str("the password was not accepted"),
-            Self::TimedOut => formatter.write_str("the password prompt timed out"),
-            Self::Failed(reason) => formatter.write_str(reason),
-        }
     }
 }
 

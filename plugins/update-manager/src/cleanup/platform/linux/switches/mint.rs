@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::cleanup::State;
 use crate::platform::linux::command::lenient;
 use crate::platform::linux::privileged::run_script;
-use crate::updates::Refusal;
+use crate::platform::Refusal;
 
 const TIMER: &str = "mintupdate-automation-autoremove.timer";
 const SERVICE: &str = "mintupdate-automation-autoremove.service";

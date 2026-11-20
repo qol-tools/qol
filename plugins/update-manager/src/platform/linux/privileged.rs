@@ -6,7 +6,7 @@ use qol_host_fixes::elevation::{
     run_privileged, spawn_privileged_piped, PrivilegedExit, PromptTimedOut,
 };
 
-use crate::updates::Refusal;
+use crate::platform::Refusal;
 
 const SHELL: &str = "/bin/sh";
 const LABEL: &str = "qol-update-manager";

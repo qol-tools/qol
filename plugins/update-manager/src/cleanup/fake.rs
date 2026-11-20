@@ -4,7 +4,7 @@ use super::{
     Amount, Found, Item, Leftover, Live, Measure, Noun, Origin, Owner, Remove, Requires, Size,
     State, Survey, Switch, WayBack, Words,
 };
-use crate::updates::Refusal;
+use crate::platform::Refusal;
 
 const MINT: Owner = Owner {
     title: "mint's cleanup",

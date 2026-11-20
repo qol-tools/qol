@@ -7,7 +7,7 @@ use crate::cleanup::{
 use crate::platform::linux::command::{self, run as run_command};
 use crate::platform::linux::packages::{base, kernel_abi};
 use crate::platform::linux::privileged::run_script;
-use crate::updates::Refusal;
+use crate::platform::Refusal;
 
 mod parse;
 mod switches;

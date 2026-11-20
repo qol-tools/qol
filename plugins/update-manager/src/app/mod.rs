@@ -14,8 +14,9 @@ use serde::Serialize;
 
 use crate::cleanup;
 use crate::pages;
+use crate::platform::Refusal;
 use crate::session::{Helper as HelperState, InUse, Journal, Rules, Session, Task};
-use crate::updates::{self, Failure, Helper, Reason, Refusal};
+use crate::updates::{self, Failure, Helper, Reason};
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,

@@ -1,7 +1,7 @@
 use crate::cleanup::State;
 use crate::platform::linux::command::lenient;
 use crate::platform::linux::privileged::run_script;
-use crate::updates::Refusal;
+use crate::platform::Refusal;
 
 const PERIODIC: &str = "APT::Periodic::Unattended-Upgrade";
 const KERNELS: &str = "Unattended-Upgrade::Remove-Unused-Kernel-Packages";
