@@ -4,7 +4,8 @@ use super::super::mint::parse_timer;
 use crate::platform::linux::command::lenient;
 use crate::platform::linux::packages::kernel_abi;
 use crate::platform::linux::privileged::run_script;
-use crate::updates::{ByHand, Cleaner, Cleanup, Refusal};
+use crate::platform::Refusal;
+use crate::updates::{ByHand, Cleaner, Cleanup};
 
 const TIMER: &str = "mintupdate-automation-autoremove.timer";
 const SERVICE: &str = "mintupdate-automation-autoremove.service";

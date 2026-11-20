@@ -7,7 +7,8 @@ use chrono::{Local, NaiveDateTime};
 
 use crate::platform::linux::command::{found, lenient, run};
 use crate::platform::linux::privileged::refused;
-use crate::updates::{AutoKey, Failure, Host, Hours, Reason, Refusal, Update, Updates};
+use crate::platform::Refusal;
+use crate::updates::{AutoKey, Failure, Host, Hours, Reason, Update, Updates};
 
 mod apt;
 mod boot;
