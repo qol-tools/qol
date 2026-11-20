@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, Register, UiOpenResult } from 'claude-code'
 
-import type { ActionKind, CheckResult, Doing, Entry, Kind, Lit, ModelChoice, ModelSeen, Pull, PullDetail, RunState } from '../types'
+import type { ActionKind, CheckResult, Doing, Entry, Kind, Lit, ModelChoice, ModelSeen, Pull, PullDetail, PullState, RunState } from '../types'
 
 const PROJECT = /^\s*Project:\s*(.+?)\s*$/
 const MODEL_LINE = /^\s*Model:\s*([A-Za-z0-9][\w.[\]-]*)\s*$/
@@ -1858,8 +1858,8 @@ export const watcherArgs = (command: string, root: string | undefined): string[]
 export const watchCommand = (program: string, agentId: string, conversation: string, name: string | undefined, args: readonly string[]): string =>
   [program, 'fork-watch', '--agent', agentId, '--conversation', conversation, ...(name === undefined || name === '' ? [] : ['--title', name]), '--', ...args].map(quote).join(' ')
 
-export const pullText = (pull: Pull): string =>
-  `#${pull.number ?? '?'} ${pull.mergeCommit !== undefined ? `merged ${pull.mergeCommit.slice(0, 7)}` : pull.isWatched ? 'open · CLI Sessions watching' : 'open · no watcher'}`
+export const pullText = (pull: Pull, state?: PullState): string =>
+  `#${pull.number ?? '?'} ${pull.mergeCommit !== undefined ? `merged ${pull.mergeCommit.slice(0, 7)}` : state === 'merged' ? 'merged' : state === 'closed' ? 'closed, not merged' : pull.isWatched ? 'open · CLI Sessions watching' : 'open · no watcher'}`
 
 const pullsOf = (all: readonly Pull[], agentId: string): Pull[] => all.filter(pull => pull.agentId === agentId)
 
@@ -1994,10 +1994,19 @@ const refreshDetails = ($: EngineInterface, own: readonly Pull[], details: Recor
   for (const pull of own) {
     const known = details[pull.pullRequest]
     const tried = detailTried.get(pull.pullRequest) ?? 0
-    if (pull.mergeCommit !== undefined || known?.state === 'merged' || known?.state === 'closed' || now - tried < DETAIL_MS) continue
+    if (pull.mergeCommit !== undefined || known?.state === 'merged' || now - tried < DETAIL_MS) continue
     detailTried.set(pull.pullRequest, now)
     $.clock.after(0, () => void fetchDetail($, pull.pullRequest).catch(() => undefined))
   }
+}
+
+const detailsRead = async ($: EngineInterface, own: readonly Pull[]): Promise<Record<string, PullDetail>> => {
+  const known = await read($, pullDetails)
+  const now = await $.clock.now()
+  const stale = [...new Set(own.filter(pull => pull.mergeCommit === undefined && known[pull.pullRequest]?.state !== 'merged').map(pull => pull.pullRequest))].filter(url => now - (detailTried.get(url) ?? 0) >= DETAIL_MS)
+  for (const url of stale) detailTried.set(url, now)
+  await Promise.all(stale.map(url => fetchDetail($, url).catch(() => undefined)))
+  return read($, pullDetails)
 }
 
 const CLOSE = 'close-fork'
@@ -2831,9 +2840,9 @@ const age = (ms: number): string => {
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`
 }
 
-const pullNote = (all: readonly Pull[], agentId: string): string => {
+const pullNote = (all: readonly Pull[], agentId: string, details: Record<string, PullDetail>): string => {
   const own = pullsOf(all, agentId)
-  return own.length === 0 ? '' : ` [${own.map(pullText).join('; ')}]`
+  return own.length === 0 ? '' : ` [${own.map(pull => pullText(pull, details[pull.pullRequest]?.state)).join('; ')}]`
 }
 
 const metaLauncher = async ($: EngineInterface, agentId: string): Promise<string | undefined> => {
@@ -2870,13 +2879,13 @@ const listedUnder = (list: Entry[], entry: Entry): string | undefined => {
   return parent === undefined ? `the fork ${entry.launcher}` : keyName(parent.name)
 }
 
-export const readText = (list: Entry[], fork: string | undefined, all: readonly Pull[] = [], states: Record<string, RunState> = {}): string => {
+export const readText = (list: Entry[], fork: string | undefined, all: readonly Pull[] = [], states: Record<string, RunState> = {}, details: Record<string, PullDetail> = {}): string => {
   if (fork !== undefined && fork.trim() !== '') {
     const wanted = fork.trim()
     const entry = [...list].reverse().find(one => one.agentId === wanted || keyName(one.name) === wanted || one.name === wanted)
     if (entry === undefined) return `No fork board row for ${wanted}.`
     const own = pullsOf(all, entry.agentId)
-    const prs = own.length === 0 ? '' : `\npull requests: ${own.map(pull => `${pullText(pull)} ${pull.pullRequest}`).join('; ')}`
+    const prs = own.length === 0 ? '' : `\npull requests: ${own.map(pull => `${pullText(pull, details[pull.pullRequest]?.state)} ${pull.pullRequest}`).join('; ')}`
     const under = listedUnder(list, entry)
     const place = under === undefined ? '' : `\nagent list: under ${under}, the fork that started it, not at the top level`
     return `${boardLine(entry)}\nagent id: ${entry.agentId}${place}${prs}\n\n${entry.report || '(no report yet)'}`
@@ -2887,7 +2896,7 @@ export const readText = (list: Entry[], fork: string | undefined, all: readonly 
     .map(entry => {
       const under = listedUnder(list, entry)
       const place = under === undefined ? '' : `, listed under ${under}`
-      return `${entry.isWorking ? `[fork board] ${keyName(entry.name)}` : boardLine(entry)} (${stateOf(entry, list, states)}, agent id ${entry.agentId}${place})${pullNote(all, entry.agentId)}`
+      return `${entry.isWorking ? `[fork board] ${keyName(entry.name)}` : boardLine(entry)} (${stateOf(entry, list, states)}, agent id ${entry.agentId}${place})${pullNote(all, entry.agentId, details)}`
     })
     .join('\n')
 }
@@ -3504,7 +3513,11 @@ export const register: Register = on => {
   on('tool.call', { tool: TOOL_NAME }, async ($, e) => {
     const fork = typeof e.fork === 'string' ? e.fork : undefined
     await ensureLoaded($)
-    return { result: readText(await withLaunchers($, await read($, board)), fork, await read($, pulls), await read($, forkStates)) }
+    const list = await withLaunchers($, await read($, board))
+    const ledger = await read($, pulls)
+    const listed = list.filter(entry => !entry.isDismissed || fork !== undefined)
+    const details = await detailsRead($, ledger.filter(pull => listed.some(entry => entry.agentId === pull.agentId)))
+    return { result: readText(list, fork, ledger, await read($, forkStates), details) }
   }).catch(() => ({ deny: 'The fork board could not be read.' }))
 
   on('tool.call', { tool: RESUME_NAME }, async ($, e) => {
