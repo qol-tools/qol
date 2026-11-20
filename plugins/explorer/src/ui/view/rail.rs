@@ -7,7 +7,7 @@ use gpui::{
 };
 use qol_gpui::kit::{float_shadow, kit, Kit};
 use qol_gpui::motion;
-use qol_gpui::scrollbar::{seek_handle, ScrollGrip, ScrollSource};
+use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::settings_panel::components::rail_caption;
 use qol_gpui::text::TextStyled;
 use qol_gpui::text_edit::TextField;
@@ -150,12 +150,7 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
                 .track_scroll(&view.rail_scroll)
                 .children(children),
         )
-        .child(kit.scroll_cue(source.clone(), kit.grounds.rail))
-        .child(ScrollGrip::new(
-            "explorer-rail-grip",
-            source,
-            seek_handle(view.rail_scroll.clone()),
-        ))
+        .child(kit.scroll_cue("explorer-rail-bar", source, kit.grounds.rail))
 }
 
 fn header(label: &'static str, colophon: &'static str, live: bool) -> AnyElement {

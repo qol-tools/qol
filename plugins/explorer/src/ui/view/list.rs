@@ -8,7 +8,7 @@ use gpui::{
     ScrollWheelEvent, StatefulInteractiveElement, Styled, Window,
 };
 use qol_gpui::kit::{kit, Chip, Kit};
-use qol_gpui::scrollbar::{ScrollGrip, ScrollSource};
+use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::text::{baseline, laid_out_width, line_height, TextStyled};
 use qol_gpui::theme::{
     translucent, Alpha, Ground, TextStyle, HEIGHT_INLINE, LINE, OPACITY_DISABLED, OPACITY_REST,
@@ -128,12 +128,12 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
         .floor()
         .max(0.0) as usize;
     let shown = end.min(total).saturating_sub(first);
-    let source = ScrollSource::Window {
+    let source = ScrollSource::window(
         first,
         shown,
         total,
-    };
-    let seek = cx.entity().downgrade();
+        cx.listener(|view, at: &f32, _, cx| view.seek_rows(*at, cx)),
+    );
     div()
         .flex_1()
         .min_h_0()
@@ -165,14 +165,7 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
             .track_scroll(view.scroll.clone()),
         )
         .children(view.marquee_box())
-        .child(kit.scroll_cue(source.clone(), kit.grounds.pane))
-        .child(ScrollGrip::new(
-            "explorer-rows-grip",
-            source,
-            move |at, _window, cx| {
-                let _ = seek.update(cx, |view, cx| view.seek_rows(at, cx));
-            },
-        ))
+        .child(kit.scroll_cue("explorer-rows-bar", source, kit.grounds.pane))
         .child(press::tracker(view.pressing.area(), cx))
         .into_any_element()
 }

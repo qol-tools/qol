@@ -301,6 +301,7 @@ impl LauncherView {
             .flex_col()
             .children(items);
         frame.child(panel).child(kit.scroll_cue(
+            "launcher-menu-bar",
             qol_gpui::scrollbar::ScrollSource::Handle {
                 handle: self.menu_scroll.clone(),
                 children,

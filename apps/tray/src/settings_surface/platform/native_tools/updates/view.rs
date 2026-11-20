@@ -435,11 +435,22 @@ impl UpdatesView {
         }
         list = list.child(self.list_height.recorder(cx.weak_entity()));
         list = list.child(kit().scroll_cue(
-            qol_gpui::scrollbar::ScrollSource::Window {
-                first: range.start,
-                shown: range.len(),
+            "updates-list-bar",
+            qol_gpui::scrollbar::ScrollSource::window(
+                range.start,
+                range.len(),
                 total,
-            },
+                cx.listener(move |view: &mut Self, at: &f32, _, cx| {
+                    view.list.seek(*at, total);
+                    let (rows, _) = view.page_rows();
+                    let navigable = navigable(&rows);
+                    if !navigable.is_empty() {
+                        let position = nearest_navigable(&navigable, view.list.selected);
+                        view.select_position(&navigable, position, rows.len());
+                    }
+                    cx.notify();
+                }),
+            ),
             kit().grounds.pane,
         ));
         list.into_any_element()

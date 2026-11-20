@@ -1102,11 +1102,16 @@ impl NativeToolsView {
         }
         list = list.child(self.list_height.recorder(cx.weak_entity()));
         list = list.child(qol_gpui::kit::kit().scroll_cue(
-            qol_gpui::scrollbar::ScrollSource::Window {
-                first: range.start,
-                shown: range.len(),
+            "native-tools-list-bar",
+            qol_gpui::scrollbar::ScrollSource::window(
+                range.start,
+                range.len(),
                 total,
-            },
+                cx.listener(move |view: &mut Self, at: &f32, _, cx| {
+                    view.list_mut().seek(*at, total);
+                    cx.notify();
+                }),
+            ),
             qol_gpui::kit::kit().grounds.pane,
         ));
         list.into_any_element()

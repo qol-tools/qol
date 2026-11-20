@@ -545,6 +545,7 @@ impl SessionsView {
                                     .children(row_els),
                             )
                             .child(kit.scroll_cue(
+                                "cli-sessions-list-bar",
                                 qol_gpui::scrollbar::ScrollSource::Handle {
                                     handle: self.list_scroll.handle().clone(),
                                     children: row_count,

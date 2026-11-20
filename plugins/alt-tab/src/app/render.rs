@@ -316,6 +316,7 @@ fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
     let kit = qol_gpui::kit::kit();
     let cue = (!context.snap.transparent_bg).then(|| {
         kit.scroll_cue(
+            "alt-tab-grid-bar",
             qol_gpui::scrollbar::ScrollSource::Handle {
                 handle: context.grid_scroll.clone(),
                 children: windows.len(),

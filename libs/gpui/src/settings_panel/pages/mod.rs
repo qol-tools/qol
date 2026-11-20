@@ -812,6 +812,7 @@ impl PagesView {
             )
             .when(front, |frame| {
                 frame.child(kit.scroll_cue(
+                    "settings-page-bar",
                     ScrollSource::Handle {
                         handle: place.scroll.handle().clone(),
                         children: count,
