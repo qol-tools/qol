@@ -702,15 +702,17 @@ mod tests {
 
     #[test]
     fn the_retired_worktree_hooks_tell_an_old_switchboard_to_restart() {
-        run(&[OsString::from("post-agent")]).unwrap();
-        let error = run(&[OsString::from("worktree-create")])
+        run(&[OsString::from("post-agent")], &mut |_| {}).unwrap();
+        let error = run(&[OsString::from("worktree-create")], &mut |_| {})
             .unwrap_err()
             .to_string();
         assert!(
             error.contains("close the switchboard and open it again"),
             "{error}"
         );
-        let error = run(&[OsString::from("bogus")]).unwrap_err().to_string();
+        let error = run(&[OsString::from("bogus")], &mut |_| {})
+            .unwrap_err()
+            .to_string();
         assert!(
             error.contains("unknown switchboard hook `bogus`"),
             "{error}"
@@ -820,7 +822,7 @@ mod tests {
 
     #[test]
     fn the_usage_names_every_hook_verb() {
-        let error = run(&[]).unwrap_err().to_string();
+        let error = run(&[], &mut |_| {}).unwrap_err().to_string();
         for verb in [
             PRE_AGENT,
             FORK_CONTEXT,
