@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, Register, UiOpenResult } from 'claude-code'
 
-import type { ActionKind, CheckResult, Doing, Entry, Kind, Lit, ModelChoice, ModelSeen, Pull, PullDetail, RunState } from '../types'
+import type { ActionKind, CheckResult, Doing, Entry, Kind, Lit, ModelChoice, ModelSeen, Pull, PullDetail, PullState, RunState } from '../types'
 
 const PROJECT = /^\s*Project:\s*(.+?)\s*$/
 const MODEL_LINE = /^\s*Model:\s*([A-Za-z0-9][\w.[\]-]*)\s*$/
@@ -1858,8 +1858,8 @@ export const watcherArgs = (command: string, root: string | undefined): string[]
 export const watchCommand = (program: string, agentId: string, conversation: string, name: string | undefined, args: readonly string[]): string =>
   [program, 'fork-watch', '--agent', agentId, '--conversation', conversation, ...(name === undefined || name === '' ? [] : ['--title', name]), '--', ...args].map(quote).join(' ')
 
-export const pullText = (pull: Pull): string =>
-  `#${pull.number ?? '?'} ${pull.mergeCommit !== undefined ? `merged ${pull.mergeCommit.slice(0, 7)}` : pull.isWatched ? 'open · CLI Sessions watching' : 'open · no watcher'}`
+export const pullText = (pull: Pull, state?: PullState): string =>
+  `#${pull.number ?? '?'} ${pull.mergeCommit !== undefined ? `merged ${pull.mergeCommit.slice(0, 7)}` : state === 'merged' ? 'merged' : state === 'closed' ? 'closed, not merged' : pull.isWatched ? 'open · CLI Sessions watching' : 'open · no watcher'}`
 
 const pullsOf = (all: readonly Pull[], agentId: string): Pull[] => all.filter(pull => pull.agentId === agentId)
 
@@ -2831,9 +2831,9 @@ const age = (ms: number): string => {
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`
 }
 
-const pullNote = (all: readonly Pull[], agentId: string): string => {
+const pullNote = (all: readonly Pull[], agentId: string, details: Record<string, PullDetail>): string => {
   const own = pullsOf(all, agentId)
-  return own.length === 0 ? '' : ` [${own.map(pullText).join('; ')}]`
+  return own.length === 0 ? '' : ` [${own.map(pull => pullText(pull, details[pull.pullRequest]?.state)).join('; ')}]`
 }
 
 const metaLauncher = async ($: EngineInterface, agentId: string): Promise<string | undefined> => {
@@ -2870,13 +2870,13 @@ const listedUnder = (list: Entry[], entry: Entry): string | undefined => {
   return parent === undefined ? `the fork ${entry.launcher}` : keyName(parent.name)
 }
 
-export const readText = (list: Entry[], fork: string | undefined, all: readonly Pull[] = [], states: Record<string, RunState> = {}): string => {
+export const readText = (list: Entry[], fork: string | undefined, all: readonly Pull[] = [], states: Record<string, RunState> = {}, details: Record<string, PullDetail> = {}): string => {
   if (fork !== undefined && fork.trim() !== '') {
     const wanted = fork.trim()
     const entry = [...list].reverse().find(one => one.agentId === wanted || keyName(one.name) === wanted || one.name === wanted)
     if (entry === undefined) return `No fork board row for ${wanted}.`
     const own = pullsOf(all, entry.agentId)
-    const prs = own.length === 0 ? '' : `\npull requests: ${own.map(pull => `${pullText(pull)} ${pull.pullRequest}`).join('; ')}`
+    const prs = own.length === 0 ? '' : `\npull requests: ${own.map(pull => `${pullText(pull, details[pull.pullRequest]?.state)} ${pull.pullRequest}`).join('; ')}`
     const under = listedUnder(list, entry)
     const place = under === undefined ? '' : `\nagent list: under ${under}, the fork that started it, not at the top level`
     return `${boardLine(entry)}\nagent id: ${entry.agentId}${place}${prs}\n\n${entry.report || '(no report yet)'}`
@@ -2887,7 +2887,7 @@ export const readText = (list: Entry[], fork: string | undefined, all: readonly 
     .map(entry => {
       const under = listedUnder(list, entry)
       const place = under === undefined ? '' : `, listed under ${under}`
-      return `${entry.isWorking ? `[fork board] ${keyName(entry.name)}` : boardLine(entry)} (${stateOf(entry, list, states)}, agent id ${entry.agentId}${place})${pullNote(all, entry.agentId)}`
+      return `${entry.isWorking ? `[fork board] ${keyName(entry.name)}` : boardLine(entry)} (${stateOf(entry, list, states)}, agent id ${entry.agentId}${place})${pullNote(all, entry.agentId, details)}`
     })
     .join('\n')
 }
@@ -3504,7 +3504,7 @@ export const register: Register = on => {
   on('tool.call', { tool: TOOL_NAME }, async ($, e) => {
     const fork = typeof e.fork === 'string' ? e.fork : undefined
     await ensureLoaded($)
-    return { result: readText(await withLaunchers($, await read($, board)), fork, await read($, pulls), await read($, forkStates)) }
+    return { result: readText(await withLaunchers($, await read($, board)), fork, await read($, pulls), await read($, forkStates), await read($, pullDetails)) }
   }).catch(() => ({ deny: 'The fork board could not be read.' }))
 
   on('tool.call', { tool: RESUME_NAME }, async ($, e) => {

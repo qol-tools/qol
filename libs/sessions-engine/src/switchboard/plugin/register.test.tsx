@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, litBody, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
+import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, litBody, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -3891,6 +3891,23 @@ test('a picked model keeps the full id the agent list labels, with its [1m] suff
     ['opus[1m]', 'Opus[1m]'],
     ['haiku', 'Haiku'],
   ]) expect(pickedLabel(model)).toBe(label)
+})
+
+test("the board's text names a pull request merged or closed from its state on GitHub when no watcher recorded the merge", () => {
+  const pull = (number: number, extra: object = {}): any => ({ agentId: 'a1', pullRequest: `https://github.com/o/r/pull/${number}`, number, isWatched: false, ...extra })
+  expect(pullText(pull(7))).toBe('#7 open · no watcher')
+  expect(pullText(pull(7, { isWatched: true }), 'open')).toBe('#7 open · CLI Sessions watching')
+  expect(pullText(pull(7), 'draft')).toBe('#7 open · no watcher')
+  expect(pullText(pull(7), 'merged')).toBe('#7 merged')
+  expect(pullText(pull(7), 'closed')).toBe('#7 closed, not merged')
+  expect(pullText(pull(7, { mergeCommit: '1a4ac81fb6080dad6412272ca1e6b05e313608b1' }), 'open')).toBe('#7 merged 1a4ac81')
+  const list: any[] = [{ agentId: 'a1', name: 'audit-fork: audits', kind: 'note', headline: 'Done.', report: 'Done.', at: 1, isWorking: false, isDismissed: false, hasNewReply: false }]
+  const detail = (state: string): any => ({ at: 1, state, passed: 0, failed: 0, running: 0, total: 0 })
+  const details = { 'https://github.com/o/r/pull/7': detail('merged'), 'https://github.com/o/r/pull/8': detail('closed') }
+  const pulls = [pull(7), pull(8), pull(9)]
+  expect(readText(list, undefined, pulls, {}, details)).toContain('[#7 merged; #8 closed, not merged; #9 open · no watcher]')
+  expect(readText(list, 'audit-fork', pulls, {}, details)).toContain('pull requests: #7 merged https://github.com/o/r/pull/7; #8 closed, not merged https://github.com/o/r/pull/8; #9 open · no watcher https://github.com/o/r/pull/9')
+  expect(readText(list, undefined, pulls)).toContain('[#7 open · no watcher; #8 open · no watcher; #9 open · no watcher]')
 })
 
 test('a pull request reads as its state, its checks without the skipped ones, the claude review and the live test', () => {
