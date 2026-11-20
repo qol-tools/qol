@@ -177,7 +177,7 @@ fn bundle_build_commands(worktree: &Path, buildable: &[BuildablePlugin]) -> Vec<
         .arg(&target_dir)
         .args(["-p", "qol", "--bin", "qol"])
         .args(["-p", "qol-tray", "--bin", "qol-tray"])
-        .args(["--features", "qol-tray/dev,qol-tray/linux_evdev"]);
+        .args(["--features", "qol-tray/dev"]);
     let mut commands = vec![core];
     if buildable.is_empty() {
         return commands;
@@ -382,7 +382,7 @@ mod tests {
             .any(|pair| pair == ["-p", "qol-tray", "--bin", "qol-tray"]));
         assert!(core_args
             .windows(2)
-            .any(|pair| pair == ["--features", "qol-tray/dev,qol-tray/linux_evdev"]));
+            .any(|pair| pair == ["--features", "qol-tray/dev"]));
         assert!(core_args.windows(2).any(|pair| pair == ["-p", "qol"]));
         assert!(plugin_args
             .windows(2)

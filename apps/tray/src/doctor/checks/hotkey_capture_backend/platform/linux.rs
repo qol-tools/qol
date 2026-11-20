@@ -1,26 +1,10 @@
 use super::super::CaptureProbe;
-
-#[cfg(feature = "linux_evdev")]
 use crate::hotkeys::capture::platform::linux::classify::{
     classify, DeviceCapabilities, DeviceClass, SkipReason,
 };
-#[cfg(feature = "linux_evdev")]
 use std::fs;
-#[cfg(feature = "linux_evdev")]
 use std::path::Path;
 
-#[cfg(not(feature = "linux_evdev"))]
-pub(super) fn capture_probe() -> CaptureProbe {
-    CaptureProbe {
-        compiled: false,
-        device_node_count: 0,
-        keyboard_count: 0,
-        uinput_writable: false,
-        skipped: Vec::new(),
-    }
-}
-
-#[cfg(feature = "linux_evdev")]
 pub(super) fn capture_probe() -> CaptureProbe {
     let mut keyboard_count = 0;
     let mut skipped = Vec::new();
@@ -40,7 +24,6 @@ pub(super) fn capture_probe() -> CaptureProbe {
         }
     }
     CaptureProbe {
-        compiled: true,
         device_node_count: input_event_node_count(),
         keyboard_count,
         uinput_writable: uinput_writable(),
@@ -48,7 +31,6 @@ pub(super) fn capture_probe() -> CaptureProbe {
     }
 }
 
-#[cfg(feature = "linux_evdev")]
 fn input_event_node_count() -> usize {
     let Ok(entries) = fs::read_dir("/dev/input") else {
         return 0;
@@ -64,7 +46,6 @@ fn input_event_node_count() -> usize {
         .count()
 }
 
-#[cfg(feature = "linux_evdev")]
 fn uinput_writable() -> bool {
     fs::OpenOptions::new()
         .write(true)

@@ -1,27 +1,9 @@
-#[cfg(feature = "linux_evdev")]
 use super::super::VirtualKeyboardProbe;
 use super::super::VirtualKeyboardScan;
-
-#[cfg(feature = "linux_evdev")]
 use crate::hotkeys::capture::platform::linux::classify::{
     classify, DeviceCapabilities, DeviceClass, SkipReason,
 };
 
-#[cfg(not(feature = "linux_evdev"))]
-pub(super) fn virtual_keyboard_probe() -> VirtualKeyboardScan {
-    VirtualKeyboardScan {
-        compiled: false,
-        devices: Vec::new(),
-        physical_down: Vec::new(),
-    }
-}
-
-#[cfg(not(feature = "linux_evdev"))]
-pub(super) fn keycode_display_name(code: u16) -> String {
-    format!("0x{code:02x}")
-}
-
-#[cfg(feature = "linux_evdev")]
 pub(super) fn virtual_keyboard_probe() -> VirtualKeyboardScan {
     use std::collections::HashSet;
 
@@ -54,13 +36,11 @@ pub(super) fn virtual_keyboard_probe() -> VirtualKeyboardScan {
     let mut physical_down: Vec<u16> = physical_down.into_iter().collect();
     physical_down.sort_unstable();
     VirtualKeyboardScan {
-        compiled: true,
         devices,
         physical_down,
     }
 }
 
-#[cfg(feature = "linux_evdev")]
 pub(super) fn keycode_display_name(code: u16) -> String {
     crate::hotkeys::capture::platform::linux::evdev_backend::keycode_name(code).to_string()
 }

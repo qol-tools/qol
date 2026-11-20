@@ -20,7 +20,6 @@ pub(crate) trait BuildPlatform {
     fn walk_pace_sleep(&self) -> std::time::Duration {
         std::time::Duration::from_millis(10)
     }
-    fn tray_dev_features(&self) -> &'static str;
     fn executable_suffix(&self) -> &'static str;
 
     fn read_preserving_access_time(&self, path: &std::path::Path) -> Option<String> {
@@ -87,13 +86,5 @@ mod tests {
         let executable = Platform.executable_name("qol-tray");
 
         assert_eq!(Platform.executable_name(&executable), executable);
-    }
-
-    #[test]
-    fn tray_dev_features_include_dev() {
-        assert!(Platform
-            .tray_dev_features()
-            .split(',')
-            .any(|feature| feature == "dev"));
     }
 }

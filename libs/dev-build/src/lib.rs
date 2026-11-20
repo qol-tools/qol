@@ -13,7 +13,6 @@ pub mod target_cache;
 pub mod tray;
 mod types;
 
-use platform::{BuildPlatform, Platform};
 use qol_workspace::workspace_dev_features;
 use std::path::Path;
 
@@ -33,6 +32,8 @@ pub use sidecar::{
 };
 pub use types::{BuildResult, BuildRun, PluginBuildPlan, PluginBuildProgress};
 
+const TRAY_DEV_FEATURE: &str = "dev";
+
 pub fn configure_dev_cargo(command: &mut std::process::Command) {
     if let Some(wrapper) = std::env::var_os("QOL_DEV_RUSTC_WRAPPER") {
         command.env("RUSTC_WRAPPER", wrapper);
@@ -42,9 +43,7 @@ pub fn configure_dev_cargo(command: &mut std::process::Command) {
 pub fn dev_feature_flags(root: &Path) -> Result<Vec<String>, String> {
     let mut flags = workspace_dev_features(root).map_err(|error| error.to_string())?;
     if root.join("apps").join("tray").join("Cargo.toml").is_file() {
-        for feature in Platform.tray_dev_features().split(',') {
-            flags.push(format!("qol-tray/{feature}"));
-        }
+        flags.push(format!("qol-tray/{TRAY_DEV_FEATURE}"));
     }
     Ok(flags)
 }
@@ -67,11 +66,6 @@ mod tests {
         std::fs::create_dir_all(&tray).unwrap();
         std::fs::write(tray.join("Cargo.toml"), "[package]\nname = \"qol-tray\"\n").unwrap();
         let flags = dev_feature_flags(tmp.path()).unwrap();
-        let expected: Vec<String> = Platform
-            .tray_dev_features()
-            .split(',')
-            .map(|feature| format!("qol-tray/{feature}"))
-            .collect();
-        assert!(flags.ends_with(&expected));
+        assert!(flags.ends_with(&["qol-tray/dev".to_string()]));
     }
 }

@@ -19,10 +19,6 @@ impl DoctorCheck for HotkeyCaptureBackendCheck {
         let probe = platform::capture_probe();
         match classify(&probe) {
             NativeCapture::Available => available_report(&probe.skipped),
-            NativeCapture::NotCompiled => warning(
-                "native evdev capture is not compiled in; hotkeys rely on X11 grabs, which the desktop can silently shadow",
-                "install or rebuild qol-tray with the linux_evdev feature to enable native keyboard capture",
-            ),
             NativeCapture::NoKeyboardDevices => warning(
                 "no keyboard devices found under /dev/input; hotkeys will fall back to X11 grabs, which the desktop can silently shadow",
                 "verify that Linux exposes keyboard event devices under /dev/input and that the input drivers are loaded",
@@ -66,7 +62,6 @@ fn warning(summary: &str, fix_advice: &str) -> CheckReport {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NativeCapture {
     Available,
-    NotCompiled,
     NoKeyboardDevices,
     NoReadableKeyboards,
     NoUinput,
@@ -74,7 +69,6 @@ enum NativeCapture {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CaptureProbe {
-    compiled: bool,
     device_node_count: usize,
     keyboard_count: usize,
     uinput_writable: bool,
@@ -82,9 +76,6 @@ struct CaptureProbe {
 }
 
 fn classify(probe: &CaptureProbe) -> NativeCapture {
-    if !probe.compiled {
-        return NativeCapture::NotCompiled;
-    }
     if probe.keyboard_count == 0 && probe.device_node_count == 0 {
         return NativeCapture::NoKeyboardDevices;
     }
@@ -106,17 +97,6 @@ mod tests {
         let cases = [
             (
                 CaptureProbe {
-                    compiled: false,
-                    device_node_count: 0,
-                    keyboard_count: 0,
-                    uinput_writable: false,
-                    skipped: Vec::new(),
-                },
-                NativeCapture::NotCompiled,
-            ),
-            (
-                CaptureProbe {
-                    compiled: true,
                     device_node_count: 0,
                     keyboard_count: 0,
                     uinput_writable: false,
@@ -126,7 +106,6 @@ mod tests {
             ),
             (
                 CaptureProbe {
-                    compiled: true,
                     device_node_count: 4,
                     keyboard_count: 0,
                     uinput_writable: false,
@@ -136,7 +115,6 @@ mod tests {
             ),
             (
                 CaptureProbe {
-                    compiled: true,
                     device_node_count: 4,
                     keyboard_count: 2,
                     uinput_writable: false,
@@ -146,7 +124,6 @@ mod tests {
             ),
             (
                 CaptureProbe {
-                    compiled: true,
                     device_node_count: 4,
                     keyboard_count: 2,
                     uinput_writable: true,
@@ -164,7 +141,6 @@ mod tests {
     #[test]
     fn available_report_lists_skipped_devices() {
         let probe = CaptureProbe {
-            compiled: true,
             device_node_count: 4,
             keyboard_count: 2,
             uinput_writable: true,
