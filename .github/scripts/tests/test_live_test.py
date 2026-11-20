@@ -1,4 +1,6 @@
 import importlib.util
+import re
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -65,6 +67,74 @@ class PatternTests(unittest.TestCase):
 
     def test_blank_lines_are_skipped(self):
         self.assertEqual(live.patterns("a/**\n\n  b.rs  \n"), ["a/**", "b.rs"])
+
+
+REPO = SCRIPTS.parents[1]
+PAGE_CONTENT = {"Page", "Group", "Row", "Notice", "Control", "Tone"}
+PAGES_USE = re.compile(r"\buse\s+qol_config::pages::(\{[^}]*\}|\w+)")
+PAGES_PATH = re.compile(r"\bpages::(?:" + "|".join(sorted(PAGE_CONTENT)) + r")\b")
+UI_FOLDER = re.compile(r"(?:^|/)src/(?:.+/)?ui/")
+
+
+def builds_pages(text: str) -> bool:
+    if "qol_config::pages" not in text:
+        return False
+    for found in PAGES_USE.finditer(text):
+        if PAGE_CONTENT & set(re.findall(r"\w+", found.group(1))):
+            return True
+    return bool(PAGES_PATH.search(text))
+
+
+def draws(path: str, text: str) -> bool:
+    if path.startswith("vendor/"):
+        return False
+    return bool(UI_FOLDER.search(path)) or (path.endswith(".rs") and builds_pages(text))
+
+
+class UiCoverageTests(unittest.TestCase):
+    def test_page_content_counts_and_the_press_plumbing_does_not(self):
+        cases = [
+            ("use qol_config::pages::{Go, Group, Page};", True),
+            ("use qol_config::pages::{\n    Go,\n    Row,\n};", True),
+            ("use qol_config::pages::Notice;", True),
+            ("use qol_config::pages;\nfn f() { pages::Row::new(\"a\", \"b\"); }", True),
+            ("let x: qol_config::pages::Group = todo!();", True),
+            ("use qol_config::pages::{Go, Press, PressReply, Stack};", False),
+            ("let pages: qol_config::pages::Pages = todo!();", False),
+            ("use crate::pages::Row;", False),
+        ]
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(builds_pages(text), expected)
+
+    def test_a_file_draws_when_it_sits_under_src_ui_or_builds_pages(self):
+        self.assertTrue(draws("plugins/a/src/ui/view.rs", ""))
+        self.assertTrue(draws("apps/tray/src/app/ui/strip.rs", ""))
+        self.assertTrue(draws("plugins/a/src/pages/home.rs", "use qol_config::pages::Row;"))
+        self.assertFalse(draws("plugins/a/src/uix/view.rs", ""))
+        self.assertFalse(draws("plugins/a/README.md", "use qol_config::pages::Row;"))
+        self.assertFalse(draws("vendor/gpui/src/ui/a.rs", ""))
+
+    def test_every_file_that_draws_is_on_the_live_test_list(self):
+        listed = live.patterns(live.PATHS_FILE.read_text(encoding="utf-8"))
+        tracked = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=REPO, capture_output=True, check=True, text=True
+        ).stdout.split("\0")
+        drawing = []
+        for path in filter(None, tracked):
+            file = REPO / path
+            if not file.is_file():
+                continue
+            text = file.read_text(encoding="utf-8", errors="replace") if path.endswith(".rs") else ""
+            if draws(path, text):
+                drawing.append(path)
+        self.assertTrue(drawing)
+        missing = sorted(set(drawing) - set(live.needing(drawing, listed)))
+        self.assertEqual(
+            missing,
+            [],
+            "these files draw or build what the tray shows, so add a glob for them to .github/live-test-paths",
+        )
 
 
 class SummaryTests(unittest.TestCase):

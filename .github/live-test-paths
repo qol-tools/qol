@@ -1,5 +1,8 @@
 plugins/*/src/ui/**
+plugins/*/src/pages/**
 plugins/*/qol-config.toml
+plugins/pointz/src/qol/pages/**
+plugins/pointz/src/app/panel/**
 plugins/alt-tab/src/app/**
 plugins/alt-tab/src/picker/**
 plugins/shot/src/app/**
