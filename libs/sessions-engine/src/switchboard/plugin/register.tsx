@@ -918,6 +918,14 @@ export const forksUnder = (list: Entry[], parent: Entry): Entry[] => {
 
 const asksYou = (list: Entry[], entry: Entry): boolean => needsYou(entry) && parentOf(list, entry) === undefined
 
+const isOwed = (entry: Entry): boolean => needsYou(entry) || isCut(entry)
+
+export const backAtRestart = (list: Entry[]): string[] =>
+  list
+    .filter(entry => entry.launcher === undefined && isUnfinished(entry))
+    .flatMap(top => [top, ...forksUnder(list, top).filter(sub => isUnfinished(sub) && [sub, ...forksUnder(list, sub)].some(isOwed))])
+    .map(entry => entry.agentId)
+
 const isBusy = (entry: Entry, states: Record<string, RunState>): boolean => entry.isWorking || isWaiting(entry, states)
 
 const isLive = (entry: Entry, states: Record<string, RunState>): boolean => isBusy(entry, states) || needsYou(entry)
@@ -3027,7 +3035,7 @@ export const register: Register = on => {
       for (const key of (await $.store.keys()).filter(one => one.startsWith(OLD_LOG_PREFIX))) await $.store.delete(key)
       if (live.length === 0) for (const key of (await $.store.keys()).filter(one => one.startsWith(HOLD_PREFIX))) await $.store.delete(key)
       const placed = await read($, board)
-      const pending = e.isInteractive && live.length === 0 ? merged.filter(one => isUnfinished(one) && placed.find(row => row.agentId === one.agentId)?.launcher === undefined).map(one => one.agentId) : []
+      const pending = e.isInteractive && live.length === 0 ? backAtRestart(placed.filter(row => merged.some(one => one.agentId === row.agentId))) : []
       reopenTries = 0
       await noteReopen($, { at: await $.clock.now(), start: id, boards: others.length, carried: earlier.length, own: own.length, rows: merged.map(one => one.agentId), pending })
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)

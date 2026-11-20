@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, litBody, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
+import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, litBody, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -4612,22 +4612,53 @@ test('a fork its killed hold wakes as the switchboard shuts down keeps its row, 
   expect(saved().map(one => one.slice(0, 3))).toEqual([['a1', true, 'The first report.']])
 })
 
-test('a restart puts only the forks the switchboard started back in the agent list, and leaves their sub-forks and the sub-forks of a fork that is gone on the board', async ($, on) => {
+test('a restart puts each fork the switchboard started back in the agent list with its sub-forks that ask or were cut, and leaves finished sub-forks and those of a fork that is gone on the board', async ($, on) => {
   const store = new Map<string, unknown>([['cuts-healed-2', true]])
   const sent: any[] = []
   const fork = (agentId: string, name: string, extra: object = {}) => ({ agentId, name, kind: 'note', headline: 'Done for now.', report: 'Done for now.', at: 7, isWorking: false, isDismissed: false, ...extra })
-  store.set('board:earlier-session', [fork('m1', 'main-fork: words'), fork('s1', 'sub-fork: words', { launcher: 'm1' }), fork('o1', 'orphan-fork: words', { launcher: 'gone1' }), fork('c1', 'cut-sub: words', { launcher: 'm1', isWorking: true })])
+  store.set('board:earlier-session', [
+    fork('m1', 'main-fork: words'),
+    fork('s1', 'sub-fork: words', { launcher: 'm1' }),
+    fork('o1', 'orphan-fork: words', { launcher: 'gone1', kind: 'ask' }),
+    fork('c1', 'cut-sub: words', { launcher: 'm1', isWorking: true }),
+    fork('a1', 'asking-sub: words', { launcher: 'm1', kind: 'ask', headline: 'Which colour?', report: 'Which colour?' }),
+    fork('d1', 'done-sub: words', { launcher: 'm1', kind: 'ask', isDone: true }),
+    fork('x1', 'closed-sub: words', { launcher: 'm1', kind: 'ask', isDismissed: true }),
+  ])
   engine(on, sent, [], [], store)
   on('agent.list', () => ({ value: [] }))
   const timers: Array<() => void> = []
   on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  for (let round = 0; round < 4; round += 1) {
+  for (let round = 0; round < 8; round += 1) {
     await renderBand($)
     for (const fire of timers.splice(0)) fire()
     await settle()
   }
-  expect(sent.map(one => [one.to, one.text])).toEqual([['m1', 'Back in the agent list.']])
-  expect((store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isInterrupted === true]).sort()).toEqual([['c1', true], ['m1', false], ['o1', false], ['s1', false]])
+  expect(sent.map(one => one.text)).toEqual(['Back in the agent list.', 'Back in the agent list.', 'Back in the agent list.'])
+  expect(sent[0].to).toBe('m1')
+  expect(sent.map(one => one.to).sort()).toEqual(['a1', 'c1', 'm1'])
+  const kept = (store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isInterrupted === true, one.kind, one.headline, one.isWorking])
+  expect(kept.filter(([id]) => ['a1', 'c1', 'm1', 'o1', 's1'].includes(id)).sort()).toEqual([
+    ['a1', false, 'ask', 'Which colour?', false],
+    ['c1', true, 'note', 'Done for now.', false],
+    ['m1', false, 'note', 'Done for now.', false],
+    ['o1', false, 'ask', 'Done for now.', false],
+    ['s1', false, 'note', 'Done for now.', false],
+  ])
+})
+
+test('the forks a restart brings back are each top-level unfinished fork, then the sub-forks under it that ask, were cut or hold one that does', () => {
+  const fork = (agentId: string, extra: object = {}): any => ({ agentId, name: `${agentId}-fork: words`, kind: 'note', headline: 'Done.', report: 'Done.', at: 1, isWorking: false, isDismissed: false, hasNewReply: false, ...extra })
+  const sub = (agentId: string, launcher: string, extra: object = {}) => fork(agentId, { launcher, ...extra })
+  expect(backAtRestart([fork('m1'), fork('m2')])).toEqual(['m1', 'm2'])
+  expect(backAtRestart([fork('m1'), sub('idle', 'm1'), sub('asks', 'm1', { kind: 'ask' }), sub('blocked', 'm1', { kind: 'blocked' }), sub('cut', 'm1', { isInterrupted: true })])).toEqual(['m1', 'asks', 'blocked', 'cut'])
+  expect(backAtRestart([sub('deep', 'lane', { kind: 'ask' }), sub('lane', 'm1'), sub('quiet', 'lane'), fork('m1'), sub('other', 'm1')])).toEqual(['m1', 'lane', 'deep'])
+  expect(backAtRestart([fork('m1', { isDone: true }), sub('asks', 'm1', { kind: 'ask' })])).toEqual([])
+  expect(backAtRestart([fork('m1', { isDismissed: true }), sub('asks', 'm1', { kind: 'ask' })])).toEqual([])
+  expect(backAtRestart([fork('m1'), sub('lane', 'm1', { isDone: true }), sub('deep', 'lane', { kind: 'ask' })])).toEqual(['m1'])
+  expect(backAtRestart([fork('m1'), sub('asks', 'm1', { kind: 'ask', isDone: true }), sub('gone', 'm1', { kind: 'ask', isDismissed: true }), sub('old', 'm1', { kind: 'ask', successor: 'new' })])).toEqual(['m1'])
+  expect(backAtRestart([sub('asks', 'nobody', { kind: 'ask' })])).toEqual([])
+  expect(backAtRestart([fork('m1'), sub('a', 'm1', { kind: 'ask' }), fork('m2'), sub('b', 'm2', { isInterrupted: true })])).toEqual(['m1', 'a', 'm2', 'b'])
 })
 
