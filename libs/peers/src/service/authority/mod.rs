@@ -294,6 +294,7 @@ impl PeerAuthority {
         candidate.validate()?;
         let encoded = inner.storage.encode(&candidate)?;
         before_replace()?;
+        inner.status = AuthorityStatus::Faulted;
         if let Err(error) = inner
             .storage
             .publish(encoded.as_ref().map(|bytes| bytes.as_slice()))
@@ -304,6 +305,7 @@ impl PeerAuthority {
             return Err(error.into());
         }
         inner.state = candidate;
+        inner.status = AuthorityStatus::Ready;
         self.changes.send_replace(());
         Ok(revision)
     }
