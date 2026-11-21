@@ -889,7 +889,7 @@ impl SettingsPanelView {
     }
 
     fn focus_target(&self) -> FocusHandle {
-        if self.body_has_focus() && self.current_source_is_custom() {
+        if self.body_has_focus() && self.custom_page_shown() {
             if let Some(custom) = self.custom_view() {
                 return custom.focus_handle.clone();
             }
@@ -1048,6 +1048,8 @@ impl SettingsPanelView {
         self.select_source(source_index, cx);
         self.materialize_source(cx);
         if self.current_source_is_custom() {
+            self.filter.clear();
+            self.filter_open = false;
             self.set_source_menu(false);
             self.reconcile_focus(window, cx);
             cx.notify();
@@ -1090,6 +1092,18 @@ impl SettingsPanelView {
         self.custom_views
             .get(self.materialized_source)
             .and_then(Option::as_ref)
+    }
+
+    fn custom_page_shown(&self) -> bool {
+        custom_page_shown(
+            self.current_source_is_custom(),
+            self.filter_open,
+            self.filtering(),
+        )
+    }
+
+    fn shown_custom_view(&self) -> Option<&CustomPanelView> {
+        self.custom_view().filter(|_| self.custom_page_shown())
     }
 
     fn custom_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1995,7 +2009,7 @@ impl SettingsPanelView {
         }
         let key = event.keystroke.key.as_str();
         let key_char = event.keystroke.key_char.as_deref();
-        if self.current_source_is_custom() && self.body_has_focus() {
+        if self.custom_page_shown() && self.body_has_focus() {
             return;
         }
         if !self.filter_open && self.stack.len() > 1 && !self.rail_has_key_focus() {
@@ -4398,7 +4412,7 @@ impl Render for SettingsPanelView {
             (Vec::new(), Vec::new())
         };
         let items = self.body_items(cx);
-        let custom_view = self.custom_view().map(|custom| custom.view.clone());
+        let custom_view = self.shown_custom_view().map(|custom| custom.view.clone());
         let revealed = (self.closing && custom_view.is_none() && self.stack.len() > 1).then(|| {
             self.render_level.set(self.stack.len() - 2);
             let items = self.body_items(cx);
@@ -4789,7 +4803,7 @@ impl SettingsPanelView {
                         }
                     })
             });
-        let custom_breadcrumbs = if self.current_source_is_custom() {
+        let custom_breadcrumbs = if self.custom_page_shown() {
             self.custom_view()
                 .map(|custom| custom.breadcrumb_labels(cx).len())
                 .unwrap_or(0)
@@ -4938,7 +4952,7 @@ impl SettingsPanelView {
             self.kit,
         );
         let band = settings_band_bar(super::PANEL_BAND_HEIGHT, self.kit);
-        if self.current_source_is_custom() {
+        if self.custom_page_shown() {
             return band.panel_drag_area().child(crumbs);
         }
         let first_card = trail.len().saturating_sub(self.stack.len() - 1);
@@ -5031,7 +5045,7 @@ impl SettingsPanelView {
     fn trail(&self, cx: &App) -> Vec<String> {
         let plugin = (self.sources.len() > 1 && !self.filtering())
             .then(|| self.plugin_title(self.materialized_source));
-        let cards = if self.current_source_is_custom() {
+        let cards = if self.custom_page_shown() {
             if self.rail_source_level() {
                 Vec::new()
             } else {
@@ -5130,7 +5144,7 @@ impl SettingsPanelView {
 
     fn render_hint_bar(&self, cx: &App) -> impl IntoElement {
         let bar = SettingsHintBar::new(self.kit);
-        if self.current_source_is_custom() && self.body_has_focus() {
+        if self.custom_page_shown() && self.body_has_focus() {
             if let Some(hints) = self.custom_view().and_then(|custom| custom.hints(cx)) {
                 let mut right = hints.right;
                 if right.is_empty() {
@@ -6062,6 +6076,13 @@ pub(super) fn rail_open(sources: usize, filtering: bool) -> bool {
     sources > 1 && !filtering
 }
 
+/// A search lists hits from every page, so it covers a custom page and keeps
+/// keys on the search field: typing on the rail while a core tool page is
+/// highlighted must not land in that page with the search still open.
+fn custom_page_shown(custom_source: bool, filter_open: bool, filtering: bool) -> bool {
+    custom_source && !filter_open && !filtering
+}
+
 fn rail_child_index(source: usize, breaks: &[usize]) -> usize {
     1 + source + breaks.iter().filter(|at| **at <= source).count()
 }
@@ -6630,6 +6651,24 @@ mod tests {
         assert!(super::rail_open(2, false));
         assert!(!super::rail_open(1, false));
         assert!(!super::rail_open(1, true));
+    }
+
+    #[test]
+    fn a_search_covers_a_custom_page() {
+        for (custom, filter_open, filtering, shown) in [
+            (true, false, false, true),
+            (true, true, false, false),
+            (true, true, true, false),
+            (true, false, true, false),
+            (false, false, false, false),
+            (false, true, true, false),
+        ] {
+            assert_eq!(
+                super::custom_page_shown(custom, filter_open, filtering),
+                shown,
+                "custom={custom} filter_open={filter_open} filtering={filtering}"
+            );
+        }
     }
 
     #[test]
