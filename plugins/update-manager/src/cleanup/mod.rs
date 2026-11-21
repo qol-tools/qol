@@ -93,7 +93,6 @@ pub(crate) struct Switch {
     pub(crate) owner: Owner,
     pub(crate) name: &'static str,
     pub(crate) short: &'static str,
-    pub(crate) doing: &'static str,
     pub(crate) when: &'static str,
     pub(crate) words: Words,
     pub(crate) covers: &'static [&'static Leftover],
@@ -183,6 +182,14 @@ impl Requires {
         }
     }
 }
+
+impl PartialEq for Leftover {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Leftover {}
 
 impl PartialEq for Switch {
     fn eq(&self, other: &Self) -> bool {
@@ -370,6 +377,76 @@ pub(crate) fn survey(at: NaiveDateTime) -> Survey {
             .copied()
             .map(|leftover| find_by(leftover, &mut output))
             .collect(),
+    }
+}
+
+pub(crate) fn empty(found: &Found) -> bool {
+    found
+        .amount
+        .as_ref()
+        .is_none_or(|amount| amount.count == 0 && !matches!(amount.size, Size::Unknown(_)))
+}
+
+pub(crate) enum Outcome {
+    Empty,
+    Removed,
+    Refused(Refusal),
+}
+
+pub(crate) fn walk(
+    kinds: &[&'static Leftover],
+    consent: Consent,
+    find: impl Fn(&'static Leftover) -> Found,
+    remove: impl Fn(&Found, Consent) -> Result<(), Refusal>,
+    mut each: impl FnMut(&Found, Outcome),
+) {
+    for kind in kinds.iter().copied() {
+        let found = find(kind);
+        if empty(&found) {
+            each(&found, Outcome::Empty);
+            continue;
+        }
+        match remove(&found, consent) {
+            Ok(()) => each(&found, Outcome::Removed),
+            Err(refusal) => {
+                let stops = refusal.stops();
+                each(&found, Outcome::Refused(refusal));
+                if stops {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn refused(kind: &Leftover, refusal: &Refusal) -> String {
+    if refusal.stops() {
+        format!("{}: {refusal}, so nothing more was removed", kind.name)
+    } else {
+        format!("{}: {refusal}", kind.name)
+    }
+}
+
+pub(crate) fn sweep(kinds: &[&'static Leftover], consent: Consent) -> Result<(), Refusal> {
+    sweep_by(kinds, consent, find, remove)
+}
+
+fn sweep_by(
+    kinds: &[&'static Leftover],
+    consent: Consent,
+    find: impl Fn(&'static Leftover) -> Found,
+    remove: impl Fn(&Found, Consent) -> Result<(), Refusal>,
+) -> Result<(), Refusal> {
+    let mut failed = Vec::new();
+    walk(kinds, consent, find, remove, |found, outcome| {
+        if let Outcome::Refused(refusal) = outcome {
+            failed.push(refused(found.leftover, &refusal));
+        }
+    });
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(Refusal::Failed(failed.join(". ")))
     }
 }
 

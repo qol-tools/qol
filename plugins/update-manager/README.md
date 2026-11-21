@@ -16,23 +16,24 @@ qol-update-manager doctor
 
 ## Settings
 
-- The first page lists the first 6 waiting updates, what finishes at the next restart, and the last run.
-- Install all starts at once; it opens a page of warnings first when an update needs a restart, carries a caution, loses an administrator's hold or drops the sound.
+- The first page has two groups. Updates holds how many wait, which opens the waiting list, and Restart to finish while something waits for a restart. In the background holds Installs on its own, Cleanup and History.
+- Install all sits at the top of the waiting list and starts at once; it opens a page of warnings first when an update needs a restart, carries a caution, loses an administrator's hold or drops the sound.
 - Each update's page shows its warnings, then Install, Skip this version and Never update.
 - Skip and Never write Mint's own ignore list, so Mint's Update Manager and its nightly run skip the update too. Skipped lists them, and Update again takes one off. A user who is not an administrator cannot take off an entry that `/etc/mintupdate.blacklist` holds, and is told so.
 - The waiting page tags every update with its updater when they differ: Update Manager, Flatpak or firmware. A list longer than 40 shows 40 at a time.
-- Restart tonight waits for Mint's own nightly run; Restart now asks first.
-- Hours and Installs on its own change Mint's own settings, and they stay when qol stops.
+- Restart tonight waits for Mint's own nightly run; Restart now asks first. A planned restart is changed or cancelled from its own row.
+- Installs on its own lists what may install by itself, then when: Between opens the hours, then Pause all, Wait while sound plays and Set back to the default. The switches and the hours change Mint's own settings, and they stay when qol stops.
+- Cleanup starts with Remove all and its total, then each kind with something to remove, largest first, six at most and the rest behind a More row. A size is exact, about an estimate, or unknown. Remove all leaves out the kinds that need `--confirm` on the command line; their own rows ask before removing, the way `--confirm` does. Its last group holds the switches that remove old kernels on their own.
 - Old kernels switches the system's own removal of old kernels, and it stays when qol stops. apt always keeps the running kernel and the two newest.
   - On Linux Mint it is Mint's cleanup, which runs weekly and 3 hours after each startup. It runs `apt-get autoremove --purge`, so it also removes other packages nothing needs.
   - Include kernels installed by hand adds `qol-kernels-by-hand.conf` to that cleanup, so kernels installed from Mint's Update Manager window are removed too. It is off until you switch it on, so a kernel kept on purpose stays.
   - On Ubuntu and Debian it is the unattended-upgrades setting that removes unused kernels, written to `/etc/apt/apt.conf.d/90qol-update-manager-kernels`. It runs only while automatic updates are on.
-  - Anywhere else the row says nothing removes old kernels on its own.
+  - Anywhere else Cleanup has no switches, and old kernels stay until you remove them.
 - `status` ends with an `Old kernels:` line. It says unknown when Mint's removal timer and its flag file disagree, or when apt's settings cannot be read.
-- `cleanup` lists what updates left behind on Linux: old kernels, kernels installed by hand, packages nothing needs, downloaded packages, unused Flatpak runtimes and old snap versions. Each line gives the kind's id and its size, which is exact, dpkg's estimate, or unknown with the reason. The total counts a package two kinds list once. Kernels are listed only when `apt-get -s purge` removes or installs nothing beyond them, and a kind that cannot be listed lists nothing. The daemon measures when it starts, before it first reads updates, then every 6 hours, after each change it makes, and within a minute of dpkg's status, the package cache or the snap folder changing, so a `cleanup remove` or an apt run in a terminal shows up too. It never measures while it reads updates or installs; a measure an install overlaps is dropped and taken again after it, and a failed measure is retried after 10 minutes.
+- `cleanup` lists what updates no longer need on Linux: old kernels, kernels installed by hand, packages nothing needs, downloaded packages, unused Flatpak runtimes and old snap versions. Each line gives the kind's id and its size, which is exact, dpkg's estimate, or unknown with the reason. The total counts a package two kinds list once. Kernels are listed only when `apt-get -s purge` removes or installs nothing beyond them, and a kind that cannot be listed lists nothing. The daemon measures when it starts, before it first reads updates, then every 6 hours, after each change it makes, and within a minute of dpkg's status, the package cache or the snap folder changing, so a `cleanup remove` or an apt run in a terminal shows up too. It never measures while it reads updates or installs; a measure an install overlaps is dropped and taken again after it, and a failed measure is retried after 10 minutes.
 - `cleanup remove <kind>` removes one kind, and `cleanup remove all` removes every kind except old snap versions and kernels installed by hand. Those two need `--confirm`, since one is the last way back and the other was kept on purpose, and `--confirm` goes with one kind only. `remove kernels` and `remove kernels_by_hand` go only when a fresh `apt-get -s purge` of them removes or installs nothing else; `remove orphans` runs `apt-get autoremove --purge`, which takes apt's old kernels with it unchecked; a removal waits up to an hour after the password; and closing the password prompt stops `remove all`.
 - `doctor` has one line per kind, saying only whether it is on this computer and whether `cleanup` can measure it, so it stays fast; `cleanup` does the measuring.
-- Wait while in use and Hold all are qol's rules, and they end when qol stops.
+- Wait while sound plays and Pause all are qol's rules, and they end when qol stops.
 - History lists each run with who started it; a run's page lists what it installed.
 
 ## License

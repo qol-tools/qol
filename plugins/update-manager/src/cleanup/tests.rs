@@ -62,7 +62,6 @@ fn every_switch_fills_its_words_and_covers_kinds_of_its_own_table() {
             switch.owner.colophon,
             switch.name,
             switch.short,
-            switch.doing,
             switch.when,
             switch.words.on,
             switch.words.idle,
@@ -351,7 +350,6 @@ const fn row(
         },
         name,
         short: name,
-        doing: name,
         when: name,
         words: Words {
             on: name,
@@ -420,4 +418,43 @@ fn the_primary_switch_is_the_one_that_covers_kinds_the_system_installed() {
     assert!(!State::On { idle: true }.removing());
     assert!(State::On { idle: true }.on());
     assert!(!State::Unknown("split").on());
+}
+
+#[test]
+fn a_sweep_skips_empty_kinds_and_stops_at_a_closed_prompt() {
+    use std::cell::RefCell;
+    let asked = RefCell::new(Vec::new());
+    let result = sweep_by(
+        &[&OLD, &ORPHANS, &LAST],
+        Consent::All,
+        |kind| {
+            if kind.id == "kernels" {
+                found(kind, 0, &[])
+            } else {
+                found(kind, 1, &[("x", 1)])
+            }
+        },
+        |found, _| {
+            asked.borrow_mut().push(found.leftover.id);
+            Err(Refusal::Dismissed)
+        },
+    );
+    assert_eq!(*asked.borrow(), ["orphans"]);
+    assert_eq!(
+        result,
+        Err(Refusal::Failed(format!(
+            "orphans: {}, so nothing more was removed",
+            Refusal::Dismissed
+        )))
+    );
+    let refused = sweep_by(
+        &[&LAST],
+        Consent::All,
+        |kind| found(kind, 1, &[("x", 1)]),
+        remove,
+    );
+    assert!(
+        matches!(refused, Err(Refusal::Failed(ref text)) if text.starts_with("last: they are the last way back to ")),
+        "{refused:?}"
+    );
 }

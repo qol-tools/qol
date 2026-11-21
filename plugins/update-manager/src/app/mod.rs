@@ -110,7 +110,7 @@ pub fn run() -> ExitCode {
         return ExitCode::FAILURE;
     }
     if let Err(error) = spawn("survey", &shared, survey) {
-        log::warn!("update-manager: cannot start measuring what updates left behind: {error}");
+        log::warn!("update-manager: cannot start measuring what updates no longer need: {error}");
         shared.lock().surveying = false;
         shared.wake.notify_all();
     }
@@ -255,7 +255,7 @@ fn start(shared: &Arc<Shared>, session: &mut Session, task: Task) {
                 done: 0,
                 reason: Reason::Stopped(reason),
             })),
-            other => session.done(&other, Err(Refusal::Failed(reason)), now()),
+            other => session.done(&other, Err(Refusal::Failed(reason))),
         }
     }
 }
@@ -308,6 +308,7 @@ fn work(shared: &Shared, task: Task) {
             remove,
             system,
         } => updates::set_skips(add, remove, *system),
+        Task::Remove { kinds, consent } => cleanup::sweep(kinds, *consent),
         Task::Open(path) => {
             if let Err(error) = qol_apps::desktop_integration::open_with_default_app_checked(path) {
                 log::warn!("update-manager: {path} could not be opened: {error}");
@@ -321,7 +322,7 @@ fn work(shared: &Shared, task: Task) {
 
 fn finish(shared: &Shared, task: &Task, result: Result<(), Refusal>) {
     let mut state = shared.lock();
-    state.session.done(task, result, now());
+    state.session.done(task, result);
     shared.save(&state.session);
     state.want_host = true;
     state.want_survey = true;
@@ -662,7 +663,6 @@ mod tests {
         let task = Task::Auto {
             key: crate::updates::AutoKey::Switch(&crate::cleanup::fake::MINT_KERNELS),
             on: true,
-            was: false,
         };
         finish(&shared, &task, Ok(()));
         let state = shared.lock();

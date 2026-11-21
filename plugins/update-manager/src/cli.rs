@@ -8,7 +8,8 @@ use qol_headless::{
 };
 
 use crate::cleanup::{
-    self, leftovers, primary, Consent, Found, Leftover, Live, Measure, Origin, Size, State, Survey,
+    self, leftovers, primary, Consent, Found, Leftover, Live, Measure, Origin, Outcome, Size,
+    State, Survey,
 };
 use crate::platform::Refusal;
 use crate::updates;
@@ -36,7 +37,7 @@ fn app() -> HeadlessApp {
         )
         .command(
             Command::new("cleanup")
-                .about("List what updates left behind, the space it takes, and what removes it on its own; or remove it.")
+                .about("List what updates no longer need, the space it takes, and what removes it on its own; or remove it.")
                 .usage(format!("{PLUGIN_ID} cleanup [remove <kind>|all] [--confirm]"))
                 .detail("`remove all` leaves out kinds that are the last way back or were installed by hand; name one of those and add --confirm to remove it. A kind that needs an administrator asks for the password, and closing that prompt stops `remove all`.")
                 .output("One line per kind with its id and size, the total, when it was measured, then the switches that remove leftovers on their own. `remove` prints one line per kind removed.")
@@ -165,32 +166,23 @@ fn remove_kinds(
 ) -> Execution {
     let mut out = String::new();
     let mut failed = String::new();
-    for kind in kinds.iter().copied() {
-        let found = find(kind);
-        if empty(&found) {
-            if named {
-                out.push_str(&format!("Nothing to remove: {}\n", kind.name));
-            }
-            continue;
-        }
-        match remove(&found, consent) {
-            Ok(()) if unmeasured(&found) => {
+    cleanup::walk(kinds, consent, find, remove, |found, outcome| {
+        let kind = found.leftover;
+        match outcome {
+            Outcome::Empty if named => out.push_str(&format!("Nothing to remove: {}\n", kind.name)),
+            Outcome::Empty => {}
+            Outcome::Removed if unmeasured(found) => {
                 out.push_str(&format!("Removed any there were: {}\n", kind.name))
             }
-            Ok(()) => out.push_str(&format!("Removed: {}\n", kind.name)),
-            Err(refusal) if cleanup::why(kind).is_some() && !confirm => {
+            Outcome::Removed => out.push_str(&format!("Removed: {}\n", kind.name)),
+            Outcome::Refused(refusal) if cleanup::why(kind).is_some() && !confirm => {
                 failed.push_str(&format!("{}: {refusal}; add --confirm\n", kind.name))
             }
-            Err(refusal @ (Refusal::Dismissed | Refusal::Denied | Refusal::TimedOut)) => {
-                failed.push_str(&format!(
-                    "{}: {refusal}, so nothing more was removed\n",
-                    kind.name
-                ));
-                break;
+            Outcome::Refused(refusal) => {
+                failed.push_str(&format!("{}\n", cleanup::refused(kind, &refusal)))
             }
-            Err(refusal) => failed.push_str(&format!("{}: {refusal}\n", kind.name)),
         }
-    }
+    });
     let code = u8::from(!failed.is_empty());
     Execution::new(out, failed, code)
 }
@@ -232,13 +224,6 @@ fn choose(
         Consent::All
     };
     Ok((vec![kind], consent))
-}
-
-fn empty(found: &Found) -> bool {
-    found
-        .amount
-        .as_ref()
-        .is_none_or(|amount| amount.count == 0 && !matches!(amount.size, Size::Unknown(_)))
 }
 
 fn listing(survey: &Survey, switches: &[Live]) -> String {
@@ -398,7 +383,7 @@ mod tests {
     use qol_headless::{DoctorStatus, EXIT_USAGE};
 
     use super::*;
-    use crate::cleanup::{Amount, Item, Why};
+    use crate::cleanup::{empty, Amount, Item, Why};
 
     fn run(args: &[&str]) -> u8 {
         let args: Vec<String> = args.iter().map(ToString::to_string).collect();

@@ -12,7 +12,10 @@ pub(super) fn page(session: &Session) -> Option<Sheet> {
     }
     let mut sheet = Sheet::new("skipped", "skipped");
     if let Some(error) = error {
-        sheet.heading("right now");
+        sheet.group(
+            "problems",
+            "the last change to this list did not go through.",
+        );
         sheet.row(
             Row::new("error", "Could not change the skipped list")
                 .detail(error.as_str())
@@ -23,14 +26,20 @@ pub(super) fn page(session: &Session) -> Option<Sheet> {
         skips.iter().partition(|entry| entry.contains('='));
     let last = skips.len() == 1;
     if !never.is_empty() {
-        sheet.heading("never");
+        sheet.group(
+            "never",
+            "these never update until you take them off the list.",
+        );
         for entry in never {
             let row = Row::new(format!("never:{entry}"), entry.as_str());
             again(&mut sheet, row, entry, busy, last);
         }
     }
     if !versions.is_empty() {
-        sheet.heading("this version");
+        sheet.group(
+            "this version",
+            "only this version is left out. a newer one shows again.",
+        );
         for entry in versions {
             let (source, version) = entry.split_once('=').unwrap_or((entry.as_str(), ""));
             let row = Row::new(format!("skip:{entry}"), source).value(version);
@@ -38,7 +47,7 @@ pub(super) fn page(session: &Session) -> Option<Sheet> {
         }
     }
     if skips.is_empty() {
-        sheet.heading("skipped");
+        sheet.group("skipped", "nothing is left out.");
         sheet.row(Row::new("none", "Nothing skipped").busy(busy));
     }
     Some(sheet)

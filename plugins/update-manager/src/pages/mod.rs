@@ -5,8 +5,8 @@ use qol_config::pages::{Go, Group, Notice, Page, Pages, Row};
 
 use crate::session::{Act, Session, Task};
 
+mod cleanup;
 mod home;
-mod kernels;
 mod last;
 mod restart;
 mod settings;
@@ -51,14 +51,6 @@ impl Sheet {
         self.group = Some(Group::new(title, colophon));
     }
 
-    fn heading(&mut self, title: impl Into<String>) {
-        self.flush();
-        self.group = Some(Group {
-            title: title.into(),
-            ..Group::default()
-        });
-    }
-
     fn row(&mut self, row: Row) {
         if let Some(group) = self.group.as_mut() {
             group.push(row);
@@ -85,7 +77,7 @@ impl Sheet {
         }
     }
 
-    fn list(self, title: &str, rows: Vec<Row>) -> Vec<Sheet> {
+    fn list(self, title: &str, colophon: &str, rows: Vec<Row>) -> Vec<Sheet> {
         let id = self.id.clone();
         let name = self.page.title.clone();
         let count = rows.len();
@@ -97,7 +89,7 @@ impl Sheet {
             let mut sheet = head
                 .take()
                 .unwrap_or_else(|| Sheet::new(slice(&id, index), name.as_str()));
-            sheet.heading(title);
+            sheet.group(title, colophon);
             for row in rows.by_ref().take(SLICE) {
                 sheet.row(row);
             }
@@ -152,7 +144,7 @@ pub(crate) fn build(session: &Session, now: NaiveDateTime) -> Board {
     for sheet in settings::pages(session, now) {
         board.add(sheet);
     }
-    if let Some(sheet) = kernels::page(session) {
+    for sheet in cleanup::pages(session) {
         board.add(sheet);
     }
     if let Some(sheet) = skipped::page(session) {

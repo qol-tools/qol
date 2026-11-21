@@ -11,6 +11,12 @@ pub(crate) enum Refusal {
     Failed(String),
 }
 
+impl Refusal {
+    pub(crate) fn stops(&self) -> bool {
+        matches!(self, Self::Dismissed | Self::Denied | Self::TimedOut)
+    }
+}
+
 impl fmt::Display for Refusal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

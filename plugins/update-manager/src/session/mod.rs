@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDateTime;
 
-use crate::cleanup::{Live, Survey};
+use crate::cleanup::{Consent, Leftover, Live, Survey};
 use crate::platform::Refusal;
 use crate::updates::{
     visible, Auto, AutoKey, Clock, Failure, Finish, Holding, Host, Hours, Mint, Update, Updates,
@@ -27,6 +27,7 @@ pub(crate) enum Op {
     Tonight,
     RestartNow,
     Skips,
+    Remove,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +88,7 @@ pub(crate) enum Act {
     Skip(String),
     Never(String),
     Unskip(String),
+    Remove(Vec<&'static Leftover>, Consent),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -96,12 +98,10 @@ pub(crate) enum Task {
         hours: Option<Hours>,
         startup_delay: u32,
         restart: Option<NaiveDateTime>,
-        was: Option<Hours>,
     },
     Auto {
         key: AutoKey,
         on: bool,
-        was: bool,
     },
     Restart(Option<NaiveDateTime>),
     RestartNow,
@@ -111,6 +111,10 @@ pub(crate) enum Task {
         add: Vec<String>,
         remove: Vec<String>,
         system: bool,
+    },
+    Remove {
+        kinds: Vec<&'static Leftover>,
+        consent: Consent,
     },
 }
 
@@ -237,8 +241,11 @@ impl Session {
         }
         let hours = self.hours();
         Some(match mint.next {
-            Some(next) => format!("Mint's run at {}", Clock::of(next)),
-            None => format!("Mint's run between {} and {}", hours.from, hours.until),
+            Some(next) => format!("the automatic update at {}", Clock::of(next)),
+            None => format!(
+                "the automatic update between {} and {}",
+                hours.from, hours.until
+            ),
         })
     }
 
@@ -266,15 +273,6 @@ impl Session {
 
     pub(crate) fn want_hold(&self) -> bool {
         self.rules.hold || (self.rules.guard && self.in_use.is_some())
-    }
-
-    pub(crate) fn auto_changed(&self) -> Vec<(AutoKey, bool)> {
-        self.journal
-            .auto
-            .iter()
-            .filter(|change| self.switch(change.key) != change.was)
-            .map(|change| (change.key, change.was))
-            .collect()
     }
 
     pub(crate) fn apply_updates(&mut self, updates: Updates, now: NaiveDateTime) {
@@ -357,23 +355,17 @@ impl Session {
                 let mint = self
                     .mint()
                     .ok_or("Mint's Update Manager is not set up here")?;
-                let (startup_delay, was) = (mint.startup_delay, mint.hours);
+                let startup_delay = mint.startup_delay;
                 self.start(Op::Hours)?;
                 Ok(Some(Task::Hours {
                     hours: *hours,
                     startup_delay,
                     restart,
-                    was,
                 }))
             }
             Act::Auto(key, on) => {
-                let was = self.switch(*key);
                 self.start(Op::Auto(*key))?;
-                Ok(Some(Task::Auto {
-                    key: *key,
-                    on: *on,
-                    was,
-                }))
+                Ok(Some(Task::Auto { key: *key, on: *on }))
             }
             Act::Ask(proposal) => {
                 self.ask = Some(*proposal);
@@ -381,6 +373,7 @@ impl Session {
             }
             Act::RestartNow => {
                 self.refuse_during_install()?;
+                self.refuse_during_removal()?;
                 self.start(Op::RestartNow)?;
                 Ok(Some(Task::RestartNow))
             }
@@ -407,6 +400,20 @@ impl Session {
                 self.change_skips(add, remove)
             }
             Act::Unskip(entry) => self.change_skips(Vec::new(), vec![entry.clone()]),
+            Act::Remove(kinds, consent) => {
+                if kinds.is_empty() {
+                    return Err("Nothing here is left to remove".into());
+                }
+                self.refuse_during_install()?;
+                if self.busy.contains(&Op::RestartNow) {
+                    return Err("The computer is restarting".into());
+                }
+                self.start(Op::Remove)?;
+                Ok(Some(Task::Remove {
+                    kinds: kinds.clone(),
+                    consent: *consent,
+                }))
+            }
         }
     }
 
@@ -437,6 +444,13 @@ impl Session {
         Ok(())
     }
 
+    fn refuse_during_removal(&self) -> Result<(), String> {
+        if self.busy.contains(&Op::Remove) {
+            return Err("Wait for the cleanup that is running to finish first".into());
+        }
+        Ok(())
+    }
+
     fn start(&mut self, op: Op) -> Result<(), String> {
         if !self.busy.insert(op) {
             return Err("That change is still being made".into());
@@ -449,6 +463,7 @@ impl Session {
         if self.job.is_some() {
             return Err("An install is already running".into());
         }
+        self.refuse_during_removal()?;
         let updates: Vec<Update> = self
             .list()
             .iter()
@@ -497,26 +512,25 @@ impl Session {
         }
     }
 
-    pub(crate) fn done(&mut self, task: &Task, result: Result<(), Refusal>, now: NaiveDateTime) {
+    pub(crate) fn done(&mut self, task: &Task, result: Result<(), Refusal>) {
         let op = match task {
             Task::Hours { .. } => Op::Hours,
             Task::Auto { key, .. } => Op::Auto(*key),
             Task::Restart(_) => Op::Tonight,
             Task::RestartNow => Op::RestartNow,
             Task::Skips { .. } => Op::Skips,
+            Task::Remove { .. } => Op::Remove,
             Task::Install(_) | Task::Rules | Task::Open(_) => return,
         };
+        if matches!(task, Task::RestartNow) && result.is_ok() {
+            return;
+        }
         self.busy.remove(&op);
         if let Err(refusal) = result {
             self.errors.insert(op, refusal.to_string());
             return;
         }
         match task {
-            Task::Hours { hours, was, .. } => {
-                self.journal.hours_written(*was, hours.is_some(), now)
-            }
-            Task::Auto { key, on, was } => self.journal.auto_written(*key, *was, *on, now),
-            Task::Restart(at) => self.journal.restart = at.map(|_| now),
             Task::Skips { add, remove, .. } => {
                 self.host.skips.retain(|entry| !remove.contains(entry));
                 for entry in add {
@@ -526,7 +540,14 @@ impl Session {
                 }
                 self.show_unskipped();
             }
-            _ => {}
+            Task::Install(_)
+            | Task::Hours { .. }
+            | Task::Auto { .. }
+            | Task::Restart(_)
+            | Task::RestartNow
+            | Task::Rules
+            | Task::Open(_)
+            | Task::Remove { .. } => {}
         }
     }
 }
@@ -635,7 +656,10 @@ mod tests {
         assert_eq!(effective(MINT_DEFAULT, Clock::hm(0, 30)), Clock::hm(1, 30));
         assert_eq!(effective(MINT_DEFAULT, Clock::hm(3, 0)), Clock::hm(3, 0));
         assert_eq!(effective(MINT_DEFAULT, Clock::hm(22, 0)), Clock::hm(1, 30));
-        assert_eq!(session.run_at().as_deref(), Some("Mint's run at 00:37"));
+        assert_eq!(
+            session.run_at().as_deref(),
+            Some("the automatic update at 00:37")
+        );
     }
 
     #[test]
@@ -668,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn changes_finish_with_their_journal_entries() {
+    fn a_change_frees_its_row_and_keeps_a_refusal() {
         let mut session = session();
         let now = at("2026-10-14 12:00");
         let hours = Hours {
@@ -681,18 +705,14 @@ mod tests {
             .expect("hours")
             .expect("task");
         assert!(session.apply(&Act::Hours(None), now).is_err());
-        session.done(&task, Ok(()), now);
+        session.done(&task, Ok(()));
         assert!(session.busy.is_empty());
-        assert_eq!(
-            session.journal.hours.map(|change| change.was),
-            Some(Some(MINT_DEFAULT))
-        );
 
         let task = session
             .apply(&Act::Auto(AutoKey::Flatpak, true), now)
             .expect("auto")
             .expect("task");
-        session.done(&task, Err(Refusal::Dismissed), now);
+        session.done(&task, Err(Refusal::Dismissed));
         assert_eq!(
             session
                 .errors
@@ -700,7 +720,7 @@ mod tests {
                 .map(String::as_str),
             Some("the password prompt was closed")
         );
-        assert!(session.journal.auto.is_empty());
+        assert!(session.busy.is_empty());
     }
 
     #[test]
@@ -774,13 +794,19 @@ mod tests {
             .expect("hold");
         session.rules.helper = Helper::Starting;
         assert!(!session.holding_all());
-        assert_eq!(session.run_at().as_deref(), Some("Mint's run at 00:37"));
+        assert_eq!(
+            session.run_at().as_deref(),
+            Some("the automatic update at 00:37")
+        );
         session.rules.helper = Helper::Ready;
         assert!(session.holding_all());
         assert_eq!(session.run_at(), None);
         session.rules.helper = Helper::Failed(Refusal::Dismissed);
         assert!(!session.holding_all());
-        assert_eq!(session.run_at().as_deref(), Some("Mint's run at 00:37"));
+        assert_eq!(
+            session.run_at().as_deref(),
+            Some("the automatic update at 00:37")
+        );
     }
 
     #[test]

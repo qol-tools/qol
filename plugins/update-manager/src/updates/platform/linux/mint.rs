@@ -7,7 +7,7 @@ use crate::platform::linux::command::{lenient, run, READ};
 use crate::platform::linux::privileged::{refused, run_script};
 use crate::platform::linux::systemd::{unit, Unit};
 use crate::platform::Refusal;
-use crate::updates::{Auto, AutoKey, Clock, Hours, Mint};
+use crate::updates::{Auto, AutoKey, Clock, Hours, Mint, Source};
 
 const UPGRADE: &str = "mintupdate-automation-upgrade";
 pub(super) const TIMER: &str = "mintupdate-automation-upgrade.timer";
@@ -16,6 +16,28 @@ const SCHEMA: &str = "com.linuxmint.updates";
 const DROP_IN_DIR: &str = "/etc/systemd/system/mintupdate-automation-upgrade.timer.d";
 const DROP_IN: &str = "qol-update-hours.conf";
 const RESTART: &str = "qol-update-manager-restart";
+const AT_LOGIN: &str = "When you log in";
+
+static SOURCES: [Source; 3] = [
+    Source {
+        key: AutoKey::Packages,
+        name: "System packages",
+        short: "system packages",
+        when: "In the update hours",
+    },
+    Source {
+        key: AutoKey::Flatpak,
+        name: "Flatpak",
+        short: "Flatpak",
+        when: AT_LOGIN,
+    },
+    Source {
+        key: AutoKey::Spices,
+        name: "Desktop add-ons",
+        short: "desktop add-ons",
+        when: AT_LOGIN,
+    },
+];
 
 const RESTART_SH: &str = r#"
 schedule() {
@@ -223,6 +245,10 @@ pub(super) fn read_restart() -> Option<NaiveDateTime> {
 
 fn setting(key: &str) -> bool {
     gsettings::get_within(SCHEMA, key, READ).is_ok_and(|value| value == "true")
+}
+
+pub(super) fn sources() -> &'static [Source] {
+    &SOURCES
 }
 
 pub(super) fn set_auto(key: AutoKey, on: bool) -> Result<(), Refusal> {
