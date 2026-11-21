@@ -4,11 +4,12 @@ use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc::{self, SyncSender, TrySendError},
-        Arc, Mutex,
+        Arc,
     },
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use qol_sync::Mutex;
 use serde::Serialize;
 use tokio::{net::UdpSocket, runtime::Handle, sync::watch, task::JoinHandle};
 
@@ -139,24 +140,18 @@ impl PointzAdapter {
 
     pub fn begin_pairing(&self) -> Result<PointzPairing, AuthorityError> {
         let session = PairingSession::open().ok_or(AuthorityError::Identity)?;
-        let mut pairing = self.pairing.lock().map_err(|_| AuthorityError::Faulted)?;
+        let mut pairing = self.pairing.lock();
         *pairing = Some(session);
         Ok(snapshot(&mut pairing))
     }
 
     pub fn cancel_pairing(&self) -> PointzPairing {
-        let Ok(mut pairing) = self.pairing.lock() else {
-            return PointzPairing::CLOSED;
-        };
-        *pairing = None;
+        *self.pairing.lock() = None;
         PointzPairing::CLOSED
     }
 
     pub fn pairing(&self) -> PointzPairing {
-        self.pairing
-            .lock()
-            .map(|mut pairing| snapshot(&mut pairing))
-            .unwrap_or(PointzPairing::CLOSED)
+        snapshot(&mut self.pairing.lock())
     }
 
     pub fn transport(&self) -> PointzTransport {
@@ -173,9 +168,7 @@ impl PointzAdapter {
 impl Drop for PointzAdapter {
     fn drop(&mut self) {
         self.stop.send_replace(true);
-        if let Ok(mut pairing) = self.pairing.lock() {
-            *pairing = None;
-        }
+        *self.pairing.lock() = None;
         for task in &self.tasks {
             task.abort();
         }
@@ -255,10 +248,7 @@ fn discovery_reply(
     server_id: &str,
     pairing: &Mutex<Option<PairingSession>>,
 ) -> Option<Vec<u8>> {
-    let pairing_open = pairing
-        .lock()
-        .map(|mut pairing| snapshot(&mut pairing).open)
-        .unwrap_or(false);
+    let pairing_open = snapshot(&mut pairing.lock()).open;
     serde_json::to_vec(&DiscoveryResponse {
         hostname,
         server_id,
@@ -276,7 +266,7 @@ fn pairing_reply(
     datagram: &[u8],
     pairing: &Mutex<Option<PairingSession>>,
 ) -> Option<Vec<u8>> {
-    let mut guard = pairing.lock().ok()?;
+    let mut guard = pairing.lock();
     let session = guard.as_mut()?;
     match session.handle(server_id, datagram) {
         HandleOutcome::Ignore => None,

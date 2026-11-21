@@ -51,10 +51,7 @@ impl Owner {
         while outbound.join_next().await.is_some() {}
         while offering.join_next().await.is_some() {}
         self.offers.close();
-        let mut attempts = self
-            .attempts
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut attempts = self.attempts.lock();
         for attempt in attempts
             .values_mut()
             .filter(|attempt| attempt.cancel.is_some())

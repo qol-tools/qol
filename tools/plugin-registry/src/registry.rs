@@ -2,9 +2,9 @@ use crate::oci::{sha256_digest, MANIFEST_MEDIA_TYPE};
 use anyhow::{Context, Result};
 use base64::Engine;
 use qol_plugin_index::{BearerChallenge, RegistryLocation};
+use qol_sync::Mutex;
 use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 use std::time::Duration;
 
 const BODY_LIMIT: u64 = 64 * 1024 * 1024;
@@ -246,14 +246,11 @@ impl Registry {
     }
 
     fn current_token(&self) -> Option<String> {
-        self.token.lock().ok().and_then(|token| token.clone())
+        self.token.lock().clone()
     }
 
     fn refresh_token(&self, used: Option<String>, challenge: &str) -> Result<String> {
-        let mut token = self
-            .token
-            .lock()
-            .map_err(|_| anyhow::anyhow!("the registry token lock is poisoned"))?;
+        let mut token = self.token.lock();
         if let Some(current) = token.as_ref() {
             if used.as_ref() != Some(current) {
                 return Ok(current.clone());

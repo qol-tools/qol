@@ -16,10 +16,10 @@ fn retained_unknown_results_are_not_evicted_to_admit_a_new_transaction() {
         if key == transaction {
             continue;
         }
-        if control.attempts.lock().unwrap().len() == MAX_RESULTS {
+        if control.attempts.lock().len() == MAX_RESULTS {
             break;
         }
-        control.attempts.lock().unwrap().insert(
+        control.attempts.lock().insert(
             key,
             Attempt {
                 state: AttemptState::Unknown {
@@ -38,16 +38,11 @@ fn retained_unknown_results_are_not_evicted_to_admit_a_new_transaction() {
         Vec::new(),
     );
     assert_eq!(result, Err(refusal(EnrollmentFailure::Capacity)));
-    assert_eq!(control.attempts.lock().unwrap().len(), MAX_RESULTS);
-    assert!(control
-        .attempts
-        .lock()
-        .unwrap()
-        .values()
-        .all(|attempt| matches!(
-            attempt.state,
-            AttemptState::Unknown {
-                reason: EnrollmentFailure::Transport
-            }
-        )));
+    assert_eq!(control.attempts.lock().len(), MAX_RESULTS);
+    assert!(control.attempts.lock().values().all(|attempt| matches!(
+        attempt.state,
+        AttemptState::Unknown {
+            reason: EnrollmentFailure::Transport
+        }
+    )));
 }

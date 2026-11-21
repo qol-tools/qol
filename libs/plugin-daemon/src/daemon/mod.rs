@@ -5,10 +5,11 @@ use std::io::{self, BufReader, ErrorKind, Write};
 use std::net::Shutdown;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use qol_runtime::local_ipc::{self, LocalListener, LocalStream};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse, ReadinessPhase};
+use qol_sync::Mutex;
 
 mod client_socket;
 mod launch;
@@ -76,28 +77,19 @@ impl ReadinessGate {
     }
 
     pub fn set_phase(&self, phase: ReadinessPhase, detail: Option<String>) {
-        let mut not_ready = self
-            .not_ready
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut not_ready = self.not_ready.lock();
         if not_ready.is_some() {
             *not_ready = Some((phase, detail));
         }
     }
 
     pub fn mark_ready(&self) {
-        let mut not_ready = self
-            .not_ready
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut not_ready = self.not_ready.lock();
         *not_ready = None;
     }
 
     fn snapshot(&self) -> NotReadyState {
-        self.not_ready
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
+        self.not_ready.lock().clone()
     }
 }
 

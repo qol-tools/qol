@@ -30,7 +30,7 @@ impl PeerAuthority {
     pub fn pending_enrollments_snapshot(
         &self,
     ) -> Result<(StoreRevision, Vec<PendingEnrollment>), EnrollmentError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         let now = Instant::now();
         Ok((
@@ -61,7 +61,7 @@ impl PeerAuthority {
         expected: StoreRevision,
         key: EnrollmentRequestKey,
     ) -> Result<EnrollmentReceipt, EnrollmentError> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         if inner.state.revision != expected {
             return Err(AuthorityError::StaleRevision {
@@ -166,7 +166,7 @@ impl PeerAuthority {
         pin: &PeerPin,
         request: &Request,
     ) -> Result<(), EnrollmentError> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         check_remote(&inner, pin)?;
         if let Some(stored) = inner
@@ -291,7 +291,7 @@ impl PeerAuthority {
         let mut changes = self.watch_enrollment();
         loop {
             let deadline = {
-                let inner = self.lock()?;
+                let inner = self.lock();
                 inner.ensure_ready()?;
                 check_remote(&inner, pin)?;
                 if let Some(receipt) = matching_receipt(&inner, pin, key)? {
@@ -325,7 +325,7 @@ impl PeerAuthority {
         pin: &PeerPin,
         key: EnrollmentRequestKey,
     ) -> Result<EnrollmentReceipt, EnrollmentError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         check_remote(&inner, pin)?;
         matching_receipt(&inner, pin, key)?.ok_or(EnrollmentError::Rejected(

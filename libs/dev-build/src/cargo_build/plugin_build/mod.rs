@@ -1,10 +1,11 @@
 mod progress;
 mod streams;
 
+use qol_sync::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
 use super::super::types::BuildResult;
@@ -199,10 +200,7 @@ where
             let tx = message_tx.clone();
             let build_group = &build_group;
             scope.spawn(move || loop {
-                let group_index = match job_rx.lock() {
-                    Ok(receiver) => receiver.recv().ok(),
-                    Err(_) => None,
-                };
+                let group_index = job_rx.lock().recv().ok();
                 let Some(group_index) = group_index else {
                     return;
                 };

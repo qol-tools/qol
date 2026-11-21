@@ -71,7 +71,7 @@ use crate::status_indicator::StatusIndicator;
 use crate::surface::{DragGestureState, PanelDragArea, SurfaceDismisser};
 
 type QueryResult = Result<serde_json::Value, String>;
-type SampledQueryResults = std::sync::Arc<std::sync::Mutex<Vec<(String, QueryResult)>>>;
+type SampledQueryResults = std::sync::Arc<qol_sync::Mutex<Vec<(String, QueryResult)>>>;
 
 const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 const LEVEL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
@@ -223,12 +223,10 @@ impl HeightCache {
     }
 }
 
-use std::sync::PoisonError;
-
 #[derive(Default)]
 struct SampleSignal {
-    state: std::sync::Mutex<SampleSignalState>,
-    requested: std::sync::Condvar,
+    state: qol_sync::Mutex<SampleSignalState>,
+    requested: qol_sync::Condvar,
 }
 
 #[derive(Default)]
@@ -239,24 +237,21 @@ struct SampleSignalState {
 
 impl SampleSignal {
     fn request(&self) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state.lock();
         state.requested = true;
         self.requested.notify_one();
     }
 
     fn stop(&self) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state.lock();
         state.stopped = true;
         self.requested.notify_one();
     }
 
     fn wait_for_request(&self) -> bool {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state.lock();
         while !state.requested && !state.stopped {
-            state = self
-                .requested
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
+            state = self.requested.wait(state);
         }
         state.requested = false;
         !state.stopped
@@ -1484,7 +1479,7 @@ impl SettingsPanelView {
                     ))
                     .detach();
                 while wake_rx.next().await.is_some() {
-                    let batch = std::mem::take(&mut *samples.lock().unwrap());
+                    let batch = std::mem::take(&mut *samples.lock());
                     let applied = this
                         .update(&mut async_cx, |this, cx| {
                             if this.runtime_poll_generation != generation {
@@ -1678,7 +1673,7 @@ impl SettingsPanelView {
         let Some(samples) = self.frame_paced_samples.clone() else {
             return false;
         };
-        let batch = std::mem::take(&mut *samples.lock().unwrap_or_else(PoisonError::into_inner));
+        let batch = std::mem::take(&mut *samples.lock());
         if let Some(signal) = &self.sample_signal {
             signal.request();
         }
@@ -1936,7 +1931,7 @@ impl SettingsPanelView {
                 fresh.push((query.clone(), runtime.query(query)));
                 due[index] = Some(started + intervals[index]);
             }
-            let mut latest = latest.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut latest = latest.lock();
             for (query, result) in fresh {
                 latest.retain(|(name, _)| name != &query);
                 latest.push((query, result));
@@ -1973,7 +1968,7 @@ impl SettingsPanelView {
             }
             let sampled = !fresh.is_empty();
             {
-                let mut latest = latest.lock().unwrap();
+                let mut latest = latest.lock();
                 for (query, result) in fresh {
                     latest.retain(|(name, _)| name != &query);
                     latest.push((query, result));

@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use qol_sync::Mutex;
 use serde_json::Value;
 
 use qol_agent_homes::{Harness, Registry};
@@ -89,15 +90,11 @@ impl ClaudeMetadataResolver {
         &self,
         session: &SessionFacts,
     ) -> (Option<ClaudeSessionLocation>, Option<CachedFacts>) {
-        let mut cache = self.cache.lock().ok();
-        let location = cache
-            .as_mut()
-            .and_then(|cache| session_location(session, self.environment.as_ref(), cache));
-        let facts = cache.as_mut().and_then(|cache| {
-            location
-                .as_ref()
-                .and_then(|location| cached_facts(&location.transcript_path, cache))
-        });
+        let mut cache = self.cache.lock();
+        let location = session_location(session, self.environment.as_ref(), &mut cache);
+        let facts = location
+            .as_ref()
+            .and_then(|location| cached_facts(&location.transcript_path, &mut cache));
         (location, facts)
     }
 
@@ -141,7 +138,7 @@ impl ClaudeMetadataResolver {
     }
 
     pub fn subscription_path(&self, session: &SessionFacts) -> Option<PathBuf> {
-        let mut cache = self.cache.lock().ok()?;
+        let mut cache = self.cache.lock();
         session_location(session, self.environment.as_ref(), &mut cache)
             .map(|location| location.transcript_path)
     }

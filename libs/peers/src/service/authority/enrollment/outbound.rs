@@ -43,7 +43,7 @@ impl PeerAuthority {
         replace_pending: bool,
     ) -> Result<TransactionId, EnrollmentError> {
         let transaction = TransactionId::from_random(random()?);
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         if inner.state.revision != expected {
             return Err(AuthorityError::StaleRevision {
@@ -111,7 +111,7 @@ impl PeerAuthority {
     }
 
     pub fn outbound_enrollments(&self) -> Result<Vec<OutboundEnrollment>, EnrollmentError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         Ok(inner
             .state
@@ -133,7 +133,7 @@ impl PeerAuthority {
         expected: StoreRevision,
         transaction: TransactionId,
     ) -> Result<StoreRevision, EnrollmentError> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         if inner.state.revision != expected {
             return Err(AuthorityError::StaleRevision {
@@ -167,7 +167,7 @@ impl PeerAuthority {
         expected: StoreRevision,
         transaction: TransactionId,
     ) -> Result<StoreRevision, EnrollmentError> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         if inner.state.revision != expected {
             return Err(AuthorityError::StaleRevision {
@@ -228,7 +228,7 @@ impl PeerAuthority {
         transaction: TransactionId,
         pin: &PeerPin,
     ) -> Result<OutboundJoin, EnrollmentError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         check_remote(&inner, pin)?;
         let join = inner
@@ -254,7 +254,7 @@ impl PeerAuthority {
         receipt: &EnrollmentReceipt,
     ) -> Result<(), EnrollmentError> {
         validate_receipt(receipt).map_err(|_| EnrollmentError::Protocol)?;
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         check_remote(&inner, pin)?;
         let index = inner

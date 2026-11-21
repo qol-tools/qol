@@ -89,8 +89,8 @@ pub fn dir_size(path: &Path) -> Result<Option<u64>, String> {
 const WALK_THREADS: usize = 4;
 
 pub fn path_bytes(path: &Path) -> u64 {
+    use qol_sync::{Condvar, Mutex};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Condvar, Mutex};
     let Ok(metadata) = path.symlink_metadata() else {
         return 0;
     };
@@ -106,9 +106,7 @@ pub fn path_bytes(path: &Path) -> u64 {
                 let mut pacer = Pacer::new();
                 loop {
                     let dir = {
-                        let Ok(mut state) = queue.lock() else {
-                            return;
-                        };
+                        let mut state = queue.lock();
                         loop {
                             if let Some(dir) = state.0.pop() {
                                 break dir;
@@ -116,10 +114,7 @@ pub fn path_bytes(path: &Path) -> u64 {
                             if state.1 == 0 {
                                 return;
                             }
-                            state = match idle.wait(state) {
-                                Ok(state) => state,
-                                Err(_) => return,
-                            };
+                            state = idle.wait(state);
                         }
                     };
                     let mut local = 0u64;
@@ -139,7 +134,8 @@ pub fn path_bytes(path: &Path) -> u64 {
                         }
                     }
                     total.fetch_add(local, Ordering::Relaxed);
-                    if let Ok(mut state) = queue.lock() {
+                    {
+                        let mut state = queue.lock();
                         state.1 += subdirs.len();
                         state.0.extend(subdirs);
                         state.1 -= 1;

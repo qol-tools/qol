@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Child;
-use std::sync::{mpsc::Receiver, Arc, Mutex};
+use std::sync::{mpsc::Receiver, Arc};
 use std::time::Instant;
 
 use anyhow::Result;
+use qol_sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::emu::ImageCandidate;
@@ -161,17 +162,11 @@ impl ProbeWorktree {
     }
 
     fn current(&self) -> PathBuf {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        self.0.lock().clone()
     }
 
     fn replace(&self, root: &Path) {
-        *self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = root.to_path_buf();
+        *self.0.lock() = root.to_path_buf();
     }
 }
 

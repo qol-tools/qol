@@ -15,10 +15,11 @@ mod title;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use qol_sync::Mutex;
 use qol_windowing::platform::windows::{top_level_windows, Window};
 use qol_windowing::WindowId;
 use windows_sys::Win32::Foundation::HWND;
@@ -86,9 +87,7 @@ struct ConsoleBackend {
 
 impl ConsoleBackend {
     fn remember(&self, reports: &[ConsoleReport]) {
-        let Ok(mut cache) = self.reports.lock() else {
-            return;
-        };
+        let mut cache = self.reports.lock();
         let now = Instant::now();
         for report in reports {
             cache.insert(
@@ -103,12 +102,11 @@ impl ConsoleBackend {
     }
 
     fn cached(&self, root: i32) -> Option<ConsoleReport> {
-        self.reports.lock().ok().and_then(|cache| {
-            cache
-                .get(&root)
-                .filter(|probed| probed.at.elapsed() < SCREEN_TTL)
-                .map(|probed| probed.report.clone())
-        })
+        self.reports
+            .lock()
+            .get(&root)
+            .filter(|probed| probed.at.elapsed() < SCREEN_TTL)
+            .map(|probed| probed.report.clone())
     }
 
     fn fresh(&self, target: &SessionBinding) -> Result<ConsoleReport, TerminalError> {

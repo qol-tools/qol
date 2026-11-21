@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use qol_sync::Mutex;
 
 use crate::platform::{Platform, PlatformOps};
 use qol_dev_build::target_cache::{
@@ -50,10 +52,7 @@ pub(super) struct DiskScan {
 
 impl DiskScan {
     fn progress_step(&self) -> String {
-        self.progress
-            .lock()
-            .map(|step| step.clone())
-            .unwrap_or_default()
+        self.progress.lock().clone()
     }
 
     pub(super) fn activity(&self, now_ms: u64) -> Activity {
@@ -280,9 +279,7 @@ pub(super) fn load_cached_report(running: &Path) -> Option<(DiskReport, u64, Sca
 }
 
 fn set_progress(progress: &Arc<Mutex<String>>, step: &str) {
-    if let Ok(mut current) = progress.lock() {
-        *current = step.to_string();
-    }
+    *progress.lock() = step.to_string();
 }
 
 fn scan_disk_usage(

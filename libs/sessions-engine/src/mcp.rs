@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufWriter, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Result};
@@ -9,6 +9,7 @@ use qol_mcp::{
     jsonrpc::{error_response, result_response, ErrorCode},
     Caller, ServerInfo, ToolHost, ToolResult, ToolSpec,
 };
+use qol_sync::Mutex;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
     ScreenReader, SessionBinding, SessionInventory, SpawnSurface, TerminalSessionService,
@@ -1644,11 +1645,11 @@ pub(crate) fn run<W: Write + Send + Sync + 'static>(
                 dispatch_line(&server, &writer, &cancellations, &workers, &line)?;
             }
             let pending_flags: Vec<Arc<AtomicBool>> =
-                cancellations.lock().unwrap().values().cloned().collect();
+                cancellations.lock().values().cloned().collect();
             for flag in pending_flags {
                 flag.store(true, Ordering::SeqCst);
             }
-            for worker in workers.lock().unwrap().drain(..) {
+            for worker in workers.lock().drain(..) {
                 let _ = worker.join();
             }
             Ok(())
@@ -1694,7 +1695,7 @@ fn dispatch_line<W: Write + Send + Sync + 'static>(
     if method == Some("notifications/cancelled") {
         if let Some(request_id) = message.pointer("/params/requestId").cloned() {
             let key = request_id_key(&request_id);
-            if let Some(flag) = cancellations.lock().unwrap().get(&key) {
+            if let Some(flag) = cancellations.lock().get(&key) {
                 flag.store(true, Ordering::SeqCst);
             }
         }
@@ -1721,7 +1722,6 @@ fn dispatch_line<W: Write + Send + Sync + 'static>(
         let flag = Arc::new(AtomicBool::new(false));
         cancellations
             .lock()
-            .unwrap()
             .insert(request_id_key(&id), Arc::clone(&flag));
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         let progress_token = params
@@ -1767,9 +1767,9 @@ fn dispatch_line<W: Write + Send + Sync + 'static>(
                     error
                 );
             }
-            cancellations.lock().unwrap().remove(&request_id_key(&id));
+            cancellations.lock().remove(&request_id_key(&id));
         });
-        workers.lock().unwrap().push(worker);
+        workers.lock().push(worker);
         return Ok(());
     }
     let params = message.get("params").cloned().unwrap_or(Value::Null);
@@ -1783,7 +1783,7 @@ fn write_response<W: Write + Send + Sync + 'static>(
     writer: &Arc<Mutex<BufWriter<W>>>,
     response: &Value,
 ) -> io::Result<()> {
-    let mut output = writer.lock().unwrap();
+    let mut output = writer.lock();
     serde_json::to_writer(&mut *output, response)?;
     output.write_all(b"\n")?;
     output.flush()
@@ -6405,29 +6405,29 @@ mod tests {
         assert_eq!(backend.spawn_count.load(Ordering::Relaxed), 0);
     }
 
-    type TestWriter = Arc<Mutex<BufWriter<Vec<u8>>>>;
+    type TestWriter = Arc<qol_sync::Mutex<BufWriter<Vec<u8>>>>;
     type ScriptedContext = (
         Arc<McpSessionServer>,
         TestWriter,
-        Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
-        Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
+        Arc<qol_sync::Mutex<HashMap<String, Arc<AtomicBool>>>>,
+        Arc<qol_sync::Mutex<Vec<std::thread::JoinHandle<()>>>>,
     );
 
     fn scripted_harness(server: McpSessionServer) -> ScriptedContext {
         let server = Arc::new(server);
-        let writer = Arc::new(Mutex::new(BufWriter::new(Vec::new())));
-        let cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        let workers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> =
-            Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(qol_sync::Mutex::new(BufWriter::new(Vec::new())));
+        let cancellations: Arc<qol_sync::Mutex<HashMap<String, Arc<AtomicBool>>>> =
+            Arc::new(qol_sync::Mutex::new(HashMap::new()));
+        let workers: Arc<qol_sync::Mutex<Vec<std::thread::JoinHandle<()>>>> =
+            Arc::new(qol_sync::Mutex::new(Vec::new()));
         (server, writer, cancellations, workers)
     }
 
     fn feed_line(
         server: &Arc<McpSessionServer>,
         writer: &TestWriter,
-        cancellations: &Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
-        workers: &Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
+        cancellations: &Arc<qol_sync::Mutex<HashMap<String, Arc<AtomicBool>>>>,
+        workers: &Arc<qol_sync::Mutex<Vec<std::thread::JoinHandle<()>>>>,
         line: &Value,
     ) {
         dispatch_line(
@@ -6441,7 +6441,7 @@ mod tests {
     }
 
     fn read_responses(writer: &TestWriter) -> Vec<Value> {
-        let data = writer.lock().unwrap().get_ref().clone();
+        let data = writer.lock().get_ref().clone();
         String::from_utf8(data)
             .unwrap()
             .lines()
@@ -6478,8 +6478,8 @@ mod tests {
         }
     }
 
-    fn drain_workers(workers: &Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>) {
-        for worker in workers.lock().unwrap().drain(..) {
+    fn drain_workers(workers: &Arc<qol_sync::Mutex<Vec<std::thread::JoinHandle<()>>>>) {
+        for worker in workers.lock().drain(..) {
             let _ = worker.join();
         }
     }

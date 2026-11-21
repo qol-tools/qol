@@ -10,7 +10,7 @@ use crate::StoreRevision;
 
 impl PeerAuthority {
     pub(in crate::service) fn check_enrollment_ready(&self) -> Result<(), EnrollmentError> {
-        self.lock()?.ensure_ready()?;
+        self.lock().ensure_ready()?;
         Ok(())
     }
 
@@ -19,7 +19,7 @@ impl PeerAuthority {
         expected: StoreRevision,
         key: EnrollmentRequestKey,
     ) -> Result<(), EnrollmentError> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         check_revision(&inner, expected)?;
         let index = inner
             .invitations
@@ -46,7 +46,7 @@ impl PeerAuthority {
         invitation: Option<&Invitation>,
         admit: impl FnOnce(PeerPin) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         check_revision(&inner, expected)?;
         let join = inner
             .state
@@ -74,7 +74,7 @@ impl PeerAuthority {
         &self,
         cursor: PageCursor,
     ) -> Result<Page<OutboundEnrollment>, Error> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         if inner.state.identity.pin().peer_id() != cursor.authority_id
             || inner.state.revision != cursor.revision
@@ -117,7 +117,7 @@ impl PeerAuthority {
         &self,
         transaction: TransactionId,
     ) -> Result<(), EnrollmentError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         if !inner
             .state

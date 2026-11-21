@@ -1,5 +1,6 @@
+use qol_sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
 use crate::core::{self, BuildStatus};
@@ -79,10 +80,7 @@ where
                 let active = Arc::clone(&active);
                 scope.spawn(move || {
                     loop {
-                        let job = match job_rx.lock() {
-                            Ok(receiver) => receiver.recv().ok(),
-                            Err(_) => None,
-                        };
+                        let job = job_rx.lock().recv().ok();
                         let Some(job) = job else {
                             return;
                         };

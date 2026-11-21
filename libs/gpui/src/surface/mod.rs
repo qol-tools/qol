@@ -1,12 +1,13 @@
 use crate::kit::{enter_window, WindowLook};
 use crate::popup_window::read_title;
 use crate::text::TextStyled;
+use qol_sync::Mutex;
 use qol_theme::TextStyle;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
@@ -406,9 +407,7 @@ impl SurfaceDismisser {
     }
 
     pub fn retitle(&self, window: &mut Window, title: String) {
-        let Ok(mut current) = self.state.title.lock() else {
-            return;
-        };
+        let mut current = self.state.title.lock();
         release_surface_title(&current);
         let reserved = reserve_surface_title(&title);
         window.set_window_title(&reserved);
@@ -936,9 +935,7 @@ fn hide_retained(title: &str, chrome: WindowChrome) -> bool {
 }
 
 fn reserve_surface_title(base: &str) -> String {
-    let mut live = LIVE_SURFACE_TITLES
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut live = LIVE_SURFACE_TITLES.lock();
     if live.insert(base.to_owned()) {
         return base.to_owned();
     }
@@ -953,10 +950,7 @@ fn reserve_surface_title(base: &str) -> String {
 }
 
 fn release_surface_title(title: &str) {
-    LIVE_SURFACE_TITLES
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .remove(title);
+    LIVE_SURFACE_TITLES.lock().remove(title);
 }
 
 fn resolved_app_id(app_id: &Option<String>, title: &str) -> String {

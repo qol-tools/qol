@@ -7,10 +7,11 @@ use crate::{
     session::AuthenticatedSession,
     PeerId,
 };
+use qol_sync::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    sync::{mpsc as blocking, Arc, Mutex},
+    sync::{mpsc as blocking, Arc},
 };
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 
@@ -120,7 +121,7 @@ impl Hub {
     }
 
     pub fn elect(&self, session: AuthenticatedSession) -> Result<SessionIo, Failure> {
-        let mut routes = self.routes.lock().map_err(|_| Failure::Unavailable)?;
+        let mut routes = self.routes.lock();
         if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(Failure::Unavailable);
         }
@@ -143,9 +144,7 @@ impl Hub {
     }
 
     pub fn close(&self, session: AuthenticatedSession) {
-        let Ok(mut routes) = self.routes.lock() else {
-            return;
-        };
+        let mut routes = self.routes.lock();
         self.authority.close_operation_session(session);
         if routes
             .get(&session.remote_peer)
@@ -153,9 +152,7 @@ impl Hub {
         {
             routes.remove(&session.remote_peer);
             drop(routes);
-            if let Ok(mut waiters) = self.waiters.lock() {
-                waiters.remove(&session.remote_peer);
-            }
+            self.waiters.lock().remove(&session.remote_peer);
         }
     }
 
@@ -164,7 +161,7 @@ impl Hub {
         session: AuthenticatedSession,
         epoch: OperationEpoch,
     ) -> Result<(), Failure> {
-        let mut routes = self.routes.lock().map_err(|_| Failure::Unavailable)?;
+        let mut routes = self.routes.lock();
         let route = routes
             .get_mut(&session.remote_peer)
             .filter(|route| route.session == session)
@@ -187,7 +184,7 @@ impl Hub {
             OperationMessage::Outcome { handle } | OperationMessage::Cancel { handle } => handle,
             OperationMessage::Reply { .. } => return Err(Failure::Unsupported),
         };
-        let mut waiters = self.waiters.lock().map_err(|_| Failure::Unavailable)?;
+        let mut waiters = self.waiters.lock();
         if waiters
             .get(&peer)
             .is_some_and(|(pending, _)| pending != handle)
@@ -218,7 +215,7 @@ impl Hub {
             .clone()
             .try_acquire_many_owned(size as u32)
             .map_err(|_| Failure::Capacity)?;
-        let routes = self.routes.lock().map_err(|_| Failure::Unavailable)?;
+        let routes = self.routes.lock();
         let route = routes
             .get(&peer)
             .filter(|route| {
@@ -244,7 +241,7 @@ impl Hub {
         message: OperationMessage,
     ) -> Result<(), Failure> {
         {
-            let routes = self.routes.lock().map_err(|_| Failure::Unavailable)?;
+            let routes = self.routes.lock();
             if !routes
                 .get(&session.remote_peer)
                 .is_some_and(|route| route.session == session && route.epoch_ready)
@@ -272,7 +269,7 @@ impl Hub {
                     self.authority
                         .record_operation_reply(session, &handle, outcome.clone())?;
                 }
-                let mut waiters = self.waiters.lock().map_err(|_| Failure::Unavailable)?;
+                let mut waiters = self.waiters.lock();
                 if waiters
                     .get(&session.remote_peer)
                     .is_some_and(|(expected, _)| *expected == handle)
@@ -301,10 +298,7 @@ impl Hub {
             Err(Failure::Gap) => {}
             Err(error) => return Some(Err(error)),
         }
-        let mut busy = match self.busy.lock() {
-            Ok(busy) => busy,
-            Err(_) => return Some(Err(Failure::Unavailable)),
-        };
+        let mut busy = self.busy.lock();
         if let Some(current) = busy.get(&session.remote_peer) {
             if *current == invocation.handle {
                 return None;
@@ -346,9 +340,7 @@ impl Hub {
 
     pub fn completed(&self, completion: Completion) -> Result<(), crate::network::NetworkFailure> {
         let worker = completion.worker;
-        if let Ok(mut busy) = self.busy.lock() {
-            busy.remove(&worker.session.remote_peer);
-        }
+        self.busy.lock().remove(&worker.session.remote_peer);
         let failed = completion.result == Err(Failure::Storage);
         let _ = self.reply(worker.session, worker.invocation.handle, completion.result);
         if failed {
@@ -375,7 +367,8 @@ impl Hub {
     pub fn ready(&self, peer: PeerId) -> bool {
         self.routes
             .lock()
-            .is_ok_and(|routes| routes.get(&peer).is_some_and(|route| route.epoch_ready))
+            .get(&peer)
+            .is_some_and(|route| route.epoch_ready)
     }
 }
 
@@ -383,14 +376,13 @@ impl Hub {
     pub fn stop(&self) {
         self.stopped
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Ok(mut routes) = self.routes.lock() {
+        {
+            let mut routes = self.routes.lock();
             for route in routes.values() {
                 self.authority.close_operation_session(route.session);
             }
             routes.clear();
         }
-        if let Ok(mut waiters) = self.waiters.lock() {
-            waiters.clear();
-        }
+        self.waiters.lock().clear();
     }
 }

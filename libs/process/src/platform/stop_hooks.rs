@@ -1,4 +1,4 @@
-use std::sync::{Mutex, MutexGuard};
+use qol_sync::Mutex;
 
 pub(crate) struct StopHooks {
     hooks: Mutex<Vec<fn()>>,
@@ -12,20 +12,14 @@ impl StopHooks {
     }
 
     pub(crate) fn register(&self, hook: fn()) {
-        self.lock().push(hook);
+        self.hooks.lock().push(hook);
     }
 
     pub(crate) fn run(&self) {
-        let hooks = std::mem::take(&mut *self.lock());
+        let hooks = std::mem::take(&mut *self.hooks.lock());
         for hook in hooks {
             hook();
         }
-    }
-
-    fn lock(&self) -> MutexGuard<'_, Vec<fn()>> {
-        self.hooks
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 

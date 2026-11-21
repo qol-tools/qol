@@ -1,6 +1,6 @@
 use anyhow::Result;
+use qol_sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 
 pub fn parallel_map<T: Sync, R: Send>(
     items: &[T],
@@ -17,9 +17,7 @@ pub fn parallel_map<T: Sync, R: Send>(
                     break;
                 };
                 let result = work(item);
-                if let Ok(mut slot) = results[index].lock() {
-                    *slot = Some(result);
-                }
+                *results[index].lock() = Some(result);
             });
         }
     });
@@ -27,8 +25,6 @@ pub fn parallel_map<T: Sync, R: Send>(
         .into_iter()
         .map(|slot| {
             slot.into_inner()
-                .ok()
-                .flatten()
                 .unwrap_or_else(|| Err(anyhow::anyhow!("a parallel task stopped without a result")))
         })
         .collect()

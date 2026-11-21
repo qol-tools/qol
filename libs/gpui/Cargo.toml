@@ -25,6 +25,7 @@ qol-hotkeys.workspace = true
 qol-platform.workspace = true
 qol-process.workspace = true
 qol-runtime.workspace = true
+qol-sync.workspace = true
 qol-theme.workspace = true
 qol-window-state.workspace = true
 qol-windowing.workspace = true

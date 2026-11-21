@@ -1,9 +1,10 @@
+use qol_sync::Mutex;
 use qol_terminal_sessions::{SessionInventory, TerminalSessionService};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use super::bridge::PendingBridgeStore;
 
@@ -185,7 +186,7 @@ impl ClientWatcher {
 
     fn ensure_watcher(&self, tokens: &[String]) {
         {
-            let mut slot = self.child.lock().unwrap();
+            let mut slot = self.child.lock();
             if let Some(child) = slot.as_mut() {
                 if matches!(child.try_wait(), Ok(None)) {
                     return;
@@ -223,7 +224,7 @@ impl ClientWatcher {
         let stderr = child.stderr.take();
         let slot = Arc::clone(&self.child);
         let debug = self.dir.join(format!("wake-debug-{}.log", self.owner_key));
-        *slot.lock().unwrap() = Some(child);
+        *slot.lock() = Some(child);
         let owner = self.owner_key.clone();
         std::thread::spawn(move || {
             if let Some(stdout) = stdout {
@@ -286,7 +287,7 @@ impl ClientWatcher {
                 }
             }
             let own_child = {
-                let mut held = slot.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut held = slot.lock();
                 if held.as_ref().is_some_and(|child| child.id() == pid) {
                     held.take()
                 } else {
@@ -448,11 +449,11 @@ mod tests {
             .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false, None)
             .unwrap();
         watcher.record_token(&open.token(), &pending);
-        let mut first = watcher.child.lock().unwrap().take().unwrap();
+        let mut first = watcher.child.lock().take().unwrap();
         let first_pid = first.id();
         let replacement = Command::new(&program).spawn().unwrap();
         let replacement_pid = replacement.id();
-        *watcher.child.lock().unwrap() = Some(replacement);
+        *watcher.child.lock() = Some(replacement);
         first.kill().unwrap();
         first.wait().unwrap();
 
@@ -507,12 +508,7 @@ mod tests {
         watcher.record_token(&open.token(), &pending);
         assert!(
             matches!(
-                watcher
-                    .child
-                    .lock()
-                    .unwrap()
-                    .as_mut()
-                    .map(|child| child.try_wait()),
+                watcher.child.lock().as_mut().map(|child| child.try_wait()),
                 Some(Ok(None))
             ),
             "recording a token must leave the watcher running"
@@ -555,12 +551,7 @@ mod tests {
         watcher.start(&pending);
         assert!(
             matches!(
-                watcher
-                    .child
-                    .lock()
-                    .unwrap()
-                    .as_mut()
-                    .map(|child| child.try_wait()),
+                watcher.child.lock().as_mut().map(|child| child.try_wait()),
                 Some(Ok(None))
             ),
             "a fresh client must spawn a watcher for a lingering open round"

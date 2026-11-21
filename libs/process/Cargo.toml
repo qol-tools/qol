@@ -27,6 +27,7 @@ tempfile = "3.8"
 
 [dependencies]
 qol-platform.workspace = true
+qol-sync.workspace = true
 workspace-hack.workspace = true
 
 [lints]

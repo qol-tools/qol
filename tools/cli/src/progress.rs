@@ -8,10 +8,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex, OnceLock,
+    Arc, OnceLock,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+use qol_sync::Mutex;
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(120);
 const PROGRESS_BAR_WIDTH: usize = 18;
@@ -65,15 +67,11 @@ fn run_log() -> &'static Mutex<Option<File>> {
 
 pub(crate) fn begin_run_log(path: &Path) {
     let file = OpenOptions::new().create(true).append(true).open(path).ok();
-    if let Ok(mut slot) = run_log().lock() {
-        *slot = file;
-    }
+    *run_log().lock() = file;
 }
 
 fn append_run_log(line: &str) {
-    let Ok(mut slot) = run_log().lock() else {
-        return;
-    };
+    let mut slot = run_log().lock();
     let Some(file) = slot.as_mut() else {
         return;
     };
@@ -319,7 +317,8 @@ impl ProgressLine {
             thread::spawn(move || {
                 let started = Instant::now();
                 while running.load(Ordering::Relaxed) {
-                    if let Ok(line) = state.lock() {
+                    {
+                        let line = state.lock();
                         if !line.verb.is_empty() {
                             eprint!("\r{}\x1b[K", render_line(&line, started.elapsed()));
                             let _ = std::io::stderr().flush();
@@ -339,9 +338,7 @@ impl ProgressLine {
     }
 
     pub(crate) fn set(&self, verb: &str, measure: Measure, detail: impl Into<String>) {
-        let Ok(mut line) = self.state.lock() else {
-            return;
-        };
+        let mut line = self.state.lock();
         line.verb = verb.to_string();
         line.measure = measure;
         line.detail = detail.into();

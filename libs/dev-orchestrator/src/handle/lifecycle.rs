@@ -2,11 +2,12 @@ use std::collections::VecDeque;
 use std::io::{self, BufWriter, Write};
 use std::process::{Child, ExitStatus};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use qol_sync::{Condvar, Mutex, MutexGuard};
 
 const CLEANUP_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -138,7 +139,7 @@ impl LifecycleRegistration {
         child: Child,
         process_tree: qol_process::ProcessTreeGuard,
     ) -> LifecycleHandle {
-        let mut state = lock_state(&self.shared);
+        let mut state = self.shared.state.lock();
         assert!(matches!(*state, LifecycleState::AwaitingWorker));
         *state = LifecycleState::Running(OwnedWorker {
             child,
@@ -158,7 +159,7 @@ impl Drop for LifecycleRegistration {
         if self.attached {
             return;
         }
-        let mut state = lock_state(&self.shared);
+        let mut state = self.shared.state.lock();
         *state = LifecycleState::Closed;
         drop(state);
         self.shared.wake.notify_one();
@@ -167,7 +168,7 @@ impl Drop for LifecycleRegistration {
 
 impl LifecycleHandle {
     pub(super) fn write_input(&mut self, input: &[u8]) -> io::Result<()> {
-        let mut state = lock_state(&self.shared);
+        let mut state = self.shared.state.lock();
         let worker = running_worker(&mut state)?;
         let stdin = worker
             .child
@@ -180,7 +181,7 @@ impl LifecycleHandle {
     }
 
     pub(super) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        let mut state = lock_state(&self.shared);
+        let mut state = self.shared.state.lock();
         running_worker(&mut state)?.child.try_wait()
     }
 
@@ -227,7 +228,7 @@ impl LifecycleHandle {
 
     #[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
     pub(super) fn pid(&self) -> u32 {
-        let mut state = lock_state(&self.shared);
+        let mut state = self.shared.state.lock();
         running_worker(&mut state)
             .map(|worker| worker.child.id())
             .unwrap_or_default()
@@ -285,7 +286,7 @@ fn running_worker(state: &mut LifecycleState) -> io::Result<&mut OwnedWorker> {
 }
 
 fn schedule_action(shared: &LifecycleShared, action: LifecycleAction) -> bool {
-    let mut state = lock_state(shared);
+    let mut state = shared.state.lock();
     let previous = std::mem::replace(&mut *state, LifecycleState::Closed);
     let LifecycleState::Running(worker) = previous else {
         *state = previous;
@@ -300,15 +301,8 @@ fn schedule_action(shared: &LifecycleShared, action: LifecycleAction) -> bool {
     true
 }
 
-fn lock_state(shared: &LifecycleShared) -> MutexGuard<'_, LifecycleState> {
-    shared
-        .state
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-}
-
 fn wait_for_action(shared: &LifecycleShared) -> MutexGuard<'_, LifecycleState> {
-    let mut state = lock_state(shared);
+    let mut state = shared.state.lock();
     loop {
         if matches!(
             *state,
@@ -316,10 +310,7 @@ fn wait_for_action(shared: &LifecycleShared) -> MutexGuard<'_, LifecycleState> {
         ) {
             return state;
         }
-        state = shared
-            .wake
-            .wait(state)
-            .unwrap_or_else(|error| error.into_inner());
+        state = shared.wake.wait(state);
     }
 }
 
@@ -582,9 +573,7 @@ fn transfer_recovery(job: RecoveryJob) {
 }
 
 fn recovery_queue() -> io::Result<Arc<RecoveryQueue>> {
-    let mut slot = RECOVERY_QUEUE
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
+    let mut slot = RECOVERY_QUEUE.lock();
     if let Some(queue) = slot.as_ref() {
         return Ok(Arc::clone(queue));
     }
@@ -656,22 +645,19 @@ fn send_recovery_state(events: Option<&Sender<LifecycleEvent>>, message: &str) {
 
 impl RecoveryQueue {
     fn push(&self, job: RecoveryJob) {
-        let mut jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
+        let mut jobs = self.jobs.lock();
         jobs.push_back(job);
         drop(jobs);
         self.wake.notify_one();
     }
 
     fn take(&self) -> RecoveryJob {
-        let mut jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
+        let mut jobs = self.jobs.lock();
         loop {
             if let Some(job) = jobs.pop_front() {
                 return job;
             }
-            jobs = self
-                .wake
-                .wait(jobs)
-                .unwrap_or_else(|error| error.into_inner());
+            jobs = self.wake.wait(jobs);
         }
     }
 }

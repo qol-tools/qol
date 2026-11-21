@@ -6318,6 +6318,7 @@ dependencies = [
  "qol-runtime",
  "qol-secrets",
  "qol-sessions-engine",
+ "qol-sync",
  "qol-terminal-sessions",
  "qol-workspace",
  "ratatui",
@@ -6684,6 +6685,7 @@ dependencies = [
  "qol-platform",
  "qol-plugin-api",
  "qol-process",
+ "qol-sync",
  "qol-workspace",
  "serde",
  "serde_json",
@@ -6703,6 +6705,7 @@ dependencies = [
  "qol-fs",
  "qol-platform",
  "qol-process",
+ "qol-sync",
  "serde",
  "serde_json",
  "sha2",
@@ -6732,6 +6735,7 @@ dependencies = [
  "qol-dev-env",
  "qol-fs",
  "qol-process",
+ "qol-sync",
  "serde",
  "serde_json",
  "tempfile",
@@ -6820,6 +6824,7 @@ dependencies = [
  "qol-platform",
  "qol-process",
  "qol-runtime",
+ "qol-sync",
  "qol-theme",
  "qol-window-state",
  "qol-windowing",
@@ -7212,6 +7217,7 @@ dependencies = [
  "qol-conventions",
  "qol-fs",
  "qol-platform",
+ "qol-sync",
  "rcgen",
  "rustls",
  "serde",
@@ -7279,6 +7285,7 @@ dependencies = [
  "qol-desktop-settings",
  "qol-platform",
  "qol-runtime",
+ "qol-sync",
  "qol-theme",
  "serde",
  "serde_json",
@@ -7323,6 +7330,7 @@ dependencies = [
  "pico-args",
  "qol-platform",
  "qol-plugin-index",
+ "qol-sync",
  "serde",
  "serde_json",
  "sha2",
@@ -7367,6 +7375,7 @@ version = "1.0.0"
 dependencies = [
  "libc",
  "qol-platform",
+ "qol-sync",
  "serde_json",
  "tempfile",
  "windows-sys 0.59.0",
@@ -7504,6 +7513,7 @@ dependencies = [
  "qol-plugin-ids",
  "qol-process",
  "qol-runtime",
+ "qol-sync",
  "qol-terminal-sessions",
  "serde",
  "serde_json",
@@ -7579,7 +7589,6 @@ version = "1.0.0"
 dependencies = [
  "log",
  "serde_json",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7613,6 +7622,7 @@ dependencies = [
  "qol-platform",
  "qol-process",
  "qol-runtime",
+ "qol-sync",
  "qol-watch",
  "qol-windowing",
  "serde",
@@ -7632,6 +7642,7 @@ dependencies = [
  "qol-conventions",
  "qol-headless",
  "qol-log",
+ "qol-sync",
  "serde_json",
  "tempfile",
  "ttf-parser 0.25.1",
@@ -7860,6 +7871,7 @@ dependencies = [
 name = "qol-work-queue"
 version = "0.1.0"
 dependencies = [
+ "qol-sync",
  "tokio",
  "workspace-hack",
 ]
@@ -7885,6 +7897,7 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "log",
+ "qol-sync",
  "serde",
  "serde_json",
  "serialport",

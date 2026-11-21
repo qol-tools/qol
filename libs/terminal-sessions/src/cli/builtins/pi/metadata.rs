@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use qol_sync::Mutex;
 use serde_json::Value;
 
 use crate::cli::{tail, CliActivityEvidence, CliRuntimeState};
@@ -67,18 +68,16 @@ impl PiMetadataResolver {
     }
 
     pub fn resolve(&self, session: &SessionFacts) -> PiMetadata {
-        let mut cache = self.cache.lock().ok();
+        let mut cache = self.cache.lock();
         let (env_path, authoritative) = env_session_file(session, self.environment.as_ref());
         let path = match env_path {
             Some(path) => Some(path),
-            None => cache
-                .as_mut()
-                .and_then(|cache| session_file(session, self.environment.as_ref(), cache)),
+            None => session_file(session, self.environment.as_ref(), &mut cache),
         };
         let external_id = path.as_deref().and_then(id_from_path);
-        let facts = cache
-            .as_mut()
-            .and_then(|cache| path.as_deref().and_then(|path| cached_facts(path, cache)));
+        let facts = path
+            .as_deref()
+            .and_then(|path| cached_facts(path, &mut cache));
         let session_name = facts.as_ref().and_then(|facts| facts.session_name.clone());
         let activity = facts
             .map(|facts| CliActivityEvidence {
@@ -101,7 +100,7 @@ impl PiMetadataResolver {
     }
 
     pub fn subscription_path(&self, session: &SessionFacts) -> Option<PathBuf> {
-        let mut cache = self.cache.lock().ok()?;
+        let mut cache = self.cache.lock();
         session_file(session, self.environment.as_ref(), &mut cache)
     }
 
@@ -111,9 +110,7 @@ impl PiMetadataResolver {
     }
 
     pub fn subscription_paths(&self, session: &SessionFacts) -> Vec<PathBuf> {
-        let Some(mut cache) = self.cache.lock().ok() else {
-            return Vec::new();
-        };
+        let mut cache = self.cache.lock();
         session_files(session, self.environment.as_ref(), &mut cache)
     }
 }

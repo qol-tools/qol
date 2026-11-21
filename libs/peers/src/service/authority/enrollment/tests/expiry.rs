@@ -53,7 +53,7 @@ async fn expired_reservations_do_not_block_another_live_invitation() {
         let projection = inviter.projection().unwrap();
         assert_eq!(projection.peers.len(), 1);
         assert!(projection.peers[0].grants.is_empty());
-        assert_eq!(inviter.inner.lock().unwrap().state.receipts.len(), 1);
+        assert_eq!(inviter.inner.lock().state.receipts.len(), 1);
     }
 }
 

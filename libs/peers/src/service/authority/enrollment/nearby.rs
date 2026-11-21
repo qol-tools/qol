@@ -31,7 +31,7 @@ impl PeerAuthority {
         peer: PeerId,
     ) -> Result<NearbyClientConfig, EnrollmentError> {
         let identity = {
-            let inner = self.lock()?;
+            let inner = self.lock();
             inner.ensure_ready()?;
             if peer == inner.state.identity.pin().peer_id() {
                 return Err(AuthorityError::LocalPeer.into());
@@ -44,7 +44,7 @@ impl PeerAuthority {
     pub(in crate::service) fn nearby_identity(
         &self,
     ) -> Result<(PeerPin, String, AuthorityLifetime), EnrollmentError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         Ok((
             inner.state.identity.pin().clone(),
@@ -80,7 +80,7 @@ impl PeerAuthority {
         pin: &PeerPin,
         code: LinkCode,
     ) -> Result<(), EnrollmentError> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         let bound = inner
             .invitations
@@ -95,9 +95,7 @@ impl PeerAuthority {
     }
 
     pub(in crate::service) fn drop_nearby(&self, invitation: InvitationId) {
-        let Ok(mut inner) = self.lock() else {
-            return;
-        };
+        let mut inner = self.lock();
         let before = inner.invitations.len();
         inner
             .invitations
@@ -108,9 +106,7 @@ impl PeerAuthority {
     }
 
     pub(in crate::service) fn abandon_nearby(&self, key: EnrollmentRequestKey) {
-        let Ok(mut inner) = self.lock() else {
-            return;
-        };
+        let mut inner = self.lock();
         let before = inner.invitations.len();
         inner.invitations.retain(|entry| {
             entry.id != key.invitation
@@ -126,7 +122,7 @@ impl PeerAuthority {
     }
 
     pub fn inbound_nearby(&self) -> Result<Vec<InboundNearby>, EnrollmentError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         let now = Instant::now();
         Ok(inner
@@ -153,7 +149,7 @@ impl PeerAuthority {
         grants: Vec<OperationKey>,
     ) -> Result<StoreRevision, EnrollmentError> {
         validate_grants(&grants)?;
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         check_revision(&inner, expected)?;
         let now = Instant::now();
         let entry = inner
@@ -188,7 +184,7 @@ impl PeerAuthority {
         expected: StoreRevision,
         peer: PeerId,
     ) -> Result<(), EnrollmentError> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         check_revision(&inner, expected)?;
         inner.invitations.retain(|entry| {
             entry
@@ -224,7 +220,7 @@ impl PeerAuthority {
         &self,
         pin: &PeerPin,
     ) -> Result<(), EnrollmentError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         check_remote(&inner, pin)
     }

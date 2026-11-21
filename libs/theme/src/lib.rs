@@ -509,13 +509,11 @@ pub fn theme_for_native_key(native: Option<&str>, accent: Option<&str>) -> Theme
     }
 }
 
-static RUNTIME_THEME_OVERRIDE: std::sync::RwLock<Option<(Option<String>, Option<String>)>> =
-    std::sync::RwLock::new(None);
+static RUNTIME_THEME_OVERRIDE: qol_sync::RwLock<Option<(Option<String>, Option<String>)>> =
+    qol_sync::RwLock::new(None);
 
 pub fn set_runtime_theme_override(native: Option<&str>, accent: Option<&str>) {
-    let mut guard = RUNTIME_THEME_OVERRIDE
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = RUNTIME_THEME_OVERRIDE.write();
     *guard = Some((native.map(str::to_string), accent.map(str::to_string)));
 }
 
@@ -529,9 +527,7 @@ pub fn runtime_theme() -> Theme {
 }
 
 fn chosen_theme() -> Theme {
-    let override_guard = RUNTIME_THEME_OVERRIDE
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let override_guard = RUNTIME_THEME_OVERRIDE.read();
     if let Some((native, accent)) = override_guard.as_ref() {
         return theme_for_native_key(native.as_deref(), accent.as_deref());
     }
@@ -548,7 +544,6 @@ fn chosen_theme() -> Theme {
 pub fn runtime_accent_key() -> &'static str {
     let override_accent = RUNTIME_THEME_OVERRIDE
         .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .as_ref()
         .map(|(_, accent)| accent.clone());
     let key = match override_accent {

@@ -6,11 +6,12 @@ use std::os::windows::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use qol_platform::native::wide::{from_wide, wide_nul};
 use qol_platform::windows_path::same_path;
+use qol_sync::{Condvar, Mutex};
 
 use super::stop_hooks::StopHooks;
 
@@ -216,10 +217,7 @@ impl ProcessTreeGuard {
     pub(crate) fn abort_prepared(&self) {}
 
     fn assign_and_resume(&self, child: &Child) -> io::Result<()> {
-        let mut assigned_process = self
-            .assigned_process
-            .lock()
-            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?;
+        let mut assigned_process = self.assigned_process.lock();
         if assigned_process.is_some() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -321,10 +319,7 @@ impl ProcessTreeGuard {
                 let _ = unsafe { TerminateProcess(process.as_raw_handle(), 1) };
             }
         }
-        self.terminating_processes
-            .lock()
-            .map_err(|_| io::Error::other("process-tree termination state is unavailable"))?
-            .extend(processes);
+        self.terminating_processes.lock().extend(processes);
         Ok(())
     }
 
@@ -333,10 +328,7 @@ impl ProcessTreeGuard {
     }
 
     pub(crate) fn recover_pending_spawn(&self, timeout: Duration) -> io::Result<()> {
-        let assigned_process = self
-            .assigned_process
-            .lock()
-            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?;
+        let assigned_process = self.assigned_process.lock();
         let process = assigned_process.as_ref().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotConnected,
@@ -360,10 +352,7 @@ impl ProcessTreeGuard {
     }
 
     pub(crate) fn terminate_root_and_wait(&self, timeout: Duration) -> io::Result<()> {
-        let assigned_process = self
-            .assigned_process
-            .lock()
-            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?;
+        let assigned_process = self.assigned_process.lock();
         let process = assigned_process.as_ref().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotConnected,
@@ -400,10 +389,7 @@ impl ProcessTreeGuard {
     }
 
     pub(crate) fn root_has_exited(&self) -> io::Result<bool> {
-        let assigned_process = self
-            .assigned_process
-            .lock()
-            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?;
+        let assigned_process = self.assigned_process.lock();
         let process = assigned_process.as_ref().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotConnected,
@@ -432,7 +418,6 @@ impl ProcessTreeGuard {
     fn assigned_process_id(&self) -> io::Result<u32> {
         self.assigned_process
             .lock()
-            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?
             .as_ref()
             .map(|process| process.id)
             .ok_or_else(|| {
@@ -445,10 +430,7 @@ impl ProcessTreeGuard {
 
     fn termination_processes(&self) -> io::Result<Vec<OwnedHandle>> {
         let current = job_process_handles(self.job.as_raw_handle(), QUERY_AND_WAIT_ACCESS)?;
-        let mut processes = self
-            .terminating_processes
-            .lock()
-            .map_err(|_| io::Error::other("process-tree termination state is unavailable"))?;
+        let mut processes = self.terminating_processes.lock();
         let mut captured = std::mem::take(&mut *processes);
         captured.extend(current);
         Ok(captured)
@@ -543,9 +525,9 @@ impl FailedChildReaper {
             .name("qol-process-failed-spawn-reaper".to_string())
             .spawn(move || {
                 let (state, ready) = &*worker;
-                let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+                let mut state = state.lock();
                 while state.child.is_none() && !state.closed {
-                    state = ready.wait(state).unwrap_or_else(|error| error.into_inner());
+                    state = ready.wait(state);
                 }
                 let Some(mut child) = state.child.take() else {
                     return;
@@ -564,7 +546,7 @@ impl FailedChildReaper {
 
     fn handoff(self, child: Child) {
         let (state, ready) = &*self.state;
-        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = state.lock();
         state.child = Some(child);
         state.closed = true;
         ready.notify_one();
@@ -575,7 +557,7 @@ impl FailedChildReaper {
 impl Drop for FailedChildReaper {
     fn drop(&mut self) {
         let (state, ready) = &*self.state;
-        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = state.lock();
         state.closed = true;
         ready.notify_one();
     }
@@ -762,9 +744,7 @@ pub(crate) fn bind_to_host_lifetime(pid: u32) -> io::Result<()> {
 }
 
 pub(crate) fn release_host_lifetime() -> io::Result<()> {
-    let slot = HOST_LIFETIME_JOB
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let slot = HOST_LIFETIME_JOB.lock();
     match *slot {
         Some(job) => set_job_limit_flags(job as HANDLE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK),
         None => Ok(()),
@@ -772,16 +752,12 @@ pub(crate) fn release_host_lifetime() -> io::Result<()> {
 }
 
 fn existing_host_lifetime_job() -> Option<HANDLE> {
-    let slot = HOST_LIFETIME_JOB
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let slot = HOST_LIFETIME_JOB.lock();
     (*slot).map(|job| job as HANDLE)
 }
 
 fn host_lifetime_job() -> io::Result<HANDLE> {
-    let mut slot = HOST_LIFETIME_JOB
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut slot = HOST_LIFETIME_JOB.lock();
     if let Some(job) = *slot {
         return Ok(job as HANDLE);
     }
@@ -932,13 +908,9 @@ pub(crate) fn install_cancellation_handler() -> io::Result<()> {
 
 pub(crate) fn wait_for_stop_request() -> io::Result<()> {
     install_cancellation_handler()?;
-    let mut signal = STOP_SIGNAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut signal = STOP_SIGNAL.lock();
     while cancellation_signal_count() == 0 {
-        signal = STOP_SIGNALLED
-            .wait(signal)
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        signal = STOP_SIGNALLED.wait(signal);
     }
     Ok(())
 }
@@ -973,9 +945,7 @@ pub(crate) fn cancellation_signal_count() -> usize {
 }
 
 fn record_cancellation_signal() {
-    let _signal = STOP_SIGNAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _signal = STOP_SIGNAL.lock();
     CANCELLATION_SIGNAL_COUNT.fetch_add(1, Ordering::Release);
     STOP_SIGNALLED.notify_all();
 }

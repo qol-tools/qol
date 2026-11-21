@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use qol_agent_homes::{AgentHome, Harness};
+use qol_sync::Mutex;
 use serde_json::Value;
 
 use crate::cli::chat::text_blocks;
@@ -83,9 +83,7 @@ impl ClaudeHistory {
         homes: &[AgentHome],
         since: SystemTime,
     ) -> Vec<CliConversation> {
-        let Ok(mut cache) = self.cache.lock() else {
-            return Vec::new();
-        };
+        let mut cache = self.cache.lock();
         let mut seen = HashSet::new();
         let mut found = Vec::new();
         for root in self.roots(homes) {

@@ -1,2 +1,5 @@
 allow-dbg-in-tests = true
 allow-print-in-tests = true
+await-holding-invalid-types = [
+    { path = "qol_sync::MutexGuard", reason = "drop the guard before the await; held across it, the lock blocks every thread that needs it until the task resumes" },
+]

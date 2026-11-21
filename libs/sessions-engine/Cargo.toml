@@ -23,6 +23,7 @@ qol-plugin-daemon.workspace = true
 qol-plugin-ids.workspace = true
 qol-process.workspace = true
 qol-runtime.workspace = true
+qol-sync.workspace = true
 qol-terminal-sessions.workspace = true
 serde.workspace = true
 serde_json.workspace = true

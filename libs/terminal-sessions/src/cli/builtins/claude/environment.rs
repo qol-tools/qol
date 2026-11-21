@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use qol_agent_homes::{Harness, Registry};
+use qol_sync::Mutex;
 use serde::Deserialize;
 
 #[derive(Clone)]
@@ -51,9 +51,7 @@ impl SystemClaudeEnvironment {
     }
 
     fn claude_homes(&self, now: Instant, load: impl FnOnce() -> Vec<PathBuf>) -> Vec<PathBuf> {
-        let Ok(mut cached) = self.claude_homes.lock() else {
-            return Vec::new();
-        };
+        let mut cached = self.claude_homes.lock();
         match cached.as_ref() {
             Some((loaded_at, homes)) if now.duration_since(*loaded_at) < CLAUDE_HOMES_TTL => {
                 homes.clone()

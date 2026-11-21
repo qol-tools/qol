@@ -38,13 +38,13 @@ pub(super) fn random_nonce() -> Result<SessionNonce, Failure> {
 
 impl PeerAuthority {
     pub fn operation_epoch(&self, peer: PeerId) -> Result<OperationEpoch, Failure> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         Ok(inner.state.operation_link(peer)?.epoch)
     }
 
     pub fn elect_operation_session(&self, session: AuthenticatedSession) -> Result<(), Failure> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         inner.state.operation_link(session.remote_peer)?;
         if session.local_peer != inner.state.identity.pin().peer_id() {
@@ -57,9 +57,7 @@ impl PeerAuthority {
     }
 
     pub fn close_operation_session(&self, session: AuthenticatedSession) {
-        let Ok(mut inner) = self.lock() else {
-            return;
-        };
+        let mut inner = self.lock();
         if inner.operation_sessions.get(&session.remote_peer) == Some(&session) {
             inner.operation_sessions.remove(&session.remote_peer);
         }
@@ -75,7 +73,7 @@ impl PeerAuthority {
         if body_digest(&invocation.body) != invocation.handle.body_digest {
             return Err(Failure::Conflict);
         }
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.check_operation_session(session)?;
         if invocation.handle.recipient != session.local_peer {
             return Err(Failure::Untrusted);
@@ -124,7 +122,7 @@ impl PeerAuthority {
         if body_digest(&invocation.body) != invocation.handle.body_digest {
             return Err(Failure::Conflict);
         }
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.check_operation_session(session)?;
         if !inner
             .state
@@ -178,7 +176,7 @@ impl PeerAuthority {
                 outcome = Outcome::Unknown;
             }
         }
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         let mut candidate = inner.state.clone();
         let link = candidate
@@ -221,7 +219,7 @@ impl PeerAuthority {
         session: AuthenticatedSession,
         handle: &RequestHandle,
     ) -> Result<Outcome, Failure> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.check_operation_session(session)?;
         if handle.recipient != session.local_peer {
             return Err(Failure::Untrusted);
@@ -238,7 +236,7 @@ impl PeerAuthority {
         session: AuthenticatedSession,
         handle: &RequestHandle,
     ) -> Result<Outcome, Failure> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.check_operation_session(session)?;
         if handle.recipient != session.local_peer || handle.body_digest.len() != 43 {
             return Err(Failure::InvalidBody);

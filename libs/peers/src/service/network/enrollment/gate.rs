@@ -1,9 +1,9 @@
 use std::{
     net::{Ipv4Addr, SocketAddrV4},
-    sync::{Mutex, MutexGuard},
     time::Duration,
 };
 
+use qol_sync::Mutex;
 use tokio::{net::TcpListener, sync::watch, time::Instant};
 
 use super::refusal;
@@ -64,10 +64,6 @@ impl Gate {
         }
     }
 
-    fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner())
-    }
-
     fn publish(&self, state: &State) {
         self.nearby_link
             .send_replace(state.nearby_link(Instant::now()));
@@ -82,7 +78,8 @@ impl Gate {
     }
 
     pub(in crate::service::network) fn nearby_deadline(&self) -> Option<Instant> {
-        self.lock()
+        self.state
+            .lock()
             .nearby_until
             .filter(|deadline| *deadline > Instant::now())
     }
@@ -92,11 +89,11 @@ impl Gate {
     }
 
     pub(super) fn held(&self) -> bool {
-        self.lock().held(Instant::now())
+        self.state.lock().held(Instant::now())
     }
 
     pub(super) fn refresh(&self) {
-        let state = self.lock();
+        let state = self.state.lock();
         self.publish(&state);
     }
 
@@ -109,7 +106,7 @@ impl Gate {
     }
 
     fn hold(&self, lifetime: Duration, nearby: bool) -> Result<u16, Error> {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         if state.closed {
             return Err(refusal(EnrollmentFailure::Unavailable));
         }
@@ -143,7 +140,7 @@ impl Gate {
     }
 
     pub(super) fn open(&self) -> std::io::Result<TcpListener> {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         let socket = match state.unadopted.take() {
             Some(socket) => socket,
             None => {
@@ -159,7 +156,7 @@ impl Gate {
     }
 
     pub(super) fn release(&self) -> bool {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         if state.held(Instant::now()) {
             return false;
         }
@@ -170,7 +167,7 @@ impl Gate {
     }
 
     pub(super) fn close(&self) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         state.closed = true;
         state.port = None;
         state.unadopted = None;

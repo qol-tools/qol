@@ -27,9 +27,9 @@ fn abandon_and_resume_writer_faults_require_reopen_and_preserve_original_evidenc
             if !abandon {
                 joiner.abandon_join(revision(&joiner), transaction).unwrap();
             }
-            let original = joiner.inner.lock().unwrap().state.outbound[0].clone();
+            let original = joiner.inner.lock().state.outbound[0].clone();
             let before = revision(&joiner);
-            joiner.inner.lock().unwrap().storage.fail_next(fault);
+            joiner.inner.lock().storage.fail_next(fault);
             let result = if abandon {
                 joiner.abandon_join(before, transaction)
             } else {
@@ -55,13 +55,10 @@ fn abandon_and_resume_writer_faults_require_reopen_and_preserve_original_evidenc
                 joiner.abandon_join(before, transaction),
                 Err(EnrollmentError::Authority(AuthorityError::Faulted))
             );
-            assert_eq!(
-                joiner.inner.lock().unwrap().state.outbound[0].state,
-                original.state
-            );
+            assert_eq!(joiner.inner.lock().state.outbound[0].state, original.state);
             drop(joiner);
             let reopened = PeerAuthority::open_persistent(&root, now()).unwrap();
-            let record = reopened.inner.lock().unwrap().state.outbound[0].clone();
+            let record = reopened.inner.lock().state.outbound[0].clone();
             assert_eq!(record.invitation, original.invitation);
             assert_eq!(record.transaction, original.transaction);
             assert_eq!(record.pin, original.pin);
@@ -300,7 +297,7 @@ async fn pending_outbound_write_faults_preserve_original_intent_only_if_replaced
         let (_temporary, root, joiner) = persistent("joiner");
         let inviter = session("inviter");
         let invitation = inviter.create_invitation(vec![]).unwrap();
-        joiner.inner.lock().unwrap().storage.fail_next(fault);
+        joiner.inner.lock().storage.fail_next(fault);
         assert_eq!(
             joiner.prepare_join(revision(&joiner), &invitation),
             Err(EnrollmentError::Authority(AuthorityError::Storage))
@@ -339,7 +336,7 @@ async fn approval_write_faults_deny_live_recovery_and_reconcile_durable_receipt_
             let mut events = inviter.watch_enrollment();
             loop {
                 if let Some(request) = inviter.pending_enrollments().unwrap().first() {
-                    inviter.inner.lock().unwrap().storage.fail_next(fault);
+                    inviter.inner.lock().storage.fail_next(fault);
                     assert_eq!(
                         inviter.approve_enrollment(revision(&inviter), request.key),
                         Err(EnrollmentError::Authority(AuthorityError::Storage))
@@ -413,7 +410,7 @@ async fn lost_joiner_persistence_result_recovers_same_transaction_before_or_afte
         let invitation = inviter.create_invitation(vec![]).unwrap();
         let transaction = joiner.prepare_join(revision(&joiner), &invitation).unwrap();
         let (client, server) = connections(&inviter, &joiner).await;
-        joiner.inner.lock().unwrap().storage.fail_next(fault);
+        joiner.inner.lock().storage.fail_next(fault);
         let (joined, accepted, _) = tokio::join!(
             joiner.redeem_enrollment(client, &invitation, transaction),
             inviter.serve_enrollment(server),
@@ -531,7 +528,7 @@ async fn faults_and_revocation_after_reservation_are_observed_before_success() {
             drop(inviter);
             let reopened = PeerAuthority::open_persistent(&root, now()).unwrap();
             assert!(reopened.projection().unwrap().peers.is_empty());
-            assert!(reopened.inner.lock().unwrap().state.receipts.is_empty());
+            assert!(reopened.inner.lock().state.receipts.is_empty());
             continue;
         }
         let projection = inviter.projection().unwrap();
@@ -540,19 +537,13 @@ async fn faults_and_revocation_after_reservation_are_observed_before_success() {
         assert_eq!(projection.revision.value(), 1);
         assert_eq!(projection.peers.len(), 1);
         assert!(projection.peers[0].grants.is_empty());
-        assert_eq!(
-            inviter.inner.lock().unwrap().state.receipts[0].receipt,
-            receipt
-        );
+        assert_eq!(inviter.inner.lock().state.receipts[0].receipt, receipt);
         drop(inviter);
         let reopened = PeerAuthority::open_persistent(&root, now()).unwrap();
         assert_eq!(reopened.projection().unwrap().name, "faulted");
         assert_eq!(reopened.projection().unwrap().revision.value(), 2);
         assert!(reopened.is_trusted(&joiner.local_pin().unwrap()));
-        assert_eq!(
-            reopened.inner.lock().unwrap().state.receipts[0].receipt,
-            receipt
-        );
+        assert_eq!(reopened.inner.lock().state.receipts[0].receipt, receipt);
     }
 }
 
@@ -565,7 +556,6 @@ async fn approve_then_invalidate(inviter: &PeerAuthority, revoke: bool) -> Enrol
     inviter
         .inner
         .lock()
-        .unwrap()
         .storage
         .fail_next(CommitFault::AfterReplace);
     assert_eq!(

@@ -1,10 +1,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use crossbeam_channel::{bounded, unbounded, Receiver, RecvTimeoutError, Sender};
+use qol_sync::Mutex;
 
 use super::frame::{MessageType, ZnpFrame};
 use super::transport::Transport;
@@ -89,13 +90,10 @@ impl RequestEngine {
         data: Vec<u8>,
         timeout: Duration,
     ) -> Result<ZnpFrame> {
-        let _turn = self
-            .sreq_turn
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let _turn = self.sreq_turn.lock();
         let (tx, rx) = bounded(1);
         let id = self.next_watch.fetch_add(1, Ordering::Relaxed);
-        self.routes().srsp = Some(Route {
+        self.routes.lock().srsp = Some(Route {
             id,
             subsystem,
             cmd1,
@@ -111,7 +109,7 @@ impl RequestEngine {
                 )
             })
         });
-        let mut routes = self.routes();
+        let mut routes = self.routes.lock();
         if routes.srsp.as_ref().is_some_and(|route| route.id == id) {
             routes.srsp = None;
         }
@@ -129,7 +127,7 @@ impl RequestEngine {
     pub fn watch_areq(&self, subsystem: u8, cmd1: u8) -> AreqWatch<'_> {
         let (tx, rx) = unbounded();
         let id = self.next_watch.fetch_add(1, Ordering::Relaxed);
-        self.routes().areq.push(Route {
+        self.routes.lock().areq.push(Route {
             id,
             subsystem,
             cmd1,
@@ -142,10 +140,6 @@ impl RequestEngine {
             cmd1,
             rx,
         }
-    }
-
-    fn routes(&self) -> MutexGuard<'_, Routes> {
-        self.routes.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -178,7 +172,8 @@ impl AreqWatch<'_> {
 impl Drop for AreqWatch<'_> {
     fn drop(&mut self) {
         self.engine
-            .routes()
+            .routes
+            .lock()
             .areq
             .retain(|route| route.id != self.id);
     }
@@ -200,7 +195,7 @@ fn dispatch(frames: &Receiver<ZnpFrame>, routes: &Weak<Mutex<Routes>>, events: &
 }
 
 fn route(frame: ZnpFrame, routes: &Mutex<Routes>, events: &Sender<ZnpFrame>) {
-    let mut routes = routes.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut routes = routes.lock();
     match frame.message_type() {
         MessageType::Srsp => match routes.srsp.take() {
             Some(route) if route.matches(&frame) => {

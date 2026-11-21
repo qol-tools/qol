@@ -1,7 +1,8 @@
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use gpui::Animation;
+use qol_sync::Mutex;
 use qol_theme::{Animations, Motion};
 
 pub const RECHECK: Duration = Duration::from_secs(2);
@@ -44,9 +45,7 @@ pub fn moving() -> bool {
         return moving;
     }
     static CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
-    let Ok(mut cache) = CACHE.lock() else {
-        return true;
-    };
+    let mut cache = CACHE.lock();
     if let Some((read_at, moving)) = *cache {
         if read_at.elapsed() < RECHECK {
             return moving;

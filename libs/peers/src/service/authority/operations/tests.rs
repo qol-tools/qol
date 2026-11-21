@@ -173,10 +173,7 @@ fn operation_ledger_duplicates_conflicts_gaps_cancellation_and_pruning_never_rea
         authority.admit_operation(session, &first, "d".repeat(43)),
         Err(Failure::Expired)
     );
-    assert_eq!(
-        authority.lock().unwrap().state.operations[0].records.len(),
-        16
-    );
+    assert_eq!(authority.lock().state.operations[0].records.len(), 16);
 }
 
 #[test]
@@ -207,7 +204,6 @@ fn operation_start_guard_rechecks_grants_session_and_deadline() {
             Failure::Deadline => {
                 authority
                     .lock()
-                    .unwrap()
                     .operation_deadlines
                     .get_mut(&session.remote_peer)
                     .unwrap()
@@ -255,7 +251,7 @@ fn operation_revoke_after_start_settles_without_restoring_trust() {
         .settle_operation(session.remote_peer, &request.handle, Outcome::Unknown)
         .unwrap();
     assert!(authority.projection().unwrap().peers.is_empty());
-    assert!(authority.lock().unwrap().state.operations.is_empty());
+    assert!(authority.lock().state.operations.is_empty());
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -394,12 +390,7 @@ fn operation_old_epoch_overflow_and_busy_refuse_without_advancing_watermark() {
         authority.admit_operation(session, &next, "d".repeat(43)),
         Err(Failure::Busy)
     );
-    assert_eq!(
-        authority.lock().unwrap().state.operations[0]
-            .admitted
-            .value(),
-        1
-    );
+    assert_eq!(authority.lock().state.operations[0].admitted.value(), 1);
     assert_eq!(
         authority.cancel_operation(session, &next.handle),
         Ok(Outcome::CancelledBeforeDispatch)
@@ -407,7 +398,7 @@ fn operation_old_epoch_overflow_and_busy_refuse_without_advancing_watermark() {
     authority
         .observe_operation_epoch(session, OperationEpoch(random_nonce().unwrap()))
         .unwrap();
-    authority.lock().unwrap().state.operations[0].next = StoreRevision::new(u64::MAX);
+    authority.lock().state.operations[0].next = StoreRevision::new(u64::MAX);
     assert_eq!(
         authority
             .prepare_operation(session.remote_peer, body("{}"))
@@ -431,7 +422,7 @@ fn operation_dispatch_commit_fault_never_grants_start_and_writer_remains_owned()
         authority
             .admit_operation(session, &request, "d".repeat(43))
             .unwrap();
-        authority.lock().unwrap().storage.fail_next(fault);
+        authority.lock().storage.fail_next(fault);
         assert_eq!(
             authority.start_operation(session, &request, &"d".repeat(43)),
             Err(Failure::Storage)
@@ -503,7 +494,7 @@ fn operation_encoded_reservations_cover_sender_receiver_and_cancel_metadata() {
     authority
         .prepare_operation(session.remote_peer, body("{}"))
         .unwrap();
-    let inner = authority.lock().unwrap();
+    let inner = authority.lock();
     let state = &inner.state;
     let reserved = state.validate_operations().unwrap();
     let link = &state.operations[0];
@@ -523,7 +514,7 @@ fn operation_encoded_reservations_cover_sender_receiver_and_cancel_metadata() {
 fn operation_global_record_limit_prunes_terminal_details_but_never_active_owners() {
     let authority = PeerAuthority::session("local".into(), SystemTime::now()).unwrap();
     let sessions: Vec<_> = (0..33).map(|_| link(&authority)).collect();
-    let mut state = authority.lock().unwrap().state.clone();
+    let mut state = authority.lock().state.clone();
     for session in &sessions[..32] {
         let link = state.operation_link_mut(session.remote_peer).unwrap();
         link.admitted = StoreRevision::new(16);
@@ -569,7 +560,7 @@ fn operation_global_record_limit_prunes_terminal_details_but_never_active_owners
     )
     .handle;
     assert_eq!(victim.lookup(&handle), Err(Failure::Expired));
-    let mut state = authority.lock().unwrap().state.clone();
+    let mut state = authority.lock().state.clone();
     let request = invocation(&authority, sessions[0], 1);
     let link = state.operation_link_mut(sessions[0].remote_peer).unwrap();
     link.admitted = request.handle.sequence;

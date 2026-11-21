@@ -3,10 +3,10 @@ use std::io::{self, BufRead, BufReader, Cursor, Read};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 use std::thread;
 
 use aho_corasick::AhoCorasick;
+use qol_sync::Mutex;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -60,15 +60,13 @@ pub fn search_transcripts(paths: Vec<PathBuf>, terms: &[String]) -> Vec<CliConve
             scope.spawn(|| {
                 while let Some((_, path)) = sized.get(next.fetch_add(1, Ordering::Relaxed)) {
                     if let Some(hit) = search_file(path, searcher.as_ref(), terms) {
-                        if let Ok(mut found) = found.lock() {
-                            found.push(hit);
-                        }
+                        found.lock().push(hit);
                     }
                 }
             });
         }
     });
-    found.into_inner().unwrap_or_default()
+    found.into_inner()
 }
 
 fn search_file(

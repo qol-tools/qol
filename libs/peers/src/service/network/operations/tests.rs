@@ -94,7 +94,7 @@ fn operation_queue_owns_sixteen_slots_and_releases_encoded_bytes() {
     drop(retained);
     hub.stop();
     assert_eq!(hub.bytes.available_permits(), 1024 * 1024);
-    assert!(hub.busy.lock().unwrap().is_empty());
+    assert!(hub.busy.lock().is_empty());
 }
 
 #[test]
@@ -156,7 +156,6 @@ async fn operation_shutdown_joins_actual_started_closure_and_keeps_writer_owned(
             self.started.send(()).unwrap();
             self.release
                 .lock()
-                .unwrap()
                 .recv_timeout(Duration::from_secs(5))
                 .unwrap();
             authority.settle_operation(
