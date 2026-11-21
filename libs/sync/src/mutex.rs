@@ -1,9 +1,9 @@
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::panic::Location;
-use std::sync::{PoisonError, TryLockError};
+use std::sync::PoisonError;
 
-use crate::poison::{recover, report, WouldBlock};
+use crate::poison::{acquire, report, try_acquire, WouldBlock};
 
 #[derive(Debug, Default)]
 pub struct Mutex<T: ?Sized>(std::sync::Mutex<T>);
@@ -21,36 +21,29 @@ impl<T> Mutex<T> {
     #[track_caller]
     pub fn into_inner(self) -> T {
         let caller = Location::caller();
-        self.0
-            .into_inner()
-            .unwrap_or_else(|poisoned| recover(caller, poisoned, || {}))
+        self.0.into_inner().unwrap_or_else(|poisoned| {
+            report(caller);
+            poisoned.into_inner()
+        })
     }
 }
 
 impl<T: ?Sized> Mutex<T> {
     #[track_caller]
     pub fn lock(&self) -> MutexGuard<'_, T> {
-        let caller = Location::caller();
-        let guard = self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| recover(caller, poisoned, || self.0.clear_poison()));
         MutexGuard {
             lock: &self.0,
-            guard,
+            guard: relock(&self.0, Location::caller()),
         }
     }
 
     #[track_caller]
     pub fn try_lock(&self) -> Result<MutexGuard<'_, T>, WouldBlock> {
-        let caller = Location::caller();
-        let guard = match self.0.try_lock() {
-            Ok(guard) => guard,
-            Err(TryLockError::Poisoned(poisoned)) => {
-                recover(caller, poisoned, || self.0.clear_poison())
-            }
-            Err(TryLockError::WouldBlock) => return Err(WouldBlock),
-        };
+        let guard = try_acquire(
+            Location::caller(),
+            || self.0.try_lock(),
+            || self.0.clear_poison(),
+        )?;
         Ok(MutexGuard {
             lock: &self.0,
             guard,
@@ -65,6 +58,13 @@ impl<T: ?Sized> Mutex<T> {
         }
         self.0.get_mut().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+pub(crate) fn relock<'a, T: ?Sized>(
+    lock: &'a std::sync::Mutex<T>,
+    caller: &Location<'_>,
+) -> std::sync::MutexGuard<'a, T> {
+    acquire(caller, || lock.lock(), || lock.clear_poison())
 }
 
 impl<T: ?Sized> Deref for MutexGuard<'_, T> {

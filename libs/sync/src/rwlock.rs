@@ -1,7 +1,7 @@
 use std::panic::Location;
-use std::sync::{RwLockReadGuard, RwLockWriteGuard, TryLockError};
+use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
-use crate::poison::{recover, WouldBlock};
+use crate::poison::{acquire, try_acquire, WouldBlock};
 
 #[derive(Debug, Default)]
 pub struct RwLock<T: ?Sized>(std::sync::RwLock<T>);
@@ -15,41 +15,37 @@ impl<T> RwLock<T> {
 impl<T: ?Sized> RwLock<T> {
     #[track_caller]
     pub fn read(&self) -> RwLockReadGuard<'_, T> {
-        let caller = Location::caller();
-        self.0
-            .read()
-            .unwrap_or_else(|poisoned| recover(caller, poisoned, || self.0.clear_poison()))
+        acquire(
+            Location::caller(),
+            || self.0.read(),
+            || self.0.clear_poison(),
+        )
     }
 
     #[track_caller]
     pub fn write(&self) -> RwLockWriteGuard<'_, T> {
-        let caller = Location::caller();
-        self.0
-            .write()
-            .unwrap_or_else(|poisoned| recover(caller, poisoned, || self.0.clear_poison()))
+        acquire(
+            Location::caller(),
+            || self.0.write(),
+            || self.0.clear_poison(),
+        )
     }
 
     #[track_caller]
     pub fn try_read(&self) -> Result<RwLockReadGuard<'_, T>, WouldBlock> {
-        let caller = Location::caller();
-        match self.0.try_read() {
-            Ok(guard) => Ok(guard),
-            Err(TryLockError::Poisoned(poisoned)) => {
-                Ok(recover(caller, poisoned, || self.0.clear_poison()))
-            }
-            Err(TryLockError::WouldBlock) => Err(WouldBlock),
-        }
+        try_acquire(
+            Location::caller(),
+            || self.0.try_read(),
+            || self.0.clear_poison(),
+        )
     }
 
     #[track_caller]
     pub fn try_write(&self) -> Result<RwLockWriteGuard<'_, T>, WouldBlock> {
-        let caller = Location::caller();
-        match self.0.try_write() {
-            Ok(guard) => Ok(guard),
-            Err(TryLockError::Poisoned(poisoned)) => {
-                Ok(recover(caller, poisoned, || self.0.clear_poison()))
-            }
-            Err(TryLockError::WouldBlock) => Err(WouldBlock),
-        }
+        try_acquire(
+            Location::caller(),
+            || self.0.try_write(),
+            || self.0.clear_poison(),
+        )
     }
 }

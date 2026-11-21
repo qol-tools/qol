@@ -1,8 +1,8 @@
+use qol_sync::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Mutex;
 
 const SUPPRESS_THRESHOLD: u32 = 5;
 
@@ -75,10 +75,7 @@ impl RateLimiter {
     }
 
     pub(crate) fn check(&self, key: &str) -> CheckResult {
-        let mut state = match self.state.lock() {
-            Ok(s) => s,
-            Err(_) => return CheckResult::Allowed { count: 1 },
-        };
+        let mut state = self.state.lock();
 
         let entry = state.entry(key.to_string()).or_insert_with(|| EntryState {
             count: 0,
@@ -115,10 +112,7 @@ impl RateLimiter {
         source: &str,
         location: &str,
     ) {
-        let mut state = match self.state.lock() {
-            Ok(s) => s,
-            Err(_) => return,
-        };
+        let mut state = self.state.lock();
         if let Some(entry) = state.get_mut(key) {
             entry.last_message = Some(message.to_string());
             entry.source = Some(source.to_string());
@@ -127,18 +121,11 @@ impl RateLimiter {
     }
 
     pub(crate) fn unsuppress(&self, key: &str) {
-        let mut state = match self.state.lock() {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        state.remove(key);
+        self.state.lock().remove(key);
     }
 
     pub(crate) fn save(&self, path: &Path) {
-        let state = match self.state.lock() {
-            Ok(s) => s,
-            Err(_) => return,
-        };
+        let state = self.state.lock();
         let suppressed: HashMap<_, _> = state
             .iter()
             .filter(|(_, e)| e.suppressed)
