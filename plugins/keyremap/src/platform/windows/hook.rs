@@ -1,6 +1,7 @@
+use qol_sync::RwLock;
 use std::cell::RefCell;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -103,9 +104,7 @@ impl Hooks {
 impl Remapper for Hooks {
     fn swap_config(&self, config: ResolvedConfig, _raw: &RemapConfig) {
         if let Some(lock) = CONFIG.get() {
-            *lock
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::new(config);
+            *lock.write() = Arc::new(config);
         }
     }
 
@@ -383,11 +382,7 @@ fn apply(decision: Decision, marker: usize) -> bool {
 
 fn current_config() -> Option<Arc<ResolvedConfig>> {
     let lock = CONFIG.get()?;
-    Some(
-        lock.read()
-            .map(|guard| Arc::clone(&guard))
-            .unwrap_or_else(|poisoned| Arc::clone(&poisoned.into_inner())),
-    )
+    Some(Arc::clone(&lock.read()))
 }
 
 fn is_ours(extra: usize) -> bool {

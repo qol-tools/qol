@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use qol_sync::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -32,9 +33,9 @@ impl Services {
         };
         let config = self.state.config();
         let layout = self.layouts.get();
-        if let Ok(mut backend) = karabiner.lock() {
-            backend.apply(choice, &config, &layout, self.state.input());
-        }
+        karabiner
+            .lock()
+            .apply(choice, &config, &layout, self.state.input());
     }
 }
 
@@ -51,10 +52,11 @@ impl engine::Remapper for Services {
         };
         let config = self.state.config();
         let layout = self.layouts.get();
-        let lease = karabiner.lock().ok().and_then(|mut backend| {
+        let lease = {
+            let mut backend = karabiner.lock();
             backend.idle(&config, &layout, self.state.input());
             backend.lease(layout.physical)
-        });
+        };
         self.state.input().set_hotkeys_relayed(
             lease
                 .as_ref()
@@ -67,12 +69,11 @@ impl engine::Remapper for Services {
 
     fn stop(self) {
         if let Some(karabiner) = &self.karabiner {
-            if let Ok(mut backend) = karabiner.lock() {
-                backend.stop();
-                self.state.input().set_hotkeys_relayed(false);
-                if let Some((relay, lease)) = backend.lease(self.layouts.get().physical) {
-                    hotkeys::send_lease(&relay, &lease);
-                }
+            let mut backend = karabiner.lock();
+            backend.stop();
+            self.state.input().set_hotkeys_relayed(false);
+            if let Some((relay, lease)) = backend.lease(self.layouts.get().physical) {
+                hotkeys::send_lease(&relay, &lease);
             }
         }
     }
@@ -86,9 +87,7 @@ fn follow_hotkeys(
     hotkeys::follow(move |hotkeys| {
         let config = state.config();
         let layout = layouts.get();
-        if let Ok(mut backend) = karabiner.lock() {
-            backend.follow_hotkeys(hotkeys, &config, &layout);
-        }
+        karabiner.lock().follow_hotkeys(hotkeys, &config, &layout);
     });
 }
 

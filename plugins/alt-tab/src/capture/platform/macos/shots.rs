@@ -3,10 +3,11 @@ use objc2::msg_send;
 use objc2::rc::autoreleasepool;
 use objc2::runtime::{AnyClass, AnyObject};
 use qol_platform::{permission_status, request_permission, Permission};
+use qol_sync::Mutex;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 pub(crate) type LiveFrame = core_video::pixel_buffer::CVPixelBuffer;
@@ -170,7 +171,7 @@ static WARM_SESSION: Mutex<Option<(Instant, Arc<ShotsSession>)>> = Mutex::new(No
 const WARM_SESSION_TTL: Duration = Duration::from_secs(5);
 
 pub(crate) fn cached_shots_session(required: &[u32]) -> Option<Arc<ShotsSession>> {
-    let slot = WARM_SESSION.lock().ok()?;
+    let slot = WARM_SESSION.lock();
     let (fetched, session) = slot.as_ref()?;
     let covers = required.iter().all(|wid| session.windows.contains_key(wid));
     if fetched.elapsed() < WARM_SESSION_TTL && covers {
@@ -184,7 +185,7 @@ pub(crate) fn warm_shots_session(required: &[u32]) -> Option<Arc<ShotsSession>> 
         return Some(session);
     }
     let session = Arc::new(fetch_shots_session()?);
-    *WARM_SESSION.lock().ok()? = Some((Instant::now(), session.clone()));
+    *WARM_SESSION.lock() = Some((Instant::now(), session.clone()));
     Some(session)
 }
 

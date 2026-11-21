@@ -1,11 +1,12 @@
 pub(crate) mod fn_keys;
 pub(crate) mod keyboard;
 
+use qol_sync::Mutex;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -139,10 +140,7 @@ fn heartbeat_loop(
         if wanted && send(writer, &ToHelper::Heartbeat).is_err() {
             return;
         }
-        let due = caps_due
-            .lock()
-            .map(|mut due| due.take_if(|at| Instant::now() >= *at))
-            .unwrap_or_default();
+        let due = caps_due.lock().take_if(|at| Instant::now() >= *at);
         if due.is_some() {
             let _ = send(writer, &ToHelper::CapsLockLight { on: caps_lock_on() });
         }
@@ -226,18 +224,14 @@ fn apply(
             }
         }
         Output::CapsLock => {
-            if let Ok(mut due) = caps_due.lock() {
-                *due = Some(Instant::now() + CAPS_LOCK_SETTLE);
-            }
+            *caps_due.lock() = Some(Instant::now() + CAPS_LOCK_SETTLE);
         }
     }
     Ok(())
 }
 
 fn send(writer: &Mutex<UnixStream>, message: &ToHelper) -> std::io::Result<()> {
-    let mut stream = writer
-        .lock()
-        .map_err(|_| std::io::Error::other("helper writer lock poisoned"))?;
+    let mut stream = writer.lock();
     protocol::write_message(&mut *stream, message)
 }
 

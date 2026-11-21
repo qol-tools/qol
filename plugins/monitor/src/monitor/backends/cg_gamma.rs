@@ -1,5 +1,5 @@
+use qol_sync::Mutex;
 use std::collections::HashMap;
-use std::sync::Mutex;
 
 use qol_windowing::display::cg_display_id_from_connector;
 use qol_windowing::DisplayEnumerator;
@@ -74,10 +74,6 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
         }
     }
 
-    fn session(&self) -> std::sync::MutexGuard<'_, HashMap<String, GammaSession>> {
-        self.sessions.lock().unwrap()
-    }
-
     fn display_id(&self, handle: &DisplayHandle) -> Result<u32, MonitorError> {
         cg_display_id_from_connector(handle.connector()).ok_or_else(|| {
             MonitorError::unsupported(
@@ -125,7 +121,7 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
                 ),
             ));
         }
-        let mut session = self.session();
+        let mut session = self.sessions.lock();
         let entry = session.entry(handle.id().to_string()).or_default();
         if entry.original.is_none() {
             let (base, verdict) = display_color::compose_base(&current);
@@ -196,7 +192,7 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
     ) -> Result<RestoreOutcome, MonitorError> {
         let (guard_base, guard_verdict) = display_color::compose_base(original);
         let guard_foreign = guard_verdict.base == classifier::BaseChoice::Neutral;
-        let entry = self.session().get(handle.id()).map(|entry| {
+        let entry = self.sessions.lock().get(handle.id()).map(|entry| {
             (
                 entry.written_checksum,
                 entry.compose_base.clone(),
@@ -251,7 +247,7 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
             )
         })?;
         if back.size() != original.size() || back.checksum() != original.checksum() {
-            let mut session = self.session();
+            let mut session = self.sessions.lock();
             let entry = session.entry(handle.id().to_string()).or_default();
             entry.mismatches += 1;
             if entry.mismatches >= MISMATCH_WARN_AT {
@@ -262,7 +258,7 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
                 "the restore write did not verify; a co-owner changed the LUT during restore",
             ));
         }
-        let mut session = self.session();
+        let mut session = self.sessions.lock();
         if let Some(entry) = session.get_mut(handle.id()) {
             entry.original = None;
             entry.compose_base = None;
@@ -276,7 +272,7 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
     }
 
     fn restore_inner(&self, handle: &DisplayHandle) -> Result<RestoreOutcome, MonitorError> {
-        let session = self.session();
+        let session = self.sessions.lock();
         let Some(entry) = session.get(handle.id()) else {
             return Ok(RestoreOutcome::NothingToRestore);
         };
@@ -383,14 +379,16 @@ impl<T: CgGammaSeam> DisplayControl for CgGammaControl<T> {
 
 impl<T: CgGammaSeam> GammaStateControl for CgGammaControl<T> {
     fn mismatch_count(&self, handle: &DisplayHandle) -> usize {
-        self.session()
+        self.sessions
+            .lock()
             .get(handle.id())
             .map(|entry| entry.mismatches)
             .unwrap_or(0)
     }
 
     fn warned(&self, handle: &DisplayHandle) -> bool {
-        self.session()
+        self.sessions
+            .lock()
             .get(handle.id())
             .map(|entry| entry.warned)
             .unwrap_or(false)
@@ -428,7 +426,7 @@ impl<T: CgGammaSeam> LutProvider for CgGammaControl<T> {
         last_value: u8,
         last_tint: Tint,
     ) {
-        let mut session = self.session();
+        let mut session = self.sessions.lock();
         let entry = session.entry(handle.id().to_string()).or_default();
         if entry.original.is_none() {
             let (base, verdict) = display_color::compose_base(original);
@@ -457,7 +455,7 @@ impl<T: CgGammaSeam> LutProvider for CgGammaControl<T> {
         foreign: bool,
         tint_allowed: bool,
     ) -> bool {
-        let mut session = self.session();
+        let mut session = self.sessions.lock();
         let Some(entry) = session.get_mut(handle.id()) else {
             return false;
         };
@@ -479,14 +477,11 @@ mod tests {
 
     impl CgGammaSeam for FakeCgSeam {
         fn read_table(&self, display_id: u32) -> Option<GammaTable> {
-            self.tables.lock().unwrap().get(&display_id).cloned()
+            self.tables.lock().get(&display_id).cloned()
         }
 
         fn write_table(&self, display_id: u32, table: &GammaTable) -> bool {
-            self.tables
-                .lock()
-                .unwrap()
-                .insert(display_id, table.clone());
+            self.tables.lock().insert(display_id, table.clone());
             true
         }
     }
@@ -580,11 +575,11 @@ mod tests {
         assert_eq!(state.value, 40);
         assert_eq!(state.source, BrightnessSource::Gamma);
         {
-            let tables = backend.seam.tables.lock().unwrap();
+            let tables = backend.seam.tables.lock();
             assert_eq!(tables[&1], scaled_table(&original, 40));
         }
         assert_eq!(backend.restore(&display).unwrap(), RestoreOutcome::Restored);
-        let tables = backend.seam.tables.lock().unwrap();
+        let tables = backend.seam.tables.lock();
         assert_eq!(tables[&1], original);
         drop(tables);
         assert_eq!(
@@ -604,25 +599,25 @@ mod tests {
             backend.set_brightness(&display, percent).unwrap();
             backend.set_tint(&display, tint).unwrap();
             assert_eq!(
-                backend.seam.tables.lock().unwrap()[&1],
+                backend.seam.tables.lock()[&1],
                 original.dimmed(percent).tinted(tint),
                 "percent: {percent}"
             );
             backend.set_brightness(&display, 70).unwrap();
             assert_eq!(
-                backend.seam.tables.lock().unwrap()[&1],
+                backend.seam.tables.lock()[&1],
                 original.dimmed(70).tinted(tint),
                 "percent: {percent}"
             );
             backend.set_tint(&display, Tint::NEUTRAL).unwrap();
             assert_eq!(
-                backend.seam.tables.lock().unwrap()[&1],
+                backend.seam.tables.lock()[&1],
                 original.dimmed(70),
                 "percent: {percent}"
             );
             assert_eq!(backend.restore(&display).unwrap(), RestoreOutcome::Restored);
             assert_eq!(
-                backend.seam.tables.lock().unwrap()[&1],
+                backend.seam.tables.lock()[&1],
                 original,
                 "percent: {percent}"
             );
@@ -643,7 +638,7 @@ mod tests {
         let display = handle("cg-1");
         backend.set_brightness(&display, 3).unwrap();
         assert_eq!(backend.get_brightness(&display).unwrap().value, 10);
-        let tables = backend.seam.tables.lock().unwrap();
+        let tables = backend.seam.tables.lock();
         assert_eq!(tables[&1], scaled_table(&original, 10));
     }
 
@@ -666,7 +661,7 @@ mod tests {
         let backend = backend(seam_with(scaled_table(&original, 50)));
         let outcome = backend.write_guarded(&handle("cg-1"), &original, 50, Tint::NEUTRAL);
         assert_eq!(outcome, LutRestoreOutcome::Restored);
-        let tables = backend.seam.tables.lock().unwrap();
+        let tables = backend.seam.tables.lock();
         assert_eq!(tables[&1], original);
     }
 
@@ -678,7 +673,7 @@ mod tests {
         let backend = backend(seam_with(foreign.clone()));
         let outcome = backend.write_guarded(&handle("cg-1"), &original, 50, Tint::NEUTRAL);
         assert_eq!(outcome, LutRestoreOutcome::ForeignLutPreserved);
-        let tables = backend.seam.tables.lock().unwrap();
+        let tables = backend.seam.tables.lock();
         assert_eq!(tables[&1], foreign);
     }
 
@@ -688,7 +683,7 @@ mod tests {
         let backend = backend(seam_with(foreign.clone()));
         let display = handle("cg-1");
         backend.set_tint(&display, Tint::from_kelvin(3500)).unwrap();
-        let written = backend.seam.tables.lock().unwrap()[&1].clone();
+        let written = backend.seam.tables.lock()[&1].clone();
         assert_eq!(u32::from(written.red[written.red.len() - 1]), 65535u32);
         assert_eq!(
             u32::from(written.green[written.green.len() - 1]),
@@ -698,7 +693,7 @@ mod tests {
             u32::from(written.blue[written.blue.len() - 1]),
             65535u32 * 563 / 1000
         );
-        let session = backend.sessions.lock().unwrap();
+        let session = backend.sessions.lock();
         let entry = session.get("mac-cg-1").unwrap();
         assert_eq!(entry.original.as_ref().unwrap(), &foreign);
         assert_ne!(entry.compose_base.as_ref().unwrap(), &foreign);
@@ -711,9 +706,9 @@ mod tests {
         let backend = backend(seam_with(foreign.clone()));
         let display = handle("cg-1");
         backend.set_tint(&display, Tint::from_kelvin(3500)).unwrap();
-        assert_ne!(backend.seam.tables.lock().unwrap()[&1], foreign);
+        assert_ne!(backend.seam.tables.lock()[&1], foreign);
         backend.set_tint(&display, Tint::NEUTRAL).unwrap();
-        assert_eq!(backend.seam.tables.lock().unwrap()[&1], foreign);
+        assert_eq!(backend.seam.tables.lock()[&1], foreign);
     }
 
     #[test]
@@ -728,8 +723,8 @@ mod tests {
             MonitorError::Refused { capability, .. } => assert_eq!(capability, "tint"),
             other => panic!("expected Refused, got {other:?}"),
         }
-        assert_eq!(backend.seam.tables.lock().unwrap()[&1], calibration);
-        let session = backend.sessions.lock().unwrap();
+        assert_eq!(backend.seam.tables.lock()[&1], calibration);
+        let session = backend.sessions.lock();
         assert!(!session.get("mac-cg-1").unwrap().tint_allowed);
     }
 
@@ -750,7 +745,7 @@ mod tests {
             second.write_guarded(&display, &foreign, 50, Tint::NEUTRAL),
             LutRestoreOutcome::Restored
         );
-        assert_eq!(shared.lock().unwrap()[&1], foreign);
+        assert_eq!(shared.lock()[&1], foreign);
     }
 
     #[test]
@@ -768,7 +763,7 @@ mod tests {
             backend.write_guarded(&display, &original, 50, warm),
             LutRestoreOutcome::Restored
         );
-        assert_eq!(backend.seam.tables.lock().unwrap()[&1], original);
+        assert_eq!(backend.seam.tables.lock()[&1], original);
     }
 
     #[test]
@@ -777,12 +772,12 @@ mod tests {
         let backend = backend(seam_with(foreign.dimmed(80)));
         let display = handle("cg-1");
         backend.adopt_baseline(&display, &foreign, 80, Tint::NEUTRAL);
-        let session = backend.sessions.lock().unwrap();
+        let session = backend.sessions.lock();
         let entry = session.get("mac-cg-1").unwrap();
         assert_eq!(entry.written_checksum, Some(foreign.dimmed(80).checksum()));
         drop(session);
         assert_eq!(backend.restore(&display).unwrap(), RestoreOutcome::Restored);
-        assert_eq!(backend.seam.tables.lock().unwrap()[&1], foreign);
+        assert_eq!(backend.seam.tables.lock()[&1], foreign);
     }
 
     #[test]
@@ -798,7 +793,7 @@ mod tests {
         first.adopt_baseline(&display, &foreign, 100, Tint::NEUTRAL);
         assert!(first.rebind_compose_base(&display, &calibration, false, true));
         first.set_tint(&display, warm).unwrap();
-        assert_eq!(shared.lock().unwrap()[&1], calibration.tinted(warm));
+        assert_eq!(shared.lock()[&1], calibration.tinted(warm));
         drop(first);
         let second = backend(FakeCgSeam {
             tables: Arc::clone(&shared),
@@ -809,7 +804,7 @@ mod tests {
             second.write_guarded(&display, &foreign, 100, warm),
             LutRestoreOutcome::Restored
         );
-        assert_eq!(shared.lock().unwrap()[&1], foreign);
+        assert_eq!(shared.lock()[&1], foreign);
     }
 
     #[test]
@@ -822,7 +817,7 @@ mod tests {
         let calibration = identity_table(64, 200);
         assert!(backend.rebind_compose_base(&display, &calibration, false, true));
         backend.set_tint(&display, warm).unwrap();
-        let written = backend.seam.tables.lock().unwrap()[&1].clone();
+        let written = backend.seam.tables.lock()[&1].clone();
         assert_eq!(written, calibration.tinted(warm));
     }
 
@@ -835,7 +830,7 @@ mod tests {
             .set_gamma_adjustment_guarded(&display, 50, Tint::NEUTRAL, original.checksum() + 1)
             .unwrap_err();
         assert!(error.is_gamma_changed_under_write());
-        assert_eq!(backend.seam.tables.lock().unwrap()[&1], original);
+        assert_eq!(backend.seam.tables.lock()[&1], original);
     }
 
     #[test]
@@ -846,8 +841,8 @@ mod tests {
         backend
             .set_gamma_adjustment_guarded(&display, 50, Tint::NEUTRAL, original.checksum())
             .unwrap();
-        assert_eq!(backend.seam.tables.lock().unwrap()[&1], original.dimmed(50));
-        let session = backend.sessions.lock().unwrap();
+        assert_eq!(backend.seam.tables.lock()[&1], original.dimmed(50));
+        let session = backend.sessions.lock();
         let entry = session.get("mac-cg-1").unwrap();
         assert_eq!(entry.written_checksum, Some(original.dimmed(50).checksum()));
         assert_eq!(entry.written_value, Some(50));

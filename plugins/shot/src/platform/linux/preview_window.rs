@@ -1,5 +1,6 @@
+use qol_sync::Mutex;
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 
 use futures::channel::oneshot;
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible};
@@ -21,18 +22,12 @@ pub(crate) fn prepare_preview_window(title: &str) -> bool {
 
 pub(crate) fn register_pin_transition(title: &str) -> Option<oneshot::Receiver<bool>> {
     let (sender, receiver) = oneshot::channel();
-    PIN_TRANSITIONS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .insert(title.to_owned(), sender);
+    PIN_TRANSITIONS.lock().insert(title.to_owned(), sender);
     Some(receiver)
 }
 
 pub(crate) fn complete_pin_transition(title: &str, succeeded: bool) {
-    let sender = PIN_TRANSITIONS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .remove(title);
+    let sender = PIN_TRANSITIONS.lock().remove(title);
     if let Some(sender) = sender {
         let _ = sender.send(succeeded);
     }

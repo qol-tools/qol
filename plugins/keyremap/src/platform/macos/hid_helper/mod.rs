@@ -8,11 +8,12 @@ pub(crate) mod report;
 mod server;
 pub(crate) mod watchdog;
 
+use qol_sync::Mutex;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
@@ -132,14 +133,8 @@ struct State {
 }
 
 impl Shared {
-    fn lock(&self) -> MutexGuard<'_, State> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
     fn open_session(&self, generation: u64, writer: UnixStream) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         if let Some((_, previous)) = state.session.take() {
             let _ = previous.shutdown(Shutdown::Both);
         }
@@ -148,7 +143,7 @@ impl Shared {
     }
 
     fn close_session(&self, generation: u64) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         state.watchdog.session_closed(generation);
         if state
             .session
@@ -160,7 +155,7 @@ impl Shared {
     }
 
     fn drop_session(&self) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         if let Some((generation, stream)) = state.session.take() {
             let _ = stream.shutdown(Shutdown::Both);
             state.watchdog.session_closed(generation);
@@ -168,35 +163,38 @@ impl Shared {
     }
 
     fn heartbeat(&self, generation: u64) {
-        self.lock().watchdog.heartbeat(generation, Instant::now());
+        self.state
+            .lock()
+            .watchdog
+            .heartbeat(generation, Instant::now());
     }
 
     fn emit(&self, generation: u64, page: u16, usage: u16, pressed: bool) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         if state.watchdog.accepts_emit(generation) {
             state.post(page, usage, pressed);
         }
     }
 
     fn seize_failed(&self) {
-        self.lock().watchdog.seize_failed(Instant::now());
+        self.state.lock().watchdog.seize_failed(Instant::now());
     }
 
     fn set_caps_light(&self, generation: u64, on: bool) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         if state.watchdog.is_current(generation) {
             state.caps_light = Some(on);
         }
     }
 
     fn set_input_monitoring(&self, granted: bool) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         state.input_monitoring = granted;
         state.watchdog.set_input_monitoring(granted);
     }
 
     fn status(&self) -> HelperStatus {
-        let state = self.lock();
+        let state = self.state.lock();
         HelperStatus {
             protocol: PROTOCOL_VERSION,
             virtual_keyboard_ready: state.keyboard_ready,
@@ -207,25 +205,25 @@ impl Shared {
     }
 
     fn tick(&self) -> (Action, Option<bool>) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         let action = state.watchdog.tick(Instant::now());
         (action, state.caps_light.take())
     }
 
     fn device_arrived(&self, country_code: u64) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         state.watchdog.device_arrived();
         state.country_code.get_or_insert(country_code);
     }
 
     fn publish_devices(&self, seized: Vec<String>, conflicts: Vec<String>) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         state.seized = seized;
         state.conflicts = conflicts;
     }
 
     fn announce_seized(&self, active: bool) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         if !active {
             for release in state.reports.clear() {
                 state.send_vhid(&release);
@@ -236,7 +234,7 @@ impl Shared {
     }
 
     fn forward(&self, page: u16, usage: u16, pressed: bool, apple: bool) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         match page {
             PAGE_KEYBOARD | PAGE_APPLE_VENDOR_TOP_CASE => state.tell_session(&ToDaemon::Key {
                 usage_page: page,
@@ -249,7 +247,7 @@ impl Shared {
     }
 
     fn set_vhid(&self, connection: Option<Connection>) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         if connection.is_none() {
             state.keyboard_ready = false;
             state.watchdog.set_keyboard_ready(false);
@@ -258,13 +256,13 @@ impl Shared {
     }
 
     fn set_keyboard_ready(&self, ready: bool) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         state.keyboard_ready = ready;
         state.watchdog.set_keyboard_ready(ready);
     }
 
     fn country_code(&self) -> Option<u64> {
-        self.lock().country_code
+        self.state.lock().country_code
     }
 }
 

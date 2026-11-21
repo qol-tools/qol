@@ -29,7 +29,7 @@ pub fn run_daemon() -> Result<()> {
     let config = crate::config::load();
     if config.activation.enabled {
         if let Err(error) = runtime.start(config) {
-            runtime.record_failure(format!("{error:#}"))?;
+            runtime.record_failure(format!("{error:#}"));
         }
     } else {
         runtime.configure_routing(&config.routing)?;
@@ -61,7 +61,7 @@ fn handle_request(runtime: &mut SessionManager, request: &DaemonRequest) -> Read
         "stop_listening" => runtime.stop().and_then(to_value),
         "session_status" => runtime.status().and_then(to_value),
         "session_events" => session_events(runtime, &request.input),
-        "session_transcripts" => runtime.transcripts().and_then(to_value),
+        "session_transcripts" => to_value(runtime.transcripts()),
         "audio_sources" => audio_sources(),
         "stt_providers" => stt_providers(),
         "stt_models" => stt_models(),
@@ -91,7 +91,7 @@ fn session_events(
         })
         .transpose()?
         .unwrap_or(0);
-    runtime.events(after).and_then(to_value)
+    to_value(runtime.events(after))
 }
 
 fn request_assistant_turn(
@@ -215,7 +215,7 @@ fn apply_activation(
     match runtime.start(config) {
         Ok(status) => to_value(status),
         Err(error) => {
-            runtime.record_failure(format!("{error:#}"))?;
+            runtime.record_failure(format!("{error:#}"));
             runtime.status().and_then(to_value)
         }
     }

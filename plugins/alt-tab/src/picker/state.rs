@@ -588,7 +588,7 @@ mod cycle_direction_tests {
             card_padding: crate::picker::layout::DEFAULT_CARD_PADDING,
             layout_budget: None,
             rendering: crate::rendering::RenderingFlow::gpui_snapshots(),
-            preview_cache: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+            preview_cache: std::sync::Arc::new(qol_sync::Mutex::new(HashMap::new())),
             previews: HashMap::new(),
             icons: HashMap::new(),
         })
@@ -751,7 +751,7 @@ mod set_windows_tests {
             card_padding: crate::picker::layout::DEFAULT_CARD_PADDING,
             layout_budget: None,
             rendering: crate::rendering::RenderingFlow::gpui_snapshots(),
-            preview_cache: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+            preview_cache: std::sync::Arc::new(qol_sync::Mutex::new(HashMap::new())),
             previews: HashMap::new(),
             icons: HashMap::new(),
         });

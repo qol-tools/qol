@@ -1,6 +1,7 @@
+use qol_sync::Mutex;
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -57,26 +58,15 @@ impl Default for SessionEventLog {
 
 impl SessionEventLog {
     pub(super) fn record(&self, update: &VoiceSessionUpdate) -> Result<()> {
-        self.inner
-            .lock()
-            .map_err(|_| anyhow!("voice-session event log is unavailable"))?
-            .record(update)
+        self.inner.lock().record(update)
     }
 
-    pub(super) fn page(&self, after: u64) -> Result<SessionEventPage> {
-        Ok(self
-            .inner
-            .lock()
-            .map_err(|_| anyhow!("voice-session event log is unavailable"))?
-            .page(after))
+    pub(super) fn page(&self, after: u64) -> SessionEventPage {
+        self.inner.lock().page(after)
     }
 
-    pub(super) fn transcripts(&self) -> Result<Vec<TranscriptItem>> {
-        Ok(self
-            .inner
-            .lock()
-            .map_err(|_| anyhow!("voice-session event log is unavailable"))?
-            .transcripts())
+    pub(super) fn transcripts(&self) -> Vec<TranscriptItem> {
+        self.inner.lock().transcripts()
     }
 }
 

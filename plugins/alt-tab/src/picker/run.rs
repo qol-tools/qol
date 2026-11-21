@@ -9,9 +9,10 @@ use futures::future::LocalBoxFuture;
 use gpui::*;
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
+use qol_sync::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 pub(crate) type SharedPreviewCache = Arc<Mutex<crate::picker::PreviewMap>>;
@@ -170,7 +171,8 @@ fn spawn_destroyed_window_listener(cx: &mut App, state: &PickerState) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         use futures::StreamExt;
         while let Some(window_id) = destroyed.next().await {
-            if let Ok(mut windows) = window_cache.lock() {
+            {
+                let mut windows = window_cache.lock();
                 windows.retain(|w| w.id != window_id);
             }
             let handles: Vec<_> = current
@@ -276,12 +278,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
                 "fast cycle, no requery ({}ms)",
                 t_total.elapsed().as_millis()
             );
-            let cached_previews = state
-                .caches
-                .preview_cache
-                .lock()
-                .map(|cache| cache.len())
-                .unwrap_or(0);
+            let cached_previews = state.caches.preview_cache.lock().len();
             let reveal_frame = if cached_previews > 0 {
                 "cached"
             } else {
@@ -370,12 +367,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(not(debug_assertions))]
     let (config_ms, query_ms, window_count, update_ms, total_ms) =
         (0_u128, 0_u128, 0_usize, 0_u128, 0_u128);
-    let cached_previews = state
-        .caches
-        .preview_cache
-        .lock()
-        .map(|cache| cache.len())
-        .unwrap_or(0);
+    let cached_previews = state.caches.preview_cache.lock().len();
     let reveal_frame = if cached_previews > 0 {
         "cached"
     } else {
@@ -486,9 +478,7 @@ pub(super) fn apply_window_cache(
 }
 
 fn replace_window_cache(window_cache: &WindowCache, windows: Vec<WindowInfo>) {
-    let Ok(mut cache) = window_cache.lock() else {
-        return;
-    };
+    let mut cache = window_cache.lock();
     *cache = windows;
 }
 
@@ -496,17 +486,13 @@ fn prune_previews(preview_cache: &SharedPreviewCache, windows: &[WindowInfo], ap
     let active: HashSet<u32> = windows.iter().map(|w| w.id).collect();
     #[cfg(debug_assertions)]
     crate::rendering::preview_trace::retain_active(&active);
-    let Ok(mut cache) = preview_cache.lock() else {
-        return;
-    };
+    let mut cache = preview_cache.lock();
     qol_gpui::image_registry::retain_or_release(&mut *cache, app, None, |id| active.contains(id));
 }
 
 fn prune_icons(icon_cache: &SharedIconCache, windows: &[WindowInfo], app: &mut App) {
     let active: HashSet<String> = windows.iter().map(|w| w.app_name.clone()).collect();
-    let Ok(mut cache) = icon_cache.lock() else {
-        return;
-    };
+    let mut cache = icon_cache.lock();
     qol_gpui::image_registry::retain_or_release(&mut *cache, app, None, |name| {
         active.contains(name)
     });
@@ -532,11 +518,7 @@ pub(super) async fn refresh_icon_cache(
 }
 
 fn cached_icon_names(icon_cache: &SharedIconCache) -> HashSet<String> {
-    icon_cache
-        .lock()
-        .ok()
-        .map(|c| c.keys().cloned().collect())
-        .unwrap_or_default()
+    icon_cache.lock().keys().cloned().collect()
 }
 
 fn missing_icon_windows(windows: &[WindowInfo], cached_names: &HashSet<String>) -> Vec<WindowInfo> {
@@ -552,9 +534,7 @@ pub(super) fn commit_icons_to_shared_cache(
     rendered: crate::picker::IconMap,
     app: &mut App,
 ) {
-    let Ok(mut cache) = icon_cache.lock() else {
-        return;
-    };
+    let mut cache = icon_cache.lock();
     qol_gpui::image_registry::extend_with(&mut *cache, rendered, app, None);
 }
 

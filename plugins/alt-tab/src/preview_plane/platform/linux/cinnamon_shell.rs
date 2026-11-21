@@ -1,7 +1,8 @@
 use crate::preview_plane::PreviewPlanePayload;
+use qol_sync::{Condvar, Mutex};
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use zbus::zvariant::DynamicType;
 
@@ -67,25 +68,19 @@ impl CommandQueue {
         }
     }
 
-    fn enqueue(&self, command: PlaneCommand) -> Result<bool, ()> {
-        let Ok(mut pending) = self.pending.lock() else {
-            return Err(());
-        };
+    fn enqueue(&self, command: PlaneCommand) -> bool {
+        let mut pending = self.pending.lock();
         let replaced = pending.replace(command).is_some();
         self.wake.notify_one();
-        Ok(replaced)
+        replaced
     }
 
     fn run(self: Arc<Self>) {
         let mut client = None;
         loop {
             let command = {
-                let Ok(pending) = self.pending.lock() else {
-                    return;
-                };
-                let Ok(mut pending) = self.wake.wait_while(pending, |value| value.is_none()) else {
-                    return;
-                };
+                let pending = self.pending.lock();
+                let mut pending = self.wake.wait_while(pending, |value| value.is_none());
                 pending.take()
             };
             let Some(command) = command else {
@@ -157,9 +152,7 @@ fn availability_decision(cache: Option<Availability>, now: Instant) -> Availabil
 
 fn ping_available_cached() -> bool {
     let now = Instant::now();
-    let Ok(mut cache) = availability_cache().lock() else {
-        return false;
-    };
+    let mut cache = availability_cache().lock();
     match availability_decision(*cache, now) {
         AvailabilityDecision::Fresh(available) => available,
         AvailabilityDecision::Stale(available) => {
@@ -184,7 +177,8 @@ fn spawn_availability_refresh() {
     }
     std::thread::spawn(|| {
         let available = ping_available();
-        if let Ok(mut cache) = availability_cache().lock() {
+        {
+            let mut cache = availability_cache().lock();
             *cache = Some(Availability {
                 checked_at: Instant::now(),
                 available,
@@ -226,7 +220,8 @@ pub(crate) fn show_async(payload: PreviewPlanePayload) {
         return;
     };
 
-    if let Ok(mut last) = last_payload_cache().lock() {
+    {
+        let mut last = last_payload_cache().lock();
         if !should_send_show(&payload_json, last.as_deref()) {
             qol_runtime::probe!(
                 "PREVIEW_PLANE_SHOW",
@@ -241,46 +236,29 @@ pub(crate) fn show_async(payload: PreviewPlanePayload) {
         "PREVIEW_PLANE_SHOW",
         "backend=cinnamon_shell show_id={show_id} outcome=queued items={item_count}"
     );
-    let enqueue = command_queue().enqueue(PlaneCommand::Show {
+    let replaced = command_queue().enqueue(PlaneCommand::Show {
         show_id: show_id.clone(),
         item_count,
         payload_json,
     });
-    match enqueue {
-        Ok(replaced) => {
-            if replaced {
-                qol_runtime::probe!(
-                    "PREVIEW_PLANE_SHOW",
-                    "backend=cinnamon_shell show_id={show_id} outcome=queued items={item_count} coalesced=true"
-                );
-            }
-        }
-        Err(()) => {
-            qol_runtime::probe!(
+    if replaced {
+        qol_runtime::probe!(
             "PREVIEW_PLANE_SHOW",
-            "backend=cinnamon_shell show_id={show_id} outcome=error reason=queue_poisoned items={item_count}"
+            "backend=cinnamon_shell show_id={show_id} outcome=queued items={item_count} coalesced=true"
         );
-        }
     }
 }
 
 pub(crate) fn hide_async(reason: &'static str) {
-    if let Ok(mut last) = last_payload_cache().lock() {
+    {
+        let mut last = last_payload_cache().lock();
         *last = None;
     }
     qol_runtime::probe!(
         "PREVIEW_PLANE_HIDE",
         "backend=cinnamon_shell reason={reason} outcome=queued"
     );
-    if command_queue()
-        .enqueue(PlaneCommand::Hide { reason })
-        .is_err()
-    {
-        qol_runtime::probe!(
-            "PREVIEW_PLANE_HIDE",
-            "backend=cinnamon_shell reason={reason} outcome=error reason=queue_poisoned"
-        );
-    }
+    command_queue().enqueue(PlaneCommand::Hide { reason });
 }
 
 struct PlaneClient {
@@ -344,7 +322,8 @@ where
     let mut result = call_cached_plane_method(client, method, body);
     let mut recovery_attempts = 0_u8;
     while result.is_err() && recovery_attempts < 2 {
-        if let Ok(mut last) = last_payload_cache().lock() {
+        {
+            let mut last = last_payload_cache().lock();
             *last = None;
         }
         super::cinnamon_extension::prepare();
@@ -599,13 +578,9 @@ mod tests {
     #[test]
     fn command_queue_replaces_stale_pending_commands() {
         let queue = CommandQueue::new();
-        assert!(!queue
-            .enqueue(PlaneCommand::Hide { reason: "first" })
-            .unwrap());
-        assert!(queue
-            .enqueue(PlaneCommand::Hide { reason: "latest" })
-            .unwrap());
-        let taken = queue.pending.lock().unwrap().take();
+        assert!(!queue.enqueue(PlaneCommand::Hide { reason: "first" }));
+        assert!(queue.enqueue(PlaneCommand::Hide { reason: "latest" }));
+        let taken = queue.pending.lock().take();
         match taken {
             Some(PlaneCommand::Hide { reason }) => {
                 assert_eq!(
@@ -616,7 +591,7 @@ mod tests {
             other => panic!("expected the coalesced hide, got {other:?}"),
         }
         assert!(
-            queue.pending.lock().unwrap().is_none(),
+            queue.pending.lock().is_none(),
             "a drained queue holds nothing else"
         );
     }

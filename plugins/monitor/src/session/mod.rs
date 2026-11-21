@@ -1,6 +1,7 @@
+use qol_sync::Mutex;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use qol_host_session::SessionSnapshot;
@@ -565,30 +566,27 @@ impl<C: DisplayControl + ?Sized> Session<C> {
     }
 
     fn is_snapshotted(&self, display_id: &str) -> bool {
-        self.snapshotted.lock().unwrap().contains(display_id)
+        self.snapshotted.lock().contains(display_id)
     }
 
     fn mark_snapshotted(&self, display_id: &str) {
-        self.snapshotted
-            .lock()
-            .unwrap()
-            .insert(display_id.to_string());
+        self.snapshotted.lock().insert(display_id.to_string());
     }
 
     fn forget_snapshot(&self, display_id: &str) {
         let _ = self.store.delete_snapshot(display_id);
-        self.snapshotted.lock().unwrap().remove(display_id);
+        self.snapshotted.lock().remove(display_id);
     }
 
     pub(crate) fn brightness(
         &self,
         handle: &DisplayHandle,
     ) -> Result<BrightnessState, MonitorError> {
-        if let Some(adjustment) = self.adjustments.lock().unwrap().get(handle.id()) {
+        if let Some(adjustment) = self.adjustments.lock().get(handle.id()) {
             return Ok(adjustment.brightness);
         }
         let brightness = self.control.get_brightness(handle)?;
-        self.adjustments.lock().unwrap().insert(
+        self.adjustments.lock().insert(
             handle.id().into(),
             DisplayAdjustment {
                 brightness,
@@ -619,14 +617,13 @@ impl<C: DisplayControl + ?Sized> Session<C> {
     pub(crate) fn brightness_cache(&self) -> BTreeMap<String, BrightnessState> {
         self.adjustments
             .lock()
-            .unwrap()
             .iter()
             .map(|(id, adjustment)| (id.clone(), adjustment.brightness))
             .collect()
     }
 
     pub(crate) fn merge_brightness_cache(&self, cache: &BTreeMap<String, BrightnessState>) {
-        let mut adjustments = self.adjustments.lock().unwrap();
+        let mut adjustments = self.adjustments.lock();
         for (id, state) in cache {
             adjustments.entry(id.clone()).or_insert(DisplayAdjustment {
                 brightness: *state,
@@ -638,7 +635,6 @@ impl<C: DisplayControl + ?Sized> Session<C> {
     pub(crate) fn tinted_displays(&self) -> HashSet<String> {
         self.adjustments
             .lock()
-            .unwrap()
             .iter()
             .filter(|(_, state)| !state.tint.is_neutral())
             .map(|(id, _)| id.clone())
@@ -646,13 +642,13 @@ impl<C: DisplayControl + ?Sized> Session<C> {
     }
 
     fn track_tint(&self, handle: &DisplayHandle, tint: Tint) {
-        if let Some(state) = self.adjustments.lock().unwrap().get_mut(handle.id()) {
+        if let Some(state) = self.adjustments.lock().get_mut(handle.id()) {
             state.tint = tint;
         }
     }
 
     fn adopt_adjustment(&self, handle: &DisplayHandle, snapshot: &Snapshot) {
-        self.adjustments.lock().unwrap().insert(
+        self.adjustments.lock().insert(
             handle.id().into(),
             DisplayAdjustment {
                 brightness: BrightnessState {
@@ -935,7 +931,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             }
             return Err(error);
         }
-        if let Some(state) = self.adjustments.lock().unwrap().get_mut(handle.id()) {
+        if let Some(state) = self.adjustments.lock().get_mut(handle.id()) {
             state.brightness.value = value;
         }
         Ok(value)

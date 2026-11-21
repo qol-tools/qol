@@ -30,7 +30,7 @@ use std::sync::Arc;
 pub(crate) type PreviewMap = std::collections::HashMap<u32, Arc<gpui::RenderImage>>;
 pub(crate) type LiveFrameMap = std::collections::HashMap<u32, capture::LiveFrame>;
 pub(crate) type IconMap = std::collections::HashMap<String, Arc<gpui::RenderImage>>;
-pub(crate) type SharedIconCache = Arc<std::sync::Mutex<IconMap>>;
+pub(crate) type SharedIconCache = Arc<qol_sync::Mutex<IconMap>>;
 pub(crate) type PickerWindowState =
     std::rc::Rc<std::cell::RefCell<qol_gpui::window::ActiveWindows<AltTabApp>>>;
 
@@ -125,10 +125,10 @@ fn resolve_placement(
     let placement = PopupPlacement::from_tracker(tracker);
     if !is_visible {
         let placement = stabilize_placement(placement, current, "hidden");
-        *ACTIVE_PICKER_MONITOR.lock().unwrap() = Some(placement.target());
+        *ACTIVE_PICKER_MONITOR.lock() = Some(placement.target());
         return placement;
     }
-    let Some(active_target) = *ACTIVE_PICKER_MONITOR.lock().unwrap() else {
+    let Some(active_target) = *ACTIVE_PICKER_MONITOR.lock() else {
         return stabilize_placement(placement, current, "visible-no-active-target");
     };
     tracker
@@ -226,7 +226,7 @@ pub(super) fn try_cycle_visible(
     if !PICKER_VISIBLE.load(Ordering::Relaxed) {
         return false;
     }
-    let target = *ACTIVE_PICKER_MONITOR.lock().unwrap();
+    let target = *ACTIVE_PICKER_MONITOR.lock();
     cycle_existing_window(current, target, reverse, show_id, cx)
 }
 

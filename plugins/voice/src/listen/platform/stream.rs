@@ -1,7 +1,8 @@
+use qol_sync::Mutex;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -54,7 +55,7 @@ impl ActiveAudioInput for StreamInput {}
 impl Drop for StreamInput {
     fn drop(&mut self) {
         self.stopping.store(true, Ordering::Release);
-        if let Some(stop) = self.stop.get_mut().ok().and_then(Option::take) {
+        if let Some(stop) = self.stop.get_mut().take() {
             stop();
         }
         if let Some(reader) = self.reader.take() {

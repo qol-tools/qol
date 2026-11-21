@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use qol_sync::Mutex;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use anyhow::{Context, Result};
@@ -94,10 +95,7 @@ fn refresh(
 ) {
     let selection = RouteSelection::resolve(config, || sink.targets());
     let status = selection.status();
-    let result = routing
-        .lock()
-        .map_err(|_| "voice routing configuration is unavailable")
-        .and_then(|mut routing| routing.update(selection));
+    let result = routing.lock().update(selection);
     match result {
         Ok(()) => qol_runtime::probe!(
             "VOICE_ROUTING",
@@ -113,7 +111,8 @@ fn refresh(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use qol_sync::Mutex;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use qol_terminal_sessions::cli::{CliSessionChangeHandler, CliSessionSubscription};
@@ -132,7 +131,7 @@ mod tests {
 
     impl ConversationSink for FakeSink {
         fn targets(&self) -> Result<Vec<TerminalTarget>, TerminalError> {
-            Ok(vec![self.target.lock().unwrap().clone()])
+            Ok(vec![self.target.lock().clone()])
         }
 
         fn subscribe_target(
@@ -140,7 +139,7 @@ mod tests {
             _target: &SessionBinding,
             on_change: CliSessionChangeHandler,
         ) -> anyhow::Result<Option<CliSessionSubscription>> {
-            *self.on_change.lock().unwrap() = Some(on_change);
+            *self.on_change.lock() = Some(on_change);
             Ok(Some(CliSessionSubscription::from_guard(())))
         }
 
@@ -180,8 +179,8 @@ mod tests {
         .unwrap();
         wait_for_label(&routing, "Old name · Codex");
 
-        sink.target.lock().unwrap().label = "New name · Codex".to_owned();
-        sink.on_change.lock().unwrap().as_ref().unwrap()();
+        sink.target.lock().label = "New name · Codex".to_owned();
+        sink.on_change.lock().as_ref().unwrap()();
 
         wait_for_label(&routing, "New name · Codex");
         drop(watcher);
@@ -190,7 +189,7 @@ mod tests {
     fn wait_for_label(routing: &Mutex<RoutingControl>, expected: &str) {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let label = routing.lock().unwrap().status().target_label;
+            let label = routing.lock().status().target_label;
             if label.as_deref() == Some(expected) {
                 return;
             }

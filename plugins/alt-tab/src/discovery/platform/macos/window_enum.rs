@@ -6,8 +6,9 @@ use super::process::{
 };
 use super::{ax, CgWindow};
 use crate::discovery::WindowInfo;
+use qol_sync::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 struct StableWindowKey {
@@ -66,11 +67,7 @@ pub(super) struct KnownWindowTracker {
 
 impl KnownWindowTracker {
     pub fn new() -> Self {
-        let snapshot = known_window_ids_by_identity()
-            .lock()
-            .ok()
-            .map(|cache| cache.clone())
-            .unwrap_or_default();
+        let snapshot = known_window_ids_by_identity().lock().clone();
         Self {
             snapshot,
             accepted: HashMap::new(),
@@ -99,7 +96,8 @@ impl KnownWindowTracker {
     }
 
     pub fn persist(self) {
-        if let Ok(mut known_cache) = known_window_ids_by_identity().lock() {
+        {
+            let mut known_cache = known_window_ids_by_identity().lock();
             known_cache.retain(|identity, _| self.seen.contains(identity));
             for (identity, ids) in self.accepted {
                 known_cache.insert(identity, ids);
@@ -220,9 +218,7 @@ fn current_stable_keys(
 }
 
 pub(crate) fn promote_focused_window(window_id: u32) {
-    let Ok(mut order) = stable_window_order().lock() else {
-        return;
-    };
+    let mut order = stable_window_order().lock();
     let Some(index) = order.iter().position(|key| key.window_id == window_id) else {
         return;
     };
@@ -233,11 +229,7 @@ pub(crate) fn promote_focused_window(window_id: u32) {
 }
 
 fn read_stable_window_order() -> Vec<StableWindowKey> {
-    stable_window_order()
-        .lock()
-        .ok()
-        .map(|order| order.clone())
-        .unwrap_or_default()
+    stable_window_order().lock().clone()
 }
 
 fn use_current_window_order(
@@ -342,9 +334,7 @@ fn apply_stable_window_order(
 }
 
 fn persist_stable_window_order(order: Vec<StableWindowKey>) {
-    let Ok(mut cached) = stable_window_order().lock() else {
-        return;
-    };
+    let mut cached = stable_window_order().lock();
     #[cfg(debug_assertions)]
     {
         let new_set: HashSet<StableWindowKey> = order.iter().copied().collect();

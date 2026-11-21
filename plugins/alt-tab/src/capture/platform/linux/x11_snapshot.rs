@@ -1,7 +1,8 @@
 use crate::discovery::WindowInfo;
 use qol_app_icon::RgbaImage;
+use qol_sync::Mutex;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use x11rb::connection::Connection;
 use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
 use x11rb::protocol::render::{self, ConnectionExt as RenderExt, Pictformat};
@@ -65,9 +66,7 @@ pub fn capture_previews_cg(
     max_w: usize,
     max_h: usize,
 ) -> Vec<(usize, Option<RgbaImage>)> {
-    let Ok(mut guard) = capture_session().lock() else {
-        return targets.iter().map(|&(idx, _)| (idx, None)).collect();
-    };
+    let mut guard = capture_session().lock();
     let session = match &*guard {
         Some(_) => guard.as_ref().unwrap(),
         None => {

@@ -1,5 +1,6 @@
+use qol_sync::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::monitor::night::Tint;
 use crate::monitor::{
@@ -60,14 +61,12 @@ impl<D, G> PolicyControl<D, G> {
     pub fn select(&self, display_id: &str, policy: BrightnessPolicy) {
         self.selections
             .lock()
-            .unwrap()
             .insert(display_id.to_string(), policy);
     }
 
     pub fn selection(&self, display_id: &str) -> BrightnessPolicy {
         self.selections
             .lock()
-            .unwrap()
             .get(display_id)
             .copied()
             .unwrap_or_default()
@@ -343,11 +342,11 @@ mod tests {
         }
 
         fn set_counts(&self) -> usize {
-            *self.sets.lock().unwrap()
+            *self.sets.lock()
         }
 
         fn value(&self) -> u8 {
-            *self.value.lock().unwrap()
+            *self.value.lock()
         }
     }
 
@@ -360,29 +359,29 @@ mod tests {
             match &self.probe_error {
                 Some(error) => Err(error.monitor()),
                 None => Ok(DisplayCapabilities {
-                    brightness_ddc: !*self.dropped.lock().unwrap(),
+                    brightness_ddc: !*self.dropped.lock(),
                     ..DisplayCapabilities::none()
                 }),
             }
         }
 
         fn get_brightness(&self, _handle: &DisplayHandle) -> Result<BrightnessState, MonitorError> {
-            *self.gets.lock().unwrap() += 1;
+            *self.gets.lock() += 1;
             match &self.get_error {
                 Some(error) => Err(error.monitor()),
                 None => Ok(BrightnessState {
-                    value: *self.value.lock().unwrap(),
+                    value: *self.value.lock(),
                     source: BrightnessSource::Ddc,
                 }),
             }
         }
 
         fn set_brightness(&self, _handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
-            *self.sets.lock().unwrap() += 1;
+            *self.sets.lock() += 1;
             match &self.set_error {
                 Some(error) => Err(error.monitor()),
                 None => {
-                    *self.value.lock().unwrap() = value;
+                    *self.value.lock() = value;
                     Ok(())
                 }
             }
@@ -419,7 +418,7 @@ mod tests {
 
     impl DdcStatus for FakeDdc {
         fn writes_dropped(&self, _connector: &str) -> bool {
-            *self.dropped.lock().unwrap()
+            *self.dropped.lock()
         }
     }
 
@@ -448,11 +447,11 @@ mod tests {
         }
 
         fn set_counts(&self) -> usize {
-            *self.sets.lock().unwrap()
+            *self.sets.lock()
         }
 
         fn value(&self) -> u8 {
-            *self.value.lock().unwrap()
+            *self.value.lock()
         }
     }
 
@@ -470,31 +469,31 @@ mod tests {
 
         fn get_brightness(&self, _handle: &DisplayHandle) -> Result<BrightnessState, MonitorError> {
             Ok(BrightnessState {
-                value: *self.value.lock().unwrap(),
+                value: *self.value.lock(),
                 source: BrightnessSource::Gamma,
             })
         }
 
         fn set_brightness(&self, _handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
-            *self.sets.lock().unwrap() += 1;
-            *self.value.lock().unwrap() = value;
+            *self.sets.lock() += 1;
+            *self.value.lock() = value;
             Ok(())
         }
 
         fn set_tint(&self, _handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
-            self.tints.lock().unwrap().push(tint);
+            self.tints.lock().push(tint);
             Ok(())
         }
 
         fn get_gamma(&self, _handle: &DisplayHandle) -> Result<GammaState, MonitorError> {
             Ok(GammaState {
-                value: *self.value.lock().unwrap(),
+                value: *self.value.lock(),
             })
         }
 
         fn set_gamma(&self, _handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
-            *self.sets.lock().unwrap() += 1;
-            *self.value.lock().unwrap() = value;
+            *self.sets.lock() += 1;
+            *self.value.lock() = value;
             Ok(())
         }
 
@@ -521,16 +520,16 @@ mod tests {
 
     impl GammaStateControl for FakeGamma {
         fn mismatch_count(&self, _handle: &DisplayHandle) -> usize {
-            *self.mismatch.lock().unwrap()
+            *self.mismatch.lock()
         }
 
         fn warned(&self, _handle: &DisplayHandle) -> bool {
-            *self.warned.lock().unwrap()
+            *self.warned.lock()
         }
 
         fn restore(&self, _handle: &DisplayHandle) -> Result<RestoreOutcome, MonitorError> {
-            *self.restore_calls.lock().unwrap() += 1;
-            Ok(*self.restore_outcome.lock().unwrap())
+            *self.restore_calls.lock() += 1;
+            Ok(*self.restore_outcome.lock())
         }
     }
 
@@ -622,7 +621,7 @@ mod tests {
         let ddc = FakeDdc::healthy(20);
         let gamma = FakeGamma::new();
         let control = policy(ddc, gamma);
-        *control.ddc.dropped.lock().unwrap() = true;
+        *control.ddc.dropped.lock() = true;
         let state = control.get_brightness(&display).unwrap();
         assert_eq!(state.source, BrightnessSource::Gamma);
         control.set_brightness(&display, 40).unwrap();
@@ -639,7 +638,7 @@ mod tests {
         control.set_brightness(&display, 50).unwrap();
         assert_eq!(control.ddc.set_counts(), 1);
         assert_eq!(control.gamma.set_counts(), 0);
-        *control.ddc.dropped.lock().unwrap() = true;
+        *control.ddc.dropped.lock() = true;
         control.set_brightness(&display, 60).unwrap();
         assert_eq!(
             control.ddc.set_counts(),
@@ -768,16 +767,16 @@ mod tests {
         let ddc = FakeDdc::healthy(42);
         let gamma = FakeGamma::new();
         let control = policy(ddc, gamma);
-        *control.gamma.mismatch.lock().unwrap() = 3;
-        *control.gamma.warned.lock().unwrap() = true;
-        *control.gamma.restore_outcome.lock().unwrap() = RestoreOutcome::ForeignLutPreserved;
+        *control.gamma.mismatch.lock() = 3;
+        *control.gamma.warned.lock() = true;
+        *control.gamma.restore_outcome.lock() = RestoreOutcome::ForeignLutPreserved;
         assert_eq!(control.mismatch_count(&display), 3);
         assert!(control.warned(&display));
         assert_eq!(
             control.restore(&display).unwrap(),
             RestoreOutcome::ForeignLutPreserved
         );
-        assert_eq!(*control.gamma.restore_calls.lock().unwrap(), 1);
+        assert_eq!(*control.gamma.restore_calls.lock(), 1);
     }
 
     #[test]
@@ -806,7 +805,7 @@ mod tests {
         control.select(display.id(), BrightnessPolicy::Ddc);
         let tint = Tint::from_kelvin(3500);
         control.set_tint(&display, tint).unwrap();
-        assert_eq!(control.gamma.tints.lock().unwrap().as_slice(), [tint]);
+        assert_eq!(control.gamma.tints.lock().as_slice(), [tint]);
         assert_eq!(control.ddc.set_counts(), 0);
     }
 
@@ -862,7 +861,7 @@ mod tests {
 
     impl crate::monitor::backends::i2c_ddc::I2cBus for FakeI2cBus {
         fn write(&mut self, frame: &[u8]) -> Result<(), crate::monitor::I2cError> {
-            let mut monitor = self.monitor.lock().unwrap();
+            let mut monitor = self.monitor.lock();
             let length = frame[1];
             if length != 0x82 && length != 0x84 {
                 return Err(crate::monitor::I2cError::Protocol {

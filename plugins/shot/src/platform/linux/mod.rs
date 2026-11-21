@@ -1,7 +1,8 @@
 use gpui::{App, Bounds, Pixels};
+use qol_sync::Mutex;
 use std::collections::HashSet;
 use std::process::{Command, Stdio};
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::Rect;
@@ -48,16 +49,14 @@ static REVEAL_REQUESTED: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
 pub(crate) fn mark_reveal_requested(title: &str) {
-    if let Ok(mut requested) = REVEAL_REQUESTED.lock() {
+    {
+        let mut requested = REVEAL_REQUESTED.lock();
         requested.insert(title.to_string());
     }
 }
 
 fn reveal_requested(title: &str) -> bool {
-    REVEAL_REQUESTED
-        .lock()
-        .map(|requested| requested.contains(title))
-        .unwrap_or(false)
+    REVEAL_REQUESTED.lock().contains(title)
 }
 
 pub(crate) fn reassert_parked(title: &str, cx: &mut App) {

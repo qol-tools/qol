@@ -1,6 +1,6 @@
+use qol_sync::Mutex;
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Mutex;
 
 use qol_windowing::DisplayEnumerator;
 
@@ -169,19 +169,16 @@ impl<T: GammaTransport> GammaBackend<T> {
         }
     }
 
-    fn session(&self) -> std::sync::MutexGuard<'_, HashMap<String, GammaSession>> {
-        self.sessions.lock().unwrap()
-    }
-
     pub fn tint_allowed(&self, handle: &DisplayHandle) -> bool {
-        self.session()
+        self.sessions
+            .lock()
             .get(handle.id())
             .map(|entry| entry.tint_allowed)
             .unwrap_or(true)
     }
 
     fn floor_inner(&self, handle: &DisplayHandle) -> Result<u8, GammaError> {
-        let known = self.session().get(handle.id()).and_then(|entry| {
+        let known = self.sessions.lock().get(handle.id()).and_then(|entry| {
             Some(display_color::brightness_floor(
                 entry.original.as_ref()?,
                 entry.compose_base.as_ref()?,
@@ -225,7 +222,7 @@ impl<T: GammaTransport> GammaBackend<T> {
                 ),
             });
         }
-        let session = self.session();
+        let session = self.sessions.lock();
         match session.get(handle.id()) {
             Some(entry) => match (entry.written_value, entry.written_checksum) {
                 (Some(value), Some(checksum)) if current.checksum() == checksum => Ok(value),
@@ -274,7 +271,7 @@ impl<T: GammaTransport> GammaBackend<T> {
                 ),
             });
         }
-        let mut session = self.session();
+        let mut session = self.sessions.lock();
         let entry = session.entry(handle.id().to_string()).or_default();
         if entry.original.is_none() {
             let (base, verdict) = display_color::compose_base(&current);
@@ -342,7 +339,7 @@ impl<T: GammaTransport> GammaBackend<T> {
     ) -> Result<RestoreOutcome, GammaError> {
         let (guard_base, guard_verdict) = display_color::compose_base(original);
         let guard_foreign = guard_verdict.base == classifier::BaseChoice::Neutral;
-        let entry = self.session().get(handle.id()).map(|entry| {
+        let entry = self.sessions.lock().get(handle.id()).map(|entry| {
             (
                 entry.written_checksum,
                 entry.compose_base.clone(),
@@ -390,7 +387,7 @@ impl<T: GammaTransport> GammaBackend<T> {
         bus.write_gamma(crtc, original)?;
         let back = bus.read_gamma(crtc)?;
         if back.size() != original.size() || back.checksum() != original.checksum() {
-            let mut session = self.session();
+            let mut session = self.sessions.lock();
             let entry = session.entry(handle.id().to_string()).or_default();
             entry.mismatches += 1;
             if entry.mismatches >= MISMATCH_WARN_AT {
@@ -402,7 +399,7 @@ impl<T: GammaTransport> GammaBackend<T> {
                         .into(),
             });
         }
-        let mut session = self.session();
+        let mut session = self.sessions.lock();
         if let Some(entry) = session.get_mut(handle.id()) {
             entry.original = None;
             entry.compose_base = None;
@@ -416,7 +413,7 @@ impl<T: GammaTransport> GammaBackend<T> {
     }
 
     fn restore_inner(&self, handle: &DisplayHandle) -> Result<RestoreOutcome, GammaError> {
-        let session = self.session();
+        let session = self.sessions.lock();
         let Some(entry) = session.get(handle.id()) else {
             return Ok(RestoreOutcome::NothingToRestore);
         };
@@ -536,21 +533,24 @@ impl<T: GammaTransport> DisplayControl for GammaBackend<T> {
 
 impl<T: GammaTransport> GammaStateControl for GammaBackend<T> {
     fn mismatch_count(&self, handle: &DisplayHandle) -> usize {
-        self.session()
+        self.sessions
+            .lock()
             .get(handle.id())
             .map(|entry| entry.mismatches)
             .unwrap_or(0)
     }
 
     fn warned(&self, handle: &DisplayHandle) -> bool {
-        self.session()
+        self.sessions
+            .lock()
             .get(handle.id())
             .map(|entry| entry.warned)
             .unwrap_or(false)
     }
 
     fn tint_capped(&self, handle: &DisplayHandle) -> bool {
-        self.session()
+        self.sessions
+            .lock()
             .get(handle.id())
             .is_some_and(|entry| entry.tint_capped)
     }
@@ -589,7 +589,7 @@ impl<T: GammaTransport> LutProvider for GammaBackend<T> {
         last_value: u8,
         last_tint: Tint,
     ) {
-        let mut session = self.session();
+        let mut session = self.sessions.lock();
         let entry = session.entry(handle.id().to_string()).or_default();
         if entry.original.is_none() {
             let (base, verdict) = display_color::compose_base(original);
@@ -619,7 +619,7 @@ impl<T: GammaTransport> LutProvider for GammaBackend<T> {
         foreign: bool,
         tint_allowed: bool,
     ) -> bool {
-        let mut session = self.session();
+        let mut session = self.sessions.lock();
         let Some(entry) = session.get_mut(handle.id()) else {
             return false;
         };
@@ -708,19 +708,19 @@ mod tests {
 
     impl GammaBus for Arc<Mutex<FakeGammaBus>> {
         fn crtc_for_connector(&mut self, connector: &str) -> Result<Option<u32>, GammaError> {
-            self.lock().unwrap().crtc_for_connector(connector)
+            self.lock().crtc_for_connector(connector)
         }
 
         fn read_gamma(&mut self, crtc: u32) -> Result<GammaTable, GammaError> {
-            self.lock().unwrap().read_gamma(crtc)
+            self.lock().read_gamma(crtc)
         }
 
         fn write_gamma(&mut self, crtc: u32, table: &GammaTable) -> Result<(), GammaError> {
-            self.lock().unwrap().write_gamma(crtc, table)
+            self.lock().write_gamma(crtc, table)
         }
 
         fn hdr_active(&mut self, crtc: u32) -> Result<bool, GammaError> {
-            self.lock().unwrap().hdr_active(crtc)
+            self.lock().hdr_active(crtc)
         }
     }
 
@@ -846,7 +846,7 @@ mod tests {
         let backend = backend(bus(&original, 1));
         backend.set_tint(&handle(), tint).unwrap();
         backend.set_brightness(&handle(), 60).unwrap();
-        let bus = backend.transport.bus.lock().unwrap();
+        let bus = backend.transport.bus.lock();
         assert_eq!(bus.tables[&1], original.dimmed(60).tinted(tint));
     }
 
@@ -864,7 +864,7 @@ mod tests {
                 .set_gamma_adjustment(&handle(), value, tint)
                 .unwrap();
             assert_eq!(
-                backend.transport.bus.lock().unwrap().tables[&1],
+                backend.transport.bus.lock().tables[&1],
                 original.dimmed(value).tinted(tint)
             );
         }
@@ -881,7 +881,7 @@ mod tests {
             backend.restore(&handle()).unwrap(),
             RestoreOutcome::Restored
         );
-        assert_eq!(backend.transport.bus.lock().unwrap().tables[&1], original);
+        assert_eq!(backend.transport.bus.lock().tables[&1], original);
     }
 
     #[test]
@@ -897,9 +897,9 @@ mod tests {
     fn set_captures_the_original_and_writes_a_verified_dim() {
         let backend = backend(bus(&identity(4, 100), 1));
         backend.set_brightness(&handle(), 50).unwrap();
-        let bus = backend.transport.bus.lock().unwrap();
+        let bus = backend.transport.bus.lock();
         assert_eq!(bus.tables[&1], identity(4, 100).dimmed(50));
-        let session = backend.sessions.lock().unwrap();
+        let session = backend.sessions.lock();
         let entry = session.get("id-1").unwrap();
         assert_eq!(entry.original.as_ref().unwrap(), &identity(4, 100));
         assert_eq!(
@@ -916,11 +916,11 @@ mod tests {
         co_owner.red[0] += 1;
         let backend = backend(bus(&original, 1));
         backend.set_brightness(&handle(), 50).unwrap();
-        let mut counts = backend.transport.bus.lock().unwrap();
+        let mut counts = backend.transport.bus.lock();
         counts.co_owner = Some(co_owner);
         drop(counts);
         backend.set_brightness(&handle(), 40).unwrap();
-        let session = backend.sessions.lock().unwrap();
+        let session = backend.sessions.lock();
         let entry = session.get("id-1").unwrap();
         assert_eq!(
             entry.mismatches, 1,
@@ -940,14 +940,14 @@ mod tests {
         let backend = backend(bus(&original, 1));
         assert_eq!(backend.capture("card0-DP-1").unwrap(), original);
         {
-            let mut bus = backend.transport.bus.lock().unwrap();
+            let mut bus = backend.transport.bus.lock();
             bus.read_sequence.push_back(foreign.clone());
         }
         let error = backend
             .set_gamma_adjustment_guarded(&handle(), 50, Tint::NEUTRAL, original.checksum())
             .unwrap_err();
         assert!(error.is_gamma_changed_under_write());
-        let bus = backend.transport.bus.lock().unwrap();
+        let bus = backend.transport.bus.lock();
         assert_eq!(
             bus.writes, 0,
             "a table stolen after the read is never overwritten"
@@ -962,11 +962,11 @@ mod tests {
         backend
             .set_gamma_adjustment_guarded(&handle(), 50, Tint::NEUTRAL, original.checksum())
             .unwrap();
-        let bus = backend.transport.bus.lock().unwrap();
+        let bus = backend.transport.bus.lock();
         assert_eq!(bus.tables[&1], original.dimmed(50));
         assert_eq!(bus.writes, 1);
         drop(bus);
-        let session = backend.sessions.lock().unwrap();
+        let session = backend.sessions.lock();
         let entry = session.get("id-1").unwrap();
         assert_eq!(entry.written_checksum, Some(original.dimmed(50).checksum()));
         assert_eq!(entry.written_value, Some(50));
@@ -978,7 +978,7 @@ mod tests {
     fn night_tint_reports_failed_readback_instead_of_claiming_it_was_applied() {
         let original = identity(4, 30_000);
         let backend = backend(bus(&original, 1));
-        backend.transport.bus.lock().unwrap().co_owner = Some(original);
+        backend.transport.bus.lock().co_owner = Some(original);
         assert!(matches!(
             backend.set_tint(&handle(), Tint::from_kelvin(3500)),
             Err(MonitorError::Refused { .. })
@@ -993,7 +993,7 @@ mod tests {
         backend
             .set_tint(&handle(), Tint::from_kelvin(3500))
             .unwrap();
-        let written = backend.transport.bus.lock().unwrap().tables[&1].clone();
+        let written = backend.transport.bus.lock().tables[&1].clone();
         assert_eq!(u32::from(written.red[written.red.len() - 1]), 65535u32);
         assert_eq!(
             u32::from(written.green[written.green.len() - 1]),
@@ -1003,7 +1003,7 @@ mod tests {
             u32::from(written.blue[written.blue.len() - 1]),
             65535u32 * 563 / 1000
         );
-        let session = backend.sessions.lock().unwrap();
+        let session = backend.sessions.lock();
         let entry = session.get("id-1").unwrap();
         assert_eq!(entry.original.as_ref().unwrap(), &foreign);
         assert_ne!(entry.compose_base.as_ref().unwrap(), &foreign);
@@ -1015,7 +1015,7 @@ mod tests {
         let foreign = warm_scale_table(64);
         let backend = backend(bus(&foreign, 1));
         backend.set_brightness(&handle(), 50).unwrap();
-        let written = backend.transport.bus.lock().unwrap().tables[&1].clone();
+        let written = backend.transport.bus.lock().tables[&1].clone();
         assert_eq!(written, foreign.dimmed(50));
     }
 
@@ -1032,7 +1032,7 @@ mod tests {
         assert!(first.rebind_compose_base(&handle(), &calibration, false, true));
         first.set_tint(&handle(), warm).unwrap();
         assert_eq!(
-            shared.lock().unwrap().tables[&1],
+            shared.lock().tables[&1],
             calibration.tinted(warm),
             "the tint composes on the rebound base"
         );
@@ -1046,7 +1046,7 @@ mod tests {
             LutRestoreOutcome::Restored,
             "a restart recognises a table written on the persisted base"
         );
-        assert_eq!(shared.lock().unwrap().tables[&1], foreign);
+        assert_eq!(shared.lock().tables[&1], foreign);
     }
 
     #[test]
@@ -1065,7 +1065,7 @@ mod tests {
             second.write_guarded(&handle(), &foreign, 50, Tint::NEUTRAL),
             LutRestoreOutcome::Restored
         );
-        assert_eq!(shared.lock().unwrap().tables[&1], foreign);
+        assert_eq!(shared.lock().tables[&1], foreign);
     }
 
     #[test]
@@ -1073,7 +1073,7 @@ mod tests {
         let foreign = warm_scale_table(64);
         let backend = backend(bus(&foreign.dimmed(80), 1));
         backend.adopt_baseline(&handle(), &foreign, 80, Tint::NEUTRAL);
-        let session = backend.sessions.lock().unwrap();
+        let session = backend.sessions.lock();
         let entry = session.get("id-1").unwrap();
         assert_eq!(
             entry.written_checksum,
@@ -1085,7 +1085,7 @@ mod tests {
             backend.restore(&handle()).unwrap(),
             RestoreOutcome::Restored
         );
-        assert_eq!(backend.transport.bus.lock().unwrap().tables[&1], foreign);
+        assert_eq!(backend.transport.bus.lock().tables[&1], foreign);
     }
 
     #[test]
@@ -1097,7 +1097,7 @@ mod tests {
         let calibration = identity(64, 200);
         assert!(backend.rebind_compose_base(&handle(), &calibration, false, true));
         backend.set_tint(&handle(), warm).unwrap();
-        let written = backend.transport.bus.lock().unwrap().tables[&1].clone();
+        let written = backend.transport.bus.lock().tables[&1].clone();
         assert_eq!(written, calibration.tinted(warm));
     }
 
@@ -1108,9 +1108,9 @@ mod tests {
         backend
             .set_tint(&handle(), Tint::from_kelvin(3500))
             .unwrap();
-        assert_ne!(backend.transport.bus.lock().unwrap().tables[&1], foreign);
+        assert_ne!(backend.transport.bus.lock().tables[&1], foreign);
         backend.set_tint(&handle(), Tint::NEUTRAL).unwrap();
-        assert_eq!(backend.transport.bus.lock().unwrap().tables[&1], foreign);
+        assert_eq!(backend.transport.bus.lock().tables[&1], foreign);
     }
 
     #[test]
@@ -1125,7 +1125,7 @@ mod tests {
             MonitorError::Refused { capability, .. } => assert_eq!(capability, "tint"),
             other => panic!("expected Refused, got {other:?}"),
         }
-        assert_eq!(backend.transport.bus.lock().unwrap().tables[&1], foreign);
+        assert_eq!(backend.transport.bus.lock().tables[&1], foreign);
         assert!(!backend.tint_allowed(&handle()));
     }
 
@@ -1137,7 +1137,7 @@ mod tests {
         let backend = backend(bus(&original, 1));
         backend.set_brightness(&handle(), 90).unwrap();
         {
-            let mut counts = backend.transport.bus.lock().unwrap();
+            let mut counts = backend.transport.bus.lock();
             counts.co_owner = Some(co_owner.clone());
         }
         for _ in 0..3 {
@@ -1154,7 +1154,7 @@ mod tests {
         co_owner.red[0] += 1;
         let backend = backend(bus(&original, 1));
         {
-            let mut counts = backend.transport.bus.lock().unwrap();
+            let mut counts = backend.transport.bus.lock();
             counts.co_owner = Some(co_owner);
         }
         backend.set_brightness(&handle(), 90).unwrap();
@@ -1175,14 +1175,11 @@ mod tests {
         let mut foreign = identity(4, 100).dimmed(40);
         foreign.red[0] += 1;
         {
-            let mut counts = backend.transport.bus.lock().unwrap();
+            let mut counts = backend.transport.bus.lock();
             counts.tables.insert(1, foreign);
         }
         let state = backend.get_brightness(&handle()).unwrap();
-        let expected = peak_percent(
-            &backend.transport.bus.lock().unwrap().tables[&1],
-            &identity(4, 100),
-        );
+        let expected = peak_percent(&backend.transport.bus.lock().tables[&1], &identity(4, 100));
         assert_eq!(state.value, expected);
     }
 
@@ -1276,7 +1273,7 @@ mod tests {
         backend.set_brightness(&handle(), 30).unwrap();
         let outcome = backend.restore(&handle()).unwrap();
         assert_eq!(outcome, RestoreOutcome::Restored);
-        let bus = backend.transport.bus.lock().unwrap();
+        let bus = backend.transport.bus.lock();
         assert_eq!(bus.tables[&1], original);
         drop(bus);
         assert_eq!(
@@ -1294,14 +1291,14 @@ mod tests {
         let backend = backend(bus(&original, 1));
         backend.set_brightness(&handle(), 50).unwrap();
         {
-            let mut counts = backend.transport.bus.lock().unwrap();
+            let mut counts = backend.transport.bus.lock();
             counts.tables.insert(1, foreign.clone());
         }
         assert_eq!(
             backend.restore(&handle()).unwrap(),
             RestoreOutcome::ForeignLutPreserved
         );
-        let bus = backend.transport.bus.lock().unwrap();
+        let bus = backend.transport.bus.lock();
         assert_eq!(
             bus.tables[&1], foreign,
             "a foreign LUT is never overwritten"
@@ -1316,7 +1313,7 @@ mod tests {
         let backend = backend(bus(&original, 1));
         backend.set_brightness(&handle(), 50).unwrap();
         {
-            let mut counts = backend.transport.bus.lock().unwrap();
+            let mut counts = backend.transport.bus.lock();
             counts.co_owner = Some(co_owner);
         }
         assert!(matches!(
@@ -1324,7 +1321,7 @@ mod tests {
             Err(MonitorError::Unsupported { .. })
         ));
         assert_eq!(backend.mismatch_count(&handle()), 1);
-        let session = backend.sessions.lock().unwrap();
+        let session = backend.sessions.lock();
         let entry = session.get("id-1").unwrap();
         assert_eq!(entry.original.as_ref().unwrap(), &original);
         assert_eq!(
@@ -1340,7 +1337,7 @@ mod tests {
         let backend = backend(bus(&original.dimmed(50), 1));
         let outcome = backend.write_guarded(&handle(), &original, 50, Tint::NEUTRAL);
         assert_eq!(outcome, LutRestoreOutcome::Restored);
-        let bus = backend.transport.bus.lock().unwrap();
+        let bus = backend.transport.bus.lock();
         assert_eq!(bus.tables[&1], original);
     }
 
@@ -1352,7 +1349,7 @@ mod tests {
         let backend = backend(bus(&foreign, 1));
         let outcome = backend.write_guarded(&handle(), &original, 50, Tint::NEUTRAL);
         assert_eq!(outcome, LutRestoreOutcome::ForeignLutPreserved);
-        let bus = backend.transport.bus.lock().unwrap();
+        let bus = backend.transport.bus.lock();
         assert_eq!(bus.tables[&1], foreign);
     }
 
@@ -1370,7 +1367,7 @@ mod tests {
             backend.write_guarded(&handle(), &original, 50, warm),
             LutRestoreOutcome::Restored
         );
-        assert_eq!(backend.transport.bus.lock().unwrap().tables[&1], original);
+        assert_eq!(backend.transport.bus.lock().tables[&1], original);
     }
 
     #[test]
@@ -1380,7 +1377,7 @@ mod tests {
         co_owner.red[0] += 1;
         let backend = backend(bus(&original.dimmed(50), 1));
         {
-            let mut counts = backend.transport.bus.lock().unwrap();
+            let mut counts = backend.transport.bus.lock();
             counts.co_owner = Some(co_owner);
         }
         let outcome = backend.write_guarded(&handle(), &original, 50, Tint::NEUTRAL);
@@ -1405,7 +1402,7 @@ mod tests {
         let backend = backend(bus(&baseline.dimmed(80), 1));
         backend.adopt_baseline(&handle(), &baseline, 80, Tint::NEUTRAL);
         backend.set_brightness(&handle(), 80).unwrap();
-        let bus = backend.transport.bus.lock().unwrap();
+        let bus = backend.transport.bus.lock();
         assert_eq!(bus.tables[&1], baseline.dimmed(80));
         assert_ne!(bus.tables[&1], baseline.dimmed(64));
     }
@@ -1416,7 +1413,7 @@ mod tests {
         backend.set_brightness(&handle(), 50).unwrap();
         let persisted = identity(4, 900);
         backend.adopt_baseline(&handle(), &persisted, 70, Tint::NEUTRAL);
-        let session = backend.sessions.lock().unwrap();
+        let session = backend.sessions.lock();
         let entry = session.get("id-1").unwrap();
         assert_eq!(entry.original.as_ref().unwrap(), &identity(4, 100));
         assert_eq!(entry.written_value, Some(50));
@@ -1449,7 +1446,7 @@ mod tests {
         }));
         let session1 = Session::new(backend1.clone(), store.clone(), backend1.clone());
         session1.mutate(&display, 80).unwrap();
-        assert_eq!(shared.lock().unwrap().tables[&1], baseline.dimmed(80));
+        assert_eq!(shared.lock().tables[&1], baseline.dimmed(80));
         let persisted = store.load_snapshot("id-1").unwrap().unwrap();
         assert_eq!(persisted.lut.as_ref().unwrap(), &baseline);
 
@@ -1461,7 +1458,7 @@ mod tests {
         }));
         let session2 = Session::new(backend2.clone(), store.clone(), backend2.clone());
         session2.mutate(&display, 80).unwrap();
-        let current = shared.lock().unwrap().tables[&1].clone();
+        let current = shared.lock().tables[&1].clone();
         assert_eq!(current, baseline.dimmed(80));
         assert_ne!(current, baseline.dimmed(64));
         let after = store.load_snapshot("id-1").unwrap().unwrap();
