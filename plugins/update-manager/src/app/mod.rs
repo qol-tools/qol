@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{Local, NaiveDateTime};
 use qol_audio::devices::{self, Direction, Kind, State as DeviceState};
@@ -12,6 +12,7 @@ use qol_host_fixes::residency::HostResidency;
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use serde::Serialize;
 
+use crate::cleanup;
 use crate::pages;
 use crate::platform::Refusal;
 use crate::session::{Helper as HelperState, InUse, Journal, Rules, Session, Task};
@@ -24,6 +25,9 @@ const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
 const HOST_EVERY: Duration = Duration::from_secs(60);
 const UPDATES_EVERY: Duration = Duration::from_secs(15 * 60);
 const RULES_EVERY: Duration = Duration::from_secs(5);
+const SURVEY_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+const SURVEY_RETRY: Duration = Duration::from_secs(10 * 60);
+const SURVEY_CHECK: Duration = Duration::from_secs(60);
 const RELEASE_WAIT: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +44,9 @@ struct State {
     want_updates: bool,
     want_host: bool,
     want_rules: bool,
+    want_survey: bool,
+    reading: bool,
+    surveying: bool,
     stop: bool,
 }
 
@@ -93,13 +100,7 @@ pub fn run() -> ExitCode {
     );
     session.install_log = log.as_ref().map(|log| log.display().to_string());
     let shared = Arc::new(Shared {
-        state: Mutex::new(State {
-            session,
-            want_updates: true,
-            want_host: true,
-            want_rules: true,
-            stop: false,
-        }),
+        state: Mutex::new(starting(session)),
         wake: Condvar::new(),
         journal,
         log,
@@ -107,6 +108,11 @@ pub fn run() -> ExitCode {
     if let Err(error) = spawn("refresh", &shared, refresh) {
         log::error!("update-manager: cannot start reading updates: {error}");
         return ExitCode::FAILURE;
+    }
+    if let Err(error) = spawn("survey", &shared, survey) {
+        log::warn!("update-manager: cannot start measuring what updates left behind: {error}");
+        shared.lock().surveying = false;
+        shared.wake.notify_all();
     }
     let (released, done) = mpsc::channel();
     let watcher = Arc::clone(&shared);
@@ -137,6 +143,19 @@ pub fn run() -> ExitCode {
             log::error!("update-manager: the daemon listener failed: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn starting(session: Session) -> State {
+    State {
+        session,
+        want_updates: true,
+        want_host: true,
+        want_rules: true,
+        want_survey: false,
+        reading: false,
+        surveying: true,
+        stop: false,
     }
 }
 
@@ -271,6 +290,7 @@ fn work(shared: &Shared, task: Task) {
             shared.save(&state.session);
             state.want_updates = true;
             state.want_host = true;
+            state.want_survey = true;
             shared.wake.notify_all();
             return;
         }
@@ -296,10 +316,15 @@ fn work(shared: &Shared, task: Task) {
         }
         Task::Rules => return,
     };
+    finish(shared, &task, result);
+}
+
+fn finish(shared: &Shared, task: &Task, result: Result<(), Refusal>) {
     let mut state = shared.lock();
-    state.session.done(&task, result, now());
+    state.session.done(task, result, now());
     shared.save(&state.session);
     state.want_host = true;
+    state.want_survey = true;
     shared.wake.notify_all();
 }
 
@@ -314,12 +339,13 @@ fn refresh(shared: &Shared) {
                     return;
                 }
                 let at = Instant::now();
-                let idle = state.session.job.is_none();
+                let idle = may_read_updates(&state);
                 let updates_due = idle && (state.want_updates || at >= next_updates);
                 let host_due = state.want_host || at >= next_host;
                 if updates_due || host_due {
                     if updates_due {
                         state.want_updates = false;
+                        state.reading = true;
                     }
                     state.want_host = false;
                     break (updates_due, host_due);
@@ -346,6 +372,8 @@ fn refresh(shared: &Shared) {
             let list = updates::read_updates();
             next_updates = Instant::now() + UPDATES_EVERY;
             let mut state = shared.lock();
+            state.reading = false;
+            shared.wake.notify_all();
             if state.session.job.is_none() {
                 state.session.apply_updates(list, now());
             } else {
@@ -353,6 +381,67 @@ fn refresh(shared: &Shared) {
             }
         }
     }
+}
+
+fn survey(shared: &Shared) {
+    let mut next = Instant::now();
+    let mut seen: Option<Vec<Option<SystemTime>>> = None;
+    loop {
+        {
+            let mut state = shared.lock();
+            if state.stop {
+                state.surveying = false;
+                return;
+            }
+            while !state.surveying {
+                if state.stop {
+                    return;
+                }
+                let busy = state.reading || state.session.job.is_some();
+                let changed = seen.as_ref().is_some_and(|seen| *seen != cleanup::stamp());
+                let left = next.saturating_duration_since(Instant::now());
+                match survey_wait(state.want_survey, busy, changed, left) {
+                    None => {
+                        state.want_survey = false;
+                        state.surveying = true;
+                    }
+                    Some(wait) => state = shared.wait(state, wait),
+                }
+            }
+        }
+        let found = cleanup::survey(now());
+        seen = Some(found.stamp.clone());
+        next = Instant::now()
+            + if found.failed() {
+                SURVEY_RETRY
+            } else {
+                SURVEY_EVERY
+            };
+        let mut state = shared.lock();
+        store(&mut state, found);
+        shared.wake.notify_all();
+    }
+}
+
+fn store(state: &mut State, found: cleanup::Survey) {
+    if state.session.job.is_none() {
+        state.session.survey = Some(found);
+    }
+    state.surveying = false;
+}
+
+fn may_read_updates(state: &State) -> bool {
+    state.session.job.is_none() && !state.surveying
+}
+
+fn survey_wait(want: bool, busy: bool, changed: bool, left: Duration) -> Option<Duration> {
+    if busy {
+        return Some(SURVEY_RETRY);
+    }
+    if want || changed || left.is_zero() {
+        return None;
+    }
+    Some(left.min(SURVEY_CHECK))
 }
 
 fn rules(shared: &Shared) {
@@ -472,6 +561,9 @@ mod tests {
                 want_updates: false,
                 want_host: false,
                 want_rules: false,
+                want_survey: false,
+                reading: false,
+                surveying: false,
                 stop: false,
             }),
             wake: Condvar::new(),
@@ -497,6 +589,85 @@ mod tests {
                 "the install log could not be written: qol's data folder was not found".into()
             )
         );
+        assert!(state.want_survey, "an install measures leftovers again");
+    }
+
+    #[test]
+    fn the_first_survey_runs_before_the_first_read_of_updates() {
+        let state = starting(Session::new(Journal::default(), false));
+        assert!(
+            state.surveying,
+            "the survey thread starts holding the first survey"
+        );
+        assert!(state.want_updates && !state.want_survey && !state.reading);
+        assert!(
+            !may_read_updates(&state),
+            "updates are read only once the first survey is stored"
+        );
+        let shared = shared();
+        assert!(may_read_updates(&shared.lock()));
+        shared.lock().surveying = true;
+        assert!(!may_read_updates(&shared.lock()), "never while measuring");
+    }
+
+    #[test]
+    fn a_survey_an_install_overlaps_is_dropped() {
+        let shared = shared();
+        let survey = || crate::cleanup::fake::survey(Vec::new());
+        {
+            let mut state = shared.lock();
+            state.surveying = true;
+            state.session.job = Some(crate::session::Job {
+                updates: Vec::new(),
+                done: 0,
+                started: false,
+            });
+            store(&mut state, survey());
+            assert!(
+                state.session.survey.is_none(),
+                "the install changed what is left"
+            );
+            assert!(!state.surveying);
+            state.session.job = None;
+            store(&mut state, survey());
+            assert!(state.session.survey.is_some());
+        }
+    }
+
+    #[test]
+    fn the_survey_waits_for_reads_and_installs_and_wakes_for_package_changes() {
+        let hour = Duration::from_secs(3600);
+        assert_eq!(survey_wait(false, false, false, hour), Some(SURVEY_CHECK));
+        assert_eq!(survey_wait(false, false, true, hour), None, "dpkg changed");
+        assert_eq!(survey_wait(true, false, false, hour), None, "asked for");
+        assert_eq!(
+            survey_wait(false, false, false, Duration::ZERO),
+            None,
+            "due"
+        );
+        assert_eq!(
+            survey_wait(false, false, false, Duration::from_secs(5)),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(
+            survey_wait(true, true, true, Duration::ZERO),
+            Some(SURVEY_RETRY),
+            "never while updates are read or installed"
+        );
+    }
+
+    #[test]
+    fn a_finished_switch_change_measures_leftovers_again() {
+        let shared = shared();
+        let task = Task::Auto {
+            key: crate::updates::AutoKey::Switch(&crate::cleanup::fake::MINT_KERNELS),
+            on: true,
+            was: false,
+        };
+        finish(&shared, &task, Ok(()));
+        let state = shared.lock();
+        assert!(state.want_survey);
+        assert!(state.want_host);
     }
 
     #[test]

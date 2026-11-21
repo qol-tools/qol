@@ -1,4 +1,5 @@
 pub mod app;
+mod cleanup;
 pub mod cli;
 mod pages;
 mod platform;

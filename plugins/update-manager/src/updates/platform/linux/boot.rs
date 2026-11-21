@@ -5,10 +5,11 @@ use chrono::{DateTime, Duration, Local, NaiveDateTime};
 
 use super::names::two_parts;
 use crate::platform::linux::command::lenient;
-use crate::platform::linux::packages::kernel_abi;
+use crate::platform::linux::packages::{
+    installed_images, kernel_abi, running_kernel, running_release, version_key,
+};
 use crate::updates::{when, Finish};
 
-const OSRELEASE: &str = "/proc/sys/kernel/osrelease";
 const BOOT_ID: &str = "/proc/sys/kernel/random/boot_id";
 const NVIDIA: &str = "/sys/module/nvidia/version";
 const REBOOT_PKGS: &str = "/run/reboot-required.pkgs";
@@ -22,9 +23,7 @@ pub(super) struct Running {
 
 pub(super) fn running() -> Running {
     Running {
-        kernel: fs::read_to_string(OSRELEASE)
-            .ok()
-            .and_then(|release| kernel_abi(&format!("linux-image-{}", release.trim()))),
+        kernel: running_kernel(),
         nvidia: fs::read_to_string(NVIDIA)
             .ok()
             .map(|version| two_parts(version.trim())),
@@ -46,25 +45,16 @@ pub(super) fn boot_time(now: NaiveDateTime) -> Option<NaiveDateTime> {
 
 pub(super) fn finish(running: &Running, now: NaiveDateTime) -> Vec<Finish> {
     let mut finish = Vec::new();
-    let flavor = fs::read_to_string(OSRELEASE).ok().and_then(|release| {
-        let release = release.trim().to_string();
+    let flavor = running_release().and_then(|release| {
         let abi = kernel_abi(&format!("linux-image-{release}"))?;
         release.strip_prefix(&format!("{abi}-")).map(String::from)
     });
-    let images = lenient(
-        "dpkg-query",
-        &[
-            "-W",
-            "-f",
-            "${Package}\t${db:Status-Abbrev}\n",
-            "linux-image-*",
-        ],
-    );
+    let images = installed_images().unwrap_or_default();
     if let (Some(current), Some(flavor)) = (running.kernel.as_deref(), flavor.as_deref()) {
-        if let Some(newest) = newest_kernel(&images, flavor)
-            .filter(|newest| version_key(newest) > version_key(current))
+        if let Some((newest, package)) = newest_kernel(&images, flavor)
+            .filter(|(newest, _)| version_key(newest) > version_key(current))
         {
-            let installed = modified(&format!("{DPKG_INFO}/linux-image-{newest}-{flavor}.list"))
+            let installed = modified(&format!("{DPKG_INFO}/{package}.list"))
                 .map(|time| format!(" {}", when(time, now)))
                 .unwrap_or_default();
             let label = format!("Linux kernel {newest}");
@@ -126,21 +116,12 @@ fn modified(path: &str) -> Option<NaiveDateTime> {
     Some(DateTime::<Local>::from(time).naive_local())
 }
 
-fn version_key(abi: &str) -> Vec<u32> {
-    abi.split(['.', '-'])
-        .map(|part| part.parse().unwrap_or(0))
-        .collect()
-}
-
-pub(super) fn newest_kernel(listing: &str, flavor: &str) -> Option<String> {
-    listing
-        .lines()
-        .filter_map(|line| {
-            let (package, status) = line.split_once('\t')?;
-            (status.trim() == "ii" && package.ends_with(&format!("-{flavor}"))).then_some(package)
-        })
-        .filter_map(kernel_abi)
-        .max_by_key(|abi| version_key(abi))
+pub(super) fn newest_kernel(images: &[String], flavor: &str) -> Option<(String, String)> {
+    images
+        .iter()
+        .filter(|package| package.ends_with(&format!("-{flavor}")))
+        .filter_map(|package| Some((kernel_abi(package)?, package.clone())))
+        .max_by_key(|(abi, _)| version_key(abi))
 }
 
 pub(super) fn installed_driver(listing: &str) -> Option<String> {
@@ -161,21 +142,31 @@ mod tests {
 
     #[test]
     fn the_newest_installed_kernel_of_the_running_flavor_wins() {
-        let listing = "linux-image-6.8.0-146-lowlatency\tii \n\
-                       linux-image-6.8.0-147-lowlatency\tii \n\
-                       linux-image-6.8.0-148-generic\tii \n\
-                       linux-image-6.8.0-149-lowlatency\trc \n\
-                       linux-image-lowlatency\tii \n";
+        let images: Vec<String> = [
+            "linux-image-6.8.0-146-lowlatency",
+            "linux-image-6.8.0-147-lowlatency",
+            "linux-image-6.8.0-148-generic",
+            "linux-image-unsigned-6.8.0-150-generic",
+            "linux-image-lowlatency",
+        ]
+        .map(String::from)
+        .to_vec();
+        let newest = |flavor| newest_kernel(&images, flavor);
         assert_eq!(
-            newest_kernel(listing, "lowlatency").as_deref(),
-            Some("6.8.0-147")
+            newest("lowlatency"),
+            Some((
+                "6.8.0-147".to_string(),
+                "linux-image-6.8.0-147-lowlatency".to_string()
+            ))
         );
         assert_eq!(
-            newest_kernel(listing, "generic").as_deref(),
-            Some("6.8.0-148")
+            newest("generic"),
+            Some((
+                "6.8.0-150".to_string(),
+                "linux-image-unsigned-6.8.0-150-generic".to_string()
+            )),
+            "an unsigned image keeps its own package name, so its install time is found"
         );
-        assert!(version_key("6.8.0-147") > version_key("6.8.0-146"));
-        assert!(version_key("6.10.0-1") > version_key("6.8.0-147"));
     }
 
     #[test]

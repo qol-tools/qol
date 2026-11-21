@@ -266,7 +266,7 @@ fn auto(session: &Session) -> Sheet {
         let value = match key {
             AutoKey::Packages => "in hours",
             AutoKey::Spices | AutoKey::Flatpak => "at login",
-            AutoKey::Kernels | AutoKey::ByHand => "weekly",
+            AutoKey::Switch(switch) => switch.when,
         };
         let row = with_error(
             Row::new(key.id(), key.name())
@@ -348,8 +348,7 @@ fn lower(key: AutoKey) -> &'static str {
         AutoKey::Packages => "system packages",
         AutoKey::Spices => "Cinnamon add-ons",
         AutoKey::Flatpak => "Flatpak",
-        AutoKey::Kernels => "old kernel removal",
-        AutoKey::ByHand => "hand-installed kernel removal",
+        AutoKey::Switch(switch) => switch.short,
     }
 }
 

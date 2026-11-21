@@ -1,11 +1,10 @@
 use std::path::Path;
 
-use super::super::mint::parse_timer;
+use crate::cleanup::State;
 use crate::platform::linux::command::lenient;
-use crate::platform::linux::packages::kernel_abi;
 use crate::platform::linux::privileged::run_script;
+use crate::platform::linux::systemd::{unit, Unit};
 use crate::platform::Refusal;
-use crate::updates::{ByHand, Cleaner, Cleanup};
 
 const TIMER: &str = "mintupdate-automation-autoremove.timer";
 const SERVICE: &str = "mintupdate-automation-autoremove.service";
@@ -13,6 +12,7 @@ const FLAG: &str = "/var/lib/linuxmint/mintupdate-automatic-removals-enabled";
 const DROP_IN_DIR: &str = "/etc/systemd/system/mintupdate-automation-autoremove.service.d";
 const DROP_IN: &str = "qol-kernels-by-hand.conf";
 const VERSIONED: &str = "^linux-.+-[0-9]+[.][0-9]+[.][0-9]+-[0-9]+";
+const SPLIT: &str = "Mint's removal timer and its flag file disagree, so removals may not run";
 
 const REMOVALS_SH: &str = r#"/usr/bin/mintupdate-automation autoremove "$1" >/dev/null || exit 3
 exit 0
@@ -31,26 +31,40 @@ systemctl daemon-reload || exit 3
 exit 0
 "#;
 
-pub(super) fn read(running: Option<&str>) -> Option<Cleanup> {
-    let timer = parse_timer(&lenient(
+fn timer() -> Unit {
+    unit(&lenient(
         "systemctl",
         &["show", TIMER, "-p", "LoadState", "-p", "UnitFileState"],
-    ));
-    if !timer.loaded {
+    ))
+}
+
+fn state(enabled: bool, flag: bool) -> State {
+    match (enabled, flag) {
+        (true, true) => State::On { idle: false },
+        (false, false) => State::Off,
+        _ => State::Unknown(SPLIT),
+    }
+}
+
+pub(super) fn removals() -> Option<State> {
+    let timer = timer();
+    timer
+        .loaded
+        .then(|| state(timer.enabled, Path::new(FLAG).exists()))
+}
+
+pub(super) fn by_hand() -> Option<State> {
+    if !timer().loaded {
         return None;
     }
     let drop_ins = lenient(
         "systemctl",
         &["show", SERVICE, "-p", "DropInPaths", "--value"],
     );
-    Some(Cleanup {
-        by: Cleaner::Mint,
-        on: timer.enabled && Path::new(FLAG).exists(),
-        idle: false,
-        by_hand: Some(ByHand {
-            on: ours(&drop_ins),
-            kept: kept(&lenient("apt-mark", &["showmanual"]), running),
-        }),
+    Some(if ours(&drop_ins) {
+        State::On { idle: false }
+    } else {
+        State::Off
     })
 }
 
@@ -58,14 +72,6 @@ fn ours(drop_ins: &str) -> bool {
     drop_ins
         .split_whitespace()
         .any(|path| path.ends_with(DROP_IN))
-}
-
-fn kept(manual: &str, running: Option<&str>) -> usize {
-    manual
-        .lines()
-        .filter_map(|package| kernel_abi(package.trim()))
-        .filter(|abi| Some(abi.as_str()) != running)
-        .count()
 }
 
 fn drop_in() -> String {
@@ -88,11 +94,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kernels_kept_by_hand_leave_out_the_running_one_and_meta_packages() {
-        let manual = "firefox\nlinux-generic\nlinux-image-generic\nlinux-image-6.8.0-111-generic\nlinux-image-6.8.0-111-lowlatency\nlinux-modules-6.8.0-111-generic\nlinux-image-6.8.0-149-lowlatency\nlinux-headers-6.8.0-111\n";
-        assert_eq!(kept(manual, Some("6.8.0-149")), 2);
-        assert_eq!(kept(manual, None), 3);
-        assert_eq!(kept("", Some("6.8.0-149")), 0);
+    fn the_timer_and_the_flag_file_must_agree_before_removals_count_as_on() {
+        assert_eq!(state(true, true), State::On { idle: false });
+        assert_eq!(state(false, false), State::Off);
+        assert_eq!(state(true, false), State::Unknown(SPLIT));
+        assert_eq!(state(false, true), State::Unknown(SPLIT));
     }
 
     #[test]

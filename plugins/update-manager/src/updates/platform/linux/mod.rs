@@ -12,7 +12,6 @@ use crate::updates::{AutoKey, Failure, Host, Hours, Reason, Update, Updates};
 
 mod apt;
 mod boot;
-mod cleanup;
 mod flatpak;
 mod fwupd;
 mod history;
@@ -81,7 +80,6 @@ pub(crate) fn read_host() -> Host {
             RUNS_SHOWN,
         ),
         mint: mint::read(),
-        cleanup: cleanup::read(running.kernel.as_deref()),
         admin: groups
             .split_whitespace()
             .any(|group| ADMIN_GROUPS.contains(&group)),
@@ -89,6 +87,7 @@ pub(crate) fn read_host() -> Host {
         log: Path::new(HISTORY).exists().then(|| HISTORY.to_string()),
         skips: skips::read(),
         problems: Vec::new(),
+        switches: Vec::new(),
     }
 }
 
@@ -165,9 +164,6 @@ pub(crate) fn install(
 }
 
 pub(crate) fn set_auto(key: AutoKey, on: bool) -> Result<(), Refusal> {
-    if key.removes() {
-        return cleanup::set(key, on);
-    }
     mint::set_auto(key, on)
 }
 

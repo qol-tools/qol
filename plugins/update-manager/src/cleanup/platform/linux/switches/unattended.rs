@@ -1,7 +1,7 @@
-use crate::platform::linux::command::lenient;
+use crate::cleanup::State;
+use crate::platform::linux::command::output;
 use crate::platform::linux::privileged::run_script;
 use crate::platform::Refusal;
-use crate::updates::{Cleaner, Cleanup};
 
 const PERIODIC: &str = "APT::Periodic::Unattended-Upgrade";
 const KERNELS: &str = "Unattended-Upgrade::Remove-Unused-Kernel-Packages";
@@ -13,18 +13,23 @@ mv "$conf.new" "$conf" || exit 3
 exit 0
 "#;
 
-pub(super) fn read() -> Cleanup {
-    parse(&lenient("apt-config", &["dump"]))
+const UNREAD: &str = "apt's settings could not be read";
+
+pub(super) fn read() -> Option<State> {
+    Some(read_from(output("apt-config", &["dump"])))
 }
 
-fn parse(dump: &str) -> Cleanup {
+fn read_from(dump: Result<String, String>) -> State {
+    dump.map_or(State::Unknown(UNREAD), |dump| parse(&dump))
+}
+
+fn parse(dump: &str) -> State {
     let periodic = value(dump, PERIODIC).is_some_and(|value| value != "0" && !value.is_empty());
     let kernels = value(dump, KERNELS).is_none_or(|value| truthy(&value));
-    Cleanup {
-        by: Cleaner::Unattended,
-        on: kernels,
-        idle: !periodic,
-        by_hand: None,
+    if kernels {
+        State::On { idle: !periodic }
+    } else {
+        State::Off
     }
 }
 
@@ -59,22 +64,22 @@ mod tests {
     #[test]
     fn kernels_are_removed_by_default_once_automatic_updates_run() {
         let ubuntu = "APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n";
-        assert_eq!(
-            parse(ubuntu),
-            Cleanup {
-                by: Cleaner::Unattended,
-                on: true,
-                idle: false,
-                by_hand: None,
-            }
-        );
+        assert_eq!(parse(ubuntu), State::On { idle: false });
         let off = format!("{ubuntu}Unattended-Upgrade::Remove-Unused-Kernel-Packages \"false\";\n");
-        assert!(!parse(&off).on);
+        assert_eq!(parse(&off), State::Off);
         let back = format!("{off}Unattended-Upgrade::Remove-Unused-Kernel-Packages \"true\";\n");
-        assert!(parse(&back).on);
-        assert!(parse("APT::Periodic::Unattended-Upgrade \"0\";\n").idle);
-        assert!(parse("").idle);
+        assert_eq!(parse(&back), State::On { idle: false });
+        assert_eq!(
+            parse("APT::Periodic::Unattended-Upgrade \"0\";\n"),
+            State::On { idle: true }
+        );
+        assert_eq!(parse(""), State::On { idle: true });
         assert!(!parse("APT::Periodic::Unattended-Upgrade-Extra \"1\";\n").removing());
+        assert_eq!(
+            read_from(Err("apt-config: E: Syntax error".into())),
+            State::Unknown(UNREAD)
+        );
+        assert_eq!(read_from(Ok(ubuntu.into())), State::On { idle: false });
     }
 
     #[test]

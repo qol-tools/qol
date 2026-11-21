@@ -5,6 +5,7 @@ use qol_desktop_settings::gsettings;
 
 use crate::platform::linux::command::{lenient, run, READ};
 use crate::platform::linux::privileged::{refused, run_script};
+use crate::platform::linux::systemd::{unit, Unit};
 use crate::platform::Refusal;
 use crate::updates::{Auto, AutoKey, Clock, Hours, Mint};
 
@@ -63,14 +64,17 @@ pub(super) struct Timer {
 }
 
 pub(super) fn parse_timer(text: &str) -> Timer {
-    let mut timer = Timer::default();
+    let Unit { loaded, enabled } = unit(text);
+    let mut timer = Timer {
+        loaded,
+        enabled,
+        ..Timer::default()
+    };
     for line in text.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
         match key {
-            "LoadState" => timer.loaded = value == "loaded",
-            "UnitFileState" => timer.enabled = value == "enabled",
             "TimersCalendar" => {
                 if let Some(spec) = entry(value, "OnCalendar=") {
                     timer.calendar.push(spec);
@@ -228,7 +232,7 @@ pub(super) fn set_auto(key: AutoKey, on: bool) -> Result<(), Refusal> {
         }
         AutoKey::Spices => "auto-update-cinnamon-spices",
         AutoKey::Flatpak => "auto-update-flatpaks",
-        AutoKey::Kernels | AutoKey::ByHand => {
+        AutoKey::Switch(_) => {
             return Err(Refusal::Failed(format!(
                 "{} is not one of Mint's install switches",
                 key.name()

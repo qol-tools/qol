@@ -1,6 +1,8 @@
 use chrono::{Datelike, NaiveDateTime};
-use qol_config::text::plural;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::cleanup::{self, Live, Switch};
 
 use crate::platform::Refusal;
 
@@ -9,9 +11,23 @@ mod platform;
 
 pub(crate) use clock::Clock;
 pub(crate) use platform::{
-    boot_id, install, is_mint, missing, read_host, read_updates, restart_now, schedule_restart,
-    set_auto, set_hours, set_skips, supported, Helper,
+    boot_id, install, is_mint, missing, read_updates, restart_now, schedule_restart, set_hours,
+    set_skips, supported, Helper,
 };
+
+pub(crate) fn read_host() -> Host {
+    Host {
+        switches: cleanup::read_switches(),
+        ..platform::read_host()
+    }
+}
+
+pub(crate) fn set_auto(key: AutoKey, on: bool) -> Result<(), Refusal> {
+    match key {
+        AutoKey::Switch(switch) => cleanup::set_switch(switch, on),
+        AutoKey::Packages | AutoKey::Spices | AutoKey::Flatpak => platform::set_auto(key, on),
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Updates {
@@ -67,7 +83,7 @@ pub(crate) struct Host {
     pub(crate) finish: Vec<Finish>,
     pub(crate) runs: Vec<Run>,
     pub(crate) mint: Option<Mint>,
-    pub(crate) cleanup: Option<Cleanup>,
+    pub(crate) switches: Vec<Live>,
     pub(crate) admin: bool,
     pub(crate) restart_at: Option<NaiveDateTime>,
     pub(crate) log: Option<String>,
@@ -128,34 +144,12 @@ pub(crate) struct Auto {
     pub(crate) flatpak: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Cleanup {
-    pub(crate) by: Cleaner,
-    pub(crate) on: bool,
-    pub(crate) idle: bool,
-    pub(crate) by_hand: Option<ByHand>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Cleaner {
-    Mint,
-    Unattended,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ByHand {
-    pub(crate) on: bool,
-    pub(crate) kept: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum AutoKey {
     Packages,
     Spices,
     Flatpak,
-    Kernels,
-    ByHand,
+    Switch(&'static Switch),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -392,77 +386,7 @@ impl Auto {
             AutoKey::Packages => self.packages,
             AutoKey::Spices => self.spices,
             AutoKey::Flatpak => self.flatpak,
-            AutoKey::Kernels | AutoKey::ByHand => false,
-        }
-    }
-}
-
-impl Cleanup {
-    pub(crate) fn get(self, key: AutoKey) -> bool {
-        match key {
-            AutoKey::Kernels => self.on,
-            AutoKey::ByHand => self.by_hand.is_some_and(|by_hand| by_hand.on),
-            AutoKey::Packages | AutoKey::Spices | AutoKey::Flatpak => false,
-        }
-    }
-
-    pub(crate) fn removing(self) -> bool {
-        self.on && !self.idle
-    }
-
-    pub(crate) fn detail(self) -> &'static str {
-        match (self.by, self.on, self.idle) {
-            (_, false, _) => "Old kernels stay until you remove them.",
-            (Cleaner::Mint, true, _) => {
-                "Weekly and 3 hours after each startup. Also removes other packages nothing needs."
-            }
-            (Cleaner::Unattended, true, true) => {
-                "Automatic updates are off here, so this never runs."
-            }
-            (Cleaner::Unattended, true, false) => {
-                "When automatic updates run. The running kernel and the two newest stay."
-            }
-        }
-    }
-}
-
-impl Cleaner {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Mint => "Old kernels and leftovers",
-            Self::Unattended => "Old kernels",
-        }
-    }
-
-    pub(crate) fn when(self) -> &'static str {
-        match self {
-            Self::Mint => "removed weekly",
-            Self::Unattended => "removed with updates",
-        }
-    }
-
-    pub(crate) fn colophon(self) -> &'static str {
-        match self {
-            Self::Mint => "mint's own cleanup. it stays when qol stops.",
-            Self::Unattended => "automatic updates, unattended-upgrades. it stays when qol stops.",
-        }
-    }
-}
-
-impl ByHand {
-    pub(crate) fn detail(self) -> String {
-        match (self.on, self.kept) {
-            (true, _) => {
-                "Each cleanup removes them too. The running kernel and the two newest stay.".into()
-            }
-            (false, 0) => {
-                "A kernel installed from Mint's Update Manager window is never removed.".into()
-            }
-            (false, kept) => format!(
-                "{} installed by hand {} never removed.",
-                plural(kept, "kernel", "kernels"),
-                if kept == 1 { "is" } else { "are" }
-            ),
+            AutoKey::Switch(_) => false,
         }
     }
 }
@@ -475,8 +399,7 @@ impl AutoKey {
             Self::Packages => "packages",
             Self::Spices => "spices",
             Self::Flatpak => "flatpak",
-            Self::Kernels => "kernels",
-            Self::ByHand => "by_hand",
+            Self::Switch(switch) => switch.id,
         }
     }
 
@@ -485,21 +408,39 @@ impl AutoKey {
             Self::Packages => "System packages",
             Self::Spices => "Cinnamon add-ons",
             Self::Flatpak => "Flatpak",
-            Self::Kernels => "Old kernels",
-            Self::ByHand => "Include kernels installed by hand",
+            Self::Switch(switch) => switch.name,
         }
     }
 
     pub(crate) fn changed(self) -> String {
         match self {
-            Self::Kernels => "Removing old kernels".into(),
-            Self::ByHand => "Removing kernels installed by hand".into(),
+            Self::Switch(switch) => switch.doing.into(),
             other => format!("{} on their own", other.name()),
         }
     }
 
     pub(crate) fn removes(self) -> bool {
-        matches!(self, Self::Kernels | Self::ByHand)
+        matches!(self, Self::Switch(_))
+    }
+
+    fn from_id(id: &str) -> Option<Self> {
+        Self::INSTALLS
+            .into_iter()
+            .find(|key| key.id() == id)
+            .or_else(|| cleanup::switch(id).map(Self::Switch))
+    }
+}
+
+impl Serialize for AutoKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.id())
+    }
+}
+
+impl<'de> Deserialize<'de> for AutoKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let id = String::deserialize(deserializer)?;
+        Self::from_id(&id).ok_or_else(|| D::Error::custom(format!("unknown switch `{id}`")))
     }
 }
 
