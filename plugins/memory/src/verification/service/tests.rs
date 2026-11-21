@@ -89,17 +89,17 @@ fn requests_remain_nonblocking_and_duplicates_share_one_job() {
     begin.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(service.query(job.clone()), Status::Pending);
     finish.send(()).unwrap();
-    let state = service.shared.state.lock().unwrap();
-    let (state, timeout) = service
-        .shared
-        .changed
-        .wait_timeout_while(state, Duration::from_secs(5), |state| {
-            matches!(
-                state.entries.get(&binding_key("fixture-verifier", &job)),
-                Some(Entry::Pending)
-            )
-        })
-        .unwrap();
+    let state = service.shared.state.lock();
+    let (state, timeout) =
+        service
+            .shared
+            .changed
+            .wait_timeout_while(state, Duration::from_secs(5), |state| {
+                matches!(
+                    state.entries.get(&binding_key("fixture-verifier", &job)),
+                    Some(Entry::Pending)
+                )
+            });
     assert!(!timeout.timed_out());
     drop(state);
     assert_eq!(
@@ -127,17 +127,17 @@ fn requests_remain_nonblocking_and_duplicates_share_one_job() {
     )
     .unwrap();
     assert_eq!(restarted.query(job.clone()), Status::Pending);
-    let state = restarted.shared.state.lock().unwrap();
-    let (state, timeout) = restarted
-        .shared
-        .changed
-        .wait_timeout_while(state, Duration::from_secs(5), |state| {
-            matches!(
-                state.entries.get(&binding_key("fixture-verifier", &job)),
-                Some(Entry::Pending)
-            )
-        })
-        .unwrap();
+    let state = restarted.shared.state.lock();
+    let (state, timeout) =
+        restarted
+            .shared
+            .changed
+            .wait_timeout_while(state, Duration::from_secs(5), |state| {
+                matches!(
+                    state.entries.get(&binding_key("fixture-verifier", &job)),
+                    Some(Entry::Pending)
+                )
+            });
     assert!(!timeout.timed_out());
     drop(state);
     assert_eq!(
@@ -178,7 +178,7 @@ fn latest_launcher_query_replaces_queued_work_and_other_callers_are_bounded() {
         );
     }
     {
-        let state = service.shared.state.lock().unwrap();
+        let state = service.shared.state.lock();
         assert_eq!(state.queued.len(), 1);
         assert_eq!(state.queued[0].1.query, "launcher question 9");
         assert_eq!(state.entries.len(), 2);
