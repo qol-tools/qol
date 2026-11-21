@@ -55,7 +55,6 @@ impl Journal {
                 label: update.label.clone(),
                 name: update.name.clone(),
                 finish: update.finish.clone(),
-                short: "Finishes when the computer restarts".into(),
             });
         }
     }
@@ -76,7 +75,6 @@ mod tests {
             label: "X".into(),
             name: "X".into(),
             finish: String::new(),
-            short: String::new(),
         });
         assert!(!journal.start_boot(Some("a".into())));
         assert!(!journal.start_boot(None));
@@ -97,7 +95,6 @@ mod tests {
                 label: "X".into(),
                 name: "X".into(),
                 finish: String::new(),
-                short: String::new(),
             }],
         };
         journal.save(&path).expect("save");

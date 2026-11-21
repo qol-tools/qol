@@ -63,7 +63,6 @@ pub(super) fn finish(running: &Running, now: NaiveDateTime) -> Vec<Finish> {
                 label: label.clone(),
                 name: label,
                 finish: format!("Installed{installed}. Until a restart, {current} keeps running."),
-                short: format!("{current} runs until a restart"),
             });
         }
     }
@@ -85,7 +84,6 @@ pub(super) fn finish(running: &Running, now: NaiveDateTime) -> Vec<Finish> {
                 label: label.clone(),
                 name: label,
                 finish: format!("Installed. Until a restart, {loaded} keeps running."),
-                short: format!("{loaded} runs until a restart"),
             });
         }
     }
@@ -105,7 +103,6 @@ pub(super) fn finish(running: &Running, now: NaiveDateTime) -> Vec<Finish> {
             label: package.to_string(),
             name: package.to_string(),
             finish: "Installed. It finishes at the restart.".into(),
-            short: "Finishes at the restart".into(),
         });
     }
     finish

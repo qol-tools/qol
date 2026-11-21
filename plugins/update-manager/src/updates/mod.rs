@@ -97,7 +97,6 @@ pub(crate) struct Finish {
     pub(crate) label: String,
     pub(crate) name: String,
     pub(crate) finish: String,
-    pub(crate) short: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

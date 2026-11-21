@@ -95,7 +95,6 @@ fn mint() -> Session {
         label: "Linux kernel 6.8.0-147".into(),
         name: "Linux kernel 6.8.0-147".into(),
         finish: "Installed today at 07:45. Until a restart, 6.8.0-146 keeps running.".into(),
-        short: "6.8.0-146 runs until a restart".into(),
     }];
     session.host.runs = vec![Run {
         start: at("2026-10-14 07:45"),
@@ -428,6 +427,14 @@ fn every_page_is_consistent_in_every_state() {
     assert!(auto.row("hours").is_some_and(|row| row.enter.is_some()));
     assert!(auto.row("hold").is_some() && auto.row("guard").is_some());
     assert!(auto.row("default").is_none());
+    if let Some(mint) = session.host.mint.as_mut() {
+        mint.ours = true;
+    }
+    let pages = build(&session, now()).pages;
+    assert!(page(&pages, "auto").row("default").is_none());
+    if let Some(mint) = session.host.mint.as_mut() {
+        mint.ours = false;
+    }
     session.failed = None;
     let pages = build(&session, now()).pages;
     assert_eq!(
