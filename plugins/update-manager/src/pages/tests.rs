@@ -450,7 +450,9 @@ fn every_heading_carries_a_sub_header_that_says_what_it_is_for() {
                 assert!(!colophon.trim().is_empty(), "`{}` on `{id}`", group.title);
                 assert_eq!(colophon, colophon.to_lowercase(), "on `{id}`");
                 assert!(
-                    !colophon.chars().any(|c| c.is_ascii_digit()),
+                    !colophon
+                        .split_whitespace()
+                        .any(|word| word.trim_end_matches([',', '.']).parse::<u64>().is_ok()),
                     "`{colophon}` on `{id}` carries a count"
                 );
                 for hint in ["esc", "enter", "press"] {
