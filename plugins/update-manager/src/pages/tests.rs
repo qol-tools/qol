@@ -379,7 +379,7 @@ fn states() -> Vec<Session> {
         let task = press(&mut skipping, update, choice, now())
             .task
             .expect("skip task");
-        skipping.done(&task, Ok(()), now());
+        skipping.done(&task, Ok(()));
     }
     vec![
         mint(),
@@ -449,6 +449,10 @@ fn every_heading_carries_a_sub_header_that_says_what_it_is_for() {
                     .unwrap_or_else(|| panic!("`{}` on `{id}` has no sub header", group.title));
                 assert!(!colophon.trim().is_empty(), "`{}` on `{id}`", group.title);
                 assert_eq!(colophon, colophon.to_lowercase(), "on `{id}`");
+                assert!(
+                    !colophon.chars().any(|c| c.is_ascii_digit()),
+                    "`{colophon}` on `{id}` carries a count"
+                );
                 for hint in ["esc", "enter", "press"] {
                     assert!(
                         !colophon
@@ -732,7 +736,7 @@ fn skipped_updates_hide_until_they_update_again() {
             system: true,
         }
     );
-    session.done(&task, Ok(()), now());
+    session.done(&task, Ok(()));
     let pages = build(&session, now()).pages;
     assert!(session.update("apt:urllib3").is_none());
     assert_eq!(value(&pages, "waiting", "skipped"), "1");
@@ -750,7 +754,7 @@ fn skipped_updates_hide_until_they_update_again() {
             system: true,
         }
     );
-    session.done(&task, Ok(()), now());
+    session.done(&task, Ok(()));
     let pages = build(&session, now()).pages;
     assert!(session.update("apt:nvidia").is_none());
     assert_eq!(value(&pages, "waiting", "skipped"), "2");
@@ -762,7 +766,7 @@ fn skipped_updates_hide_until_they_update_again() {
     assert_eq!(titles, ["never", "this version"]);
     let again = press(&mut session, "skipped", "never:apt:nvidia-src", now());
     let task = again.task.expect("update again task");
-    session.done(&task, Ok(()), now());
+    session.done(&task, Ok(()));
     assert!(session.update("apt:nvidia").is_some());
     let mut locked = mint();
     locked.host.admin = false;
@@ -779,7 +783,6 @@ fn skipped_updates_hide_until_they_update_again() {
             system,
         },
         Err(Refusal::Denied),
-        now(),
     );
     let pages = build(&locked, now()).pages;
     assert_eq!(broken(&pages), Vec::<String>::new());
@@ -1012,15 +1015,8 @@ fn hours_and_switches_change_through_tasks() {
     );
     assert_eq!(restart, None);
     let switch = press(&mut session, "auto", "flatpak", now());
-    assert!(matches!(
-        switch.task,
-        Some(Task::Auto {
-            on: true,
-            was: false,
-            ..
-        })
-    ));
-    session.done(&switch.task.expect("task"), Err(Refusal::Denied), now());
+    assert!(matches!(switch.task, Some(Task::Auto { on: true, .. })));
+    session.done(&switch.task.expect("task"), Err(Refusal::Denied));
     let pages = build(&session, now()).pages;
     assert_eq!(
         detail(&pages, "auto", "flatpak"),
@@ -1265,7 +1261,6 @@ fn cleanup_removes_with_the_consent_the_command_line_asks_for() {
     session.done(
         &all.task.expect("task"),
         Err(Refusal::Failed("orphans: apt is locked".into())),
-        now(),
     );
     assert!(!session.busy.contains(&Op::Remove));
     let pages = build(&session, now()).pages;
@@ -1296,7 +1291,12 @@ fn cleanup_removes_with_the_consent_the_command_line_asks_for() {
     let refused = press(&mut session, "cleanup", "all", now());
     assert!(matches!(refused.notice, Some(Notice::Failure(_))));
     let mut session = sized();
-    session.busy.insert(Op::RestartNow);
+    let restart = session
+        .apply(&crate::session::Act::RestartNow, now())
+        .expect("restart now")
+        .expect("task");
+    session.done(&restart, Ok(()));
+    assert!(session.busy.contains(&Op::RestartNow));
     let restarting = press(&mut session, "cleanup", "all", now());
     assert!(matches!(restarting.notice, Some(Notice::Failure(_))));
     assert!(restarting.task.is_none());
@@ -1360,10 +1360,9 @@ fn old_kernels_switch_through_tasks_on_the_cleanup_page() {
         Task::Auto {
             key: AutoKey::Switch(&MINT_BY_HAND),
             on: true,
-            was: false,
         }
     );
-    session.done(&task, Ok(()), now());
+    session.done(&task, Ok(()));
     session.host.switches[1].state = State::On { idle: false };
     let pages = build(&session, now()).pages;
     assert_eq!(broken(&pages), Vec::<String>::new());
@@ -1463,7 +1462,6 @@ fn a_borrowed_computer_asks_before_changing_the_owners_kernel_removal() {
         Some(Task::Auto {
             key: AutoKey::Switch(&MINT_KERNELS),
             on: false,
-            was: true,
         })
     );
 }

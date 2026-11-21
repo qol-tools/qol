@@ -98,12 +98,10 @@ pub(crate) enum Task {
         hours: Option<Hours>,
         startup_delay: u32,
         restart: Option<NaiveDateTime>,
-        was: Option<Hours>,
     },
     Auto {
         key: AutoKey,
         on: bool,
-        was: bool,
     },
     Restart(Option<NaiveDateTime>),
     RestartNow,
@@ -357,23 +355,17 @@ impl Session {
                 let mint = self
                     .mint()
                     .ok_or("Mint's Update Manager is not set up here")?;
-                let (startup_delay, was) = (mint.startup_delay, mint.hours);
+                let startup_delay = mint.startup_delay;
                 self.start(Op::Hours)?;
                 Ok(Some(Task::Hours {
                     hours: *hours,
                     startup_delay,
                     restart,
-                    was,
                 }))
             }
             Act::Auto(key, on) => {
-                let was = self.switch(*key);
                 self.start(Op::Auto(*key))?;
-                Ok(Some(Task::Auto {
-                    key: *key,
-                    on: *on,
-                    was,
-                }))
+                Ok(Some(Task::Auto { key: *key, on: *on }))
             }
             Act::Ask(proposal) => {
                 self.ask = Some(*proposal);
@@ -520,7 +512,7 @@ impl Session {
         }
     }
 
-    pub(crate) fn done(&mut self, task: &Task, result: Result<(), Refusal>, now: NaiveDateTime) {
+    pub(crate) fn done(&mut self, task: &Task, result: Result<(), Refusal>) {
         let op = match task {
             Task::Hours { .. } => Op::Hours,
             Task::Auto { key, .. } => Op::Auto(*key),
@@ -530,17 +522,15 @@ impl Session {
             Task::Remove { .. } => Op::Remove,
             Task::Install(_) | Task::Rules | Task::Open(_) => return,
         };
+        if matches!(task, Task::RestartNow) && result.is_ok() {
+            return;
+        }
         self.busy.remove(&op);
         if let Err(refusal) = result {
             self.errors.insert(op, refusal.to_string());
             return;
         }
         match task {
-            Task::Hours { hours, was, .. } => {
-                self.journal.hours_written(*was, hours.is_some(), now)
-            }
-            Task::Auto { key, on, was } => self.journal.auto_written(*key, *was, *on, now),
-            Task::Restart(at) => self.journal.restart = at.map(|_| now),
             Task::Skips { add, remove, .. } => {
                 self.host.skips.retain(|entry| !remove.contains(entry));
                 for entry in add {
@@ -551,6 +541,9 @@ impl Session {
                 self.show_unskipped();
             }
             Task::Install(_)
+            | Task::Hours { .. }
+            | Task::Auto { .. }
+            | Task::Restart(_)
             | Task::RestartNow
             | Task::Rules
             | Task::Open(_)
@@ -699,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn changes_finish_with_their_journal_entries() {
+    fn a_change_frees_its_row_and_keeps_a_refusal() {
         let mut session = session();
         let now = at("2026-10-14 12:00");
         let hours = Hours {
@@ -712,18 +705,14 @@ mod tests {
             .expect("hours")
             .expect("task");
         assert!(session.apply(&Act::Hours(None), now).is_err());
-        session.done(&task, Ok(()), now);
+        session.done(&task, Ok(()));
         assert!(session.busy.is_empty());
-        assert_eq!(
-            session.journal.hours.map(|change| change.was),
-            Some(Some(MINT_DEFAULT))
-        );
 
         let task = session
             .apply(&Act::Auto(AutoKey::Flatpak, true), now)
             .expect("auto")
             .expect("task");
-        session.done(&task, Err(Refusal::Dismissed), now);
+        session.done(&task, Err(Refusal::Dismissed));
         assert_eq!(
             session
                 .errors
@@ -731,7 +720,7 @@ mod tests {
                 .map(String::as_str),
             Some("the password prompt was closed")
         );
-        assert!(session.journal.auto.is_empty());
+        assert!(session.busy.is_empty());
     }
 
     #[test]

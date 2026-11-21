@@ -255,7 +255,7 @@ fn start(shared: &Arc<Shared>, session: &mut Session, task: Task) {
                 done: 0,
                 reason: Reason::Stopped(reason),
             })),
-            other => session.done(&other, Err(Refusal::Failed(reason)), now()),
+            other => session.done(&other, Err(Refusal::Failed(reason))),
         }
     }
 }
@@ -322,7 +322,7 @@ fn work(shared: &Shared, task: Task) {
 
 fn finish(shared: &Shared, task: &Task, result: Result<(), Refusal>) {
     let mut state = shared.lock();
-    state.session.done(task, result, now());
+    state.session.done(task, result);
     shared.save(&state.session);
     state.want_host = true;
     state.want_survey = true;
@@ -663,7 +663,6 @@ mod tests {
         let task = Task::Auto {
             key: crate::updates::AutoKey::Switch(&crate::cleanup::fake::MINT_KERNELS),
             on: true,
-            was: false,
         };
         finish(&shared, &task, Ok(()));
         let state = shared.lock();
