@@ -20,24 +20,23 @@ use objc2_io_bluetooth::{
     IOBluetoothHostController, IOBluetoothSDPUUID,
 };
 use qol_headless::DoctorCheckResult;
+use qol_runtime::protocol::DaemonRequest;
 
 use crate::bluetooth::{
-    normalize_address, AdapterHealth, BackendCapabilities, DeviceInfo, Pairing, ReconnectReport,
-    ReconnectSelection,
+    normalize_address, AdapterHealth, BackendCapabilities, DaemonAction, DaemonHooks, DaemonReply,
+    DeviceInfo, Pairing, ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
 
 use super::nearby::{self, Advertisement, Sightings};
 use super::paired::{self, PairedStack};
-pub use super::paired::{
-    open_settings, search_status_snapshot, settings_action, settings_query, stop_search,
-};
+pub use super::paired::{open_settings, search_status_snapshot, DaemonCommand};
 
 const SETTINGS_PANE: &str = "x-apple.systempreferences:com.apple.BluetoothSettings";
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: false,
-    audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
+    audio_reclaim: crate::audio_claim::RECLAIM_SUPPORTED,
     settings_pairing: Some("System Settings"),
     settings_pane: Some(SETTINGS_PANE),
 };
@@ -610,12 +609,26 @@ pub fn reconnect_devices(
     paired::reconnect_devices::<MacOs>(config, selection)
 }
 
-pub fn devices_snapshot() -> Result<serde_json::Value> {
-    paired::devices_snapshot::<MacOs>()
+pub fn devices_snapshot(managed_devices: &[String]) -> Result<serde_json::Value> {
+    paired::devices_snapshot::<MacOs>(managed_devices)
 }
 
-pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
-    paired::run_daemon::<MacOs>(config)
+pub fn set_adapter_source(_source: fn() -> String) {}
+
+pub fn dispatch_request(
+    action: DaemonAction,
+    request: &DaemonRequest,
+    config: impl FnOnce() -> ReconnectConfig,
+) -> DaemonReply<DaemonCommand> {
+    paired::dispatch_request::<MacOs>(action, request, config)
+}
+
+pub fn run_daemon(
+    config: ReconnectConfig,
+    hooks: DaemonHooks,
+    listen: impl FnOnce(std::sync::mpsc::Sender<DaemonCommand>) -> bool,
+) -> Result<()> {
+    paired::run_daemon::<MacOs>(config, hooks, listen)
 }
 
 #[cfg(test)]

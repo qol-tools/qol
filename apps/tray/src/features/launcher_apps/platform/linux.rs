@@ -1,6 +1,6 @@
 use super::super::icon::{LauncherIcon, MarkFiles};
 use super::super::LauncherEntry;
-use crate::installer::platform::linux::INSTALLER_DESKTOP_ENTRIES;
+use crate::platform::linux::INSTALLER_DESKTOP_ENTRIES;
 use crate::shortcuts::model::AppRef;
 use anyhow::{Context, Result};
 use qol_apps::desktop::{
@@ -35,7 +35,7 @@ pub(super) fn sync(entries: &[LauncherEntry], target: &Path, marks: &MarkFiles) 
 }
 
 pub(super) fn apps_dir() -> Result<PathBuf> {
-    Ok(crate::paths::platform::linux::xdg_data_home()?.join("applications"))
+    Ok(crate::paths::xdg_data_home()?.join("applications"))
 }
 
 pub(super) fn publish_synced() {

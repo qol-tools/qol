@@ -7,6 +7,7 @@ mod system;
 use std::env;
 use std::path::PathBuf;
 
+use crate::action::WindowAction;
 use crate::config::WindowActionsConfig;
 use crate::restore;
 use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
@@ -16,37 +17,37 @@ use system::{run_cinnamon_eval, X11WindowSystem};
 pub(crate) use doctor::{platform_supported_check, required_binaries_check};
 pub(crate) use glide::GlideController;
 
-pub(crate) const DIAGNOSTIC_ACTIONS: &[crate::cli::ActionSpec] = &[];
+pub(crate) const DIAGNOSTIC_ACTIONS: &[WindowAction] = &[];
 
 pub(crate) fn execute_action(
-    action: &str,
+    action: WindowAction,
     store: &FileMinimizedStateStore,
     config: &WindowActionsConfig,
 ) -> Result<(), String> {
     let system = X11WindowSystem;
     match action {
-        "snap-left" => {
+        WindowAction::SnapLeft => {
             run_cinnamon_eval(&scripts::snap_left_script(config.snap_fraction)).map(|_| ())
         }
-        "snap-right" => {
+        WindowAction::SnapRight => {
             run_cinnamon_eval(&scripts::snap_right_script(config.snap_fraction)).map(|_| ())
         }
-        "snap-bottom" => {
+        WindowAction::SnapBottom => {
             run_cinnamon_eval(&scripts::snap_bottom_script(config.snap_fraction)).map(|_| ())
         }
-        "maximize" => run_cinnamon_eval(&scripts::maximize_script()).map(|_| ()),
-        "minimize" => restore::minimize_window(&system, store),
-        "restore" => restore::restore_window(&system, store),
-        "center" => run_cinnamon_eval(&scripts::center_script(config)).map(|_| ()),
-        "move-monitor-left" => monitor_move::move_monitor(
+        WindowAction::Maximize => run_cinnamon_eval(&scripts::maximize_script()).map(|_| ()),
+        WindowAction::Minimize => restore::minimize_window(&system, store),
+        WindowAction::Restore => restore::restore_window(&system, store),
+        WindowAction::Center => run_cinnamon_eval(&scripts::center_script(config)).map(|_| ()),
+        WindowAction::MoveMonitorLeft => monitor_move::move_monitor(
             &scripts::move_monitor_left_script(),
             config.reveal_taskbar_after_move,
         ),
-        "move-monitor-right" => monitor_move::move_monitor(
+        WindowAction::MoveMonitorRight => monitor_move::move_monitor(
             &scripts::move_monitor_right_script(),
             config.reveal_taskbar_after_move,
         ),
-        _ => Err(format!("Unknown action: {action}")),
+        WindowAction::Glide(_) | WindowAction::PrintWorkAreas => Err(action.unknown_message()),
     }
 }
 

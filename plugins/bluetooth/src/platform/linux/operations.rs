@@ -11,8 +11,8 @@ use super::{
     apply_report, complete_device_action_within, connect_with, ensure_powered,
     finish_device_action, reconnect_with, redacted, remove_with, schedule_failed,
     trace_manual_failure, trace_remove_action, trace_report, AudioWatchState, ConnectionMode,
-    ConnectionSource, ReconnectConfig, ReconnectReport, ReconnectSelection, RetryState,
-    EXPLICIT_DEVICE_ACTION_TIMEOUT,
+    ConnectionSource, DaemonHooks, ReconnectConfig, ReconnectReport, ReconnectSelection,
+    RetryState, EXPLICIT_DEVICE_ACTION_TIMEOUT,
 };
 
 const HOLD_RECHECK: Duration = Duration::from_secs(5);
@@ -144,6 +144,7 @@ pub(super) fn complete(
     completion: Completion,
     retries: &mut HashMap<Address, RetryState>,
     config: &ReconnectConfig,
+    hooks: DaemonHooks,
     subscribed: &mut HashSet<Address>,
     watch_states: &mut HashMap<Address, AudioWatchState>,
 ) {
@@ -178,7 +179,7 @@ pub(super) fn complete(
                 retries.remove(&address);
                 subscribed.remove(&address);
                 watch_states.remove(&address);
-                crate::config::forget_managed(config, &address.to_string());
+                (hooks.forget_managed)(config, &address.to_string());
             }
             trace_remove_action(address, result);
         }

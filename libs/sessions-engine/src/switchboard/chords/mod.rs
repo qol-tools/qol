@@ -151,17 +151,22 @@ fn bind_on_this_host(
     bind(&Host::system()?, binder, &tool, home, launch)
 }
 
-pub(super) fn bind_for(interpreter: &CliSessionInterpreter, tool: &str, home: &Path) -> Bound {
+pub(super) fn bind_for(
+    interpreter: &CliSessionInterpreter,
+    tool: &str,
+    home: &Path,
+    warn: &mut dyn FnMut(String),
+) -> Bound {
     let launch = launch_id();
     let chords = match bind_on_this_host(interpreter, tool, home, &launch) {
         Ok(binding) => {
             for warning in binding.warnings {
-                crate::cli::warn(warning);
+                warn(warning);
             }
             binding.bound
         }
         Err(error) => {
-            crate::cli::warn(format!(
+            warn(format!(
                 "the switchboard's key chords are not set up: {error:#}"
             ));
             Vec::new()
@@ -188,19 +193,23 @@ fn pass_through(terminals: &TerminalSessionService, chords: &[ChordCommand]) -> 
     Ok(())
 }
 
-pub(super) fn pass(terminals: &TerminalSessionService, bound: &Bound) {
+pub(super) fn pass(
+    terminals: &TerminalSessionService,
+    bound: &Bound,
+    warn: &mut dyn FnMut(String),
+) {
     if bound.chords.is_empty() {
         return;
     }
     if let Err(error) = pass_through(terminals, &bound.chords) {
-        crate::cli::warn(format!(
+        warn(format!(
             "{} reach the switchboard only where the terminal does not keep them for itself: {error:#}",
             spelled(&bound.chords)
         ));
     }
 }
 
-fn settle_on_this_host(settle: impl Fn(&Host) -> Vec<String>) {
+fn settle_on_this_host(settle: impl Fn(&Host) -> Vec<String>, warn: &mut dyn FnMut(String)) {
     let settled = Host::system().and_then(|host| {
         let _lock = host.lock()?;
         Ok(settle(&host))
@@ -208,10 +217,10 @@ fn settle_on_this_host(settle: impl Fn(&Host) -> Vec<String>) {
     match settled {
         Ok(warnings) => {
             for warning in warnings {
-                crate::cli::warn(warning);
+                warn(warning);
             }
         }
-        Err(error) => crate::cli::warn(format!(
+        Err(error) => warn(format!(
             "the switchboard's key chords stay bound: {error:#}"
         )),
     }
@@ -227,24 +236,24 @@ impl ReleaseAtExit {
 
 impl Drop for ReleaseAtExit {
     fn drop(&mut self) {
-        release(&self.0);
+        release(&self.0, &mut |text| log::warn!("{text}"));
     }
 }
 
-pub(super) fn release(launch: &str) {
-    settle_on_this_host(|host| host.release(launch));
+pub(super) fn release(launch: &str, warn: &mut dyn FnMut(String)) {
+    settle_on_this_host(|host| host.release(launch), warn);
 }
 
-pub(super) fn hand_back(bound: &Bound) {
-    settle_on_this_host(|host| host.hand_back(&bound.launch));
+pub(super) fn hand_back(bound: &Bound, warn: &mut dyn FnMut(String)) {
+    settle_on_this_host(|host| host.hand_back(&bound.launch), warn);
 }
 
-pub(super) fn run_release(args: &[OsString]) -> Result<()> {
+pub(super) fn run_release(args: &[OsString], warn: &mut dyn FnMut(String)) -> Result<()> {
     let launch = args
         .first()
         .and_then(|arg| arg.to_str())
         .ok_or_else(|| anyhow!("{RELEASE} takes the launch id"))?;
-    release(launch);
+    release(launch, warn);
     Ok(())
 }
 
@@ -464,6 +473,9 @@ mod tests {
 
     #[test]
     fn the_release_hook_needs_a_launch_id() {
-        assert!(run_release(&[]).unwrap_err().to_string().contains(RELEASE));
+        assert!(run_release(&[], &mut |_| {})
+            .unwrap_err()
+            .to_string()
+            .contains(RELEASE));
     }
 }

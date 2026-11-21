@@ -68,6 +68,8 @@ pub(crate) fn cancel_recording(session_id: u64) {
 
 pub(crate) fn release_held_keys() {}
 
+pub(crate) fn release_tap() {}
+
 pub(crate) fn install(
     bindings: Vec<Binding>,
     on_fire: OnFire,

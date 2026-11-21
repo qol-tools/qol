@@ -10,7 +10,7 @@ pub struct Config {
 const CONTRACT: &str = qol_config::plugin_config_contract!();
 
 pub fn load() -> Config {
-    qol_config::load_plugin_config_from_env_with_contract(env!("QOL_PLUGIN_ID"), CONTRACT)
+    qol_config::load_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONTRACT)
 }
 
 #[cfg(test)]

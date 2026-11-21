@@ -89,12 +89,15 @@ mod tests {
 }
 
 #[cfg(test)]
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod exit_restore_tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::theme_session;
+    use super::ENV_LOCK;
     use crate::session::restore_exit_when;
-    use crate::ENV_LOCK;
 
     const SCHEMA: &str = "org.gnome.desktop.interface";
     const KEY: &str = "color-scheme";

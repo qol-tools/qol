@@ -7,9 +7,11 @@ use serde::Serialize;
 
 use anyhow::{bail, Result};
 
+pub mod daemon;
 pub mod find;
 pub mod retry;
 
+pub use daemon::{DaemonAction, DaemonHooks, DaemonReply};
 pub use find::nearby_payload;
 
 pub const SEARCH_WINDOW: Duration = Duration::from_secs(60);

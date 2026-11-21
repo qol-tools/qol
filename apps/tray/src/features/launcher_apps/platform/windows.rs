@@ -2,8 +2,8 @@ use super::super::icon::{LauncherIcon, MarkFiles};
 use super::super::LauncherEntry;
 use super::link_names::{link_names, link_path, LINK_EXTENSION};
 use crate::installer::boot_environment::paths_equal_canonicalized;
-use crate::installer::platform::windows::ico::ico_from_pngs;
-use crate::installer::platform::windows::shortcut::{self, Shortcut};
+use crate::platform::windows::ico::ico_from_pngs;
+use crate::platform::windows::shortcut::{self, Shortcut};
 use crate::shortcuts::model::AppRef;
 use anyhow::{anyhow, Context, Result};
 use qol_apps::shell_link::{LinkTarget, ShellLink};
@@ -32,7 +32,7 @@ pub(super) fn publish_synced() {
 }
 
 fn apps_dir() -> Result<PathBuf> {
-    Ok(crate::paths::platform::windows::start_menu_programs_dir()?.join(shortcut::LAUNCHER_FOLDER))
+    Ok(crate::paths::start_menu_programs_dir()?.join(shortcut::LAUNCHER_FOLDER))
 }
 
 fn sync_into(

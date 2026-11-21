@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use qol_hotkeys::macos_keycode as keycode;
 
-use super::config::{CharRule, KeyRule, ModifierKeys, MouseRule, RemapConfig, ScrollRule};
+use crate::config::{CharRule, KeyRule, ModifierKeys, MouseRule, RemapConfig, ScrollRule};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Modifiers {
@@ -811,7 +811,7 @@ mod tests {
     use proptest::prelude::*;
 
     fn test_config() -> ResolvedConfig {
-        let raw = super::super::config::builtin_defaults();
+        let raw = crate::config::builtin_defaults();
         resolve(&raw)
     }
 
@@ -848,7 +848,7 @@ mod tests {
 
     #[test]
     fn contract_defaults_pass_semantic_validation() {
-        let raw = super::super::config::builtin_defaults();
+        let raw = crate::config::builtin_defaults();
         assert_eq!(validation_issues(&raw), Vec::<String>::new());
     }
 
@@ -978,7 +978,7 @@ mod tests {
             excluded_apps: vec![],
             char_swaps: vec![],
             char_rules: vec![],
-            key_rules: vec![super::super::config::KeyRule::Single {
+            key_rules: vec![crate::config::KeyRule::Single {
                 from_mods: vec![],
                 from_key: "a".into(),
                 to_mods: vec![],
@@ -1030,7 +1030,7 @@ mod tests {
             excluded_apps: vec![],
             char_swaps: vec![],
             char_rules: vec![],
-            key_rules: vec![super::super::config::KeyRule::Single {
+            key_rules: vec![crate::config::KeyRule::Single {
                 from_mods: vec![],
                 from_key: "<".into(),
                 to_mods: vec![],
@@ -1242,13 +1242,13 @@ mod tests {
                 char_swaps: vec![],
                 char_rules: vec![],
                 key_rules: vec![
-                    super::super::config::KeyRule::Batch {
+                    crate::config::KeyRule::Batch {
                         from_mods: vec!["ctrl".into()],
                         to_mods: vec!["cmd".into()],
                         keys: vec!["c".into()],
                         global: false,
                     },
-                    super::super::config::KeyRule::Single {
+                    crate::config::KeyRule::Single {
                         from_mods: vec!["ctrl".into()],
                         from_key: "c".into(),
                         to_mods: vec!["alt".into()],

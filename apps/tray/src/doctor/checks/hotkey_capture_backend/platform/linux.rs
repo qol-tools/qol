@@ -1,7 +1,5 @@
 use super::super::CaptureProbe;
-use crate::hotkeys::capture::platform::linux::classify::{
-    classify, DeviceCapabilities, DeviceClass, SkipReason,
-};
+use crate::platform::linux::classify::{classify, DeviceCapabilities, DeviceClass, SkipReason};
 use std::fs;
 use std::path::Path;
 

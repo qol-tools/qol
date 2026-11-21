@@ -14,7 +14,7 @@ mod cli;
 mod files;
 pub mod housekeeping;
 pub mod mode;
-pub(crate) mod platform;
+mod platform;
 mod source;
 pub mod stand_in;
 pub mod trial;
@@ -70,6 +70,10 @@ pub fn ensure_installed_desktop_registration() {
     if let Err(error) = platform::ensure_desktop_registration() {
         log::warn!("desktop entry self-heal failed: {error:#}");
     }
+}
+
+pub fn refresh_after_update(binary: &Path, installer: Option<&Path>) -> Result<()> {
+    platform::refresh_after_update(binary, installer)
 }
 
 pub fn check_platform_paths() -> Result<()> {

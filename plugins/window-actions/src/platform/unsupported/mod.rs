@@ -4,10 +4,11 @@ use std::path::PathBuf;
 
 use qol_windowing::{WindowId, WindowOps, WindowRect};
 
-use crate::cli::PLUGIN_ID;
+use crate::action::WindowAction;
 use crate::config::WindowActionsConfig;
 use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 use crate::restore::{self, WindowSystem};
+use crate::PLUGIN_ID;
 
 pub(crate) use doctor::{platform_supported_check, required_binaries_check};
 
@@ -40,20 +41,25 @@ impl GlideController {
     }
 }
 
-pub(crate) const DIAGNOSTIC_ACTIONS: &[crate::cli::ActionSpec] = &[];
+pub(crate) const DIAGNOSTIC_ACTIONS: &[WindowAction] = &[];
 
 pub(crate) fn execute_action(
-    action: &str,
+    action: WindowAction,
     store: &FileMinimizedStateStore,
     _config: &WindowActionsConfig,
 ) -> Result<(), String> {
     let system = UnsupportedWindowSystem;
     match action {
-        "minimize" => restore::minimize_window(&system, store),
-        "restore" => restore::restore_window(&system, store),
-        "snap-left" | "snap-right" | "snap-bottom" | "maximize" | "center"
-        | "move-monitor-left" | "move-monitor-right" => Err(unsupported(action)),
-        _ => Err(format!("Unknown action: {action}")),
+        WindowAction::Minimize => restore::minimize_window(&system, store),
+        WindowAction::Restore => restore::restore_window(&system, store),
+        WindowAction::SnapLeft
+        | WindowAction::SnapRight
+        | WindowAction::SnapBottom
+        | WindowAction::Maximize
+        | WindowAction::Center
+        | WindowAction::MoveMonitorLeft
+        | WindowAction::MoveMonitorRight => Err(unsupported(action.id())),
+        WindowAction::Glide(_) | WindowAction::PrintWorkAreas => Err(action.unknown_message()),
     }
 }
 

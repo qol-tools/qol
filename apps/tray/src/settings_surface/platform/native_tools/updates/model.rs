@@ -108,6 +108,12 @@ pub(super) struct TargetRow {
     pub(super) spinner: bool,
 }
 
+impl Summary {
+    pub(super) fn dimmed(&self) -> bool {
+        self.action.is_none() && self.action_label.is_some()
+    }
+}
+
 impl TargetRow {
     pub(super) fn dimmed(&self) -> bool {
         self.action.is_none() && self.action_label.is_some()
@@ -343,7 +349,7 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             .to_string(),
             description,
             action: plugins_queued.then_some(RowAction::StopUpdates),
-            action_label: plugins_queued.then_some("Stop"),
+            action_label: Some("Stop"),
         };
     }
     if let Some(trial) = &snapshot.trial {
@@ -355,8 +361,8 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
                 "Trying pull request #{} until qol pr off.",
                 trial.pull_request
             ),
-            action: None,
-            action_label: None,
+            action: check_action(snapshot),
+            action_label: Some(check_label(snapshot)),
         };
     }
     let failed = pending_names(snapshot, &[TargetState::Failed]);
@@ -402,8 +408,8 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             busy: true,
             label: "Checking for updates".to_string(),
             description: format!("{checked}."),
-            action: None,
-            action_label: None,
+            action: check_action(snapshot),
+            action_label: Some(check_label(snapshot)),
         };
     }
     if let Some(error) = &snapshot.check_error {
@@ -412,8 +418,8 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             busy: false,
             label: "Couldn't check for updates".to_string(),
             description: format!("{error}."),
-            action: None,
-            action_label: None,
+            action: check_action(snapshot),
+            action_label: Some(check_label(snapshot)),
         };
     }
     let unchecked = unchecked_names(snapshot);
@@ -423,8 +429,8 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             busy: false,
             label: "Not checked yet".to_string(),
             description: format!("{unchecked}."),
-            action: None,
-            action_label: None,
+            action: check_action(snapshot),
+            action_label: Some(check_label(snapshot)),
         };
     }
     let label = if snapshot.checks_enabled {
@@ -437,8 +443,8 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
         busy: false,
         label: label.to_string(),
         description: format!("{checked}."),
-        action: None,
-        action_label: None,
+        action: check_action(snapshot),
+        action_label: Some(check_label(snapshot)),
     }
 }
 
@@ -471,7 +477,7 @@ fn check_row(snapshot: &UpdatesSnapshot) -> TargetRow {
     } else {
         None
     };
-    let action = can_check(snapshot).then_some(RowAction::Check);
+    let action = check_action(snapshot);
     TargetRow {
         id: CHECK_ROW_ID.to_string(),
         name: "Last checked".to_string(),
@@ -498,6 +504,10 @@ fn checked_subject(snapshot: &UpdatesSnapshot) -> String {
     } else {
         plugins
     }
+}
+
+fn check_action(snapshot: &UpdatesSnapshot) -> Option<RowAction> {
+    can_check(snapshot).then_some(RowAction::Check)
 }
 
 fn check_label(snapshot: &UpdatesSnapshot) -> &'static str {
@@ -716,6 +726,7 @@ mod tests {
             "Trying pull request #435 until qol pr off."
         );
         assert_eq!(status.action, None);
+        assert!(status.dimmed());
         assert_eq!(status.dot, None);
 
         let check = check_row(&during);
@@ -910,7 +921,8 @@ mod tests {
         assert_eq!(failed.dot, Some(SummaryDot::Warning));
         assert_eq!(failed.label, "Couldn't check for updates");
         assert_eq!(failed.description, "No connection to GitHub.");
-        assert_eq!(failed.action, None);
+        assert_eq!(failed.action, Some(RowAction::Check));
+        assert_eq!(failed.action_label, Some("Try again"));
 
         offline.checking = true;
         let checking = summary(&offline);
@@ -919,6 +931,7 @@ mod tests {
         assert_eq!(checking.label, "Checking for updates");
         assert_eq!(checking.description, "qol-tray 1.0.0 and 2 plugins.");
         assert_eq!(checking.action, None);
+        assert!(checking.dimmed());
 
         let fresh = snapshot(
             target("qol-tray", "qol-tray", TargetState::Unchecked),
@@ -927,7 +940,8 @@ mod tests {
         let fresh = summary(&fresh);
         assert_eq!(fresh.label, "Not checked yet");
         assert_eq!(fresh.description, "qol-tray.");
-        assert_eq!(fresh.action, None);
+        assert_eq!(fresh.action, Some(RowAction::Check));
+        assert_eq!(fresh.action_label, Some("Check now"));
 
         let plugin_only = snapshot(
             target("qol-tray", "qol-tray", TargetState::UpToDate),
@@ -954,6 +968,8 @@ mod tests {
         assert_eq!(busy.label, "Updating qol-tray");
         assert_eq!(busy.description, "qol restarts when the download is done");
         assert_eq!(busy.action, None);
+        assert_eq!(busy.action_label, Some("Stop"));
+        assert!(busy.dimmed());
 
         let mut host_running = snapshot(
             target("qol-tray", "qol-tray", TargetState::Updating),
@@ -1019,7 +1035,8 @@ mod tests {
         assert_eq!(current_summary.dot, Some(SummaryDot::Success));
         assert_eq!(current_summary.label, "Everything is up to date");
         assert_eq!(current_summary.description, "qol-tray 1.0.0 and 1 plugin.");
-        assert_eq!(current_summary.action, None);
+        assert_eq!(current_summary.action, Some(RowAction::Check));
+        assert_eq!(current_summary.action_label, Some("Check now"));
     }
 
     #[test]
@@ -1132,7 +1149,7 @@ mod tests {
     }
 
     #[test]
-    fn the_status_row_offers_updates_and_the_last_checked_row_offers_a_check() {
+    fn the_status_row_and_the_last_checked_row_both_offer_a_check() {
         let mut disabled = snapshot(
             target("qol-tray", "qol-tray", TargetState::DevBuild),
             vec![target("cli", "CLI Sessions", TargetState::Unchecked)],
@@ -1142,7 +1159,8 @@ mod tests {
         disabled.check_error = Some("No connection to GitHub".to_string());
         let row = summary(&disabled);
         assert_eq!(row.label, "Couldn't check for updates");
-        assert_eq!(row.action, None);
+        assert_eq!(row.action, Some(RowAction::Check));
+        assert_eq!(row.action_label, Some("Try again"));
         let check = check_row(&disabled);
         assert_eq!(check.name, "Last checked");
         assert_eq!(check.value, "Never");
@@ -1172,7 +1190,7 @@ mod tests {
         let row = summary(&disabled);
         assert_eq!(row.label, "Plugins are up to date");
         assert_eq!(row.description, "1 plugin.");
-        assert_eq!(row.action, None);
+        assert_eq!(row.action, Some(RowAction::Check));
 
         let failed = UpdatesSnapshot {
             check_error: Some("Couldn't reach GitHub".to_string()),

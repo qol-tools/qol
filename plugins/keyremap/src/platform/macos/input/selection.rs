@@ -1,5 +1,5 @@
 use super::BackendId;
-use crate::platform::engine::config::KeyBackendChoice;
+use crate::config::KeyBackendChoice;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Availability {

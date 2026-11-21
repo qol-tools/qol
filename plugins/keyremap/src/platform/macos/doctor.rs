@@ -4,9 +4,9 @@ use qol_plugin_api::manifest::{parse_version, PluginManifest, SystemDependency};
 
 pub(crate) use qol_platform::SecureInputHolder;
 
-use crate::cli::PLUGIN_ID;
 use crate::platform::macos::input::selection::{Availability, Reason, Selection};
 use crate::platform::macos::input::BackendId;
+use crate::PLUGIN_ID;
 
 const MANIFEST: &str = include_str!("../../../plugin.toml");
 const DRIVER_NAME: &str = "Karabiner-DriverKit-VirtualHIDDevice";

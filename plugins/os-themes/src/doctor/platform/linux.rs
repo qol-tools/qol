@@ -45,7 +45,7 @@ fn classify_session_desktop(desktop: Option<&str>) -> (Option<&'static str>, boo
         return (None, false);
     };
 
-    let name = crate::theme::platform::Platform::desktop_name(desktop);
+    let name = crate::theme::Platform::desktop_name(desktop);
     (name, name.is_some())
 }
 

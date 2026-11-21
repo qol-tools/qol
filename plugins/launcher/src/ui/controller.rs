@@ -518,7 +518,7 @@ impl LauncherView {
             let mut async_cx = cx.clone();
             async move {
                 let outcome = async_cx
-                    .background_spawn(async move { crate::flow::fetch_rows(&entry, &text) })
+                    .background_spawn(async move { crate::app::host::fetch_rows(&entry, &text) })
                     .await;
                 this.update(&mut async_cx, |view, cx| {
                     let Some(session) = view.state.flow.as_mut() else {
@@ -626,9 +626,9 @@ impl LauncherView {
             let mut async_cx = cx.clone();
             async move {
                 let outcome = async_cx
-                    .background_spawn(
-                        async move { crate::flow::send_feedback(&entry, &query, &key) },
-                    )
+                    .background_spawn(async move {
+                        crate::app::host::send_feedback(&entry, &query, &key)
+                    })
                     .await;
                 if let Err(error) = outcome {
                     log::warn!("flow dislike failed: {error}");
@@ -654,7 +654,9 @@ impl LauncherView {
             return;
         }
         if !entry.row_actions.is_empty() {
-            if let Err(message) = crate::flow::run_row_action(entry, &entry.row_actions[0], row) {
+            if let Err(message) =
+                crate::app::host::run_row_action(entry, &entry.row_actions[0], row)
+            {
                 self.state.set_launch_error(message);
                 cx.notify();
                 return;

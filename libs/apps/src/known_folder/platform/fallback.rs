@@ -16,6 +16,10 @@ pub fn programs_dir() -> Option<PathBuf> {
     None
 }
 
+pub fn common_programs_dir() -> Option<PathBuf> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

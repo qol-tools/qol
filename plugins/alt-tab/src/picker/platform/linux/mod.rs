@@ -46,10 +46,6 @@ pub fn pre_create(
     tracker: &qol_gpui::monitor::MonitorTracker,
     cx: &mut gpui::App,
 ) {
-    qol_gpui::popup_window::set_ghost_debug(
-        config.display.ghost_opacity,
-        config.display.ghost_debug_color.as_deref(),
-    );
     let windows = crate::discovery::Platform
         .visible_windows(config.display.show_minimized, &config.switchable_panels)
         .unwrap_or_default();
@@ -89,7 +85,7 @@ pub fn destroy_non_target_windows(
 pub fn discard_old_window(
     current: &crate::picker::PickerWindowState,
     target: qol_gpui::window::MonitorKey,
-    handle: gpui::WindowHandle<crate::app::AltTabApp>,
+    handle: gpui::WindowHandle<crate::picker::AltTabApp>,
     cx: &mut gpui::App,
 ) {
     let _ = handle.update(cx, |_, window, _| window.remove_window());

@@ -1,6 +1,6 @@
 [package]
 name = "qol-controllers"
-version = "0.76.2"
+version = "0.76.4"
 edition = "2021"
 
 [dependencies]

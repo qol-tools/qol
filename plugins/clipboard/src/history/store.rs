@@ -28,7 +28,7 @@ pub struct Store {
 
 impl Store {
     pub fn resolve() -> Result<Self> {
-        qol_config::data_subdir(&format!("plugins/{}", env!("QOL_PLUGIN_ID")))
+        qol_config::data_subdir(&format!("plugins/{}", crate::PLUGIN_ID))
             .map(Self::at)
             .context("cannot resolve the clipboard data dir")
     }

@@ -4,6 +4,10 @@ mod fallback;
 pub(crate) mod windows;
 
 #[cfg(not(target_os = "windows"))]
-pub use fallback::{pictures_dir, programs_dir, user_content_folders, videos_dir};
+pub use fallback::{
+    common_programs_dir, pictures_dir, programs_dir, user_content_folders, videos_dir,
+};
 #[cfg(target_os = "windows")]
-pub use windows::{pictures_dir, programs_dir, user_content_folders, videos_dir};
+pub use windows::{
+    common_programs_dir, pictures_dir, programs_dir, user_content_folders, videos_dir,
+};

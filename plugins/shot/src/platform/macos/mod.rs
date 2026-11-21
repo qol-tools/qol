@@ -4,20 +4,16 @@ mod display;
 mod labels;
 mod native_capture;
 mod recording;
-mod selector;
-mod selector_target;
 mod swift;
 mod system;
 
 pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
-pub use display::{full_screen_bounds, get_monitors};
+pub(crate) use display::rect_from_bounds;
+pub use display::{full_screen_bounds, get_monitors, monitor_capture_rect};
 pub use recording::{
     capture_screenshot, recording_format, recording_started, recording_stopped, start_capture,
     stop_capture,
 };
-pub use selector::{monitor_capture_rect, select_region, select_region_in_app};
-
-pub fn pre_create_selector(_cx: &mut gpui::App) {}
 
 pub(crate) fn reassert_parked(_title: &str, _cx: &mut gpui::App) {}
 
@@ -37,10 +33,6 @@ pub(crate) fn register_pin_transition(
 }
 
 pub(crate) fn complete_pin_transition(_title: &str, _succeeded: bool) {}
-
-pub fn pre_create_pins(cx: &mut gpui::App) {
-    crate::ui::pinned::pre_create(cx);
-}
 
 pub fn pin_cache_enabled() -> bool {
     false

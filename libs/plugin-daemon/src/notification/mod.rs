@@ -1,5 +1,11 @@
 pub mod gate;
-pub mod platform;
+mod platform;
+
+pub use platform::send_notification as send_native_notification;
+pub use platform::{
+    acquire_inhibit, install_toast_identity, os_banners_showing, os_do_not_disturb,
+    release_toast_identity, set_os_banners, uninstall_toast_identity, NotificationInhibit,
+};
 
 pub use qol_runtime::protocol::{NotificationLayout, NotificationLevel, NotificationMeta};
 pub use qol_runtime::Notification;

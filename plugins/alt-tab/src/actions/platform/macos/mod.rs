@@ -3,11 +3,11 @@ mod destroy_watch;
 pub use destroy_watch::destroyed_windows;
 
 use super::CloseOutcome;
-use crate::discovery::platform::macos::ax::{
+use crate::discovery::native::ax::{
     ax_find_window, ax_find_window_brute_force, ax_find_window_on_any_space,
 };
-use crate::discovery::platform::macos::ffi;
-use crate::discovery::platform::macos::ffi::{
+use crate::platform::macos::ffi;
+use crate::platform::macos::ffi::{
     copy_window_list_timed, CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryRef, CFRelease,
     K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL, K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
     K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
@@ -20,14 +20,10 @@ pub struct Platform;
 
 impl WindowOps for Platform {
     fn enumerate_windows(&self) -> Result<Vec<WindowId>, String> {
-        let config = crate::config::load_alt_tab_config();
-        Ok(crate::discovery::platform::macos::discover_live_windows(
-            true,
-            &config.switchable_panels,
-        )
-        .into_iter()
-        .map(|window| WindowId::from_u32(window.id))
-        .collect())
+        Ok(crate::discovery::native::discover_live_windows(true, &[])
+            .into_iter()
+            .map(|window| WindowId::from_u32(window.id))
+            .collect())
     }
 
     fn window_geometry(&self, _window_id: &WindowId) -> Result<Option<WindowRect>, String> {
@@ -198,7 +194,7 @@ pub fn activate_window(window_id: u32) -> bool {
                 #[cfg(debug_assertions)]
                 if !matches!(state, FrontState::Gone) {
                     let focused =
-                        unsafe { crate::discovery::platform::macos::ax::ax_focused_window_id(pid) };
+                        unsafe { crate::discovery::native::ax::ax_focused_window_id(pid) };
                     if !key_focus_sampled {
                         key_focus_sampled = true;
                         qol_runtime::probe!(
@@ -637,7 +633,7 @@ mod tests {
         classify_front_state, front_before_other_apps, front_stack_entry,
         should_quit_on_close_fallback, FrontState,
     };
-    use crate::discovery::platform::macos::ffi::K_CG_WINDOW_LAYER_NORMAL;
+    use crate::platform::macos::ffi::K_CG_WINDOW_LAYER_NORMAL;
     use qol_gpui::platform::ReassertStep;
 
     type Case = (&'static str, u32, i32, &'static [(u32, i32)], bool);

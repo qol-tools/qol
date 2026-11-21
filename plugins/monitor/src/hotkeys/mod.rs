@@ -5,7 +5,8 @@ use anyhow::{Context, Result};
 use qol_headless::DoctorCheckResult;
 use qol_hotkeys::grammar;
 
-pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+use crate::PLUGIN_ID;
+
 pub const PLUGIN_UID: &str = "d3d4cda9-f9cf-44dc-aacd-07419b5b5ea0";
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

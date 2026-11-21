@@ -1,10 +1,9 @@
 use super::run::{SharedPreviewCache, WindowCache};
-use crate::app::AltTabApp;
 use crate::capture;
 use crate::config::AltTabConfig;
 use crate::discovery::WindowInfo;
 use crate::picker::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
-use crate::picker::{IconMap, PreviewMap, SharedIconCache};
+use crate::picker::{AltTabApp, IconMap, PreviewMap, SharedIconCache, PICKER_VISIBLE};
 use futures::channel::oneshot;
 use gpui::*;
 use std::collections::HashMap;
@@ -632,7 +631,7 @@ fn cancellation_reason(
     if !scheduler.is_current(lane, generation) {
         return Some("superseded");
     }
-    if picker_visibility_cancels(lane, crate::app::PICKER_VISIBLE.load(Ordering::Acquire)) {
+    if picker_visibility_cancels(lane, PICKER_VISIBLE.load(Ordering::Acquire)) {
         return Some("picker_visible");
     }
     None

@@ -1,6 +1,6 @@
 use super::super::super::binding::{Binding, CaptureEvent, Phase, HEARTBEAT_INTERVAL};
 #[cfg(debug_assertions)]
-use super::evdev_backend::keycode_name;
+use crate::platform::linux::keycode::keycode_name;
 use qol_hotkeys::evdev;
 use qol_hotkeys::grammar::Modifier;
 use std::collections::{BTreeSet, HashMap, HashSet};

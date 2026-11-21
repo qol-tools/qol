@@ -309,12 +309,23 @@ pub fn settings_value_text(
 
 const ACTION_MARK_SIZE: f32 = 14.0;
 
-pub fn settings_action_busy(id: impl Into<ElementId>, busy: bool, kit: Kit) -> gpui::Div {
-    let frame = action_mark_frame();
-    if busy {
-        return frame.child(settings_action_spinner(id, kit).size(px(12.)));
-    }
-    frame
+pub fn settings_action_word(
+    id: impl Into<ElementId>,
+    verb: impl Into<SharedString>,
+    busy: bool,
+    row: RowGround,
+    kit: Kit,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_none()
+        .flex_row()
+        .items_center()
+        .gap(px(qol_theme::SPACE_INSET))
+        .when(busy, |end| {
+            end.child(action_mark_frame().child(settings_action_spinner(id, kit).size(px(12.))))
+        })
+        .child(settings_tag(verb, SettingsValueTone::Normal, row, kit))
 }
 
 fn action_mark_frame() -> gpui::Div {

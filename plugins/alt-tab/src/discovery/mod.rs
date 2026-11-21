@@ -40,6 +40,7 @@ impl std::fmt::Display for DiscoveryError {
 
 impl std::error::Error for DiscoveryError {}
 
-pub(crate) mod platform;
+mod platform;
 
-pub use platform::Platform;
+pub use native::Platform;
+pub use platform::native;

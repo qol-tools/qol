@@ -11,7 +11,7 @@ use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 use qol_terminal_sessions::{BackendId, SessionId};
 
 use crate::daemon::actions::CONFIG;
-use crate::storage::paths::PLUGIN_ID;
+use crate::PLUGIN_ID;
 
 const OPEN: &str = "open";
 const SESSIONS: &str = "sessions";
@@ -373,11 +373,16 @@ where
                 .exit_behavior("Exits non-zero if the settings surface cannot be opened.")
                 .run_plain_text(|context| {
                     reject_args(context.args())?;
-                    crate::show_settings()?;
+                    show_settings()?;
                     Ok(PlainTextOutput::empty())
                 }),
         )
         .doctor_checks(doctor_checks)
+}
+
+fn show_settings() -> anyhow::Result<()> {
+    qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
+        .context("failed to open CLI Sessions settings URL")
 }
 
 fn run_daemon(show_on_start: bool) -> CommandResult {

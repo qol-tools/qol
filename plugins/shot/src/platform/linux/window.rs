@@ -153,7 +153,7 @@ pub fn prepare_pin_window(title: &str, origin: (f64, f64)) -> bool {
     qol_gpui::popup_window::hide_invisible(title)
 }
 
-pub(super) fn configure_selector_window(title: String, bounds: Rect) {
+pub(crate) fn configure_selector_window(title: String, bounds: Rect) {
     let Some(expected) = exact_window_bounds(bounds) else {
         qol_runtime::probe!(
             "SHOT_SELECT_VIEWPORT",
@@ -173,7 +173,7 @@ pub(super) fn configure_selector_window(title: String, bounds: Rect) {
     );
 }
 
-pub(super) fn prepare_selector_window(title: &str, bounds: Rect) {
+pub(crate) fn prepare_selector_window(title: &str, bounds: Rect) {
     let Some(expected) = exact_window_bounds(bounds) else {
         qol_runtime::probe!("SHOT_SELECT_PREPARE", "title={title} result=invalid");
         return;
