@@ -1,7 +1,7 @@
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -10,6 +10,7 @@ use qol_audio::devices::{self, Direction, Kind, State as DeviceState};
 use qol_config::pages::{Go, Press, PressReply, Stack};
 use qol_host_fixes::residency::HostResidency;
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
+use qol_sync::{Condvar, Mutex, MutexGuard};
 use serde::Serialize;
 
 use crate::cleanup;
@@ -58,15 +59,8 @@ struct Shared {
 }
 
 impl Shared {
-    fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
     fn wait<'a>(&self, state: MutexGuard<'a, State>, timeout: Duration) -> MutexGuard<'a, State> {
-        self.wake
-            .wait_timeout(state, timeout)
-            .unwrap_or_else(PoisonError::into_inner)
-            .0
+        self.wake.wait_timeout(state, timeout).0
     }
 
     fn save(&self, session: &Session) {
@@ -82,7 +76,7 @@ impl Shared {
     }
 
     fn rules(&self, change: impl FnOnce(&mut Rules)) {
-        change(&mut self.lock().session.rules);
+        change(&mut self.state.lock().session.rules);
     }
 }
 
@@ -111,7 +105,7 @@ pub fn run() -> ExitCode {
     }
     if let Err(error) = spawn("survey", &shared, survey) {
         log::warn!("update-manager: cannot start measuring what updates no longer need: {error}");
-        shared.lock().surveying = false;
+        shared.state.lock().surveying = false;
         shared.wake.notify_all();
     }
     let (released, done) = mpsc::channel();
@@ -131,7 +125,7 @@ pub fn run() -> ExitCode {
         Arc::clone(&shared),
         |shared, request| handle(shared, &request.action, &request.input),
     );
-    shared.lock().stop = true;
+    shared.state.lock().stop = true;
     shared.wake.notify_all();
     if done.recv_timeout(RELEASE_WAIT).is_err() {
         log::warn!("update-manager: the rules did not end in time; exiting releases them");
@@ -189,7 +183,7 @@ fn handle(shared: &Arc<Shared>, action: &str, input: &serde_json::Value) -> Read
         Action::Ping | Action::Kill => ReadResult::Handled,
         Action::Pages => match open(input) {
             Ok(open) => payload(
-                &pages::build(&shared.lock().session, now())
+                &pages::build(&shared.state.lock().session, now())
                     .pages
                     .only(&open),
             ),
@@ -222,7 +216,7 @@ fn press(shared: &Arc<Shared>, input: &serde_json::Value) -> ReadResult<()> {
         Err(error) => return ReadResult::Error(format!("press needs a page and a row: {error}")),
     };
     let at = now();
-    let mut state = shared.lock();
+    let mut state = shared.state.lock();
     let outcome = pages::press(&mut state.session, &press.page, &press.row, at);
     match outcome.task {
         Some(Task::Rules) => {
@@ -266,7 +260,7 @@ fn work(shared: &Shared, task: Task) {
             let result = match &shared.log {
                 Some(log) => panic::catch_unwind(AssertUnwindSafe(|| {
                     updates::install(list, log, &mut |done| {
-                        shared.lock().session.progress(done);
+                        shared.state.lock().session.progress(done);
                     })
                 }))
                 .unwrap_or_else(|_| {
@@ -285,7 +279,7 @@ fn work(shared: &Shared, task: Task) {
                     ),
                 }),
             };
-            let mut state = shared.lock();
+            let mut state = shared.state.lock();
             state.session.installed(result);
             shared.save(&state.session);
             state.want_updates = true;
@@ -321,7 +315,7 @@ fn work(shared: &Shared, task: Task) {
 }
 
 fn finish(shared: &Shared, task: &Task, result: Result<(), Refusal>) {
-    let mut state = shared.lock();
+    let mut state = shared.state.lock();
     state.session.done(task, result);
     shared.save(&state.session);
     state.want_host = true;
@@ -334,7 +328,7 @@ fn refresh(shared: &Shared) {
     let mut next_host = Instant::now();
     loop {
         let (read_updates, read_host) = {
-            let mut state = shared.lock();
+            let mut state = shared.state.lock();
             loop {
                 if state.stop {
                     return;
@@ -363,7 +357,7 @@ fn refresh(shared: &Shared) {
             let host = updates::read_host();
             let boot = updates::boot_id();
             next_host = Instant::now() + HOST_EVERY;
-            let mut state = shared.lock();
+            let mut state = shared.state.lock();
             state.session.apply_host(host);
             if state.session.journal.start_boot(boot) {
                 shared.save(&state.session);
@@ -372,7 +366,7 @@ fn refresh(shared: &Shared) {
         if read_updates {
             let list = updates::read_updates();
             next_updates = Instant::now() + UPDATES_EVERY;
-            let mut state = shared.lock();
+            let mut state = shared.state.lock();
             state.reading = false;
             shared.wake.notify_all();
             if state.session.job.is_none() {
@@ -389,7 +383,7 @@ fn survey(shared: &Shared) {
     let mut seen: Option<Vec<Option<SystemTime>>> = None;
     loop {
         {
-            let mut state = shared.lock();
+            let mut state = shared.state.lock();
             if state.stop {
                 state.surveying = false;
                 return;
@@ -418,7 +412,7 @@ fn survey(shared: &Shared) {
             } else {
                 SURVEY_EVERY
             };
-        let mut state = shared.lock();
+        let mut state = shared.state.lock();
         store(&mut state, found);
         shared.wake.notify_all();
     }
@@ -450,7 +444,7 @@ fn rules(shared: &Shared) {
     let mut next = Instant::now();
     loop {
         {
-            let mut state = shared.lock();
+            let mut state = shared.state.lock();
             while !state.stop && !state.want_rules && Instant::now() < next {
                 let wait = next.saturating_duration_since(Instant::now());
                 state = shared.wait(state, wait);
@@ -463,7 +457,7 @@ fn rules(shared: &Shared) {
         next = Instant::now() + RULES_EVERY;
         let playing = in_use();
         let (want_helper, want_hold, holding) = {
-            let mut state = shared.lock();
+            let mut state = shared.state.lock();
             state.session.in_use = playing;
             (
                 state.session.want_helper(),
@@ -576,13 +570,13 @@ mod tests {
     #[test]
     fn an_install_without_a_data_folder_stops_and_says_why() {
         let shared = shared();
-        shared.lock().session.job = Some(crate::session::Job {
+        shared.state.lock().session.job = Some(crate::session::Job {
             updates: Vec::new(),
             done: 0,
             started: false,
         });
         work(&shared, Task::Install(Vec::new()));
-        let state = shared.lock();
+        let state = shared.state.lock();
         let failed = state.session.failed.as_ref().expect("failed");
         assert_eq!(
             failed.failure.reason,
@@ -606,9 +600,12 @@ mod tests {
             "updates are read only once the first survey is stored"
         );
         let shared = shared();
-        assert!(may_read_updates(&shared.lock()));
-        shared.lock().surveying = true;
-        assert!(!may_read_updates(&shared.lock()), "never while measuring");
+        assert!(may_read_updates(&shared.state.lock()));
+        shared.state.lock().surveying = true;
+        assert!(
+            !may_read_updates(&shared.state.lock()),
+            "never while measuring"
+        );
     }
 
     #[test]
@@ -616,7 +613,7 @@ mod tests {
         let shared = shared();
         let survey = || crate::cleanup::fake::survey(Vec::new());
         {
-            let mut state = shared.lock();
+            let mut state = shared.state.lock();
             state.surveying = true;
             state.session.job = Some(crate::session::Job {
                 updates: Vec::new(),
@@ -665,7 +662,7 @@ mod tests {
             on: true,
         };
         finish(&shared, &task, Ok(()));
-        let state = shared.lock();
+        let state = shared.state.lock();
         assert!(state.want_survey);
         assert!(state.want_host);
     }

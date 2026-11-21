@@ -19,6 +19,7 @@ qol-platform.workspace = true
 qol-plugin-api.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
+qol-sync.workspace = true
 qol-zigbee.workspace = true
 serde_json.workspace = true
 serialport = { version = "4", default-features = false }

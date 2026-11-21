@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::thread;
 use std::time::SystemTime;
 
@@ -13,6 +13,7 @@ use gpui::{
 };
 use qol_gpui::kit::kit;
 use qol_gpui::theme::{SPACE_STACK, SPACE_TIGHT};
+use qol_sync::Mutex;
 
 use super::pictogram::play;
 use super::preview_images::PreviewImages;
@@ -91,7 +92,7 @@ impl Previews {
     }
 
     fn shot(&self, key: Key) -> Option<Shot> {
-        let mut shared = lock(&self.shared);
+        let mut shared = self.shared.lock();
         match shared.slots.get(&key) {
             Some(Slot::Ready(shot)) => return Some(shot.clone()),
             Some(Slot::Waiting | Slot::Missing) => return None,
@@ -176,7 +177,7 @@ impl Previews {
 fn work(shared: &Mutex<Shared>, ready: &UnboundedSender<()>) {
     loop {
         let key = {
-            let mut shared = lock(shared);
+            let mut shared = shared.lock();
             let Some(key) = shared.queue.pop() else {
                 shared.workers -= 1;
                 return;
@@ -189,7 +190,7 @@ fn work(shared: &Mutex<Shared>, ready: &UnboundedSender<()>) {
                 Slot::Missing
             });
         let shown = matches!(slot, Slot::Ready(_));
-        if let Some(waiting) = lock(shared).slots.get_mut(&key) {
+        if let Some(waiting) = shared.lock().slots.get_mut(&key) {
             *waiting = slot;
         }
         if shown {
@@ -233,10 +234,6 @@ fn fit((width, height): (f32, f32), (room_width, room_height): (f32, f32)) -> (f
         (width * scale).round().max(1.0),
         (height * scale).round().max(1.0),
     )
-}
-
-fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
-    shared.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

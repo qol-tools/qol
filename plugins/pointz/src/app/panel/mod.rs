@@ -1,10 +1,9 @@
-use std::sync::{Mutex, MutexGuard};
-
 use chrono::{DateTime, Local};
 use qol_config::pages::{Go, Notice, Press, PressReply, Stack};
 use qol_peers::admin::{PageCursor, PointzRequest, PointzStatus, Response};
 use qol_peers::pointz::{PointzSocket, PointzTransport};
 use qol_plugin_daemon::daemon::ReadResult;
+use qol_sync::Mutex;
 use serde::Serialize;
 
 use crate::config::ServerConfig;
@@ -22,15 +21,11 @@ pub(super) trait Tray {
 }
 
 pub(super) fn pages<C>(input: &serde_json::Value) -> ReadResult<C> {
-    answer_pages(&Live, &mut memory(), input, Local::now())
+    answer_pages(&Live, &mut MEMORY.lock(), input, Local::now())
 }
 
 pub(super) fn press<C>(input: &serde_json::Value) -> ReadResult<C> {
-    answer_press(&Live, &mut memory(), input, Local::now())
-}
-
-fn memory() -> MutexGuard<'static, Memory> {
-    MEMORY.lock().unwrap_or_else(|error| error.into_inner())
+    answer_press(&Live, &mut MEMORY.lock(), input, Local::now())
 }
 
 fn answer_pages<C>(

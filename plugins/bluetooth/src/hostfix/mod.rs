@@ -1,9 +1,10 @@
 use anyhow::{bail, Context, Result};
 use qol_host_fixes::residency::HostResidency;
 use qol_host_fixes::{elevation, takeover, Finding, FixState, HostFixes};
+use qol_sync::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 
 mod platform;
 
@@ -252,9 +253,7 @@ impl HostFixes for BluetoothHostFixes {
     }
 
     fn apply(&self, id: &str) -> Result<String> {
-        let _lock = HOST_FIX_LOCK
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Bluetooth host fix ownership is unavailable"))?;
+        let _lock = HOST_FIX_LOCK.lock();
         if id == SERVICE_FIX_ID {
             qol_runtime::probe!(
                 "BLUETOOTH_HOST_FIX",
@@ -534,9 +533,7 @@ pub fn restore_claimed_managers() {
 }
 
 fn restore_claimed_managers_for(dir: &Path, residency: HostResidency, ops: &mut dyn ManagerOps) {
-    let Ok(_lock) = HOST_FIX_LOCK.lock() else {
-        return;
-    };
+    let _lock = HOST_FIX_LOCK.lock();
     if residency.is_resident() {
         for claim in takeover::outstanding(dir) {
             let state = match manager_claim_state(&claim) {
@@ -582,9 +579,7 @@ fn restore_claimed_managers_for(dir: &Path, residency: HostResidency, ops: &mut 
 }
 
 pub fn reconcile_claimed_managers() {
-    let Ok(_lock) = HOST_FIX_LOCK.lock() else {
-        return;
-    };
+    let _lock = HOST_FIX_LOCK.lock();
     let Ok(dir) = claims_dir() else {
         return;
     };
@@ -624,9 +619,7 @@ pub fn adopt_competing_managers_if_resident() -> Vec<String> {
     let Ok(dir) = claims_dir() else {
         return Vec::new();
     };
-    let Ok(_lock) = HOST_FIX_LOCK.lock() else {
-        return Vec::new();
-    };
+    let _lock = HOST_FIX_LOCK.lock();
     let fixes = BluetoothHostFixes;
     let mut adopted = Vec::new();
     for manager in COMPETING_MANAGERS {
@@ -1031,10 +1024,8 @@ mod tests {
     const TEST_DEVICE: &str = "test-device";
 
     #[cfg(target_os = "linux")]
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    fn env_lock() -> qol_sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock()
     }
 
     #[cfg(target_os = "linux")]

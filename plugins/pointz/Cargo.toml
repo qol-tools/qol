@@ -15,6 +15,7 @@ qol-platform.workspace = true
 qol-peers.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
+qol-sync.workspace = true
 qol-conventions.workspace = true
 log.workspace = true
 qol-log.workspace = true

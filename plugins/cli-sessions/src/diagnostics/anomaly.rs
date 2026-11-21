@@ -1,7 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
+use qol_sync::Mutex;
 use qol_terminal_sessions::SessionId;
 
 use crate::attention::Phase;
@@ -163,9 +164,7 @@ pub fn observe(
     let Some(recorder) = RECORDER.get_or_init(from_env).as_ref() else {
         return;
     };
-    let Ok(mut machine) = recorder.machine.lock() else {
-        return;
-    };
+    let mut machine = recorder.machine.lock();
     let frame = Frame {
         ts,
         title: title.to_string(),

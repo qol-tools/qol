@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use qol_sync::Mutex;
 
 use crate::config::{self, ReconnectConfig};
 
@@ -10,9 +10,7 @@ pub(super) fn forget_managed(current: &ReconnectConfig, address: &str) {
     }
     let address = address.to_string();
     std::mem::drop(std::thread::spawn(move || {
-        let _writing = FORGET_WRITES
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _writing = FORGET_WRITES.lock();
         let Some(kept) = config::without_managed(&config::load().managed_devices, &address) else {
             return;
         };

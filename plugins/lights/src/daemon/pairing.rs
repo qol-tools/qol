@@ -1,5 +1,7 @@
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use qol_sync::Mutex;
 
 pub const PAIRING_WINDOW: Duration = Duration::from_secs(60);
 
@@ -67,14 +69,11 @@ impl PairingSession {
 }
 
 pub fn snapshot(pairing: &SharedPairing) -> PairingSession {
-    pairing
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+    pairing.lock().clone()
 }
 
 pub fn update(pairing: &SharedPairing, change: impl FnOnce(&mut PairingSession)) {
-    change(&mut pairing.lock().unwrap_or_else(PoisonError::into_inner));
+    change(&mut pairing.lock());
 }
 
 #[cfg(test)]

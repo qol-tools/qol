@@ -3,10 +3,11 @@ use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use qol_sync::Mutex;
 use qol_watch::{Watch, WatchNotice, WatchRoot};
 
 use super::pace::Pace;
@@ -82,7 +83,7 @@ impl LiveCounts {
 
     #[cfg(test)]
     pub(super) fn following(&self) -> bool {
-        lock(&self.watch).is_some()
+        self.watch.lock().is_some()
     }
 
     #[cfg(test)]
@@ -92,7 +93,7 @@ impl LiveCounts {
 
     #[cfg(test)]
     pub(super) fn is_stale(&self, folder: &Path) -> bool {
-        lock(&self.stale).contains(folder)
+        self.stale.lock().contains(folder)
     }
 
     pub(super) fn drain(&mut self, now: Instant) -> Vec<FolderCount> {
@@ -132,7 +133,7 @@ impl LiveCounts {
         }
         self.stale_at = None;
         let ready = self.ready();
-        let mut stale = lock(&self.stale);
+        let mut stale = self.stale.lock();
         for path in &ready {
             stale.remove(path);
         }
@@ -156,7 +157,8 @@ impl LiveCounts {
             .iter()
             .flat_map(|recount| &recount.pending)
             .collect();
-        lock(&self.stale)
+        self.stale
+            .lock()
             .iter()
             .filter(|path| !counting.contains(path))
             .cloned()
@@ -175,21 +177,23 @@ fn watch_counts(
     let roots: Vec<WatchRoot> = folders.iter().map(WatchRoot::shallow).collect();
     let noticed = Arc::clone(&stale);
     let notice_wake = wake.clone();
-    let watched =
-        qol_watch::watch(&roots, move |notice| {
-            let WatchNotice::Changed(paths) = notice else {
-                return;
-            };
-            lock(&noticed).extend(paths.iter().filter_map(|path| path.parent()).flat_map(
-                |folder| {
+    let watched = qol_watch::watch(&roots, move |notice| {
+        let WatchNotice::Changed(paths) = notice else {
+            return;
+        };
+        noticed.lock().extend(
+            paths
+                .iter()
+                .filter_map(|path| path.parent())
+                .flat_map(|folder| {
                     same_folders
                         .get(folder)
                         .cloned()
                         .unwrap_or_else(|| vec![folder.to_path_buf()])
-                },
-            ));
-            notice_wake();
-        });
+                }),
+        );
+        notice_wake();
+    });
     let watch = match watched {
         Ok(watch) => watch,
         Err(error) => {
@@ -200,14 +204,14 @@ fn watch_counts(
     let Some(slot) = slot.upgrade() else {
         return;
     };
-    *lock(&slot) = Some(watch);
+    *slot.lock() = Some(watch);
     let unseen: Vec<PathBuf> = folders
         .iter()
         .filter(|folder| changed_since(folder, counted_from))
         .cloned()
         .collect();
     if !unseen.is_empty() {
-        lock(&stale).extend(unseen);
+        stale.lock().extend(unseen);
         wake();
     }
 }
@@ -241,8 +245,4 @@ fn same_folders(folders: &[PathBuf]) -> HashMap<PathBuf, Vec<PathBuf>> {
         }
     }
     found
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

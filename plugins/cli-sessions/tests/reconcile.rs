@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use qol_cli_sessions::attention::{Evidence, GRACE_SECS};
 use qol_cli_sessions::daemon::reconcile::{
@@ -9,6 +9,7 @@ use qol_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
 use qol_cli_sessions::registry::{Registry, SessionState};
 use qol_cli_sessions::service::{NoServiceProbe, ServiceProbe};
 use qol_cli_sessions::status::Status;
+use qol_sync::Mutex;
 use qol_terminal_sessions::cli::{
     claude_tool, codex_tool, generic_tool, kimi_tool, CliActivityEvidence, CliRuntimeState,
     CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence,
@@ -56,7 +57,7 @@ impl TerminalHost for CountingHost {
 
     fn get_text(&self, _target: &SessionBinding) -> Option<String> {
         self.reads.fetch_add(1, Ordering::Relaxed);
-        Some(self.screen.lock().unwrap().clone())
+        Some(self.screen.lock().clone())
     }
 
     fn focus(&self, _target: &SessionBinding) -> anyhow::Result<()> {
@@ -95,12 +96,12 @@ impl CliSessionStrategy for SubscribedAgent {
     fn describe(&self, _pane: &Pane) -> CliSessionDescriptor {
         CliSessionDescriptor {
             tool: self.tool.clone(),
-            display_name: self.name.lock().unwrap().clone(),
-            external_id: Some(self.external_id.lock().unwrap().clone()),
+            display_name: self.name.lock().clone(),
+            external_id: Some(self.external_id.lock().clone()),
             external_id_authoritative: false,
             has_activity: Some(true),
             evidence: CliSessionEvidence {
-                runtime: *self.runtime.lock().unwrap(),
+                runtime: *self.runtime.lock(),
                 activity: CliActivityEvidence::default(),
             },
         }
@@ -114,7 +115,7 @@ impl CliSessionStrategy for SubscribedAgent {
         Option<CliSessionSubscription>,
         qol_terminal_sessions::cli::CliSessionSubscriptionError,
     > {
-        self.handlers.lock().unwrap().push(on_change);
+        self.handlers.lock().push(on_change);
         Ok(Some(CliSessionSubscription::from_guard(())))
     }
 }
@@ -181,7 +182,7 @@ impl TerminalHost for ClaudeViewportHost {
 
     fn visual_screen_is_current(&self, _target: &SessionBinding, _screen: &str) -> Option<bool> {
         self.checks.fetch_add(1, Ordering::Relaxed);
-        *self.current.lock().unwrap()
+        *self.current.lock()
     }
 
     fn focus(&self, _target: &SessionBinding) -> anyhow::Result<()> {
@@ -311,9 +312,7 @@ fn claude_scrolled_old_dialog_never_overrides_a_fresh_working_transcript() {
     .unwrap();
     for (current, expected) in [(false, Status::Working), (true, Status::NeedsYou)] {
         let reg = Arc::new(Mutex::new(Registry::default()));
-        reg.lock()
-            .unwrap()
-            .restore(vec![restored(52, Status::Working)]);
+        reg.lock().restore(vec![restored(52, Status::Working)]);
         let host = ClaudeViewportHost {
             pane: pane(52, "Claude", false, &["zsh", "claude"], "claude"),
             screen: "Do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel".into(),
@@ -340,15 +339,13 @@ fn claude_scrolled_old_dialog_never_overrides_a_fresh_working_transcript() {
             &mut caches,
         );
         assert!(first.is_empty());
-        assert_eq!(reg.lock().unwrap().sorted()[0].status, expected);
+        assert_eq!(reg.lock().sorted()[0].status, expected);
         assert_eq!(second.len(), usize::from(current));
         assert_eq!(host.checks.load(Ordering::Relaxed), 1);
     }
 
     let reg = Arc::new(Mutex::new(Registry::default()));
-    reg.lock()
-        .unwrap()
-        .restore(vec![restored(52, Status::Working)]);
+    reg.lock().restore(vec![restored(52, Status::Working)]);
     let host = ClaudeViewportHost {
         pane: pane(52, "Claude", false, &["zsh", "claude"], "claude"),
         screen: "Do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel".into(),
@@ -365,7 +362,7 @@ fn claude_scrolled_old_dialog_never_overrides_a_fresh_working_transcript() {
         100,
         &mut caches,
     );
-    *host.current.lock().unwrap() = Some(true);
+    *host.current.lock() = Some(true);
     let notices = tick_with_caches(
         &reg,
         &host,
@@ -375,7 +372,7 @@ fn claude_scrolled_old_dialog_never_overrides_a_fresh_working_transcript() {
         101,
         &mut caches,
     );
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::NeedsYou);
+    assert_eq!(reg.lock().sorted()[0].status, Status::NeedsYou);
     assert_eq!(notices.len(), 1);
     assert_eq!(host.checks.load(Ordering::Relaxed), 2);
 }
@@ -418,7 +415,7 @@ fn subscribed_screens_cache_after_active_sessions_settle() {
     );
     assert_eq!(host.reads.load(Ordering::Relaxed), 6);
 
-    *harness.runtime.lock().unwrap() = CliRuntimeState::Ready;
+    *harness.runtime.lock() = CliRuntimeState::Ready;
     tick_with_caches(
         &reg,
         &host,
@@ -450,12 +447,12 @@ fn subscribed_screens_cache_after_active_sessions_settle() {
         "settling panes stay active until the grace window closes"
     );
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::YourTurn,
         "the ready evidence completes the turn once the grace window closes"
     );
 
-    harness.handlers.lock().unwrap()[2]();
+    harness.handlers.lock()[2]();
     tick_with_caches(
         &reg,
         &host,
@@ -507,9 +504,9 @@ fn changed_external_session_replaces_the_metadata_subscription() {
         100,
         &mut caches,
     );
-    assert_eq!(harness.handlers.lock().unwrap().len(), 1);
+    assert_eq!(harness.handlers.lock().len(), 1);
 
-    *harness.external_id.lock().unwrap() = "replacement-session".to_owned();
+    *harness.external_id.lock() = "replacement-session".to_owned();
     tick_with_caches(
         &reg,
         &host,
@@ -520,7 +517,7 @@ fn changed_external_session_replaces_the_metadata_subscription() {
         &mut caches,
     );
 
-    assert_eq!(harness.handlers.lock().unwrap().len(), 2);
+    assert_eq!(harness.handlers.lock().len(), 2);
     assert_eq!(host.reads.load(Ordering::Relaxed), 2);
 }
 
@@ -543,10 +540,7 @@ fn transient_missing_label_keeps_the_last_known_title() {
         100,
         &mut caches,
     );
-    assert_eq!(
-        reg.lock().unwrap().sorted()[0].name.as_deref(),
-        Some("Subscribed")
-    );
+    assert_eq!(reg.lock().sorted()[0].name.as_deref(), Some("Subscribed"));
 
     for (now, name, expected) in [
         (101, Some(" "), Some("Subscribed")),
@@ -554,7 +548,7 @@ fn transient_missing_label_keeps_the_last_known_title() {
         (103, None, Some("Subscribed")),
         (104, Some("Renamed"), Some("Renamed")),
     ] {
-        *harness.name.lock().unwrap() = name.map(str::to_owned);
+        *harness.name.lock() = name.map(str::to_owned);
         tick_with_caches(
             &reg,
             &host,
@@ -565,13 +559,13 @@ fn transient_missing_label_keeps_the_last_known_title() {
             &mut caches,
         );
         assert_eq!(
-            reg.lock().unwrap().sorted()[0].name.as_deref(),
+            reg.lock().sorted()[0].name.as_deref(),
             expected,
             "incoming label at {now:?} must not erase a stable title"
         );
     }
 
-    *harness.name.lock().unwrap() = None;
+    *harness.name.lock() = None;
     host.panes[0].root_pid = host.panes[0].root_pid.saturating_add(1);
     tick_with_caches(
         &reg,
@@ -583,7 +577,7 @@ fn transient_missing_label_keeps_the_last_known_title() {
         &mut caches,
     );
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].name,
+        reg.lock().sorted()[0].name,
         None,
         "a replaced pane identity must not inherit a stale title"
     );
@@ -643,9 +637,9 @@ fn answered_picker_stays_working_through_the_transition() {
         101,
         &mut caches,
     );
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::NeedsYou);
+    assert_eq!(reg.lock().sorted()[0].status, Status::NeedsYou);
 
-    *host.screen.lock().unwrap() = KIMI_TRANSITION.to_owned();
+    *host.screen.lock() = KIMI_TRANSITION.to_owned();
     tick_with_caches(
         &reg,
         &host,
@@ -656,12 +650,12 @@ fn answered_picker_stays_working_through_the_transition() {
         &mut caches,
     );
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::NeedsYou,
         "a chrome-less transition frame holds the answered session instead of flipping it"
     );
 
-    *host.screen.lock().unwrap() = KIMI_WORKING.to_owned();
+    *host.screen.lock() = KIMI_WORKING.to_owned();
     tick_with_caches(
         &reg,
         &host,
@@ -673,7 +667,7 @@ fn answered_picker_stays_working_through_the_transition() {
     );
 
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "the first spinner frame must keep the answered session working"
     );
@@ -703,9 +697,9 @@ fn kimi_questionnaire_enters_attention_after_confirmation_and_keeps_it_while_edi
         100,
         &mut caches,
     );
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Working);
+    assert_eq!(reg.lock().sorted()[0].status, Status::Working);
 
-    *host.screen.lock().unwrap() = KIMI_EDITING_QUESTIONNAIRE.to_owned();
+    *host.screen.lock() = KIMI_EDITING_QUESTIONNAIRE.to_owned();
     tick_with_caches(
         &reg,
         &host,
@@ -716,13 +710,12 @@ fn kimi_questionnaire_enters_attention_after_confirmation_and_keeps_it_while_edi
         &mut caches,
     );
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "a questionnaire frame right after work with unknown freshness is not confirmed yet"
     );
 
-    *host.screen.lock().unwrap() =
-        KIMI_EDITING_QUESTIONNAIRE.replace("custom answer", "changed answer");
+    *host.screen.lock() = KIMI_EDITING_QUESTIONNAIRE.replace("custom answer", "changed answer");
     tick_with_caches(
         &reg,
         &host,
@@ -733,7 +726,7 @@ fn kimi_questionnaire_enters_attention_after_confirmation_and_keeps_it_while_edi
         &mut caches,
     );
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "an editing frame keeps the confirmation window open"
     );
@@ -750,7 +743,7 @@ fn kimi_questionnaire_enters_attention_after_confirmation_and_keeps_it_while_edi
         );
     }
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "a settled questionnaire still needs the full grace"
     );
@@ -764,13 +757,12 @@ fn kimi_questionnaire_enters_attention_after_confirmation_and_keeps_it_while_edi
         &mut caches,
     );
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::NeedsYou,
         "a settled questionnaire confirmed by the grace alerts"
     );
 
-    *host.screen.lock().unwrap() =
-        KIMI_EDITING_QUESTIONNAIRE.replace("changed answer", "another answer");
+    *host.screen.lock() = KIMI_EDITING_QUESTIONNAIRE.replace("changed answer", "another answer");
     tick_with_caches(
         &reg,
         &host,
@@ -781,7 +773,7 @@ fn kimi_questionnaire_enters_attention_after_confirmation_and_keeps_it_while_edi
         &mut caches,
     );
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::NeedsYou,
         "editing after confirmation keeps attention"
     );
@@ -797,13 +789,13 @@ fn kimi_stale_spinner_line_settles_to_your_turn_after_grace() {
     };
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "a first sighting of a spinner line is still conservative"
     );
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 101, 101);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "one stable poll is insufficient"
     );
@@ -811,7 +803,7 @@ fn kimi_stale_spinner_line_settles_to_your_turn_after_grace() {
         tick(&reg, &host, &interpreter(), &NoServiceProbe, now, now);
     }
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::YourTurn,
         "a settled screen with a stale spinner line completes after the grace window"
     );
@@ -825,19 +817,19 @@ fn kimi_scrolled_screen_holds_working_until_the_live_view_returns() {
         screen: KIMI_WORKING.into(),
     };
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Working);
+    assert_eq!(reg.lock().sorted()[0].status, Status::Working);
 
     let scrolled = "User message number 57 asking about topic 57.\n\nAssistant reply number 57 with a fairly long answer\nthat wraps across multiple terminal lines.";
     host.screen = scrolled.to_owned();
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 101, 101);
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 102, 102);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "a scrolled chrome-less view must hold the working status, not flip to your turn"
     );
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].last_activity,
+        reg.lock().sorted()[0].last_activity,
         100,
         "the stretch start survives the scrolled hold"
     );
@@ -845,13 +837,13 @@ fn kimi_scrolled_screen_holds_working_until_the_live_view_returns() {
     host.screen = KIMI_STALE_LINE.to_owned();
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 103, 103);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "the returning spinner frame reads live work"
     );
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 104, 104);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "one settled poll after the view returns is not yet your turn"
     );
@@ -859,7 +851,7 @@ fn kimi_scrolled_screen_holds_working_until_the_live_view_returns() {
         tick(&reg, &host, &interpreter(), &NoServiceProbe, now, now);
     }
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::YourTurn,
         "the settled stale line is your turn once the grace window closes"
     );
@@ -874,7 +866,7 @@ fn tick_classifies_codex_blocked_from_screen() {
     };
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 101, 101);
-    let rows = reg.lock().unwrap().sorted();
+    let rows = reg.lock().sorted();
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows[0].status,
@@ -893,7 +885,7 @@ fn tick_codex_idle_when_no_turn_taken() {
     };
     tick(&reg, &host, &cli_interpreter, &NoServiceProbe, 100, 100);
     tick(&reg, &host, &cli_interpreter, &NoServiceProbe, 101, 101);
-    let rows = reg.lock().unwrap().sorted();
+    let rows = reg.lock().sorted();
     assert_eq!(
         rows[0].status,
         Status::Unknown,
@@ -905,9 +897,7 @@ fn tick_codex_idle_when_no_turn_taken() {
 #[test]
 fn tick_codex_ready_state_clears_a_stale_needs_you_status() {
     let reg = Arc::new(Mutex::new(Registry::default()));
-    reg.lock()
-        .unwrap()
-        .restore(vec![restored(13, Status::NeedsYou)]);
+    reg.lock().restore(vec![restored(13, Status::NeedsYou)]);
     let host = FakeHost {
         panes: vec![pane(
             13,
@@ -920,7 +910,7 @@ fn tick_codex_ready_state_clears_a_stale_needs_you_status() {
     };
 
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::NeedsYou);
+    assert_eq!(reg.lock().sorted()[0].status, Status::NeedsYou);
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 101, 101);
     tick(
         &reg,
@@ -931,7 +921,7 @@ fn tick_codex_ready_state_clears_a_stale_needs_you_status() {
         101 + GRACE_SECS,
     );
 
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Unknown);
+    assert_eq!(reg.lock().sorted()[0].status, Status::Unknown);
 }
 
 #[test]
@@ -942,13 +932,13 @@ fn tick_codex_requires_ready_evidence_even_when_answer_ends_in_numbered_list() {
         screen: CODEX_WORKING_LINE.into(),
     };
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Working);
+    assert_eq!(reg.lock().sorted()[0].status, Status::Working);
 
     host.screen = CODEX_ANSWER_LIST.to_owned();
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 101, 101);
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 102, 102);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "a settled answer without live or fresh evidence holds until the grace window closes"
     );
@@ -956,14 +946,14 @@ fn tick_codex_requires_ready_evidence_even_when_answer_ends_in_numbered_list() {
         tick(&reg, &host, &interpreter(), &NoServiceProbe, now, now);
     }
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "a quiet answer is not proof of completion"
     );
 
     host.panes[0].title = "project | Ready | finished".into();
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 108, 108);
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::YourTurn);
+    assert_eq!(reg.lock().sorted()[0].status, Status::YourTurn);
 }
 
 #[test]
@@ -1004,7 +994,7 @@ fn tick_generic_listening_reads_service() {
     };
     tick(&reg, &host, &interpreter(), &YesService, 100, 100);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Service,
         "a generic process holding a listener reads live, not working"
     );
@@ -1026,7 +1016,7 @@ fn tick_agent_never_reads_service() {
     tick(&reg, &host, &interpreter(), &YesService, 100, 100);
     tick(&reg, &host, &interpreter(), &YesService, 101, 101);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Unknown,
         "an agent is never demoted to live even when the probe says yes"
     );
@@ -1035,9 +1025,7 @@ fn tick_agent_never_reads_service() {
 #[test]
 fn tick_codex_your_turn_when_turn_taken() {
     let reg = Arc::new(Mutex::new(Registry::default()));
-    reg.lock()
-        .unwrap()
-        .restore(vec![restored(13, Status::Working)]);
+    reg.lock().restore(vec![restored(13, Status::Working)]);
     let cli_interpreter = fake_codex("Asasdsadasd", true);
     let host = FakeHost {
         panes: vec![pane(13, "qol-monorepo", false, &["zsh", "codex"], "codex")],
@@ -1045,7 +1033,7 @@ fn tick_codex_your_turn_when_turn_taken() {
     };
     tick(&reg, &host, &cli_interpreter, &NoServiceProbe, 100, 100);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "the confirming screen read resets the settle stretch"
     );
@@ -1053,7 +1041,7 @@ fn tick_codex_your_turn_when_turn_taken() {
         tick(&reg, &host, &cli_interpreter, &NoServiceProbe, now, now);
     }
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::YourTurn,
         "a completed rollout is your turn once the grace window closes"
     );
@@ -1074,7 +1062,7 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
     };
     tick(&reg, &working, &interpreter(), &NoServiceProbe, 100, 100);
     tick(&reg, &working, &interpreter(), &NoServiceProbe, 101, 101);
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Working);
+    assert_eq!(reg.lock().sorted()[0].status, Status::Working);
 
     let parked = FakeHost {
         panes: vec![pane(
@@ -1089,7 +1077,7 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
     tick(&reg, &parked, &interpreter(), &NoServiceProbe, 200, 200);
     tick(&reg, &parked, &interpreter(), &NoServiceProbe, 201, 201);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "a done marker needs the settle grace before it completes"
     );
@@ -1097,18 +1085,17 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
         tick(&reg, &parked, &interpreter(), &NoServiceProbe, now, now);
     }
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::YourTurn,
         "the parked done summary completes after the grace window"
     );
 
     reg.lock()
-        .unwrap()
         .get_mut(&kitty_session_id(10))
         .unwrap()
         .acknowledge();
     tick(&reg, &parked, &interpreter(), &NoServiceProbe, 300, 300);
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Acknowledged,);
+    assert_eq!(reg.lock().sorted()[0].status, Status::Acknowledged,);
 
     let redrawn = FakeHost {
         panes: vec![pane(
@@ -1123,7 +1110,7 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
     tick(&reg, &redrawn, &interpreter(), &NoServiceProbe, 400, 400);
     tick(&reg, &redrawn, &interpreter(), &NoServiceProbe, 401, 401);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Acknowledged,
         "a cosmetic redraw must not re-arm an acknowledged turn"
     );
@@ -1144,7 +1131,7 @@ fn tick_claude_fresh_is_idle() {
     };
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 101, 101);
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Unknown,);
+    assert_eq!(reg.lock().sorted()[0].status, Status::Unknown,);
 }
 
 #[test]
@@ -1162,7 +1149,7 @@ fn tick_labels_claude_from_title_not_launch_alias() {
     };
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].name.as_deref(),
+        reg.lock().sorted()[0].name.as_deref(),
         Some("Improve logging"),
         "claude label is the title topic, not the launch alias"
     );
@@ -1176,7 +1163,7 @@ fn tick_labels_generic_from_command() {
         screen: String::new(),
     };
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
-    let rows = reg.lock().unwrap().sorted();
+    let rows = reg.lock().sorted();
     assert_eq!(rows[0].name.as_deref(), Some("qol dev"));
     assert_eq!(rows[0].status, Status::Working, "running generic => green");
 }
@@ -1192,14 +1179,14 @@ fn tick_does_not_refresh_activity_timestamp_while_working() {
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 200, 200);
 
-    let rows = reg.lock().unwrap().sorted();
+    let rows = reg.lock().sorted();
     assert_eq!(rows[0].last_activity, 100);
 }
 
 #[test]
 fn tick_refreshes_restored_identity_fields() {
     let reg = Arc::new(Mutex::new(Registry::default()));
-    reg.lock().unwrap().restore(vec![SessionState {
+    reg.lock().restore(vec![SessionState {
         id: kitty_session_id(21),
         root_pid: -1,
         project: "stale".into(),
@@ -1229,7 +1216,7 @@ fn tick_refreshes_restored_identity_fields() {
 
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
 
-    let rows = reg.lock().unwrap().sorted();
+    let rows = reg.lock().sorted();
     assert_eq!(rows[0].project, "proj");
     assert_eq!(rows[0].cwd, "/a/proj");
     assert_ne!(rows[0].root_pid, -1);
@@ -1249,7 +1236,7 @@ fn tick_drops_panes_that_disappear() {
         screen: String::new(),
     };
     tick(&reg, &present, &interpreter(), &NoServiceProbe, 100, 100);
-    assert_eq!(reg.lock().unwrap().sorted().len(), 1);
+    assert_eq!(reg.lock().sorted().len(), 1);
 
     let gone = FakeHost {
         panes: vec![],
@@ -1257,7 +1244,7 @@ fn tick_drops_panes_that_disappear() {
     };
     tick(&reg, &gone, &interpreter(), &NoServiceProbe, 200, 200);
     assert_eq!(
-        reg.lock().unwrap().sorted().len(),
+        reg.lock().sorted().len(),
         0,
         "a pane that disappears is pruned"
     );
@@ -1266,9 +1253,7 @@ fn tick_drops_panes_that_disappear() {
 #[test]
 fn restored_attention_never_re_alerts_without_evidence() {
     let reg = Arc::new(Mutex::new(Registry::default()));
-    reg.lock()
-        .unwrap()
-        .restore(vec![restored(50, Status::Acknowledged)]);
+    reg.lock().restore(vec![restored(50, Status::Acknowledged)]);
     let host = FakeHost {
         panes: vec![pane(50, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: CODEX_DONE.into(),
@@ -1278,7 +1263,7 @@ fn restored_attention_never_re_alerts_without_evidence() {
         notices.is_empty(),
         "a restored acknowledged session must not re-announce"
     );
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Acknowledged);
+    assert_eq!(reg.lock().sorted()[0].status, Status::Acknowledged);
 }
 
 #[test]
@@ -1343,7 +1328,7 @@ fn completing_after_grace_requires_a_time_advance_not_poll_count() {
         tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
     }
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "twenty polls at the same instant are not a grace period"
     );
@@ -1356,7 +1341,7 @@ fn completing_after_grace_requires_a_time_advance_not_poll_count() {
         100 + GRACE_SECS,
     );
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::YourTurn,
         "one poll after the grace boundary completes the turn"
     );
@@ -1375,32 +1360,32 @@ fn wall_clock_jumps_do_not_expire_grace() {
     };
     tick(&reg, &busy, &interpreter(), &NoServiceProbe, 100, 100);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "a generic busy pane starts working"
     );
     tick(&reg, &busy, &interpreter(), &NoServiceProbe, 1100, 101);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "a +1000s wall jump does not disturb a running turn"
     );
     tick(&reg, &prompt, &interpreter(), &NoServiceProbe, 1100, 104);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Unknown,
         "the wall jump must not expire the 5s grace early"
     );
 
     tick(&reg, &busy, &interpreter(), &NoServiceProbe, 1100, 106);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::Working,
         "a new working episode starts"
     );
     tick(&reg, &prompt, &interpreter(), &NoServiceProbe, 1100, 111);
     assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
+        reg.lock().sorted()[0].status,
         Status::YourTurn,
         "grace counts monotonic seconds, not wall seconds"
     );
@@ -1414,12 +1399,12 @@ fn restored_working_with_same_screen_hash_starts_a_fresh_grace() {
         screen: KIMI_STALE_LINE.into(),
     };
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Working);
-    let hash = reg.lock().unwrap().sorted()[0].screen_hash;
+    assert_eq!(reg.lock().sorted()[0].status, Status::Working);
+    let hash = reg.lock().sorted()[0].screen_hash;
     assert!(hash.is_some(), "the working turn produced a screen hash");
 
     let restarted = Arc::new(Mutex::new(Registry::default()));
-    restarted.lock().unwrap().restore(vec![SessionState {
+    restarted.lock().restore(vec![SessionState {
         id: kitty_session_id(1),
         root_pid: std::process::id() as i32,
         project: "proj".into(),
@@ -1454,7 +1439,7 @@ fn restored_working_with_same_screen_hash_starts_a_fresh_grace() {
         &mut caches,
     );
     assert_eq!(
-        restarted.lock().unwrap().sorted()[0].status,
+        restarted.lock().sorted()[0].status,
         Status::Working,
         "a restored working turn with the same screen hash must not complete instantly"
     );
@@ -1468,7 +1453,7 @@ fn restored_working_with_same_screen_hash_starts_a_fresh_grace() {
         &mut caches,
     );
     assert_eq!(
-        restarted.lock().unwrap().sorted()[0].status,
+        restarted.lock().sorted()[0].status,
         Status::Working,
         "the fresh grace is still running"
     );
@@ -1482,7 +1467,7 @@ fn restored_working_with_same_screen_hash_starts_a_fresh_grace() {
         &mut caches,
     );
     assert_eq!(
-        restarted.lock().unwrap().sorted()[0].status,
+        restarted.lock().sorted()[0].status,
         Status::YourTurn,
         "the restart observes a full fresh grace before completing"
     );
@@ -1507,11 +1492,7 @@ fn pi_embedded_working_recovers_and_stays_busy_across_quiet_ticks() {
             now,
             &mut caches,
         );
-        assert_eq!(
-            reg.lock().unwrap().sorted()[0].status,
-            Status::Working,
-            "time={now}"
-        );
+        assert_eq!(reg.lock().sorted()[0].status, Status::Working, "time={now}");
     }
 }
 
@@ -1603,7 +1584,7 @@ fn a_woken_session_its_runner_will_close_never_toasts_your_turn() {
             &mut caches,
         ));
     }
-    let rows = reg.lock().unwrap().sorted();
+    let rows = reg.lock().sorted();
     assert_eq!(rows[0].status, Status::YourTurn, "the woken turn ended");
     assert!(
         notices.is_empty(),
@@ -1647,7 +1628,7 @@ fn a_finished_park_toasts_its_report_once_and_a_click_reopens_it() {
     let activate = notices[0].activate();
     assert_eq!(activate.action, "reopen");
     assert_eq!(activate.input["park"], "park-19");
-    assert!(reg.lock().unwrap().sorted().is_empty());
+    assert!(reg.lock().sorted().is_empty());
 }
 
 #[test]
@@ -1678,7 +1659,7 @@ fn a_parked_pane_shows_parked_instead_of_your_turn_and_never_notifies() {
             &mut caches,
         ));
     }
-    let rows = reg.lock().unwrap().sorted();
+    let rows = reg.lock().sorted();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].status, Status::Parked);
     assert!(notices.is_empty(), "a parked turn end is not your turn");
@@ -1711,7 +1692,7 @@ fn a_parked_pane_woken_in_its_kept_terminal_shows_working_until_its_turn_ends() 
             now,
             &mut caches,
         );
-        seen.push(reg.lock().unwrap().sorted()[0].status);
+        seen.push(reg.lock().sorted()[0].status);
     }
     assert!(
         seen[..4].contains(&Status::Working),
@@ -1742,7 +1723,7 @@ fn a_parked_session_without_a_pane_stays_listed_while_its_runner_lives() {
         );
         assert!(notices.is_empty());
     }
-    let rows = reg.lock().unwrap().sorted();
+    let rows = reg.lock().sorted();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, kitty_session_id(17));
     assert_eq!(rows[0].status, Status::Parked);
@@ -1762,7 +1743,7 @@ fn a_parked_session_without_a_pane_stays_listed_while_its_runner_lives() {
         &mut caches,
     );
     assert!(
-        reg.lock().unwrap().sorted().is_empty(),
+        reg.lock().sorted().is_empty(),
         "a park that stopped waiting leaves the list"
     );
 }
@@ -1831,7 +1812,7 @@ fn a_park_that_closed_its_tab_stays_listed_until_its_conversation_opens_again() 
     for now in 100..=101 {
         assert!(tick_at(&host, now).is_empty());
     }
-    let rows = reg.lock().unwrap().sorted();
+    let rows = reg.lock().sorted();
     assert_eq!(rows.len(), 1, "a park that kept its tab open is not parked");
     assert_eq!(rows[0].id, kitty_session_id(21));
     assert_eq!(rows[0].status, Status::Parked);
@@ -1841,13 +1822,7 @@ fn a_park_that_closed_its_tab_stays_listed_until_its_conversation_opens_again() 
 
     host.panes = vec![pane(23, "reopened", false, &["zsh", "codex"], "codex")];
     tick_at(&host, 102);
-    let ids: Vec<_> = reg
-        .lock()
-        .unwrap()
-        .sorted()
-        .into_iter()
-        .map(|row| row.id)
-        .collect();
+    let ids: Vec<_> = reg.lock().sorted().into_iter().map(|row| row.id).collect();
     assert_eq!(ids, [kitty_session_id(23)], "the reopened tab replaces it");
     let stored: ParkRecord =
         serde_json::from_str(&std::fs::read_to_string(parked.path().join("park-21.json")).unwrap())
@@ -1857,7 +1832,7 @@ fn a_park_that_closed_its_tab_stays_listed_until_its_conversation_opens_again() 
     host.panes.clear();
     tick_at(&host, 103);
     assert!(
-        reg.lock().unwrap().sorted().is_empty(),
+        reg.lock().sorted().is_empty(),
         "closing the reopened tab does not park it again"
     );
 }
@@ -1887,13 +1862,7 @@ fn a_waiting_park_whose_conversation_is_open_elsewhere_is_not_listed_twice() {
         100,
         &mut caches,
     );
-    let ids: Vec<_> = reg
-        .lock()
-        .unwrap()
-        .sorted()
-        .into_iter()
-        .map(|row| row.id)
-        .collect();
+    let ids: Vec<_> = reg.lock().sorted().into_iter().map(|row| row.id).collect();
     assert_eq!(ids, [kitty_session_id(25)]);
 }
 

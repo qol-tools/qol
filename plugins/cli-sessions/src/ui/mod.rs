@@ -8,7 +8,7 @@ pub mod selection;
 mod trace;
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use gpui::{
     px, size, App, AppContext, AsyncApp, Bounds, Context, FocusHandle, Focusable, Pixels,
@@ -16,6 +16,7 @@ use gpui::{
 };
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{DragGestureState, SurfaceDismisser};
+use qol_sync::Mutex;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
 use crate::host::TerminalHost;
@@ -87,11 +88,10 @@ impl SessionsView {
     }
 
     fn read_focus_after_leaving(&self, cx: &mut Context<Self>) {
-        let Ok(read) = self.registry.lock().map(|mut registry| {
+        let read = {
+            let mut registry = self.registry.lock();
             registry.focus_moved();
             registry.focus_read()
-        }) else {
-            return;
         };
         let registry = self.registry.clone();
         let host = self.host.clone();
@@ -99,9 +99,7 @@ impl SessionsView {
             cx.background_executor().timer(FOCUS_SETTLE).await;
             cx.background_spawn(async move {
                 let panes = host.discover();
-                if let Ok(mut registry) = registry.lock() {
-                    registry.observe_focus(read, &panes);
-                }
+                registry.lock().observe_focus(read, &panes);
             })
             .await;
             let _ = view.update(cx, |_, cx| cx.notify());
@@ -110,7 +108,7 @@ impl SessionsView {
     }
 
     pub fn rows(&self) -> Vec<crate::session::registry::SessionState> {
-        self.registry.lock().map(|r| r.sorted()).unwrap_or_default()
+        self.registry.lock().sorted()
     }
 
     pub fn is_showing(&self) -> bool {
@@ -309,18 +307,17 @@ impl SessionsView {
     }
 
     pub fn acknowledge(&mut self, id: &SessionId) {
-        if let Ok(mut reg) = self.registry.lock() {
-            if let Some(s) = reg.get_mut(id) {
-                let previous = s.status;
-                s.acknowledge();
-                if previous != s.status {
-                    self.selection.select(id.clone());
-                    qol_runtime::probe!(
-                        "CLI_SESSIONS_ACK",
-                        "id={id} previous={previous:?} status={:?}",
-                        s.status
-                    );
-                }
+        let mut reg = self.registry.lock();
+        if let Some(s) = reg.get_mut(id) {
+            let previous = s.status;
+            s.acknowledge();
+            if previous != s.status {
+                self.selection.select(id.clone());
+                qol_runtime::probe!(
+                    "CLI_SESSIONS_ACK",
+                    "id={id} previous={previous:?} status={:?}",
+                    s.status
+                );
             }
         }
     }
@@ -337,11 +334,7 @@ impl SessionsView {
         let Some(id) = self.selection.resolved(&order) else {
             return;
         };
-        let key = self
-            .registry
-            .lock()
-            .ok()
-            .and_then(|reg| reg.get(&id).and_then(|s| s.key.clone()));
+        let key = self.registry.lock().get(&id).and_then(|s| s.key.clone());
         if let Some(key) = key {
             crate::daemon::knocks::spawn_wake(&key);
         }

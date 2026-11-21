@@ -3,7 +3,7 @@ mod platform;
 use crate::command::{Command, ModifierKeys};
 use crate::config::ServerConfig;
 use anyhow::Result;
-use std::sync::Mutex;
+use qol_sync::Mutex;
 use std::time::{Duration, Instant};
 
 use platform::InputHandlerImpl;
@@ -156,7 +156,7 @@ impl ScreenBoundsCache {
     }
 
     pub(in crate::input) fn current(&self) -> ScreenBounds {
-        let mut state = self.state.lock().expect("Screen bounds mutex poisoned");
+        let mut state = self.state.lock();
         if state.1.elapsed() >= SCREEN_BOUNDS_REFRESH {
             if let Some(refreshed) = (self.query)() {
                 state.0 = refreshed;
@@ -181,7 +181,7 @@ impl CursorTrack {
     }
 
     pub(in crate::input) fn advance(&self, bounds: &ScreenBounds, dx: f64, dy: f64) -> (f64, f64) {
-        let mut state = self.state.lock().expect("Cursor position mutex poisoned");
+        let mut state = self.state.lock();
         let now = Instant::now();
         let (x, y) = start_position(*state, now, self.read).unwrap_or_else(|| bounds.center());
         let moved = bounds.clamp(x + dx, y + dy);

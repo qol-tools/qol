@@ -90,10 +90,7 @@ fn before_typing(config: &crate::config::LauncherConfig) -> BeforeTyping {
 
 impl LauncherView {
     pub(crate) fn new(title: String, shared: SharedEntries, cx: &mut Context<Self>) -> Self {
-        let entries = shared
-            .lock()
-            .map(|g| g.entries.clone())
-            .unwrap_or_else(|_| Arc::new(PreloadedEntries::empty()));
+        let entries = shared.lock().entries.clone();
         let mut blur_guard = qol_gpui::ghost::BlurGuard::new();
         blur_guard.arm(Duration::from_millis(BLUR_GUARD_MS));
         let mut store = EntryStore::new(
@@ -211,9 +208,7 @@ impl LauncherView {
     }
 
     pub(crate) fn sync_entries_from_shared(&mut self) -> bool {
-        let Ok(guard) = self.shared_entries.lock() else {
-            return false;
-        };
+        let guard = self.shared_entries.lock();
         if Arc::ptr_eq(&guard.entries, &self.last_entries_snapshot) {
             return false;
         }

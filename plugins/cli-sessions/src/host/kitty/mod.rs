@@ -1,5 +1,6 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use qol_sync::Mutex;
 use qol_terminal_sessions::TerminalSnapshot;
 use qol_terminal_sessions::{ScreenReader, SessionFocus, TerminalSessionService};
 
@@ -16,26 +17,18 @@ impl TerminalHost for Kitty {
         let snapshot = match self.sessions.snapshot() {
             Ok(snapshot) => Arc::new(snapshot),
             Err(error) => {
-                if let Ok(mut current) = self.snapshot.lock() {
-                    *current = None;
-                }
+                *self.snapshot.lock() = None;
                 qol_runtime::probe!("CLI_SESSIONS_DISCOVER", "outcome=error error={error}");
                 return Vec::new();
             }
         };
         let panes = snapshot.sessions().to_vec();
-        if let Ok(mut current) = self.snapshot.lock() {
-            *current = Some(snapshot);
-        }
+        *self.snapshot.lock() = Some(snapshot);
         panes
     }
 
     fn get_text(&self, target: &qol_terminal_sessions::SessionBinding) -> Option<String> {
-        let snapshot = self
-            .snapshot
-            .lock()
-            .ok()
-            .and_then(|current| current.clone());
+        let snapshot = self.snapshot.lock().clone();
         match snapshot {
             Some(snapshot) => self.sessions.read_screen_from(&snapshot, target).ok(),
             None => self.sessions.read_screen(target).ok(),

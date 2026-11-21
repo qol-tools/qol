@@ -11,13 +11,14 @@ mod trace;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub use qol_apps::AppEntry;
 use qol_plugin_api::launcher_flows::{self, FlowEntry};
 use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 use qol_runtime::PlatformStateClient;
+use qol_sync::Mutex;
 use qol_watch::{WatchNotice, WatchRoot};
 
 use details::AppFace;
@@ -197,7 +198,8 @@ fn publish(
         file_entries: file_entries.clone(),
         flow_entries: flow_entries.clone(),
     });
-    if let Ok(mut guard) = entries.lock() {
+    {
+        let mut guard = entries.lock();
         guard.entries = fresh.clone();
         guard.loaded_once = true;
     }

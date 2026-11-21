@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
+
+use qol_sync::Mutex;
 
 use super::format_ieee;
 use super::input::{hex_string, BRIGHTNESS_RANGE, MIREK_RANGE};
@@ -73,15 +75,11 @@ impl LightLooks {
     }
 }
 
-pub fn lock(looks: &SharedLooks) -> MutexGuard<'_, LightLooks> {
-    looks.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 pub fn record(looks: &SharedLooks, ieee: &str, commands: &[LightCommand]) {
     if commands.is_empty() {
         return;
     }
-    let mut guard = lock(looks);
+    let mut guard = looks.lock();
     guard.apply(ieee, commands);
     persist::submit(Change::Looks(guard.snapshot()));
 }

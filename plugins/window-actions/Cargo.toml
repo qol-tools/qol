@@ -17,6 +17,7 @@ qol-plugin-api.workspace = true
 qol-plugin-daemon.workspace = true
 qol-process.workspace = true
 qol-runtime.workspace = true
+qol-sync.workspace = true
 qol-windowing.workspace = true
 serde.workspace = true
 serde_json.workspace = true

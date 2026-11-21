@@ -23,6 +23,7 @@ qol-watch.workspace = true
 qol-gpui.workspace = true
 qol-headless.workspace = true
 qol-runtime.workspace = true
+qol-sync.workspace = true
 qol-search.workspace = true
 qol-frecency.workspace = true
 qol-fs.workspace = true

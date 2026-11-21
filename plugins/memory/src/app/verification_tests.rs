@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use qol_plugin_daemon::daemon::ReadResult;
 use qol_runtime::protocol::DaemonRequest;
+use qol_sync::Mutex;
 use serde_json::{json, Value};
 
 use super::request;

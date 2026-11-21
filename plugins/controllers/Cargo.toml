@@ -12,6 +12,7 @@ qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-headless.workspace = true
 qol-host-fixes.workspace = true
+qol-sync.workspace = true
 qol-apps.workspace = true
 workspace-hack.workspace = true
 

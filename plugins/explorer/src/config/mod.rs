@@ -1,8 +1,9 @@
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use futures::channel::oneshot;
+use qol_sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -135,10 +136,7 @@ impl ConfigSaver {
     }
 
     pub fn take_failures(&self) -> Vec<&'static str> {
-        self.failures
-            .lock()
-            .map(|mut failures| std::mem::take(&mut *failures))
-            .unwrap_or_default()
+        std::mem::take(&mut *self.failures.lock())
     }
 
     pub fn reload(&self) -> Option<oneshot::Receiver<ExplorerConfig>> {
@@ -183,11 +181,10 @@ fn work_until_closed(
 }
 
 fn record_failures(failures: &Mutex<Vec<&'static str>>, names: &[&'static str]) {
-    if let Ok(mut failures) = failures.lock() {
-        for name in names {
-            if !failures.contains(name) {
-                failures.push(name);
-            }
+    let mut failures = failures.lock();
+    for name in names {
+        if !failures.contains(name) {
+            failures.push(name);
         }
     }
 }

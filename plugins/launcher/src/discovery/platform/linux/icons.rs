@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use qol_desktop_settings::gsettings;
+use qol_sync::Mutex;
 
 const ICON_SIZE: u32 = 48;
 const EXTENSIONS: [&str; 2] = ["png", "svg"];
@@ -57,13 +58,11 @@ pub(super) fn icon_path(name: &str) -> Option<PathBuf> {
     if as_path.is_absolute() {
         return (is_renderable(as_path) && as_path.is_file()).then(|| as_path.to_path_buf());
     }
-    if let Some(found) = memo().lock().ok().and_then(|memo| memo.get(name).cloned()) {
+    if let Some(found) = memo().lock().get(name).cloned() {
         return found;
     }
     let found = lookup().find(strip_image_extension(name));
-    if let Ok(mut memo) = memo().lock() {
-        memo.insert(name.to_owned(), found.clone());
-    }
+    memo().lock().insert(name.to_owned(), found.clone());
     found
 }
 

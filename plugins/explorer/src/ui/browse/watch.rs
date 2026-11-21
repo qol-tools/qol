@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::thread;
 
+use qol_sync::Mutex;
 use qol_watch::{Watch, WatchError, WatchNotice, WatchRoot};
 
 const FOLLOWED_LINK_FOLDERS: usize = 64;
@@ -64,7 +65,7 @@ impl FolderWatch {
         wake: impl Fn() + Send + 'static,
     ) {
         let links: Vec<PathBuf> = links.into_iter().take(FOLLOWED_LINKS).collect();
-        let kept = lock(&self.links).take().filter(|_| !links.is_empty());
+        let kept = self.links.lock().take().filter(|_| !links.is_empty());
         self.links = Arc::new(Mutex::new(kept));
         if links.is_empty() {
             return;
@@ -79,28 +80,30 @@ impl FolderWatch {
                 let Some(slot) = slot.upgrade() else {
                     return;
                 };
-                let kept = lock(&slot)
+                let kept = slot
+                    .lock()
                     .as_ref()
                     .is_some_and(|followed| followed.targets == targets);
                 if !kept {
                     let followed = watch_links(targets, mark);
-                    *lock(&slot) = followed;
+                    *slot.lock() = followed;
                 }
             });
         if let Err(error) = spawned {
-            *lock(&self.links) = None;
+            *self.links.lock() = None;
             log::warn!("linked files will not be followed: {error}");
         }
     }
 
     #[cfg(all(test, unix))]
     pub(super) fn follows_links(&self) -> bool {
-        lock(&self.links).is_some()
+        self.links.lock().is_some()
     }
 
     #[cfg(all(test, unix))]
     pub(super) fn follows_link_to(&self, file: &Path) -> bool {
-        lock(&self.links)
+        self.links
+            .lock()
             .as_ref()
             .is_some_and(|followed| followed.targets.values().any(|files| files.contains(file)))
     }
@@ -239,8 +242,4 @@ fn link_target(link: &Path) -> Option<PathBuf> {
     let target = link.parent()?.join(fs::read_link(link).ok()?);
     let parent = fs::canonicalize(target.parent()?).ok()?;
     Some(parent.join(target.file_name()?))
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

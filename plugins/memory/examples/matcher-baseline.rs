@@ -2,7 +2,7 @@
 
 use std::path::Path;
 mod support;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 use support::{call, fixture_store, FixtureMemory};
 
@@ -10,6 +10,7 @@ use anyhow::{bail, Context, Result};
 use qol_memory::ask::{self, AskRequest};
 use qol_memory::retrieval::{bm25_ranks, build_index, DocRef};
 use qol_memory::warm::WarmState;
+use qol_sync::Mutex;
 use serde::Deserialize;
 use serde_json::json;
 

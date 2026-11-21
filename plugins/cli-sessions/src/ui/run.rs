@@ -2,11 +2,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{px, size, App, AppContext, Application, AsyncApp};
 use qol_gpui::surface::{OpenedSurface, Surface, SurfaceKind, WindowMemory};
+use qol_sync::Mutex;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
@@ -58,9 +59,7 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     let host: Arc<dyn TerminalHost + Send + Sync> = crate::host::system();
 
     if let Some(path) = paths::state_path(&plugin_id) {
-        if let Ok(mut reg) = registry.lock() {
-            reg.restore(persist::load(&path));
-        }
+        registry.lock().restore(persist::load(&path));
     }
 
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
@@ -82,17 +81,15 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
 
     let probe =
         SystemServiceProbe::with_shared_cache(service_commands.to_vec(), service_snapshot.clone());
-    if let Ok(mut caches) = reconcile_caches.lock() {
-        reconcile::tick_with_caches(
-            &registry,
-            host.as_ref(),
-            cli_interpreter.as_ref(),
-            &probe,
-            now_secs(),
-            mono_now(),
-            &mut caches,
-        );
-    }
+    reconcile::tick_with_caches(
+        &registry,
+        host.as_ref(),
+        cli_interpreter.as_ref(),
+        &probe,
+        now_secs(),
+        mono_now(),
+        &mut reconcile_caches.lock(),
+    );
 
     let reg_for_app = registry.clone();
     let host_for_app = host.clone();
@@ -157,10 +154,12 @@ fn snapshot_now(host: &Arc<dyn TerminalHost + Send + Sync>, registry: &Arc<Mutex
         log::debug!("snapshot: no data dir");
         return;
     };
-    let panel: HashMap<SessionId, Status> = match registry.lock() {
-        Ok(reg) => reg.sorted().into_iter().map(|s| (s.id, s.status)).collect(),
-        Err(_) => HashMap::new(),
-    };
+    let panel: HashMap<SessionId, Status> = registry
+        .lock()
+        .sorted()
+        .into_iter()
+        .map(|s| (s.id, s.status))
+        .collect();
     match snapshot::capture_all(host.as_ref(), &panel, &dir, now_secs()) {
         Ok(path) => log::debug!("snapshot -> {}", path.display()),
         Err(e) => log::warn!("snapshot failed: {e}"),
@@ -187,7 +186,7 @@ fn open_panel(
         .remember(WindowMemory::reopened_by_action(APP_ID, APP_ID, "open"))
         .stays_live_while({
             let registry = registry.clone();
-            move || registry.lock().is_ok_and(|reg| reg.session_holds_focus())
+            move || registry.lock().session_holds_focus()
         })
         .show_focused(tracker, cx, move |dismisser, window, cx| {
             SessionsView::new(registry, host, corner, dismisser, window, cx)
@@ -236,18 +235,15 @@ fn spawn_reconcile_timer(
         let mono = mono_now();
         cx.background_spawn(async move {
             let probe = SystemServiceProbe::with_shared_cache(commands.to_vec(), service_snapshot);
-            let notices = match cache.lock() {
-                Ok(mut caches) => reconcile::tick_with_caches(
-                    &reg,
-                    h.as_ref(),
-                    interpreter.as_ref(),
-                    &probe,
-                    now,
-                    mono,
-                    &mut caches,
-                ),
-                Err(_) => Vec::new(),
-            };
+            let notices = reconcile::tick_with_caches(
+                &reg,
+                h.as_ref(),
+                interpreter.as_ref(),
+                &probe,
+                now,
+                mono,
+                &mut cache.lock(),
+            );
             for notice in &notices {
                 crate::ui::notify::send(notice);
             }
@@ -358,12 +354,11 @@ fn reconcile_interval(panel_showing: bool, active: bool) -> Duration {
 }
 
 fn active_session_exists(registry: &Arc<Mutex<Registry>>) -> bool {
-    registry.lock().ok().is_some_and(|registry| {
-        registry
-            .sorted()
-            .iter()
-            .any(|session| matches!(session.status, Status::Working | Status::NeedsYou))
-    })
+    registry
+        .lock()
+        .sorted()
+        .iter()
+        .any(|session| matches!(session.status, Status::Working | Status::NeedsYou))
 }
 
 fn notify_panel_if_showing(panel: &SharedPanel, cx: &mut App) -> bool {
@@ -485,10 +480,7 @@ fn focus_session(
     host: &(dyn TerminalHost + Send + Sync),
     session: &SessionId,
 ) {
-    let target = registry
-        .lock()
-        .ok()
-        .and_then(|registry| registry.get(session).and_then(|row| row.binding()));
+    let target = registry.lock().get(session).and_then(|row| row.binding());
     let Some(target) = target else {
         log::info!("[cli-sessions] focus skipped: session {session} is gone");
         return;
@@ -509,18 +501,15 @@ fn next_attention_target(
     registry: &Arc<Mutex<Registry>>,
     attention_cursor: &AttentionCursor,
 ) -> Option<SessionBinding> {
-    let rows = registry.lock().ok()?.sorted();
-    let current = attention_cursor.lock().ok().and_then(|cursor| {
-        cursor
-            .as_ref()
-            .and_then(|id| rows.iter().position(|row| &row.id == id))
-    });
+    let rows = registry.lock().sorted();
+    let current = attention_cursor
+        .lock()
+        .as_ref()
+        .and_then(|id| rows.iter().position(|row| &row.id == id));
     let index = crate::ui::nav::next_attention_row(&rows, current)?;
     let target = rows.get(index)?;
     let binding = target.binding()?;
-    if let Ok(mut cursor) = attention_cursor.lock() {
-        *cursor = Some(target.id.clone());
-    }
+    *attention_cursor.lock() = Some(target.id.clone());
     Some(binding)
 }
 

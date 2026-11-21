@@ -3,10 +3,11 @@ use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use qol_process::{run_owned_with_output_timeout, BoundedCommandOutput};
+use qol_sync::Mutex;
 
 use super::objc::{
     cls, msg_ptr, msg_ptr_usize, msg_rect, msg_usize, sel, CGDisplayBounds, CGGetActiveDisplayList,
@@ -149,7 +150,7 @@ impl SnapshotCache {
     }
 
     fn get(&self, key: &DisplayKey) -> Option<ScreenSnapshot> {
-        let latest = self.latest.lock().unwrap_or_else(PoisonError::into_inner);
+        let latest = self.latest.lock();
         latest
             .as_ref()
             .filter(|snapshot| snapshot.key == *key)
@@ -157,7 +158,7 @@ impl SnapshotCache {
     }
 
     fn store(&self, snapshot: ScreenSnapshot) {
-        *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(snapshot);
+        *self.latest.lock() = Some(snapshot);
     }
 }
 

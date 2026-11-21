@@ -1,10 +1,11 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use qol_sync::Mutex;
 use serde::Deserialize;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tungstenite::http::StatusCode;
@@ -227,9 +228,7 @@ fn handle_client(
         let Some(pending) = parse_pending(&cmd) else {
             continue;
         };
-        if let Ok(mut buf) = buffer.lock() {
-            *buf = Some(pending);
-        }
+        *buffer.lock() = Some(pending);
     }
 }
 
@@ -296,13 +295,11 @@ fn start_send_loop(
         .name("ws-send".into())
         .spawn(move || loop {
             thread::sleep(SEND_INTERVAL);
-            let Some(cmd) = buffer.lock().ok().and_then(|mut b| b.take()) else {
+            let Some(cmd) = buffer.lock().take() else {
                 continue;
             };
             let target = current_target(&target);
-            let Ok(mut guard) = service.lock() else {
-                continue;
-            };
+            let mut guard = service.lock();
             let Some(svc) = guard.as_mut() else {
                 continue;
             };

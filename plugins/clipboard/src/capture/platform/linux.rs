@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
 use std::fmt::Display;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use qol_sync::Mutex;
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::xfixes::{self, ConnectionExt as _, SelectionEventMask};
 use x11rb::protocol::xproto::{
@@ -179,7 +180,7 @@ impl Clipboard for X11Clipboard {
                 "This clip is too large to copy again.".to_string(),
             ));
         }
-        *lock(&self.offer) = Some(payload);
+        *self.offer.lock() = Some(payload);
         self.conn
             .set_selection_owner(self.window, self.atoms.clipboard, x11rb::CURRENT_TIME)
             .map_err(failed)?;
@@ -201,7 +202,7 @@ impl Clipboard for X11Clipboard {
 
     fn clear_expired_secret(&self) -> Result<(), CaptureError> {
         {
-            let mut offer = lock(&self.offer);
+            let mut offer = self.offer.lock();
             if !offer.as_ref().is_some_and(Payload::is_expired_secret) {
                 return Ok(());
             }
@@ -226,7 +227,7 @@ impl Clipboard for X11Clipboard {
 
 impl X11Clipboard {
     fn next_event(&self) -> Result<Event, CaptureError> {
-        if let Some(event) = lock(&self.pending).pop_front() {
+        if let Some(event) = self.pending.lock().pop_front() {
             return Ok(event);
         }
         self.conn.wait_for_event().map_err(failed)
@@ -236,7 +237,7 @@ impl X11Clipboard {
         match event {
             Event::SelectionRequest(request) => self.serve(request),
             Event::SelectionClear(clear) if clear.selection == self.atoms.clipboard => {
-                *lock(&self.offer) = None;
+                *self.offer.lock() = None;
                 Ok(())
             }
             _ => Ok(()),
@@ -359,7 +360,7 @@ impl X11Clipboard {
             match self.conn.poll_for_event().map_err(failed)? {
                 Some(event) if wanted(&event) => return Ok(Some(event)),
                 Some(Event::SelectionRequest(request)) => self.serve(request)?,
-                Some(event) => lock(&self.pending).push_back(event),
+                Some(event) => self.pending.lock().push_back(event),
                 None if Instant::now() >= deadline => return Ok(None),
                 None => std::thread::sleep(POLL_STEP),
             }
@@ -404,7 +405,7 @@ impl X11Clipboard {
             request.property
         };
         let answered = {
-            let offer = lock(&self.offer);
+            let offer = self.offer.lock();
             match offer.as_ref() {
                 Some(payload) if request.selection == self.atoms.clipboard => {
                     self.answer(&request, property, payload)?
@@ -495,12 +496,6 @@ impl X11Clipboard {
             .map_err(failed)?;
         Ok(true)
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn atoms_of(raw: &[u8]) -> Vec<Atom> {

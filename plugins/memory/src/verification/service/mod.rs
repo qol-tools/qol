@@ -1,9 +1,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use qol_sync::{Condvar, Mutex};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -89,11 +90,7 @@ impl Service {
 
     pub fn query(&self, job: Job) -> Status {
         let key = binding_key(&self.identity, &job);
-        let mut state = self
-            .shared
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut state = self.shared.state.lock();
         match state.entries.get(&key) {
             Some(Entry::Pending) => return Status::Pending,
             Some(Entry::Ready(decision)) => return Status::Ready(decision.clone()),
@@ -129,11 +126,7 @@ impl Service {
 
 impl Drop for Service {
     fn drop(&mut self) {
-        let mut state = self
-            .shared
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut state = self.shared.state.lock();
         state.closed = true;
         state.queued.clear();
         self.shared.changed.notify_one();
@@ -143,15 +136,9 @@ impl Drop for Service {
 fn run(shared: Arc<Shared>, root: PathBuf, mut verifier: impl Verifier) {
     loop {
         let (key, job) = {
-            let mut state = shared
-                .state
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
+            let mut state = shared.state.lock();
             while state.queued.is_empty() && !state.closed {
-                state = shared
-                    .changed
-                    .wait(state)
-                    .unwrap_or_else(|error| error.into_inner());
+                state = shared.changed.wait(state);
             }
             if state.closed {
                 return;
@@ -206,10 +193,7 @@ fn run(shared: Arc<Shared>, root: PathBuf, mut verifier: impl Verifier) {
                 Entry::Unavailable(Instant::now())
             }
         };
-        let mut state = shared
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut state = shared.state.lock();
         state.entries.insert(key.clone(), entry);
         state.finished.retain(|old| old != &key);
         state.finished.push_back(key);

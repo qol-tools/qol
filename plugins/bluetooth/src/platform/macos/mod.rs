@@ -537,7 +537,7 @@ pub fn remove_device(address: &str) -> Result<()> {
 
 pub fn search_devices(config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
     paired::ensure_powered::<MacOs>(config.power_on_adapter)?;
-    paired::mark_search_starting()?;
+    paired::mark_search_starting();
 
     let inquiry = unsafe { IOBluetoothDeviceInquiry::inquiryWithDelegate(None) }
         .ok_or_else(|| anyhow!("macOS could not start a Bluetooth search"))?;
@@ -547,20 +547,19 @@ pub fn search_devices(config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
     }
     let started = unsafe { inquiry.start() };
     if started != IO_RETURN_SUCCESS {
-        paired::reset_discovery_state()?;
+        paired::reset_discovery_state();
         bail!("macOS refused to start a Bluetooth search (code {started})");
     }
 
     let mut low_energy = LowEnergyScan::begin();
-    let watched = watch_search(&inquiry, low_energy.as_mut());
+    watch_search(&inquiry, low_energy.as_mut());
     unsafe { inquiry.stop() };
     let found = found_devices(&inquiry, low_energy.as_ref());
     if let Some(scan) = &low_energy {
         scan.report_unscanned();
     }
     drop(low_energy);
-    paired::mark_search_stopped()?;
-    watched?;
+    paired::mark_search_stopped();
 
     let devices = nearby::merge(paired_devices().into_iter().chain(found));
     qol_runtime::probe!(
@@ -575,21 +574,17 @@ pub fn search_devices(config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
     Ok(devices)
 }
 
-fn watch_search(
-    inquiry: &IOBluetoothDeviceInquiry,
-    mut low_energy: Option<&mut LowEnergyScan>,
-) -> Result<()> {
+fn watch_search(inquiry: &IOBluetoothDeviceInquiry, mut low_energy: Option<&mut LowEnergyScan>) {
     let deadline = Instant::now() + Duration::from_secs(u64::from(SEARCH_SECONDS));
-    while Instant::now() < deadline && paired::searching()? {
+    while Instant::now() < deadline && paired::searching() {
         deliver_pending_iobluetooth_callbacks(RUN_LOOP_SLICE);
         if let Some(scan) = low_energy.as_deref_mut() {
             scan.scan_once_powered();
         }
         for device in found_devices(inquiry, low_energy.as_deref()) {
-            paired::record_discovered_device(device)?;
+            paired::record_discovered_device(device);
         }
     }
-    Ok(())
 }
 
 fn found_devices(

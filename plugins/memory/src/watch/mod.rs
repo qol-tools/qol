@@ -1,7 +1,8 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
+use qol_sync::Mutex;
 use qol_watch::{Watch, WatchError, WatchRoot};
 
 use crate::ingest::{self, IngestRoots};
@@ -47,10 +48,7 @@ fn drain(
             continue;
         }
         let (store, compactions) = {
-            let mut warm = match state.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let mut warm = state.lock();
             let store = warm.store().clone();
             let compactions = match ingest::ingest_paths(&store, &roots, &paths, warm.keys()) {
                 Ok(report) => report.compactions,
@@ -67,10 +65,7 @@ fn drain(
         }
         match crate::distill::run(&store, notes_runs_kept) {
             Ok(report) if !report.unchanged => {
-                let mut warm = match state.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
+                let mut warm = state.lock();
                 warm.invalidate_notes_index();
             }
             Ok(_) => {}

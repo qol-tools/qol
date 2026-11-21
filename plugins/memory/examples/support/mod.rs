@@ -4,10 +4,11 @@ use qol_memory::store::Store;
 use qol_memory::warm::WarmState;
 use qol_plugin_daemon::daemon::ReadResult;
 use qol_runtime::protocol::DaemonRequest;
+use qol_sync::Mutex;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]

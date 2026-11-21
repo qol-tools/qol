@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use evdev::{AbsInfo, AbsoluteAxisCode, Device, KeyCode};
 use qol_bluetooth_control::{normalize_address, now_ms, HoldOwner, Holds};
+use qol_sync::Mutex;
 
 use crate::detection;
 use crate::detection::clash::{self, Holder, LinkEvidence};
@@ -219,7 +220,7 @@ impl SignalWorker {
         std::thread::spawn(move || loop {
             std::thread::sleep(SIGNAL_REFRESH_INTERVAL);
             let targets = {
-                let state = worker.lock().unwrap_or_else(PoisonError::into_inner);
+                let state = worker.lock();
                 match state.requested_at {
                     Some(requested_at) if requested_at.elapsed() < SIGNAL_IDLE_TIMEOUT => {
                         state.targets.clone()
@@ -228,16 +229,13 @@ impl SignalWorker {
                 }
             };
             let signals = collect_signals(&targets);
-            worker
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .signals = signals;
+            worker.lock().signals = signals;
         });
         Self { state }
     }
 
     fn request(&self, targets: Vec<BluetoothTarget>) -> HashMap<Mac, Option<NativeSignal>> {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state.lock();
         state.targets = targets;
         state.requested_at = Some(Instant::now());
         state.signals.clone()

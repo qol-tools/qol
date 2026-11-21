@@ -5,8 +5,8 @@ use crate::input::{
     ScreenBoundsCache,
 };
 use anyhow::Result;
+use qol_sync::Mutex;
 use rdev::{simulate, Button, EventType, Key, SimulateError};
-use std::sync::Mutex;
 use std::time::Duration;
 use x11::xlib;
 
@@ -217,10 +217,7 @@ impl InputHandlerTrait for InputHandlerImpl {
     }
 
     fn modifier_press(&self, modifier: &str) -> Result<()> {
-        let mut state = self
-            .modifier_state
-            .lock()
-            .expect("Modifier state mutex poisoned");
+        let mut state = self.modifier_state.lock();
         match modifier.to_lowercase().as_str() {
             "ctrl" | "control" => {
                 state.ctrl = true;
@@ -244,10 +241,7 @@ impl InputHandlerTrait for InputHandlerImpl {
     }
 
     fn modifier_release(&self, modifier: &str) -> Result<()> {
-        let mut state = self
-            .modifier_state
-            .lock()
-            .expect("Modifier state mutex poisoned");
+        let mut state = self.modifier_state.lock();
         match modifier.to_lowercase().as_str() {
             "ctrl" | "control" => {
                 state.ctrl = false;
@@ -273,7 +267,7 @@ impl InputHandlerTrait for InputHandlerImpl {
 
 impl InputHandlerImpl {
     fn apply_modifiers(state: &Mutex<ModifierKeys>, modifiers: &ModifierKeys) -> Result<()> {
-        let mut state_guard = state.lock().expect("Modifier state mutex poisoned");
+        let mut state_guard = state.lock();
 
         if modifiers.ctrl && !state_guard.ctrl {
             send_event(EventType::KeyPress(Key::ControlLeft))?;

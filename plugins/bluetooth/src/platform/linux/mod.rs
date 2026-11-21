@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::process::Command;
-use std::sync::{mpsc, LazyLock, OnceLock, RwLock};
+use std::sync::{mpsc, LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 
 mod inventory;
@@ -25,6 +25,7 @@ use qol_headless::DoctorCheckResult;
 use qol_host_fixes::{findings_payload, HostFixes};
 use qol_plugin_daemon::notification::send_notification;
 use qol_runtime::protocol::DaemonRequest;
+use qol_sync::RwLock;
 
 use crate::bluetooth::{
     adapter_options, audio_output_degraded, audio_profile_repairable, connection_ready,
@@ -337,16 +338,13 @@ pub fn open_settings() -> Result<()> {
 }
 
 pub fn devices_snapshot(managed_devices: &[String]) -> Result<serde_json::Value> {
-    let devices = if adapter_available()? {
+    let devices = if adapter_available() {
         list_devices()?
     } else {
         Vec::new()
     };
-    let discovery = discovery_state()?;
-    let action = DEVICE_ACTION_STATE
-        .read()
-        .map_err(|_| anyhow!("Bluetooth device action state is unavailable"))?
-        .clone();
+    let discovery = discovery_state();
+    let action = DEVICE_ACTION_STATE.read().clone();
     let payload = devices_payload(
         &devices,
         managed_devices,
@@ -367,22 +365,16 @@ pub fn devices_snapshot(managed_devices: &[String]) -> Result<serde_json::Value>
 }
 
 pub fn nearby_snapshot() -> Result<serde_json::Value> {
-    let adapter = ADAPTER_STATE
-        .read()
-        .map_err(|_| anyhow!("Bluetooth adapter state is unavailable"))?
-        .clone();
+    let adapter = ADAPTER_STATE.read().clone();
     let devices = if adapter.is_some() {
         list_devices()?
     } else {
         Vec::new()
     };
-    let action = DEVICE_ACTION_STATE
-        .read()
-        .map_err(|_| anyhow!("Bluetooth device action state is unavailable"))?
-        .clone();
+    let action = DEVICE_ACTION_STATE.read().clone();
     Ok(nearby_payload(
         &devices,
-        &discovery_state()?,
+        &discovery_state(),
         action.as_ref(),
         adapter.is_some_and(|adapter| adapter.powered),
         CAPABILITIES,
@@ -391,14 +383,11 @@ pub fn nearby_snapshot() -> Result<serde_json::Value> {
 }
 
 pub fn search_status_snapshot() -> Result<serde_json::Value> {
-    Ok(search_status_payload(&discovery_state()?))
+    Ok(search_status_payload(&discovery_state()))
 }
 
 fn adapter_status_snapshot() -> Result<serde_json::Value> {
-    let adapter = ADAPTER_STATE
-        .read()
-        .map_err(|_| anyhow!("Bluetooth adapter state is unavailable"))?
-        .clone();
+    let adapter = ADAPTER_STATE.read().clone();
     adapter_status_payload(adapter.as_ref())
 }
 
@@ -411,29 +400,20 @@ fn adapter_status_payload(adapter: Option<&AdapterHealth>) -> Result<serde_json:
     }))
 }
 
-fn adapter_available() -> Result<bool> {
-    ADAPTER_STATE
-        .read()
-        .map(|adapter| adapter.is_some())
-        .map_err(|_| anyhow!("Bluetooth adapter state is unavailable"))
+fn adapter_available() -> bool {
+    ADAPTER_STATE.read().is_some()
 }
 
 fn set_adapter_state(adapter: Option<AdapterHealth>) {
-    match ADAPTER_STATE.write() {
-        Ok(mut state) => *state = adapter,
-        Err(_) => log::warn!("Bluetooth adapter state is unavailable"),
-    }
+    *ADAPTER_STATE.write() = adapter;
 }
 
-fn discovery_state() -> Result<DiscoveryState> {
-    DISCOVERY_STATE
-        .read()
-        .map(|state| state.clone())
-        .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))
+fn discovery_state() -> DiscoveryState {
+    DISCOVERY_STATE.read().clone()
 }
 
 fn current_managed_device_options() -> Result<Vec<DeviceOption>> {
-    if !adapter_available()? {
+    if !adapter_available() {
         return Ok(Vec::new());
     }
     Ok(managed_device_options(&list_devices()?))
@@ -1309,14 +1289,14 @@ pub fn dispatch_request(
         DaemonAction::RemoveDevice => {
             device_daemon_command(request, DaemonCommand::Remove, DeviceIntent::Remove)
         }
-        DaemonAction::StartSearch => match mark_search_requested() {
-            Ok(()) => DaemonReply::Command(DaemonCommand::StartSearch),
-            Err(error) => DaemonReply::Error(error.to_string()),
-        },
-        DaemonAction::StopSearch => match mark_search_stopped() {
-            Ok(()) => DaemonReply::Command(DaemonCommand::StopSearch),
-            Err(error) => DaemonReply::Error(error.to_string()),
-        },
+        DaemonAction::StartSearch => {
+            mark_search_requested();
+            DaemonReply::Command(DaemonCommand::StartSearch)
+        }
+        DaemonAction::StopSearch => {
+            mark_search_stopped();
+            DaemonReply::Command(DaemonCommand::StopSearch)
+        }
         DaemonAction::Devices => match devices_snapshot(&config().managed_devices) {
             Ok(payload) => DaemonReply::Data(payload),
             Err(error) => DaemonReply::Error(format!("{error:#}")),
@@ -1467,7 +1447,7 @@ async fn resilient_daemon_loop(
             Ok(Ok(adapter)) => adapter,
             Ok(Err(error)) => {
                 set_adapter_state(None);
-                reset_discovery_state("adapter_unavailable")?;
+                reset_discovery_state("adapter_unavailable");
                 log::warn!("Bluetooth adapter unavailable; retrying: {error:#}");
                 qol_runtime::probe!("BLUETOOTH_ADAPTER", "available=false outcome=retrying");
                 if wait_without_adapter(&mut config, hooks, &mut commands).await? {
@@ -1477,7 +1457,7 @@ async fn resilient_daemon_loop(
             }
             Err(_) => {
                 set_adapter_state(None);
-                reset_discovery_state("adapter_lookup_timed_out")?;
+                reset_discovery_state("adapter_lookup_timed_out");
                 log::warn!(
                     "Bluetooth adapter lookup timed out after {} seconds; retrying",
                     ADAPTER_CONNECT_TIMEOUT.as_secs()
@@ -1493,7 +1473,7 @@ async fn resilient_daemon_loop(
             Ok(()) => return Ok(()),
             Err(error) => {
                 set_adapter_state(None);
-                reset_discovery_state("adapter_session_ended")?;
+                reset_discovery_state("adapter_session_ended");
                 log::warn!("Bluetooth adapter session ended; retrying: {error:#}");
                 qol_runtime::probe!("BLUETOOTH_ADAPTER", "available=false outcome=session_ended");
             }
@@ -1538,10 +1518,10 @@ async fn wait_without_adapter(
                         );
                     }
                     DaemonCommand::StopSearch => {
-                        mark_search_stopped()?;
+                        mark_search_stopped();
                     }
                     DaemonCommand::StartSearch => {
-                        reset_discovery_state("adapter_unavailable")?;
+                        reset_discovery_state("adapter_unavailable");
                         qol_runtime::probe!(
                             "BLUETOOTH_SEARCH",
                             "outcome=failed stage=adapter_unavailable"
@@ -1697,23 +1677,17 @@ async fn daemon_loop(
                     }
                     if let Err(error) = result {
                         log::warn!("failed to start Bluetooth search: {error:#}");
-                        if let Err(state_error) = mark_search_stopped() {
-                            log::warn!("failed to reset Bluetooth search state: {state_error:#}");
-                        }
+                        mark_search_stopped();
                         qol_runtime::probe!("BLUETOOTH_SEARCH", "outcome=failed stage=start");
                     }
                     continue;
                 }
                 if matches!(command, DaemonCommand::StopSearch) {
-                    if let Err(error) = stop_search_session(&mut discovery, "cancelled") {
-                        log::warn!("failed to stop Bluetooth search: {error:#}");
-                    }
+                    stop_search_session(&mut discovery, "cancelled");
                     continue;
                 }
                 if let DaemonCommand::Pair(address) = command {
-                    let cached = discovery_state()
-                        .ok()
-                        .and_then(|state| state.device(&address.to_string()));
+                    let cached = discovery_state().device(&address.to_string());
                     spawn_explicit_device_action(
                         ExplicitDeviceAction::Pair,
                         address,
@@ -1729,9 +1703,7 @@ async fn daemon_loop(
                     continue;
                 }
                 if let DaemonCommand::Connect(address) = command {
-                    let cached = discovery_state()
-                        .ok()
-                        .and_then(|state| state.device(&address.to_string()));
+                    let cached = discovery_state().device(&address.to_string());
                     spawn_connect(address, config.power_on_adapter, cached);
                     continue;
                 }
@@ -1819,9 +1791,7 @@ async fn daemon_loop(
                         }
                         if !powered {
                             discovery.take();
-                            if let Err(error) = reset_discovery_state("adapter_powered_off") {
-                                log::warn!("failed to reset Bluetooth search after adapter power-off: {error:#}");
-                            }
+                            reset_discovery_state("adapter_powered_off");
                         }
                         qol_runtime::probe!(
                             "BLUETOOTH_ADAPTER_POWER",
@@ -1878,17 +1848,13 @@ async fn daemon_loop(
                     Some(AdapterEvent::PropertyChanged(_)) => {}
                     None => {
                         discovery = None;
-                        if let Err(error) = mark_search_stopped() {
-                            log::warn!("failed to update Bluetooth search state: {error:#}");
-                        }
+                        mark_search_stopped();
                         qol_runtime::probe!("BLUETOOTH_SEARCH", "outcome=ended source=bluez");
                     }
                 }
             }
             _ = wait_for_deadline(search_deadline) => {
-                if let Err(error) = stop_search_session(&mut discovery, "timed_out") {
-                    log::warn!("failed to time out Bluetooth search: {error:#}");
-                }
+                stop_search_session(&mut discovery, "timed_out");
             }
             _ = wait_for_deadline(deadline) => {
                 operations.start_due(&adapter, &retries);
@@ -1989,9 +1955,7 @@ async fn run_explicit_device_action(
 }
 
 fn begin_device_action(address: Address, intent: DeviceIntent) -> Result<()> {
-    let mut state = DEVICE_ACTION_STATE
-        .write()
-        .map_err(|_| anyhow!("Bluetooth device action state is unavailable"))?;
+    let mut state = DEVICE_ACTION_STATE.write();
     if state.as_ref().is_some_and(|action| action.pending) {
         bail!("another Bluetooth device action is still running");
     }
@@ -2003,24 +1967,16 @@ fn begin_device_action(address: Address, intent: DeviceIntent) -> Result<()> {
     });
     drop(state);
     if intent == DeviceIntent::Pair {
-        DISCOVERY_STATE
-            .write()
-            .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))?
-            .claim(&address.to_string());
+        DISCOVERY_STATE.write().claim(&address.to_string());
     }
     Ok(())
 }
 
 fn finish_device_action<T>(label: &str, result: &Result<T>) {
     if let Err(error) = result {
-        match DEVICE_ACTION_STATE.write() {
-            Ok(mut state) => {
-                if let Some(action) = state.as_mut() {
-                    action.status = format!("{label} failed: {error:#}");
-                    action.pending = false;
-                }
-            }
-            Err(_) => log::warn!("Bluetooth device action state is unavailable"),
+        if let Some(action) = DEVICE_ACTION_STATE.write().as_mut() {
+            action.status = format!("{label} failed: {error:#}");
+            action.pending = false;
         }
         return;
     }
@@ -2028,10 +1984,7 @@ fn finish_device_action<T>(label: &str, result: &Result<T>) {
 }
 
 fn set_device_action_state(action: Option<DeviceActionState>) {
-    match DEVICE_ACTION_STATE.write() {
-        Ok(mut state) => *state = action,
-        Err(_) => log::warn!("Bluetooth device action state is unavailable"),
-    }
+    *DEVICE_ACTION_STATE.write() = action;
 }
 
 fn trace_device_action(action: &str, address: Address, result: Result<DeviceInfo>) {
@@ -2097,7 +2050,7 @@ async fn start_search_session(
         .await
         .context("BlueZ failed to start Bluetooth discovery")?
         .boxed_local();
-    mark_search_starting()?;
+    mark_search_starting();
     *discovery = Some(DiscoverySession {
         deadline: Instant::now() + SEARCH_TIMEOUT,
         events: stream,
@@ -2129,7 +2082,7 @@ async fn set_adapter_power(
     }
     if !powered {
         discovery.take();
-        reset_discovery_state("adapter_powered_off")?;
+        reset_discovery_state("adapter_powered_off");
     }
     Ok(())
 }
@@ -2141,55 +2094,32 @@ fn power_label(powered: bool) -> &'static str {
     "off"
 }
 
-fn mark_search_requested() -> Result<()> {
-    DISCOVERY_STATE
-        .write()
-        .map(|mut state| state.request())
-        .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))
+fn mark_search_requested() {
+    DISCOVERY_STATE.write().request();
 }
 
-fn mark_search_starting() -> Result<()> {
-    let mut state = DISCOVERY_STATE
-        .write()
-        .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))?;
-    state.start();
-    drop(state);
-    match DEVICE_ACTION_STATE.write() {
-        Ok(mut state) => forget_failed_pair(&mut state),
-        Err(_) => log::warn!("Bluetooth device action state is unavailable"),
-    }
-    Ok(())
+fn mark_search_starting() {
+    DISCOVERY_STATE.write().start();
+    forget_failed_pair(&mut DEVICE_ACTION_STATE.write());
 }
 
-fn stop_search_session(
-    discovery: &mut Option<DiscoverySession>,
-    outcome: &'static str,
-) -> Result<()> {
+fn stop_search_session(discovery: &mut Option<DiscoverySession>, outcome: &'static str) {
     discovery.take();
-    let mut state = DISCOVERY_STATE
-        .write()
-        .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))?;
+    let mut state = DISCOVERY_STATE.write();
     state.stop();
     qol_runtime::probe!(
         "BLUETOOTH_SEARCH",
         "outcome={outcome} devices={}",
         state.discovered_count()
     );
-    Ok(())
 }
 
-fn mark_search_stopped() -> Result<()> {
-    let mut state = DISCOVERY_STATE
-        .write()
-        .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))?;
-    state.stop();
-    Ok(())
+fn mark_search_stopped() {
+    DISCOVERY_STATE.write().stop();
 }
 
-fn reset_discovery_state(reason: &'static str) -> Result<()> {
-    let mut state = DISCOVERY_STATE
-        .write()
-        .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))?;
+fn reset_discovery_state(reason: &'static str) {
+    let mut state = DISCOVERY_STATE.write();
     let searching = state.searching();
     let devices = state.discovered_count();
     state.reset();
@@ -2199,15 +2129,11 @@ fn reset_discovery_state(reason: &'static str) -> Result<()> {
             "outcome=reset reason={reason} devices={devices}"
         );
     }
-    Ok(())
 }
 
 async fn track_discovered_device(adapter: &Adapter, address: Address) {
     let total = {
-        let Ok(mut state) = DISCOVERY_STATE.write() else {
-            log::warn!("Bluetooth discovery state is unavailable");
-            return;
-        };
+        let mut state = DISCOVERY_STATE.write();
         state.record(address.to_string());
         state.discovered_count()
     };
@@ -2247,10 +2173,7 @@ async fn track_discovered_device(adapter: &Adapter, address: Address) {
             return;
         }
     };
-    let Ok(mut state) = DISCOVERY_STATE.write() else {
-        log::warn!("Bluetooth discovery state is unavailable");
-        return;
-    };
+    let mut state = DISCOVERY_STATE.write();
     state.record_device(device);
     qol_runtime::probe!(
         "BLUETOOTH_SEARCH_DEVICE",
@@ -2261,11 +2184,7 @@ async fn track_discovered_device(adapter: &Adapter, address: Address) {
 }
 
 fn remove_discovered_device(address: Address) {
-    let Ok(mut state) = DISCOVERY_STATE.write() else {
-        log::warn!("Bluetooth discovery state is unavailable");
-        return;
-    };
-    state.remove(&address.to_string());
+    DISCOVERY_STATE.write().remove(&address.to_string());
 }
 
 async fn next_discovery_event(discovery: &mut Option<DiscoverySession>) -> Option<AdapterEvent> {
@@ -2306,26 +2225,18 @@ struct ConnectionFlightGuard(Address);
 
 impl ConnectionFlightGuard {
     fn acquire(address: Address) -> Option<Self> {
-        let claimed = {
-            let mut active = CONNECTION_FLIGHTS.write().ok()?;
-            active.insert(address)
-        };
+        let claimed = CONNECTION_FLIGHTS.write().insert(address);
         claimed.then(|| Self(address))
     }
 
     fn active(address: Address) -> bool {
-        CONNECTION_FLIGHTS
-            .read()
-            .map(|active| active.contains(&address))
-            .unwrap_or(true)
+        CONNECTION_FLIGHTS.read().contains(&address)
     }
 }
 
 impl Drop for ConnectionFlightGuard {
     fn drop(&mut self) {
-        if let Ok(mut active) = CONNECTION_FLIGHTS.write() {
-            active.remove(&self.0);
-        }
+        CONNECTION_FLIGHTS.write().remove(&self.0);
     }
 }
 
@@ -2333,19 +2244,14 @@ struct AudioRepairGuard(Address);
 
 impl AudioRepairGuard {
     fn acquire(address: Address) -> Option<Self> {
-        let claimed = {
-            let mut active = AUDIO_REPAIRS.write().ok()?;
-            active.insert(address)
-        };
+        let claimed = AUDIO_REPAIRS.write().insert(address);
         claimed.then(|| Self(address))
     }
 }
 
 impl Drop for AudioRepairGuard {
     fn drop(&mut self) {
-        if let Ok(mut active) = AUDIO_REPAIRS.write() {
-            active.remove(&self.0);
-        }
+        AUDIO_REPAIRS.write().remove(&self.0);
     }
 }
 
@@ -2487,29 +2393,19 @@ impl AdoptionRetries {
 }
 
 fn register_adoption_retry(address: Address) -> bool {
-    ADOPTION_RETRIES
-        .write()
-        .map(|mut retries| retries.register(address, Instant::now()))
-        .unwrap_or(false)
+    ADOPTION_RETRIES.write().register(address, Instant::now())
 }
 
 fn clear_adoption_retry(address: Address) {
-    if let Ok(mut retries) = ADOPTION_RETRIES.write() {
-        retries.clear(address);
-    }
+    ADOPTION_RETRIES.write().clear(address);
 }
 
 fn adoption_retry_pending(address: Address) -> bool {
-    ADOPTION_RETRIES
-        .read()
-        .is_ok_and(|retries| retries.is_pending(address))
+    ADOPTION_RETRIES.read().is_pending(address)
 }
 
 fn expire_adoption_retries() -> Vec<Address> {
-    ADOPTION_RETRIES
-        .write()
-        .map(|mut retries| retries.expire(Instant::now()))
-        .unwrap_or_default()
+    ADOPTION_RETRIES.write().expire(Instant::now())
 }
 
 fn redacted_sink(name: &str) -> String {
@@ -3144,7 +3040,7 @@ mod tests {
             futures::future::pending::<Result<()>>(),
         ));
         finish_device_action("Connect", &result);
-        let state = DEVICE_ACTION_STATE.read().unwrap().clone().unwrap();
+        let state = DEVICE_ACTION_STATE.read().clone().unwrap();
         let error = result.unwrap_err();
 
         assert_eq!(

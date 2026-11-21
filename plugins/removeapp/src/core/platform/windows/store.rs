@@ -1,8 +1,9 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use qol_sync::Mutex;
 use windows::core::HSTRING;
 use windows::ApplicationModel::{Package, PackageSignatureKind};
 use windows::Management::Deployment::PackageManager;
@@ -56,9 +57,7 @@ pub(super) fn display_name(display: &str, package_name: &str) -> String {
 static CACHE: Mutex<Option<(Instant, Arc<Vec<StorePackage>>)>> = Mutex::new(None);
 
 pub(super) fn packages() -> Arc<Vec<StorePackage>> {
-    let mut cache = CACHE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut cache = CACHE.lock();
     if let Some((read_at, packages)) = cache.as_ref() {
         if read_at.elapsed() < CACHE_TTL {
             return Arc::clone(packages);
@@ -73,9 +72,7 @@ pub(super) fn packages() -> Arc<Vec<StorePackage>> {
 }
 
 pub(super) fn forget() {
-    let mut cache = CACHE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut cache = CACHE.lock();
     *cache = None;
 }
 
