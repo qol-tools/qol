@@ -85,7 +85,8 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
 
     fn get_inner(&self, handle: &DisplayHandle) -> Result<u8, MonitorError> {
         Ok(self
-            .session()
+            .sessions
+            .lock()
             .get(handle.id())
             .and_then(|entry| entry.written_value)
             .unwrap_or(100))
