@@ -1175,10 +1175,9 @@ fn cleanup_lists_the_largest_kinds_first_and_hides_the_empty_ones() {
         ]
     );
     assert_eq!(label(&pages, "cleanup", "all"), "Remove all");
-    assert_eq!(value(&pages, "cleanup", "all"), "about 403 MB and more");
     assert_eq!(
         detail(&pages, "cleanup", "all"),
-        "Leaves out what asks first"
+        "About 403 MB and more. Leaves out what asks first"
     );
     assert_eq!(
         cleanup.row("all").and_then(|row| row.control.clone()),
@@ -1187,18 +1186,28 @@ fn cleanup_lists_the_largest_kinds_first_and_hides_the_empty_ones() {
             ask: "remove all".into(),
         })
     );
-    assert_eq!(value(&pages, "cleanup", "kind:orphans"), "402 MB");
-    assert_eq!(value(&pages, "cleanup", "kind:listed"), "about 1.0 MB");
-    assert_eq!(detail(&pages, "cleanup", "kind:kernels"), "1 old kernel");
+    assert_eq!(
+        detail(&pages, "cleanup", "kind:listed"),
+        "About 1.0 MB, 1 listed"
+    );
+    assert_eq!(
+        detail(&pages, "cleanup", "kind:orphans"),
+        "402 MB, 2 packages"
+    );
+    assert_eq!(
+        detail(&pages, "cleanup", "kind:kernels"),
+        "400 MB, 1 old kernel"
+    );
     assert_eq!(
         detail(&pages, "cleanup", "kind:last"),
-        "1 old version. Asks first: they are the last way back to the version before"
+        "64 MB, 1 old version. Asks first: they are the last way back to the version before"
     );
     assert_eq!(label(&pages, "cleanup", "more"), "1 more");
-    assert_eq!(
-        value(&pages, "cleanup:more", "kind:scripted"),
-        "size unknown"
-    );
+    assert!(detail(&pages, "cleanup:more", "kind:scripted").starts_with("Size unknown. "));
+    assert!(cleanup
+        .rows()
+        .filter(|row| matches!(row.control, Some(Control::Destroy { .. })))
+        .all(|row| row.value.is_none()));
     assert!(cleanup.row("kind:extra").is_none());
     assert!(cleanup
         .rows()

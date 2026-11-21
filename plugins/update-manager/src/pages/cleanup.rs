@@ -5,6 +5,7 @@ use qol_config::text::{format_bytes, plural};
 
 use super::restart::with_error;
 use super::settings::press_auto;
+use super::words::cap;
 use super::Sheet;
 use crate::cleanup::{empty, leftovers, why, Consent, Found, Live, Origin, Size, State, Survey};
 use crate::session::{Act, Op, Session};
@@ -66,14 +67,14 @@ pub(super) fn pages(session: &Session) -> Vec<Sheet> {
                 .filter(|found| why(found.leftover).is_none())
                 .collect();
             if !all.is_empty() {
+                let total = cap(&worth(survey, &all));
                 let row = Row::new("all", "Remove all")
-                    .value(worth(survey, &all))
+                    .detail(if all.len() < list.len() {
+                        format!("{total}. Leaves out what asks first")
+                    } else {
+                        total
+                    })
                     .busy(busy);
-                let row = if all.len() < list.len() {
-                    row.detail("Leaves out what asks first")
-                } else {
-                    row
-                };
                 sheet.press(
                     row.destroy("remove", "remove all"),
                     Act::Remove(
@@ -143,10 +144,14 @@ fn size(found: &Found) -> String {
 fn kind(sheet: &mut Sheet, found: &Found, busy: bool) {
     let leftover = found.leftover;
     let count = found.amount.as_ref().map_or(0, |amount| amount.count);
+    let size = cap(&size(found));
     let base = if count > 0 {
-        plural(count, leftover.noun.one, leftover.noun.many)
+        format!(
+            "{size}, {}",
+            plural(count, leftover.noun.one, leftover.noun.many)
+        )
     } else {
-        leftover.what.to_string()
+        format!("{size}. {}", leftover.what)
     };
     let (detail, consent) = match why(leftover) {
         None => (base, Consent::All),
@@ -155,7 +160,6 @@ fn kind(sheet: &mut Sheet, found: &Found, busy: bool) {
     sheet.press(
         Row::new(format!("kind:{}", leftover.id), leftover.name)
             .detail(detail)
-            .value(size(found))
             .busy(busy)
             .destroy("remove", format!("remove {}", leftover.name.to_lowercase())),
         Act::Remove(vec![leftover], consent),
