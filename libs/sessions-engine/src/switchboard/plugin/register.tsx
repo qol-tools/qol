@@ -84,6 +84,7 @@ const TERMINAL_CODE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|[\]P^_X][^\u0007\u001b]*(?:\
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g
 const KINDS: readonly Kind[] = ['ask', 'test', 'failed', 'blocked', 'merged', 'note']
 const NEEDS_YOU: readonly Kind[] = ['ask', 'test', 'failed', 'blocked']
+const REPORT_TAG = /<\s*\/?\s*report\s*>/gi
 const MARKUP = /^[\s*_`#>-]+|[\s*_`]+$/g
 const HANDBACK = /^(Another Claude session sent a message:\n<agent-message from="([A-Za-z0-9_-]+)">\n\[Subagent hand-back\][^\n]*?The report follows:\n)((?:(?: {2}[^\n]*)?\n)*?)(<\/agent-message>\n)/
 const NOTIFICATION = /^<task-notification>\n[\s\S]*<\/task-notification>$/
@@ -205,7 +206,7 @@ const sort = async ($: EngineInterface, report: string): Promise<Sorting> => {
     const reply = await $.model.complete({
       model: 'haiku',
       system: HAIKU_SYSTEM,
-      prompt: `<report>\n${report.slice(0, 12_000)}\n</report>`,
+      prompt: `<report>\n${report.slice(0, 12_000).replace(REPORT_TAG, '[report]')}\n</report>`,
       maxTokens: 200,
       timeoutMs: HAIKU_MS,
     })
