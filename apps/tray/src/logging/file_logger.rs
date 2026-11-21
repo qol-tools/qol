@@ -6,7 +6,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use super::rate_limiter::{CheckResult, RateLimiter};
 
 struct FileLoggerState {
-    writer: std::sync::Mutex<tracing_appender::non_blocking::NonBlocking>,
+    writer: qol_sync::Mutex<tracing_appender::non_blocking::NonBlocking>,
     _guard: WorkerGuard,
     limiter: RateLimiter,
     version: String,
@@ -51,7 +51,7 @@ pub fn init() {
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     let _ = STATE.set(FileLoggerState {
-        writer: std::sync::Mutex::new(non_blocking),
+        writer: qol_sync::Mutex::new(non_blocking),
         _guard: guard,
         limiter,
         version,
@@ -170,10 +170,7 @@ fn write_jsonl(state: &FileLoggerState, entry: &LogEntry<'_>) {
         return;
     };
     json.push('\n');
-    let Ok(mut writer) = state.writer.lock() else {
-        return;
-    };
-    let _ = writer.write_all(json.as_bytes());
+    let _ = state.writer.lock().write_all(json.as_bytes());
 }
 
 fn now_iso() -> String {

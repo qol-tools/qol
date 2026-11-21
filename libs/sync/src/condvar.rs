@@ -2,8 +2,8 @@ use std::panic::Location;
 use std::sync::WaitTimeoutResult;
 use std::time::{Duration, Instant};
 
-use crate::mutex::MutexGuard;
-use crate::poison::recover;
+use crate::mutex::{relock, MutexGuard};
+use crate::poison::release;
 
 #[derive(Debug, Default)]
 pub struct Condvar(std::sync::Condvar);
@@ -17,10 +17,13 @@ impl Condvar {
     pub fn wait<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
         let caller = Location::caller();
         let MutexGuard { lock, guard } = guard;
-        let guard = self
-            .0
-            .wait(guard)
-            .unwrap_or_else(|poisoned| recover(caller, poisoned, || lock.clear_poison()));
+        let guard = match self.0.wait(guard) {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                release(caller, poisoned, || lock.clear_poison());
+                relock(lock, caller)
+            }
+        };
         MutexGuard { lock, guard }
     }
 
@@ -38,7 +41,10 @@ impl Condvar {
         loop {
             match self.0.wait_while(guard, &mut condition) {
                 Ok(guard) => return MutexGuard { lock, guard },
-                Err(poisoned) => guard = recover(caller, poisoned, || lock.clear_poison()),
+                Err(poisoned) => {
+                    release(caller, poisoned, || lock.clear_poison());
+                    guard = relock(lock, caller);
+                }
             }
         }
     }
@@ -51,10 +57,14 @@ impl Condvar {
     ) -> (MutexGuard<'a, T>, WaitTimeoutResult) {
         let caller = Location::caller();
         let MutexGuard { lock, guard } = guard;
-        let (guard, result) = self
-            .0
-            .wait_timeout(guard, timeout)
-            .unwrap_or_else(|poisoned| recover(caller, poisoned, || lock.clear_poison()));
+        let (guard, result) = match self.0.wait_timeout(guard, timeout) {
+            Ok(woken) => woken,
+            Err(poisoned) => {
+                let result = poisoned.get_ref().1;
+                release(caller, poisoned, || lock.clear_poison());
+                (relock(lock, caller), result)
+            }
+        };
         (MutexGuard { lock, guard }, result)
     }
 
@@ -75,7 +85,10 @@ impl Condvar {
             let remaining = timeout.saturating_sub(started.elapsed());
             match self.0.wait_timeout_while(guard, remaining, &mut condition) {
                 Ok((guard, result)) => return (MutexGuard { lock, guard }, result),
-                Err(poisoned) => guard = recover(caller, poisoned, || lock.clear_poison()).0,
+                Err(poisoned) => {
+                    release(caller, poisoned, || lock.clear_poison());
+                    guard = relock(lock, caller);
+                }
             }
         }
     }
