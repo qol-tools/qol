@@ -128,7 +128,7 @@ const COLOR: Record<Kind, string> = {
   merged: 'success',
   note: 'inactive',
 }
-const HAIKU_SYSTEM = `You sort a coding agent's final report on a board. Answer with one of these words on the first line and nothing else on it: ${KINDS.join(', ')}. ask: the report asks the user a question. test: the user must try something by hand. failed or blocked: something broke or stops the work. merged: a pull request merged. note: anything else. For ask, when the report recommends an answer to its question, write that answer on the second line, in the words the user would send back; otherwise write nothing more.`
+const HAIKU_SYSTEM = `You sort a coding agent's final report on a board by what it needs from the user. The report sits between <report> tags; the agent wrote it to the user, so in it I, me and we are the agent, and you is the user. Answer with one of these words on the first line and nothing else on it: ${KINDS.join(', ')}. ask: the report asks the user a question, or waits for the user's answer, decision or approval. test: the report asks the user to try or check something by hand. failed or blocked: something broke or stops the work, and the agent cannot go on without the user. merged: the report says a pull request merged. note: anything else, such as the agent saying what it does now or that it waits on its own build, test or checks. For ask, when the report recommends an answer to its question, write that answer on the second line, in the words the user would send back; otherwise write nothing more.`
 
 const board = atom({ plugin: 'qol-switchboard', key: 'board' } as const, [], { shape: 'board-1' })
 const writingTo = atom({ plugin: 'qol-switchboard', key: 'writingTo' } as const, '')
@@ -205,7 +205,7 @@ const sort = async ($: EngineInterface, report: string): Promise<Sorting> => {
     const reply = await $.model.complete({
       model: 'haiku',
       system: HAIKU_SYSTEM,
-      prompt: report.slice(0, 12_000),
+      prompt: `<report>\n${report.slice(0, 12_000)}\n</report>`,
       maxTokens: 200,
       timeoutMs: HAIKU_MS,
     })

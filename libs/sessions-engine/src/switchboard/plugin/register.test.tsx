@@ -25,6 +25,8 @@ const SORTED: [string, string][] = [
   ['#77', 'merged.'],
 ]
 
+const asked: { prompt: string; system: string }[] = []
+
 const promptBand = (isFullscreen: boolean) =>
   ({
     plugin: 'qol-switchboard',
@@ -132,7 +134,10 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Sp
     sent.push(e)
     return answer(e)
   })
-  on('model.complete', (_: unknown, e: { prompt: string }) => ({ value: { isAnswered: true, text: SORTED.find(([needle]) => e.prompt.includes(needle))?.[1] ?? 'note', usage: {} } }))
+  on('model.complete', (_: unknown, e: { prompt: string; system?: string }) => {
+    asked.push({ prompt: e.prompt, system: e.system ?? '' })
+    return { value: { isAnswered: true, text: SORTED.find(([needle]) => e.prompt.includes(needle))?.[1] ?? 'note', usage: {} } }
+  })
 }
 
 test('a report reaches the model as its first sentence and the pane lists it under Needs you with the answer Haiku found', async ($, on) => {
@@ -189,6 +194,21 @@ test('a hand-back report is rewritten in place to its first sentence and Haiku s
   expect(await ui.find({ type: 'Text', text: 'hide idle' })).toBeDefined()
   await ui.press({ key: 'idle-fold' })
   expect(await ui.find({ type: 'Text', text: '1 idle' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a report reaches the sorter between report tags, so its I reads as the fork and not the user', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a7', 'vm-fork: self test')
+  const report = "I've built this branch, and the throwaway VM is now starting with that build so I can test PR #605's fix."
+  await deliver($, notification('a7', 'vm-fork: self test', report))
+  const sorted = asked.find(one => one.prompt.includes('throwaway VM'))
+  expect(sorted?.prompt).toBe(`<report>\n${report}\n</report>`)
+  expect(sorted?.system).toContain('in it I, me and we are the agent, and you is the user')
+  expect(sorted?.system).toContain('waits on its own build, test or checks')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Nothing needs you/ })).toBeDefined()
   await ui.unmount()
 })
 
