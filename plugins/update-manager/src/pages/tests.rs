@@ -1219,6 +1219,12 @@ fn cleanup_removes_with_the_consent_the_command_line_asks_for() {
     );
     let again = press(&mut session, "cleanup", "kind:kernels", now());
     assert!(matches!(again.notice, Some(Notice::Failure(_))));
+    let install = press(&mut session, "update:apt:urllib3", "install", now());
+    assert!(matches!(install.notice, Some(Notice::Failure(_))));
+    assert!(session.job.is_none());
+    assert!(session
+        .apply(&crate::session::Act::RestartNow, now())
+        .is_err());
     let pages = build(&session, now()).pages;
     assert!(page(&pages, "cleanup")
         .row("all")

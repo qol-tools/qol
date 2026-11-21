@@ -381,6 +381,7 @@ impl Session {
             }
             Act::RestartNow => {
                 self.refuse_during_install()?;
+                self.refuse_during_removal()?;
                 self.start(Op::RestartNow)?;
                 Ok(Some(Task::RestartNow))
             }
@@ -412,6 +413,9 @@ impl Session {
                     return Err("Nothing here is left to remove".into());
                 }
                 self.refuse_during_install()?;
+                if self.busy.contains(&Op::RestartNow) {
+                    return Err("The computer is restarting".into());
+                }
                 self.start(Op::Remove)?;
                 Ok(Some(Task::Remove {
                     kinds: kinds.clone(),
@@ -448,6 +452,13 @@ impl Session {
         Ok(())
     }
 
+    fn refuse_during_removal(&self) -> Result<(), String> {
+        if self.busy.contains(&Op::Remove) {
+            return Err("Wait for the cleanup that is running to finish first".into());
+        }
+        Ok(())
+    }
+
     fn start(&mut self, op: Op) -> Result<(), String> {
         if !self.busy.insert(op) {
             return Err("That change is still being made".into());
@@ -460,6 +471,7 @@ impl Session {
         if self.job.is_some() {
             return Err("An install is already running".into());
         }
+        self.refuse_during_removal()?;
         let updates: Vec<Update> = self
             .list()
             .iter()
