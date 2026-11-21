@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::daemon::{DaemonEvent, EventBus};
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 
 use super::super::{verify_host_update, verify_release_binary, FoundUpdate};
 use super::download::{self, HostUpdate};
@@ -126,7 +126,7 @@ fn replace_binary_with(
 
 pub(super) async fn download_and_install(
     events: Arc<EventBus>,
-    plugin_manager: Arc<Mutex<PluginManager>>,
+    plugin_manager: SharedPluginManager,
     update: Option<FoundUpdate>,
 ) -> Result<()> {
     let install_kind = InstallKind::detect();
@@ -225,11 +225,9 @@ async fn download_installer(update: &HostUpdate, work_dir: &Path) -> Option<Path
     }
 }
 
-async fn stop_plugins(plugin_manager: Arc<Mutex<PluginManager>>) {
+async fn stop_plugins(plugin_manager: SharedPluginManager) {
     let stopping = tokio::task::spawn_blocking(move || {
-        let mut manager = plugin_manager
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut manager = plugin_manager.lock();
         manager.hand_off_running_daemons();
         manager.shutdown();
     });

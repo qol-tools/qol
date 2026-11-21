@@ -9,6 +9,7 @@ use crate::plugins::action_executor::ProcessTracker;
 use crate::plugins::action_transport::DaemonActionDispatch;
 use crate::plugins::resolver::ResolutionReport;
 use anyhow::Result;
+use qol_sync::Mutex;
 use reload_delivery::{
     CompletionDecision, DaemonInstance, DeliverySettlement, PendingReloadTicket, ReloadDeliveries,
     ReloadDeliveryOutcome,
@@ -18,6 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const DAEMON_HAND_OFF_TIMEOUT: Duration = Duration::from_millis(200);
+
+pub type SharedPluginManager = Arc<Mutex<PluginManager>>;
 
 pub struct PluginManager {
     plugins: HashMap<PluginId, Plugin>,
@@ -46,6 +49,10 @@ impl PluginManager {
             #[cfg(test)]
             profile_reconciliation_count: 0,
         }
+    }
+
+    pub fn into_shared(self) -> SharedPluginManager {
+        Arc::new(Mutex::new(self))
     }
 
     pub(crate) fn process_tracker(&self) -> Arc<ProcessTracker> {

@@ -4,10 +4,9 @@ use crate::plugins::manifest::{
     ActionDeclaration, ActionType, BuildInfo, Capabilities, DaemonConfig, MenuConfig, MenuItem,
     PluginInfo, PluginManifest, RuntimeConfig, CURRENT_MANIFEST_VERSION,
 };
-use crate::plugins::{Plugin, PluginId};
+use crate::plugins::{Plugin, PluginId, PluginManager};
 use std::collections::HashMap;
 use std::fs;
-use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 fn make_plugin(
@@ -522,7 +521,7 @@ fn resolve_action_keeps_runtime_fallback_when_daemon_and_runtime_differ() {
 
 #[test]
 fn try_execute_action_returns_plugin_not_found() {
-    let manager = Arc::new(Mutex::new(PluginManager::new()));
+    let manager = PluginManager::new().into_shared();
     let err = try_execute_action(&manager, "missing", "open")
         .err()
         .unwrap();
@@ -625,8 +624,8 @@ fn kill_plugin_processes_preserves_other_plugins_tracking() {
 
 #[test]
 fn on_demand_readiness_cannot_bypass_shutdown_reconciliation() {
-    let plugin_manager = Arc::new(Mutex::new(PluginManager::new()));
-    plugin_manager.lock().unwrap().shutdown();
+    let plugin_manager = PluginManager::new().into_shared();
+    plugin_manager.lock().shutdown();
 
     let error = ensure_daemon_ready(
         &plugin_manager,
@@ -645,7 +644,7 @@ fn not_ready_daemon_defers_promptly_with_its_phase_instead_of_waiting() {
     let plugin = make_plugin(&dir, "open", None, None);
     let mut manager = PluginManager::new();
     manager.insert_plugin_for_test(plugin);
-    let plugin_manager = Arc::new(Mutex::new(manager));
+    let plugin_manager = manager.into_shared();
     let started = Instant::now();
 
     let error = ensure_daemon_ready(
@@ -720,7 +719,7 @@ fn repeated_daemon_action_resolution_does_not_read_profile_state() {
     );
     let mut manager = PluginManager::new();
     manager.insert_plugin_for_test(plugin);
-    let plugin_manager = Arc::new(Mutex::new(manager));
+    let plugin_manager = manager.into_shared();
 
     crate::plugins::config::reset_profile_config_read_count();
     for _ in 0..5 {
@@ -758,7 +757,7 @@ fn repeated_daemon_action_readiness_does_not_read_profile_state() {
 
     let mut manager = PluginManager::new();
     manager.insert_plugin_for_test(plugin);
-    let plugin_manager = Arc::new(Mutex::new(manager));
+    let plugin_manager = manager.into_shared();
     crate::plugins::config::reset_profile_config_read_count();
 
     for _ in 0..5 {
@@ -774,7 +773,7 @@ fn repeated_daemon_action_readiness_does_not_read_profile_state() {
     }
 
     assert_eq!(crate::plugins::config::profile_config_read_count(), 0);
-    plugin_manager.lock().unwrap().shutdown();
+    plugin_manager.lock().shutdown();
 }
 
 /// Queries feed settings rows, so they must fail fast rather than inherit the
@@ -896,7 +895,7 @@ fn query_reply_loss_never_performs_readiness_recovery_or_query_retry() {
     let id = plugin.id.to_string();
     let mut manager = PluginManager::new();
     manager.insert_plugin_for_test(plugin);
-    let manager = Arc::new(Mutex::new(manager));
+    let manager = manager.into_shared();
     let server = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         let request = qol_runtime::local_ipc::read_line(&mut BufReader::new(&stream))

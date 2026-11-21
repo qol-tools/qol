@@ -1,16 +1,16 @@
 pub mod icon;
 mod platform;
 
-use crate::plugins::{Plugin, PluginManager};
+use crate::plugins::{Plugin, SharedPluginManager};
 use crate::shortcuts::model::{Shortcut, ShortcutAction, ShortcutSource};
 use icon::{LauncherIcon, MarkFiles, PluginMarks};
 use qol_plugin_api::launcher_flows::{self, FlowEntry};
 use qol_plugin_api::manifest::LauncherKind;
+use qol_sync::Mutex;
 use qol_theme::Mark;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 static SYNC_LOCK: Mutex<()> = Mutex::new(());
 static SYNC_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -206,33 +206,20 @@ pub fn sync_entries(entries: Vec<LauncherEntry>, binary_path: &Path, marks: &Mar
     }
 }
 
-pub fn trigger_full_sync_with_manager(plugin_manager: &Arc<Mutex<PluginManager>>) {
+pub fn trigger_full_sync_with_manager(plugin_manager: &SharedPluginManager) {
     let Some(marks) = MarkFiles::locate() else {
         log::warn!("Skipping launcher sync: no data directory");
         return;
     };
-    let (plugin_settings_entries, flows, plugin_marks, app_windows) = match plugin_manager.lock() {
-        Ok(manager) => {
-            reconcile_plugin_shortcuts(manager.plugins());
-            (
-                collect_plugin_settings_entries(manager.plugins()),
-                collect_flow_entries(manager.plugins(), &marks),
-                icon::plugin_marks(manager.plugins()),
-                app_window_shortcuts(manager.plugins()),
-            )
-        }
-        Err(error) => {
-            log::error!(
-                "plugin manager lock poisoned during launcher sync: {}",
-                error
-            );
-            (
-                Vec::new(),
-                Vec::new(),
-                PluginMarks::new(),
-                AppWindows::new(),
-            )
-        }
+    let (plugin_settings_entries, flows, plugin_marks, app_windows) = {
+        let manager = plugin_manager.lock();
+        reconcile_plugin_shortcuts(manager.plugins());
+        (
+            collect_plugin_settings_entries(manager.plugins()),
+            collect_flow_entries(manager.plugins(), &marks),
+            icon::plugin_marks(manager.plugins()),
+            app_window_shortcuts(manager.plugins()),
+        )
     };
     sync_launcher_entries(
         plugin_settings_entries,
@@ -273,7 +260,7 @@ fn sync_launcher_entries(
     entries.extend(plugin_settings_entries);
     let gen = SYNC_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     std::thread::spawn(move || {
-        let _guard = SYNC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = SYNC_LOCK.lock();
         if SYNC_GENERATION.load(Ordering::SeqCst) != gen {
             return;
         }

@@ -10,8 +10,7 @@ use super::http_json::{self, blocking};
 use crate::plugins::manager::reload_delivery::{
     CompletionDecision, PendingReloadTicket, ReloadDeliveryOutcome,
 };
-use crate::plugins::PluginManager;
-use std::sync::{Arc, Mutex};
+use crate::plugins::SharedPluginManager;
 
 mod form;
 mod io;
@@ -112,7 +111,7 @@ fn set_plugin_config_inner(
 fn apply_tracked_plugin_config_save(
     plugin_id: &str,
     config: serde_json::Value,
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
 ) -> HttpResult<Response> {
     let ticket = match begin_config_reload(plugin_manager, plugin_id) {
         Ok(ticket) => ticket,
@@ -144,50 +143,44 @@ fn apply_tracked_plugin_config_save(
 }
 
 fn begin_config_reload(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
 ) -> Result<PendingReloadTicket, String> {
-    plugin_manager
-        .lock()
-        .map_err(|error| format!("Plugin manager mutex poisoned: {error}"))?
-        .begin_config_reload(plugin_id)
+    plugin_manager.lock().begin_config_reload(plugin_id)
 }
 
 fn record_config_reload_saved(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     ticket: &PendingReloadTicket,
     receipt: crate::plugins::config::ConfigSaveReceipt,
 ) -> Result<(), String> {
     plugin_manager
         .lock()
-        .map_err(|error| format!("Plugin manager mutex poisoned: {error}"))?
         .record_config_reload_saved(ticket, receipt)
 }
 
 fn retire_config_reload(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     ticket: &PendingReloadTicket,
     outcome: ReloadDeliveryOutcome,
 ) {
-    let Ok(mut manager) = plugin_manager.lock() else {
-        return;
-    };
-    manager.complete_config_reload(ticket, outcome);
+    plugin_manager
+        .lock()
+        .complete_config_reload(ticket, outcome);
 }
 
 fn complete_config_reload(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     ticket: &PendingReloadTicket,
     outcome: ReloadDeliveryOutcome,
-) -> Result<CompletionDecision, String> {
-    let mut manager = plugin_manager
+) -> CompletionDecision {
+    plugin_manager
         .lock()
-        .map_err(|error| format!("Plugin manager mutex poisoned: {error}"))?;
-    Ok(manager.complete_config_reload(ticket, outcome))
+        .complete_config_reload(ticket, outcome)
 }
 
 fn dispatch_config_reload(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
     ticket: &PendingReloadTicket,
 ) -> HttpResult<Response> {
@@ -207,18 +200,9 @@ fn dispatch_config_reload(
             return Err(Box::new(config_refresh_failed_response()));
         }
     };
-    let decision = match complete_config_reload(plugin_manager, ticket, outcome) {
-        Ok(decision) => decision,
-        Err(error) => {
-            log::error!(
-                "Config saved for {}, but daemon refresh failed: {}",
-                plugin_id,
-                error
-            );
-            return Err(Box::new(config_refresh_failed_response()));
-        }
-    };
-    if let CompletionDecision::RestartFailed(error) = decision {
+    if let CompletionDecision::RestartFailed(error) =
+        complete_config_reload(plugin_manager, ticket, outcome)
+    {
         log::error!(
             "Config saved for {}, but daemon refresh failed: {}",
             plugin_id,
@@ -298,6 +282,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     const PLUGIN_ID: &str = "plugin-config-reload-handler";
@@ -307,7 +292,7 @@ mod tests {
     const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
     struct Harness {
-        manager: Arc<Mutex<PluginManager>>,
+        manager: SharedPluginManager,
         config_path: PathBuf,
         socket_path: PathBuf,
         stopped: bool,
@@ -317,7 +302,6 @@ mod tests {
         fn pid(&self) -> u32 {
             self.manager
                 .lock()
-                .unwrap()
                 .get(PLUGIN_ID)
                 .unwrap()
                 .daemon_pid()
@@ -333,9 +317,7 @@ mod tests {
                 return;
             }
             self.stopped = true;
-            if let Ok(mut manager) = self.manager.lock() {
-                manager.shutdown();
-            }
+            self.manager.lock().shutdown();
         }
     }
 
@@ -406,7 +388,7 @@ socket = "{contract_socket}"
                 .expect("test contract socket must be valid UTF-8"),
         );
         Harness {
-            manager: Arc::new(Mutex::new(manager)),
+            manager: manager.into_shared(),
             config_path: plugins_dir.join(PLUGIN_ID).join("config.json"),
             socket_path,
             stopped: false,
@@ -419,7 +401,7 @@ socket = "{contract_socket}"
 
     fn worker_apply(
         root: &Path,
-        manager: &Arc<Mutex<PluginManager>>,
+        manager: &SharedPluginManager,
         value: u64,
     ) -> std::thread::JoinHandle<HttpResult<Response>> {
         let manager = Arc::clone(manager);
@@ -615,15 +597,10 @@ socket = "{contract_socket}"
         });
 
         published_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-        assert!(harness
-            .manager
-            .lock()
-            .unwrap()
-            .has_pending_config_reload(PLUGIN_ID));
+        assert!(harness.manager.lock().has_pending_config_reload(PLUGIN_ID));
         assert!(!harness
             .manager
             .lock()
-            .unwrap()
             .reconcile_profile_generation()
             .unwrap());
         assert_eq!(harness.pid(), pid_before);
@@ -638,7 +615,6 @@ socket = "{contract_socket}"
         assert!(!harness
             .manager
             .lock()
-            .unwrap()
             .reconcile_profile_generation()
             .unwrap());
         assert_eq!(harness.pid(), pid_before);
@@ -670,7 +646,6 @@ socket = "{contract_socket}"
         assert!(!harness
             .manager
             .lock()
-            .unwrap()
             .reconcile_profile_generation()
             .unwrap());
         assert_eq!(harness.pid(), pid_after);
@@ -697,7 +672,7 @@ socket = "{contract_socket}"
         daemon.wait_arrival(0);
 
         let replacement_pid = {
-            let mut manager = harness.manager.lock().unwrap();
+            let mut manager = harness.manager.lock();
             manager.restart_running_plugin_daemon(PLUGIN_ID).unwrap();
             manager.get(PLUGIN_ID).unwrap().daemon_pid().unwrap()
         };
@@ -710,7 +685,6 @@ socket = "{contract_socket}"
         assert!(!harness
             .manager
             .lock()
-            .unwrap()
             .reconcile_profile_generation()
             .unwrap());
         assert_eq!(harness.pid(), replacement_pid);
@@ -766,7 +740,6 @@ socket = "{contract_socket}"
         assert!(!harness
             .manager
             .lock()
-            .unwrap()
             .reconcile_profile_generation()
             .unwrap());
         assert_eq!(harness.pid(), pid_before);
@@ -833,7 +806,6 @@ socket = "{contract_socket}"
         assert!(!harness
             .manager
             .lock()
-            .unwrap()
             .reconcile_profile_generation()
             .unwrap());
         assert_eq!(harness.pid(), pid_before);
@@ -846,7 +818,7 @@ socket = "{contract_socket}"
         let _runtime_cache = crate::test_support::runtime_cache_lock().blocking_lock();
         let root = tempfile::tempdir_in("/tmp").unwrap();
         let _path = crate::paths::push_test_path_root(root.path());
-        let manager = Arc::new(Mutex::new(PluginManager::new()));
+        let manager = PluginManager::new().into_shared();
 
         let response = apply_tracked_plugin_config_save(
             "plugin-not-enrolled",
@@ -909,7 +881,7 @@ items = []
         let mut manager = PluginManager::new();
         let plugin = PluginLoader::load_plugin_with_id(NO_DAEMON_ID, &plugin_dir).unwrap();
         manager.insert_plugin_for_test(plugin);
-        let manager = Arc::new(Mutex::new(manager));
+        let manager = manager.into_shared();
 
         let response = apply_tracked_plugin_config_save(
             NO_DAEMON_ID,
@@ -918,16 +890,13 @@ items = []
         )
         .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        assert!(!manager
-            .lock()
-            .unwrap()
-            .has_pending_config_reload(NO_DAEMON_ID));
+        assert!(!manager.lock().has_pending_config_reload(NO_DAEMON_ID));
         assert!(plugin_dir.join("config.json").exists());
         assert!(
-            !manager.lock().unwrap().reconcile_profile_generation().unwrap(),
+            !manager.lock().reconcile_profile_generation().unwrap(),
             "a saved config with no daemon to notify must not reload the plugin and kill its windows"
         );
-        manager.lock().unwrap().shutdown();
+        manager.lock().shutdown();
     }
 
     #[test]
@@ -945,7 +914,6 @@ items = []
         harness
             .manager
             .lock()
-            .unwrap()
             .ensure_plugin_daemon_running(PLUGIN_ID)
             .unwrap();
         let pid_before = harness.pid();
@@ -964,11 +932,7 @@ items = []
             early.unwrap_err().status(),
             StatusCode::INTERNAL_SERVER_ERROR
         );
-        assert!(!harness
-            .manager
-            .lock()
-            .unwrap()
-            .has_pending_config_reload(PLUGIN_ID));
+        assert!(!harness.manager.lock().has_pending_config_reload(PLUGIN_ID));
         assert_eq!(
             crate::plugins::config::profile_config_plugin_generation(PLUGIN_ID),
             seed.generation,
@@ -994,11 +958,7 @@ items = []
             published.unwrap_err().status(),
             StatusCode::INTERNAL_SERVER_ERROR
         );
-        assert!(!harness
-            .manager
-            .lock()
-            .unwrap()
-            .has_pending_config_reload(PLUGIN_ID));
+        assert!(!harness.manager.lock().has_pending_config_reload(PLUGIN_ID));
         assert!(
             crate::plugins::config::profile_config_plugin_generation(PLUGIN_ID) > seed.generation,
             "a post-publication persistence failure must keep its invalidation"
@@ -1009,7 +969,6 @@ items = []
         assert!(harness
             .manager
             .lock()
-            .unwrap()
             .reconcile_profile_generation()
             .unwrap());
         let pid_after = harness.pid();
@@ -1021,7 +980,6 @@ items = []
         assert!(!harness
             .manager
             .lock()
-            .unwrap()
             .reconcile_profile_generation()
             .unwrap());
         assert_eq!(harness.pid(), pid_after);

@@ -386,7 +386,7 @@ pub(super) async fn list_installed(
     State(state): State<AppState>,
 ) -> Result<Json<InstalledPluginsResponse>, StatusCode> {
     match tokio::task::spawn_blocking(move || plugin_services::list_installed(&state)).await {
-        Ok(result) => result.map(Json),
+        Ok(installed) => Ok(Json(installed)),
         Err(error) => {
             log::error!("list_installed join error: {}", error);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -417,10 +417,7 @@ pub(super) async fn get_plugin_permissions(
     if validate_plugin_id(&id).is_err() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let manager = state
-        .plugin_manager
-        .lock()
-        .map_err(plugin_manager_lock_failed)?;
+    let manager = state.plugin_manager.lock();
     let plugin = manager.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let permissions =
         crate::plugins::capabilities::check_plugin_permissions(&plugin.manifest.capabilities);
@@ -466,13 +463,6 @@ fn invalid_plugin_id_action_result() -> (StatusCode, Json<ExecuteActionResult>) 
             data: None,
         }),
     )
-}
-
-fn plugin_manager_lock_failed(
-    error: std::sync::PoisonError<std::sync::MutexGuard<'_, crate::plugins::PluginManager>>,
-) -> StatusCode {
-    log::error!("Plugin manager mutex poisoned: {}", error);
-    StatusCode::INTERNAL_SERVER_ERROR
 }
 
 fn join_error_response(error: tokio::task::JoinError) -> (StatusCode, String) {

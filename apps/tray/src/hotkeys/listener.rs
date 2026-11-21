@@ -5,12 +5,11 @@ use super::manager::{RegisteredHotkey, RegistrationScope};
 use super::platform::PhysicalHotkeyState;
 use super::reload;
 use super::{HotkeyAction, HotkeyManager};
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 use anyhow::{anyhow, Result};
 use crossbeam_channel::{after, never, select, Receiver};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyEventReceiver, HotKeyState};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
@@ -24,14 +23,12 @@ const REASSERT_SCHEDULE: &[Duration] = &[
     Duration::from_secs(420),
 ];
 
-type SharedPluginManager = Arc<Mutex<PluginManager>>;
-
-pub fn start_hotkey_listener(plugin_manager: Arc<Mutex<PluginManager>>) -> Result<()> {
+pub fn start_hotkey_listener(plugin_manager: SharedPluginManager) -> Result<()> {
     start_listener(plugin_manager, RegistrationScope::All);
     Ok(())
 }
 
-pub(super) fn start_listener(plugin_manager: Arc<Mutex<PluginManager>>, scope: RegistrationScope) {
+pub(super) fn start_listener(plugin_manager: SharedPluginManager, scope: RegistrationScope) {
     let reload_rx = reload::subscribe();
     std::thread::spawn(move || {
         run_supervised(
@@ -330,16 +327,12 @@ impl<'a> HotkeyListenerLoop<'a> {
     fn dispatch(&mut self, dispatch: HotkeyDispatch, source: DispatchSource, _keys: &str) {
         let action = dispatch.action();
 
-        let plugin_id = match self.plugin_manager.lock() {
-            Ok(manager) => manager
-                .identity_index()
-                .display_for(&action.plugin_uid)
-                .map(|d| d.id.as_str().to_owned()),
-            Err(_) => {
-                log::error!("hotkey dispatch: plugin manager lock failed");
-                return;
-            }
-        };
+        let plugin_id = self
+            .plugin_manager
+            .lock()
+            .identity_index()
+            .display_for(&action.plugin_uid)
+            .map(|d| d.id.as_str().to_owned());
 
         let Some(plugin_id) = plugin_id else {
             log::warn!(
@@ -732,6 +725,7 @@ mod tests {
     use super::*;
     use crate::plugins::PluginUid;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
 
     fn registration(name: &str, continuous: bool) -> RegisteredHotkey {
         RegisteredHotkey {

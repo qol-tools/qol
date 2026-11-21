@@ -7574,6 +7574,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-sync"
+version = "1.0.0"
+dependencies = [
+ "log",
+ "serde_json",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-template"
 version = "0.2.0"
 dependencies = [
@@ -7689,6 +7698,7 @@ dependencies = [
  "qol-process",
  "qol-profile-sync",
  "qol-runtime",
+ "qol-sync",
  "qol-theme",
  "qol-watch",
  "qol-window-state",

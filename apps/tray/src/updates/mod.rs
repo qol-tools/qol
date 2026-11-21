@@ -347,7 +347,7 @@ const STAND_IN_REFUSAL: &str =
 
 pub(crate) async fn install_host_update(
     events: std::sync::Arc<crate::daemon::EventBus>,
-    plugin_manager: std::sync::Arc<Mutex<crate::plugins::PluginManager>>,
+    plugin_manager: crate::plugins::SharedPluginManager,
     confirm_after_restart: bool,
     update_plugins: Vec<String>,
 ) -> Result<(), String> {

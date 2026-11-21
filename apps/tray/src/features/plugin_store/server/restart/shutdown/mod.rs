@@ -1,8 +1,8 @@
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::daemon::{DaemonEvent, EventBus};
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 
 use super::super::dev_runtime::DevRuntimeService;
 
@@ -69,7 +69,7 @@ impl Drop for PendingRestart {
 }
 
 pub(in crate::features::plugin_store::server) async fn cleanup_before_restart(
-    plugin_manager: Arc<Mutex<PluginManager>>,
+    plugin_manager: SharedPluginManager,
 ) -> Result<(), String> {
     crate::window_reopen::capture_before_restart();
     if let Err(error) = crate::runtime::RuntimeServer::shutdown_peers_and_wait().await {
@@ -84,15 +84,8 @@ pub(in crate::features::plugin_store::server) async fn cleanup_before_restart(
     .map_err(|error| format!("Restart plugin cleanup worker failed: {error}"))?
 }
 
-fn shutdown_plugin_manager(plugin_manager: &Arc<Mutex<PluginManager>>) {
-    let mut manager = plugin_manager.lock().unwrap_or_else(|poisoned| {
-        log::error!(
-            "Plugin manager lock poisoned during self restart: {}",
-            poisoned
-        );
-        poisoned.into_inner()
-    });
-    manager.shutdown();
+fn shutdown_plugin_manager(plugin_manager: &SharedPluginManager) {
+    plugin_manager.lock().shutdown();
 }
 
 fn verify_plugin_process_leaks() -> Result<(), String> {

@@ -40,6 +40,7 @@ qol-runtime = { path = "libs/runtime" }
 qol-search = { path = "libs/search" }
 qol-secrets = { path = "libs/secrets" }
 qol-sessions-engine = { path = "libs/sessions-engine" }
+qol-sync = { path = "libs/sync" }
 qol-migrations = { path = "libs/migrations" }
 qol-apps = { path = "libs/apps" }
 qol-app-icon = { path = "libs/app-icon" }

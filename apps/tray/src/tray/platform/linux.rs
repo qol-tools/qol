@@ -1,10 +1,10 @@
 use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 use crate::tray::TrayManager;
 use anyhow::Result;
 use gtk::{self, glib};
-use std::sync::{Arc, Mutex, OnceLock as OnceCell};
+use std::sync::{Arc, OnceLock as OnceCell};
 use tokio::sync::broadcast;
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
@@ -47,7 +47,7 @@ pub(crate) fn create_tray(
 
 pub(crate) fn run_app<F>(init: F) -> Result<()>
 where
-    F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
+    F: FnOnce() -> Result<(TrayManager, SharedPluginManager)>,
 {
     let (tray, plugin_manager) = init()?;
     let _signal_listener = crate::signal::install_signal_handler(tray.shutdown_sender())?;

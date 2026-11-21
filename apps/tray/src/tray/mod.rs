@@ -5,9 +5,9 @@ pub mod tone;
 
 use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 use qol_runtime::protocol::{NotificationLevel, NotificationMeta};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 
@@ -23,7 +23,7 @@ pub struct TrayManager {
 
 pub fn run_app<F>(init: F) -> anyhow::Result<()>
 where
-    F: FnOnce() -> anyhow::Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
+    F: FnOnce() -> anyhow::Result<(TrayManager, SharedPluginManager)>,
 {
     if crate::headless_mode::active() {
         headless::run_app(init)
@@ -37,15 +37,8 @@ pub(crate) fn request_shutdown(shutdown_tx: &broadcast::Sender<()>) {
     platform::request_shutdown(shutdown_tx);
 }
 
-pub(crate) fn shutdown_plugins(plugin_manager: &Arc<Mutex<PluginManager>>) {
-    let mut manager = match plugin_manager.lock() {
-        Ok(guard) => guard,
-        Err(error) => {
-            log::error!("Plugin manager lock poisoned during shutdown: {}", error);
-            return;
-        }
-    };
-    manager.shutdown();
+pub(crate) fn shutdown_plugins(plugin_manager: &SharedPluginManager) {
+    plugin_manager.lock().shutdown();
 }
 
 impl TrayManager {

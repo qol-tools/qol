@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use std::os::unix::process::CommandExt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::daemon::{DaemonEvent, EventBus};
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 
 use super::super::FoundUpdate;
 use super::download::HostUpdate;
@@ -63,7 +63,7 @@ fn tar_update_blocked(
 
 pub(super) async fn download_and_install(
     events: Arc<EventBus>,
-    _plugin_manager: Arc<Mutex<PluginManager>>,
+    _plugin_manager: SharedPluginManager,
     update: Option<FoundUpdate>,
 ) -> Result<()> {
     let install_kind = InstallKind::detect();

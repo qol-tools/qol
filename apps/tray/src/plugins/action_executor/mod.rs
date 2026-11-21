@@ -1,12 +1,12 @@
 pub(crate) mod remote;
-use super::manager::PluginManager;
+use super::manager::SharedPluginManager;
 use crate::plugins::action_transport::DaemonActionDispatch;
 use crate::plugins::daemon_health::{probe_daemon_readiness_with_timeout, DaemonReadiness};
 use crate::plugins::PluginId;
 use qol_runtime::protocol::ReadinessPhase;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod execution;
@@ -30,7 +30,6 @@ pub const MCP_DISPATCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub enum ActionExecutionError {
-    PluginManagerPoisoned,
     PluginNotFound(PluginId),
     InvalidActionId(String),
     RuntimeCommandEscapesPluginDir {
@@ -60,7 +59,6 @@ pub enum ActionExecutionError {
 impl Display for ActionExecutionError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PluginManagerPoisoned => write!(f, "plugin manager lock failed"),
             Self::PluginNotFound(plugin_id) if crate::headless_mode::active() => write!(
                 f,
                 "plugin not found: {} (qol-tray runs headless and loads only plugins that declare headless = true)",
@@ -115,11 +113,7 @@ fn readiness_phase_label(phase: &ReadinessPhase) -> &'static str {
     }
 }
 
-pub fn execute_action(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
-    plugin_id: &str,
-    action_id: &str,
-) {
+pub fn execute_action(plugin_manager: &SharedPluginManager, plugin_id: &str, action_id: &str) {
     execute_action_with_input(
         plugin_manager,
         plugin_id,
@@ -129,7 +123,7 @@ pub fn execute_action(
 }
 
 pub fn execute_action_with_input(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
     action_id: &str,
     input: serde_json::Value,
@@ -161,7 +155,7 @@ pub fn execute_action_with_input(
 }
 
 pub fn try_execute_action(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
     action_id: &str,
 ) -> Result<(), ActionExecutionError> {
@@ -174,7 +168,7 @@ pub fn try_execute_action(
 }
 
 pub fn try_execute_action_with_input(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
     action_id: &str,
     input: serde_json::Value,
@@ -199,7 +193,7 @@ pub(crate) fn core_tool_for_action(action_id: &str) -> Option<crate::settings_su
 }
 
 pub fn try_execute_action_with_input_result(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
     action_id: &str,
     input: serde_json::Value,
@@ -254,21 +248,16 @@ pub fn try_execute_action_with_input_result(
         }
     }
     ensure_daemon_ready_for_action(plugin_manager, &resolved)?;
-    let tracker = process_tracker(plugin_manager)?;
+    let tracker = process_tracker(plugin_manager);
     execution::execute_resolved_action(&tracker, &resolved, &input)
 }
 
-fn process_tracker(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
-) -> Result<Arc<ProcessTracker>, ActionExecutionError> {
-    plugin_manager
-        .lock()
-        .map(|manager| manager.process_tracker())
-        .map_err(|_| ActionExecutionError::PluginManagerPoisoned)
+fn process_tracker(plugin_manager: &SharedPluginManager) -> Arc<ProcessTracker> {
+    plugin_manager.lock().process_tracker()
 }
 
 pub fn dispatch_query(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
     query_name: &str,
 ) -> Result<serde_json::Value, ActionExecutionError> {
@@ -282,7 +271,7 @@ pub fn dispatch_query(
 }
 
 pub fn dispatch_query_with_input(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
     query_name: &str,
     input: serde_json::Value,
@@ -389,13 +378,11 @@ fn dispatch_outcome(dispatch: &DaemonActionDispatch) -> &'static str {
 }
 
 fn resolve_plugin_daemon_socket(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
 ) -> Result<std::path::PathBuf, ActionExecutionError> {
     let (identity, socket) = {
-        let mut plugins = plugin_manager
-            .lock()
-            .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
+        let mut plugins = plugin_manager.lock();
         plugins
             .reconcile_profile_generation()
             .map_err(|error| ActionExecutionError::SpawnFailed(error.to_string()))?;
@@ -421,14 +408,12 @@ fn resolve_plugin_daemon_socket(
 }
 
 fn resolve_plugin_action(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
     action_id: &str,
 ) -> Result<resolution::ResolvedAction, ActionExecutionError> {
     let (identity, resolved) = {
-        let mut plugins = plugin_manager
-            .lock()
-            .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
+        let mut plugins = plugin_manager.lock();
         plugins
             .reconcile_profile_generation()
             .map_err(|error| ActionExecutionError::SpawnFailed(error.to_string()))?;
@@ -446,7 +431,7 @@ fn resolve_plugin_action(
 }
 
 fn materialize_plugin_runtime_config(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
     identity: &crate::plugins::config::ManifestIdentity,
 ) -> Result<(), ActionExecutionError> {
@@ -470,9 +455,7 @@ fn materialize_plugin_runtime_config(
         return Ok(());
     }
     let manifest = {
-        let plugins = plugin_manager
-            .lock()
-            .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
+        let plugins = plugin_manager.lock();
         plugins
             .get(plugin_id)
             .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?
@@ -532,7 +515,7 @@ fn runtime_cache_hit_fields(
 }
 
 fn ensure_daemon_ready_for_action(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     resolved: &resolution::ResolvedAction,
 ) -> Result<(), ActionExecutionError> {
     let Some(socket_path) = resolved.daemon_socket.as_deref() else {
@@ -579,16 +562,14 @@ fn trace_daemon_ready(phase: &str, plugin_id: &str, action_id: &str, started: &(
 }
 
 fn ensure_daemon_ready(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
     request_id: &str,
     socket_path: &Path,
     readiness_probe: fn(&Path) -> DaemonReadiness,
 ) -> Result<(), ActionExecutionError> {
     {
-        let mut plugins = plugin_manager
-            .lock()
-            .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
+        let mut plugins = plugin_manager.lock();
         plugins
             .ensure_plugin_daemon_running(plugin_id)
             .map_err(|error| ActionExecutionError::SpawnFailed(error.to_string()))?;

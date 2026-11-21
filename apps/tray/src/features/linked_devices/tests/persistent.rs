@@ -430,7 +430,7 @@ args = ["run"]
         manifest,
         plugin_root.clone(),
     );
-    host.plugins.lock().unwrap().insert_plugin_for_test(plugin);
+    host.plugins.lock().insert_plugin_for_test(plugin);
     let grant = OperationKey::new(
         crate::plugins::manifest::PluginUid::new("fixture-uid"),
         OperationKind::Action,
@@ -507,7 +507,7 @@ args = ["run"]
             }
         );
     }
-    *host.plugins.lock().unwrap() = PluginManager::new();
+    *host.plugins.lock() = PluginManager::new();
     assert!(matches!(
         shared.peer_admin(Request::SetGrants {
             expected: authority(&shared).expected(),

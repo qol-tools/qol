@@ -1,5 +1,5 @@
 use super::{Host, PeerHostHandle};
-use crate::plugins::{action_executor::remote::PreparedRemote, PluginManager};
+use crate::plugins::{action_executor::remote::PreparedRemote, PluginManager, SharedPluginManager};
 use qol_peers::{
     operations::{Failure, Invocation, Outcome, Request, RequestStatus, Response},
     service::{network::OperationDispatcher, PeerAuthority},
@@ -10,7 +10,7 @@ use std::time::Duration;
 
 pub(super) struct Dispatcher {
     pub host: Weak<Mutex<Host>>,
-    pub plugins: Weak<Mutex<PluginManager>>,
+    pub plugins: Weak<qol_sync::Mutex<PluginManager>>,
 }
 
 impl OperationDispatcher for Dispatcher {
@@ -26,14 +26,14 @@ impl OperationDispatcher for Dispatcher {
         let captured = {
             let host = host.lock().map_err(|_| Failure::Unavailable)?;
             check_host(&host, session)?;
-            let manager = plugins.lock().map_err(|_| Failure::Unavailable)?;
+            let manager = plugins.lock();
             PreparedRemote::capture(&manager)?
         };
         let prepared = PreparedRemote::prepare(captured, &body)?;
         {
             let host = host.lock().map_err(|_| Failure::Unavailable)?;
             check_host(&host, session)?;
-            let manager = plugins.lock().map_err(|_| Failure::Unavailable)?;
+            let manager = plugins.lock();
             prepared.recheck(&manager)?;
             let (outcome, owned) = authority.admit_operation(
                 session,
@@ -78,12 +78,12 @@ impl Dispatcher {
         invocation: &Invocation,
         prepared: &PreparedRemote,
         host: &Arc<Mutex<Host>>,
-        plugins: &Arc<Mutex<PluginManager>>,
+        plugins: &SharedPluginManager,
     ) -> Result<tokio::time::Instant, Failure> {
         let captured = {
             let host = host.lock().map_err(|_| Failure::Unavailable)?;
             check_host(&host, session)?;
-            let manager = plugins.lock().map_err(|_| Failure::Unavailable)?;
+            let manager = plugins.lock();
             prepared.recheck(&manager)?;
             PreparedRemote::capture(&manager)?
         };
@@ -91,7 +91,7 @@ impl Dispatcher {
         let refreshed = prepared.refresh(captured)?;
         let host = host.lock().map_err(|_| Failure::Unavailable)?;
         check_host(&host, session)?;
-        let manager = plugins.lock().map_err(|_| Failure::Unavailable)?;
+        let manager = plugins.lock();
         prepared.recheck(&manager)?;
         refreshed.recheck(&manager)?;
         let deadline = authority.start_operation(session, invocation, prepared.declaration())?;
@@ -185,7 +185,7 @@ impl PeerHostHandle {
         change: impl FnOnce(&mut PluginManager),
     ) {
         let _host = self.inner.lock().unwrap();
-        let mut manager = self.plugins.lock().unwrap();
+        let mut manager = self.plugins.lock();
         change(&mut manager);
     }
 }

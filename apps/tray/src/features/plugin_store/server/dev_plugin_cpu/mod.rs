@@ -4,7 +4,7 @@ mod snapshot;
 mod state;
 
 use crate::daemon::EventBus;
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -18,10 +18,7 @@ pub(super) struct DevPluginCpuService {
 }
 
 impl DevPluginCpuService {
-    pub(super) fn start(
-        plugin_manager: Arc<Mutex<PluginManager>>,
-        events: Arc<EventBus>,
-    ) -> Arc<Self> {
+    pub(super) fn start(plugin_manager: SharedPluginManager, events: Arc<EventBus>) -> Arc<Self> {
         let service = Arc::new(Self {
             state: Arc::new(Mutex::new(state::PluginCpuState::default())),
         });
@@ -40,7 +37,7 @@ impl DevPluginCpuService {
 
 fn start_sampler(
     state: Arc<Mutex<state::PluginCpuState>>,
-    plugin_manager: Arc<Mutex<PluginManager>>,
+    plugin_manager: SharedPluginManager,
     events: Arc<EventBus>,
 ) {
     tokio::spawn(async move {

@@ -1,9 +1,4 @@
-use std::{
-    net::Ipv4Addr,
-    path::Path,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{net::Ipv4Addr, path::Path, sync::Arc, time::Duration};
 
 use qol_peers::admin::{EnrollmentRequest, ExpectedAuthority, Request, Response};
 use qol_peers::network::ListenerStatus;
@@ -52,7 +47,7 @@ impl Fixture {
         let (shutdown, receiver) = tokio::sync::broadcast::channel(1);
         let owner = LinkedDevices::start_at(
             Ok(root.into()),
-            Arc::new(Mutex::new(PluginManager::new())),
+            PluginManager::new().into_shared(),
             false,
             receiver,
             Some(NetworkOptions {
@@ -293,7 +288,7 @@ async fn invitation_capacity_and_unknown_transaction_are_typed_local_refusals() 
 
 impl Fixture {
     #[cfg(target_os = "linux")]
-    pub(crate) fn plugins(&self) -> Arc<Mutex<PluginManager>> {
+    pub(crate) fn plugins(&self) -> crate::plugins::SharedPluginManager {
         self.owner.handle().plugins.clone()
     }
 

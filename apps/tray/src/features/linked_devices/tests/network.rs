@@ -83,7 +83,7 @@ impl Fixture {
         let (shutdown, rx) = tokio::sync::broadcast::channel(1);
         let owner = LinkedDevices::start_at(
             Ok(root.into()),
-            Arc::new(Mutex::new(PluginManager::new())),
+            PluginManager::new().into_shared(),
             shadow,
             rx,
             Some(options),

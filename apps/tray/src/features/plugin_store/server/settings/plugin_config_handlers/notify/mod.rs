@@ -2,9 +2,8 @@
 use super::super::super::types::AppState;
 use crate::plugins::action_transport::{dispatch_daemon_action, DaemonActionDispatch};
 use crate::plugins::manager::reload_delivery::ReloadDeliveryOutcome;
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "dev")]
 pub(in crate::features::plugin_store::server) fn notify_plugin_reload(
@@ -23,7 +22,7 @@ pub(in crate::features::plugin_store::server) fn notify_plugin_reload(
 }
 
 pub(super) fn notify_plugin_reload_outcome(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
 ) -> Result<ReloadDeliveryOutcome, String> {
     let snapshot = daemon_snapshot(plugin_manager, plugin_id)?;
@@ -43,13 +42,11 @@ pub(super) fn notify_plugin_reload_outcome(
 
 #[cfg(feature = "dev")]
 fn restart_running_plugin_daemon(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
 ) -> Result<(), String> {
-    let mut manager = plugin_manager
+    plugin_manager
         .lock()
-        .map_err(|e| format!("Plugin manager mutex poisoned: {}", e))?;
-    manager
         .restart_running_plugin_daemon(plugin_id)
         .map_err(|e| e.to_string())
 }
@@ -60,12 +57,10 @@ struct DaemonSnapshot {
 }
 
 fn daemon_snapshot(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &str,
 ) -> Result<DaemonSnapshot, String> {
-    let manager = plugin_manager
-        .lock()
-        .map_err(|e| format!("Plugin manager mutex poisoned: {}", e))?;
+    let manager = plugin_manager.lock();
     let plugin = manager
         .get(plugin_id)
         .ok_or_else(|| format!("plugin not found: {}", plugin_id))?;

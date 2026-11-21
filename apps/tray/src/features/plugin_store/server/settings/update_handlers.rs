@@ -30,7 +30,6 @@ const NO_UPDATE: &str = "No update is available";
 const DEV_LINKED_PLUGIN: &str = "A dev-linked plugin can't be updated here";
 const RUNNING_UPDATE_KEEPS_GOING: &str = "The current update can't be stopped";
 
-type HttpResult<T> = Result<T, Box<Response>>;
 type PlannedJob = (String, Operation);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -188,7 +187,7 @@ enum UpdateTarget {
 pub(super) async fn get_updates(state: AppState) -> Response {
     crate::features::connection_health::note_interest();
     http_json::blocking("updates query", move || {
-        let view = collect_view(&state)?;
+        let view = collect_view(&state);
         let payload = build_updates_payload(&view, SystemTime::now());
         let json = http_json::encode_json(&payload, "Failed to serialize updates")?;
         Ok(http_json::json_response(json))
@@ -198,7 +197,7 @@ pub(super) async fn get_updates(state: AppState) -> Response {
 
 pub(super) async fn get_attention(state: AppState) -> Response {
     http_json::blocking("attention query", move || {
-        let view = collect_view(&state)?;
+        let view = collect_view(&state);
         let now = SystemTime::now();
         let payload = build_updates_payload(&view, now);
         let tray_started_secs = secs_since(now, Some(view.tray_start)).unwrap_or(0);
@@ -296,12 +295,7 @@ fn start_host_update() -> Response {
 }
 
 fn start_plugin_update(state: &AppState, id: String) -> Response {
-    let plugins = match plugin_views(state) {
-        Ok(plugins) => plugins,
-        Err(_) => {
-            return action_error(StatusCode::INTERNAL_SERVER_ERROR, "Plugin list unavailable")
-        }
-    };
+    let plugins = plugin_views(state);
     let Some(plugin) = plugins.iter().find(|plugin| plugin.id == id) else {
         return action_error(StatusCode::NOT_FOUND, format!("Unknown plugin: {id}"));
     };
@@ -318,12 +312,7 @@ fn start_update_all_action(state: &AppState) -> Response {
     if let Some(refused) = trial_refusal() {
         return refused;
     }
-    let plugins = match plugin_views(state) {
-        Ok(plugins) => plugins,
-        Err(_) => {
-            return action_error(StatusCode::INTERNAL_SERVER_ERROR, "Plugin list unavailable")
-        }
-    };
+    let plugins = plugin_views(state);
     let host_available = crate::updates::host_update_available();
     let plan = update_all_plan(&plugins, host_available);
     if let Some(message) = update_all_refusal(jobs::QUEUE.busy(), &plan) {
@@ -355,15 +344,14 @@ fn stop_outcome(stopped: usize, busy: bool) -> Result<&'static str, &'static str
     }
 }
 
-fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {
+fn collect_view(state: &AppState) -> UpdatesView {
     let health = crate::updates::check_health();
     let catalog = CatalogHealth::read(state);
     let checks_enabled = crate::updates::checks_enabled();
     let trial = crate::installer::trial::current();
-    let plugins = plugin_views_during(state, trial.as_ref())
-        .map_err(|status| Box::new(status.into_response()))?;
+    let plugins = plugin_views_during(state, trial.as_ref());
     let host_checked = health.latest_succeeded();
-    Ok(UpdatesView {
+    UpdatesView {
         checking: health.checking || catalog.checking || super::super::update_check::running(state),
         checks_enabled,
         last_attempt: health.last_attempt,
@@ -383,7 +371,7 @@ fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {
         },
         trial,
         plugins,
-    })
+    }
 }
 
 fn last_good_check(
@@ -398,18 +386,15 @@ fn check_error(host: Option<String>, catalog_failed: bool) -> Option<String> {
     host.or_else(|| catalog_failed.then(|| PLUGIN_LIST_FAILED.to_string()))
 }
 
-fn plugin_views(state: &AppState) -> Result<Vec<PluginView>, StatusCode> {
+fn plugin_views(state: &AppState) -> Vec<PluginView> {
     plugin_views_during(state, None)
 }
 
-fn plugin_views_during(
-    state: &AppState,
-    trial: Option<&Trial>,
-) -> Result<Vec<PluginView>, StatusCode> {
-    let installed = plugin_services::list_installed(state)?;
+fn plugin_views_during(state: &AppState, trial: Option<&Trial>) -> Vec<PluginView> {
+    let installed = plugin_services::list_installed(state);
     let checked = CatalogHealth::read(state).checked();
     let jobs = jobs::snapshot();
-    Ok(installed
+    installed
         .plugins
         .into_iter()
         .map(|plugin| PluginView {
@@ -423,7 +408,7 @@ fn plugin_views_during(
                 .is_some_and(|trial| trial.plugins.iter().any(|id| id == plugin.id.as_str())),
             job: update_job(jobs.get(plugin.id.as_str())),
         })
-        .collect())
+        .collect()
 }
 
 fn update_job(job: Option<&UpdateJob>) -> Option<UpdateJob> {

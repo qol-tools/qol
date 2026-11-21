@@ -11,7 +11,7 @@ mod persistent;
 mod pointz;
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use qol_peers::admin::{AuthoritySummary, Error, Lifecycle, Request, Response, Status};
 use qol_peers::{AuthorityError, AuthorityLifetime, StoreRevision};
@@ -23,7 +23,7 @@ use crate::runtime::SharedState;
 pub(crate) fn host_at(root: &Path, shadow: bool) -> PeerHostHandle {
     let host = PeerHostHandle::new(
         Ok(root.to_path_buf()),
-        Arc::new(Mutex::new(PluginManager::new())),
+        PluginManager::new().into_shared(),
         shadow,
     );
     host.initialize();
@@ -115,7 +115,7 @@ async fn owned_shutdown_observer_clears_the_handle_and_pending_clones() {
     let (tx, rx) = tokio::sync::broadcast::channel(1);
     let mut owner = LinkedDevices::start_at(
         Ok(root.clone()),
-        Arc::new(Mutex::new(PluginManager::new())),
+        PluginManager::new().into_shared(),
         false,
         rx,
         None,
@@ -144,7 +144,7 @@ async fn dropping_the_owner_closes_an_attached_session() {
     let (_tx, rx) = tokio::sync::broadcast::channel(1);
     let owner = LinkedDevices::start_at(
         Ok(temporary.path().join("peers")),
-        Arc::new(Mutex::new(PluginManager::new())),
+        PluginManager::new().into_shared(),
         false,
         rx,
         None,
@@ -191,7 +191,7 @@ fn standby_refuses_all_authority_constructors_until_promotion() {
 fn root_resolution_failure_is_visible_and_explicit_session_still_works() {
     let host = PeerHostHandle::new(
         Err(Error::RootUnavailable),
-        Arc::new(Mutex::new(PluginManager::new())),
+        PluginManager::new().into_shared(),
         false,
     );
     host.initialize();

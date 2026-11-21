@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::daemon::{DaemonEvent, EventBus};
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 
 use super::super::{verify_host_update, FoundUpdate};
 use super::download::HostUpdate;
@@ -173,7 +173,7 @@ fn copy_bundle_dir(source: &Path, destination: &Path) -> Result<()> {
 
 pub(super) async fn download_and_install(
     events: Arc<EventBus>,
-    _plugin_manager: Arc<Mutex<PluginManager>>,
+    _plugin_manager: SharedPluginManager,
     update: Option<FoundUpdate>,
 ) -> Result<()> {
     let install_kind = InstallKind::detect();

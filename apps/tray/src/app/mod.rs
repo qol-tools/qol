@@ -14,7 +14,7 @@ static PENDING_HEAL_REPORT: std::sync::OnceLock<qol_tray::dev::boot_contract::He
 use qol_tray::features::{self, FeatureRegistry};
 use qol_tray::hotkeys;
 
-use qol_tray::plugins::PluginManager;
+use qol_tray::plugins::{PluginManager, SharedPluginManager};
 use qol_tray::tray::{self, TrayManager};
 use qol_tray::updates;
 use std::sync::{Arc, Mutex};
@@ -243,7 +243,7 @@ struct InitResult {
     shutdown_tx: broadcast::Sender<()>,
     shutdown_rx: broadcast::Receiver<()>,
     update_available: bool,
-    plugin_manager: Arc<Mutex<PluginManager>>,
+    plugin_manager: SharedPluginManager,
     feature_registry: Arc<FeatureRegistry>,
     events: Arc<qol_tray::daemon::EventBus>,
     post_pull_task: Option<tokio::task::JoinHandle<()>>,
@@ -254,21 +254,19 @@ struct InitResult {
 fn app_init(
     core_log_controls: qol_tray::logging::CoreControlsHandle,
     peers: Arc<Mutex<Option<PeerRuntime>>>,
-) -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
+) -> Result<(TrayManager, SharedPluginManager)> {
     app_init_inner(core_log_controls, peers)
 }
 
 #[cfg(not(feature = "dev"))]
-fn app_init(
-    peers: Arc<Mutex<Option<PeerRuntime>>>,
-) -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
+fn app_init(peers: Arc<Mutex<Option<PeerRuntime>>>) -> Result<(TrayManager, SharedPluginManager)> {
     app_init_inner(peers)
 }
 
 fn app_init_inner(
     #[cfg(feature = "dev")] core_log_controls: qol_tray::logging::CoreControlsHandle,
     peers: Arc<Mutex<Option<PeerRuntime>>>,
-) -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
+) -> Result<(TrayManager, SharedPluginManager)> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -337,7 +335,7 @@ async fn async_init_inner(
     let sync_service = Arc::new(qol_tray::sync::SyncService::new(plugins_dir)?);
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
-    let plugin_manager = Arc::new(Mutex::new(plugin_manager));
+    let plugin_manager = plugin_manager.into_shared();
     let linked_devices = features::linked_devices::LinkedDevices::start(
         plugin_manager.clone(),
         shutdown_tx.subscribe(),
@@ -482,7 +480,7 @@ async fn finished_update_available(update_check: Option<tokio::task::JoinHandle<
 }
 
 async fn start_local_daemons_before_launch_pull<F>(
-    plugin_manager: Arc<Mutex<PluginManager>>,
+    plugin_manager: SharedPluginManager,
     launch_pull_factory: Option<F>,
     mut shutdown_rx: broadcast::Receiver<()>,
 ) -> Result<Option<tokio::task::JoinHandle<()>>>
@@ -493,10 +491,7 @@ where
     let Some(launch_pull_factory) = launch_pull_factory else {
         return Ok(None);
     };
-    let lifecycle_cancellation = plugin_manager
-        .lock()
-        .map_err(|_| anyhow::anyhow!("plugin manager lock poisoned"))?
-        .lifecycle_cancellation();
+    let lifecycle_cancellation = plugin_manager.lock().lifecycle_cancellation();
     if !matches!(
         shutdown_rx.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -516,7 +511,7 @@ where
 
 async fn reconcile_after_launch_pull(
     mut launch_pull: tokio::task::JoinHandle<anyhow::Result<bool>>,
-    plugin_manager: Arc<Mutex<PluginManager>>,
+    plugin_manager: SharedPluginManager,
     mut shutdown_rx: broadcast::Receiver<()>,
     lifecycle_cancellation: Arc<qol_process::CancellationToken>,
 ) {
@@ -554,14 +549,7 @@ async fn reconcile_after_launch_pull(
         if cancellation_for_reconcile.is_cancelled() {
             return;
         }
-        let mut manager = match plugin_manager.lock() {
-            Ok(manager) => manager,
-            Err(error) => {
-                log::error!("Plugin manager mutex poisoned after profile pull: {error}");
-                return;
-            }
-        };
-        if let Err(error) = manager.reconcile_profile_generation() {
+        if let Err(error) = plugin_manager.lock().reconcile_profile_generation() {
             log::error!("Failed to reconcile daemons after profile pull: {error:#}");
         }
     });
@@ -634,17 +622,13 @@ fn trace_post_auth_migration(event: &str, outcome: &str, duration_ms: u64, reaso
     let _ = (event, outcome, duration_ms, reason);
 }
 
-async fn autostart_plugin_daemons(plugin_manager: Arc<Mutex<PluginManager>>) {
+async fn autostart_plugin_daemons(plugin_manager: SharedPluginManager) {
     if let Err(error) = tokio::task::spawn_blocking(move || {
         if qol_tray::dev_generation::daemon_autostart_held() {
             log::info!("Shadow dev generation: deferring plugin daemon autostart until promotion");
             return;
         }
-        if let Ok(mut manager) = plugin_manager.lock() {
-            manager.reconcile_and_autostart_daemons();
-        } else {
-            log::error!("plugin manager lock poisoned during daemon autostart");
-        }
+        plugin_manager.lock().reconcile_and_autostart_daemons();
     })
     .await
     {
@@ -663,13 +647,13 @@ fn materialize_installed_runtime_configs() {
     }
 }
 
-fn sync_launcher_apps(plugin_manager: Arc<Mutex<PluginManager>>) {
+fn sync_launcher_apps(plugin_manager: SharedPluginManager) {
     features::launcher_apps::trigger_full_sync_with_manager(&plugin_manager);
 }
 
 fn spawn_config_reconcilers(
     config: &qol_tray::daemon::ConfigBus,
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
 ) {
     use qol_tray::daemon::ConfigKind;
     use qol_tray::reconcile::spawn_reconciler;
@@ -702,40 +686,27 @@ fn spawn_config_reconcilers(
         config,
         &[ConfigKind::Plugins, ConfigKind::Profile],
         move || {
-            let mut manager = match pm_for_plugins.lock() {
-                Ok(manager) => manager,
-                Err(error) => {
-                    log::error!(
-                        "Plugin manager mutex poisoned during generation reconcile: {error}"
-                    );
-                    return;
-                }
-            };
-            if let Err(error) = manager.reconcile_profile_generation() {
+            if let Err(error) = pm_for_plugins.lock().reconcile_profile_generation() {
                 log::error!("Failed to reconcile plugin generation after config event: {error:#}");
             }
         },
     );
 }
 
-fn build_startup_info(
-    pm: &std::sync::Arc<std::sync::Mutex<qol_tray::plugins::PluginManager>>,
-) -> String {
-    let plugins_desc = match pm.lock() {
-        Ok(manager) => manager
-            .plugins()
-            .map(|p| {
-                let id = &p.id;
-                let version = &p.manifest.plugin.version;
-                match p.manifest.build.commit.as_deref() {
-                    Some(c) => format!("{}@{}@{}", id, version, c),
-                    None => format!("{}@{}", id, version),
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", "),
-        Err(_) => "unknown".to_string(),
-    };
+fn build_startup_info(pm: &SharedPluginManager) -> String {
+    let plugins_desc = pm
+        .lock()
+        .plugins()
+        .map(|p| {
+            let id = &p.id;
+            let version = &p.manifest.plugin.version;
+            match p.manifest.build.commit.as_deref() {
+                Some(c) => format!("{}@{}@{}", id, version, c),
+                None => format!("{}@{}", id, version),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let os_info = qol_tray::paths::current_os_subdir();
     format!("{}, plugins: [{}]", os_info, plugins_desc)
@@ -906,7 +877,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn local_daemons_start_before_a_pending_launch_pull() {
-        let manager = Arc::new(std::sync::Mutex::new(PluginManager::new()));
+        let manager = PluginManager::new().into_shared();
         let (release_tx, release_rx) = oneshot::channel();
         let post_pull_task = start_local_daemons_before_launch_pull(
             manager,
@@ -931,8 +902,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn shutdown_cancels_pending_launch_pull_reconciliation() {
-        let manager = Arc::new(std::sync::Mutex::new(PluginManager::new()));
-        let cancellation = manager.lock().unwrap().lifecycle_cancellation();
+        let manager = PluginManager::new().into_shared();
+        let cancellation = manager.lock().lifecycle_cancellation();
         let (release_tx, release_rx) = oneshot::channel();
         let launch_pull = tokio::spawn(async move {
             release_rx.await.unwrap();
@@ -957,7 +928,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn shutdown_reaches_a_detached_blocking_launch_pull() {
-        let manager = Arc::new(std::sync::Mutex::new(PluginManager::new()));
+        let manager = PluginManager::new().into_shared();
         let (observed_tx, observed_rx) = oneshot::channel();
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
         let post_pull_task = start_local_daemons_before_launch_pull(

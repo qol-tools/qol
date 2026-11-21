@@ -25,7 +25,7 @@ pub(crate) use daemon_lifecycle::register_operation_fixture;
 pub(crate) use daemon_lifecycle::stop_daemons_for_session_end;
 pub use identity_index::{PluginDisplay, PluginIdentityIndex};
 pub use loader::PluginLoader;
-pub use manager::PluginManager;
+pub use manager::{PluginManager, SharedPluginManager};
 pub use manifest::{ActionType, MenuItem, PluginId, PluginManifest, PluginUid};
 pub use qol_conventions::is_reserved_plugin_id;
 pub use resolver::PluginSource;

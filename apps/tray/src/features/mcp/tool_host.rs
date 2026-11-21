@@ -1,14 +1,13 @@
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 use qol_config::contract::IndexMap;
 use qol_plugin_api::operations::{Invocation, Operation, OperationCatalog};
-use std::sync::{Arc, Mutex};
 
 pub(super) struct PluginToolHost {
-    plugin_manager: Arc<Mutex<PluginManager>>,
+    plugin_manager: SharedPluginManager,
 }
 
 impl PluginToolHost {
-    pub(super) fn new(plugin_manager: Arc<Mutex<PluginManager>>) -> Self {
+    pub(super) fn new(plugin_manager: SharedPluginManager) -> Self {
         Self { plugin_manager }
     }
 }
@@ -156,10 +155,8 @@ fn tool_name(plugin_id: &str, runable: &str) -> String {
     format!("{plugin_id}__{runable}")
 }
 
-fn bindings(plugin_manager: &Arc<Mutex<PluginManager>>) -> Vec<ToolBinding> {
-    let Ok(mut manager) = plugin_manager.lock() else {
-        return Vec::new();
-    };
+fn bindings(plugin_manager: &SharedPluginManager) -> Vec<ToolBinding> {
+    let mut manager = plugin_manager.lock();
     if manager.reconcile_profile_generation().is_err() {
         qol_runtime::probe!(
             "TRAY_MCP",
@@ -213,6 +210,7 @@ mod tests {
         BuildInfo, Capabilities, MenuConfig, PluginId, PluginInfo, PluginManifest, PluginUid,
         CURRENT_MANIFEST_VERSION,
     };
+    use crate::plugins::PluginManager;
     use qol_config::contract::RuntimeSpec;
 
     fn manifest_for(plugin_id: &str) -> PluginManifest {
@@ -599,7 +597,7 @@ input = { question = "Question to ask", agent_home = "Agent home id" }
             manifest,
             dir.path().to_path_buf(),
         ));
-        let host = PluginToolHost::new(Arc::new(Mutex::new(manager)));
+        let host = PluginToolHost::new(manager.into_shared());
         assert_eq!(host.list()[0].name, "fixture__blink");
         std::fs::write(&runtime_path,
             "schema_version = 1\n[action.blink]\ndescription = \"Blink\"\npeer = { replay = \"never\" }\n"

@@ -8,18 +8,17 @@ use axum::{
 use qol_peers::admin::Request;
 use qol_runtime::{local_ipc::MAX_MESSAGE_BYTES, PlatformStateClient};
 use serde::de::DeserializeOwned;
-use std::sync::{Arc, Mutex};
 
 use super::super::types::AppState;
 use crate::features::linked_devices::settings::{catalog_operations, invitation_info, Failure};
-use crate::plugins::{operation_catalog::CatalogCapture, PluginManager};
+use crate::plugins::{operation_catalog::CatalogCapture, SharedPluginManager};
 
 #[cfg(test)]
 mod tests;
 
 #[derive(Clone)]
 pub(in crate::features::plugin_store::server) struct CatalogState(
-    pub(in crate::features::plugin_store::server) Arc<Mutex<PluginManager>>,
+    pub(in crate::features::plugin_store::server) SharedPluginManager,
 );
 
 impl FromRef<AppState> for CatalogState {
@@ -41,12 +40,7 @@ where
 
 async fn catalog(State(CatalogState(manager)): State<CatalogState>) -> Response {
     let result = tokio::task::spawn_blocking(move || {
-        let capture = {
-            let guard = manager
-                .lock()
-                .map_err(|_| Failure::Transport("Operation catalog unavailable".into()))?;
-            CatalogCapture::capture(&guard)
-        };
+        let capture = CatalogCapture::capture(&manager.lock());
         let resolved = capture
             .try_resolve()
             .map_err(|_| Failure::Transport("Operation catalog unavailable".into()))?;

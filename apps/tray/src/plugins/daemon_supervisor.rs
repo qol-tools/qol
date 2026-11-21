@@ -2,10 +2,9 @@ use crate::plugins::daemon_health::{
     probe_daemon_readiness, DaemonExpectation, DaemonReadiness, HealthPublisher, PluginHealth,
     PluginRuntimeStatus, ReadinessRegistry,
 };
-use crate::plugins::{PluginId, PluginManager};
+use crate::plugins::{PluginId, SharedPluginManager};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
 
@@ -32,7 +31,7 @@ enum LivenessTransition {
 }
 
 pub fn spawn_supervisor(
-    plugin_manager: Arc<Mutex<PluginManager>>,
+    plugin_manager: SharedPluginManager,
     shutdown_rx: broadcast::Receiver<()>,
     publisher: HealthPublisher,
 ) {
@@ -42,7 +41,7 @@ pub fn spawn_supervisor(
 }
 
 async fn run_supervision_loop(
-    plugin_manager: Arc<Mutex<PluginManager>>,
+    plugin_manager: SharedPluginManager,
     mut shutdown_rx: broadcast::Receiver<()>,
     publisher: HealthPublisher,
 ) {
@@ -74,7 +73,7 @@ async fn run_supervision_loop(
 }
 
 fn supervise_once(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     state: &mut SupervisorState,
     publisher: &HealthPublisher,
 ) -> Vec<PluginHealth> {
@@ -134,7 +133,7 @@ fn supervise_once(
 }
 
 fn readiness_pass(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     state: &mut SupervisorState,
     publisher: &HealthPublisher,
     last_published: &mut Vec<PluginHealth>,
@@ -189,10 +188,8 @@ fn update_readiness(state: &mut SupervisorState, snapshots: &[DaemonSnapshot]) {
     state.readiness.retain(|id, _| known.contains(id));
 }
 
-fn reconcile_profile_generation(plugin_manager: &Arc<Mutex<PluginManager>>) -> anyhow::Result<()> {
-    let mut manager = plugin_manager
-        .lock()
-        .map_err(|_| anyhow::anyhow!("plugin manager lock poisoned"))?;
+fn reconcile_profile_generation(plugin_manager: &SharedPluginManager) -> anyhow::Result<()> {
+    let mut manager = plugin_manager.lock();
     manager.reconcile_profile_generation()?;
     Ok(())
 }
@@ -239,19 +236,12 @@ fn classify_snapshots(snapshots: &[DaemonSnapshot], state: &mut SupervisorState)
     outcome
 }
 
-fn reap_exited_daemons(plugin_manager: &Arc<Mutex<PluginManager>>) {
-    let Ok(mut manager) = plugin_manager.lock() else {
-        log::error!("Daemon supervisor: plugin manager lock poisoned");
-        return;
-    };
-    manager.reap_exited_daemons();
+fn reap_exited_daemons(plugin_manager: &SharedPluginManager) {
+    plugin_manager.lock().reap_exited_daemons();
 }
 
-fn snapshot_daemons(plugin_manager: &Arc<Mutex<PluginManager>>) -> Vec<DaemonSnapshot> {
-    let Ok(manager) = plugin_manager.lock() else {
-        log::error!("Daemon supervisor: plugin manager lock poisoned");
-        return Vec::new();
-    };
+fn snapshot_daemons(plugin_manager: &SharedPluginManager) -> Vec<DaemonSnapshot> {
+    let manager = plugin_manager.lock();
     manager
         .daemon_health_snapshots()
         .into_iter()
@@ -267,12 +257,10 @@ fn snapshot_daemons(plugin_manager: &Arc<Mutex<PluginManager>>) -> Vec<DaemonSna
 }
 
 fn restart_daemon(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     plugin_id: &PluginId,
 ) -> anyhow::Result<Option<u32>> {
-    let mut manager = plugin_manager
-        .lock()
-        .map_err(|_| anyhow::anyhow!("plugin manager lock poisoned"))?;
+    let mut manager = plugin_manager.lock();
     manager.ensure_plugin_daemon_running(plugin_id.as_str())?;
     Ok(manager.plugin_daemon_pid(plugin_id))
 }
@@ -485,6 +473,7 @@ impl SupervisorState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::PluginManager;
     use qol_runtime::protocol::ReadinessPhase;
 
     fn pid(id: &str) -> PluginId {
@@ -1084,7 +1073,7 @@ mod tests {
         let _env_lock = crate::test_support::env_lock().blocking_lock();
         let root = tempfile::TempDir::new().unwrap();
         let _path = crate::paths::push_test_path_root(root.path());
-        let plugin_manager = Arc::new(Mutex::new(PluginManager::new()));
+        let plugin_manager = PluginManager::new().into_shared();
         let (health_tx, _health_rx) = crate::plugins::daemon_health::channel();
         let publisher = HealthPublisher::new(
             health_tx,
@@ -1154,7 +1143,7 @@ command = "daemon"
             std::fs::write(profile_configs.join(format!("{plugin_id}.json")), "{}\n").unwrap();
         }
 
-        let plugin_manager = Arc::new(Mutex::new(manager));
+        let plugin_manager = manager.into_shared();
         let (health_tx, _health_rx) = crate::plugins::daemon_health::channel();
         let publisher = HealthPublisher::new(
             health_tx,
@@ -1163,7 +1152,7 @@ command = "daemon"
         );
         supervise_once(&plugin_manager, &mut SupervisorState::default(), &publisher);
 
-        let manager = plugin_manager.lock().unwrap();
+        let manager = plugin_manager.lock();
         let new_pid = manager
             .plugin_daemon_pid(&PluginId::new(plugin_id))
             .unwrap();

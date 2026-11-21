@@ -20,10 +20,8 @@ impl PeerHostHandle {
                     request: qol_peers::admin::NearbyRequest::Confirm { grants, .. },
                 } if !grants.is_empty()
         ) {
-            let capture = {
-                let manager = self.plugins.lock().map_err(|_| Error::HostUnavailable)?;
-                crate::plugins::operation_catalog::CatalogCapture::capture(&manager)
-            };
+            let capture =
+                crate::plugins::operation_catalog::CatalogCapture::capture(&self.plugins.lock());
             Some(capture.resolve())
         } else {
             None
@@ -139,7 +137,7 @@ impl PeerHostHandle {
         existing: &[OperationKey],
         catalog: Option<&crate::plugins::operation_catalog::ResolvedCatalog>,
     ) -> Result<(), Error> {
-        let manager = self.plugins.lock().map_err(|_| Error::HostUnavailable)?;
+        let manager = self.plugins.lock();
         for grant in grants {
             if existing.contains(grant) {
                 continue;

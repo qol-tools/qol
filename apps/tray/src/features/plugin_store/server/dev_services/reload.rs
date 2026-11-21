@@ -52,7 +52,7 @@ pub(super) fn queue_reload_single(state: &AppState, plugin_id: String) -> Result
 
 struct ReloadTask {
     runtime: Arc<DevRuntimeService>,
-    plugin_manager: std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
+    plugin_manager: crate::plugins::SharedPluginManager,
     config: std::sync::Arc<crate::daemon::ConfigBus>,
     events: std::sync::Arc<crate::daemon::EventBus>,
     config_dir: Option<std::path::PathBuf>,
@@ -142,18 +142,12 @@ fn run_build(task: &ReloadTask) -> crate::dev::BuildRun {
 
 fn reload_plugins(
     runtime: &DevRuntimeService,
-    plugin_manager: std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
+    plugin_manager: crate::plugins::SharedPluginManager,
     config: std::sync::Arc<crate::daemon::ConfigBus>,
     events: std::sync::Arc<crate::daemon::EventBus>,
     plugin_filter: Option<&str>,
 ) {
-    let mut manager = match plugin_manager.lock() {
-        Ok(manager) => manager,
-        Err(error) => {
-            log::error!("Plugin manager mutex poisoned: {}", error);
-            return;
-        }
-    };
+    let mut manager = plugin_manager.lock();
 
     let reload_ids = match plugin_filter {
         Some(plugin_id) => vec![plugin_id.to_string()],
@@ -231,7 +225,7 @@ mod tests {
     use crate::plugins::PluginLoader;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     const TARGET_ID: &str = "plugin-reload-fresh-target";
     const OTHER_ID: &str = "plugin-reload-fresh-other";
@@ -283,7 +277,7 @@ command = "daemon"
     }
 
     fn loaded_manager() -> (
-        Arc<Mutex<crate::plugins::PluginManager>>,
+        crate::plugins::SharedPluginManager,
         std::path::PathBuf,
         crate::paths::TestPathRootGuard,
     ) {
@@ -301,10 +295,10 @@ command = "daemon"
         let mut manager = crate::plugins::PluginManager::new();
         insert_loaded_plugin(&mut manager, TARGET_ID, &plugins_dir.join(TARGET_ID));
         insert_loaded_plugin(&mut manager, OTHER_ID, &plugins_dir.join(OTHER_ID));
-        (Arc::new(Mutex::new(manager)), plugins_dir, path_guard)
+        (manager.into_shared(), plugins_dir, path_guard)
     }
 
-    fn reload(manager: &Arc<Mutex<crate::plugins::PluginManager>>, plugin_filter: Option<&str>) {
+    fn reload(manager: &crate::plugins::SharedPluginManager, plugin_filter: Option<&str>) {
         reload_plugins(
             &DevRuntimeService::new(),
             Arc::clone(manager),
@@ -314,31 +308,19 @@ command = "daemon"
         );
     }
 
-    fn stop_all_daemons(manager: &Arc<Mutex<crate::plugins::PluginManager>>) {
-        manager.lock().unwrap().shutdown();
+    fn stop_all_daemons(manager: &crate::plugins::SharedPluginManager) {
+        manager.lock().shutdown();
     }
 
     #[test]
     fn fresh_plugins_keep_their_daemons_alive() {
         let (manager, _, _path_guard) = loaded_manager();
-        let target_pid_before = manager
-            .lock()
-            .unwrap()
-            .get(TARGET_ID)
-            .unwrap()
-            .daemon_pid()
-            .unwrap();
-        let other_pid_before = manager
-            .lock()
-            .unwrap()
-            .get(OTHER_ID)
-            .unwrap()
-            .daemon_pid()
-            .unwrap();
+        let target_pid_before = manager.lock().get(TARGET_ID).unwrap().daemon_pid().unwrap();
+        let other_pid_before = manager.lock().get(OTHER_ID).unwrap().daemon_pid().unwrap();
 
         reload(&manager, None);
 
-        let guard = manager.lock().unwrap();
+        let guard = manager.lock();
         assert_eq!(
             guard.get(TARGET_ID).unwrap().daemon_pid(),
             Some(target_pid_before),
@@ -356,26 +338,14 @@ command = "daemon"
     #[test]
     fn changed_plugin_restarts_while_fresh_plugin_keeps_its_daemon() {
         let (manager, plugins_dir, _path_guard) = loaded_manager();
-        let target_pid_before = manager
-            .lock()
-            .unwrap()
-            .get(TARGET_ID)
-            .unwrap()
-            .daemon_pid()
-            .unwrap();
-        let other_pid_before = manager
-            .lock()
-            .unwrap()
-            .get(OTHER_ID)
-            .unwrap()
-            .daemon_pid()
-            .unwrap();
+        let target_pid_before = manager.lock().get(TARGET_ID).unwrap().daemon_pid().unwrap();
+        let other_pid_before = manager.lock().get(OTHER_ID).unwrap().daemon_pid().unwrap();
 
         write_daemon_plugin(&plugins_dir, TARGET_ID, "2.0.0", "v2");
 
         reload(&manager, None);
 
-        let guard = manager.lock().unwrap();
+        let guard = manager.lock();
         let target_pid_after = guard.get(TARGET_ID).unwrap().daemon_pid().unwrap();
         assert_eq!(
             guard.get(TARGET_ID).unwrap().manifest.plugin.version,
@@ -401,19 +371,13 @@ command = "daemon"
     #[test]
     fn failed_rebuild_keeps_the_running_daemon() {
         let (manager, plugins_dir, _path_guard) = loaded_manager();
-        let target_pid_before = manager
-            .lock()
-            .unwrap()
-            .get(TARGET_ID)
-            .unwrap()
-            .daemon_pid()
-            .unwrap();
+        let target_pid_before = manager.lock().get(TARGET_ID).unwrap().daemon_pid().unwrap();
 
         write_daemon_plugin(&plugins_dir, TARGET_ID, "2.0.0", "v1");
 
         reload(&manager, None);
 
-        let guard = manager.lock().unwrap();
+        let guard = manager.lock();
         assert_eq!(
             guard.get(TARGET_ID).unwrap().daemon_pid(),
             Some(target_pid_before),
@@ -471,12 +435,12 @@ command = "daemon"
         let mut manager = crate::plugins::PluginManager::new();
         insert_loaded_plugin(&mut manager, TARGET_ID, &plugins_dir.join(TARGET_ID));
         let pid_before = manager.get(TARGET_ID).unwrap().daemon_pid().unwrap();
-        let manager = Arc::new(Mutex::new(manager));
+        let manager = manager.into_shared();
 
         qol_dev_build::write_fingerprint_sidecar(&script, "v1").unwrap();
         reload(&manager, None);
 
-        let guard = manager.lock().unwrap();
+        let guard = manager.lock();
         assert_ne!(
             guard.get(TARGET_ID).unwrap().daemon_pid(),
             Some(pid_before),
