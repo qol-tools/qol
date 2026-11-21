@@ -237,7 +237,8 @@ mod tests {
 
         finish_session_end();
 
-        let deadline = SEEN_DEADLINE.lock().expect("session end hook ran");
+        let seen = *SEEN_DEADLINE.lock();
+        let deadline = seen.expect("session end hook ran");
         assert!(deadline <= Instant::now() + DAEMON_STOP_BUDGET);
         assert!(deadline + Duration::from_secs(1) < started + EXIT_GRACE);
         *SESSION_END.lock() = None;
