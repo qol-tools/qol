@@ -12,9 +12,9 @@ mod validation;
 
 use crate::daemon::Daemon;
 use crate::features::MenuProvider;
-use crate::plugins::{MenuItem as PluginMenuItem, PluginManager};
+use crate::plugins::{MenuItem as PluginMenuItem, SharedPluginManager};
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 const SETTINGS_MENU_ITEM_ID: &str = "settings";
 
@@ -32,7 +32,7 @@ impl Plugins {
     }
 
     pub async fn start_server(
-        plugin_manager: Arc<Mutex<PluginManager>>,
+        plugin_manager: SharedPluginManager,
         daemon: &Daemon,
         shutdown_tx: tokio::sync::broadcast::Sender<()>,
         sync_service: Arc<crate::features::profile::sync::SyncService>,

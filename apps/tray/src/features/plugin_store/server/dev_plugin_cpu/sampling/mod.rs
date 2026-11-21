@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::daemon::{DaemonEvent, EventBus};
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 
 use super::state::{PluginCpuState, PluginPidSet};
 
@@ -16,7 +16,7 @@ mod rows;
 
 pub(super) fn sample_once(
     state: &Arc<Mutex<PluginCpuState>>,
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
     history_limit: usize,
 ) {
     let cpu_percent_window_samples = super::platform::cpu_percent_window_samples().max(1);

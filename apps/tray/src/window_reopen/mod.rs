@@ -1,13 +1,12 @@
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use qol_window_state::{Reopen, WindowStateStore};
 use serde::{Deserialize, Serialize};
 
 use crate::plugins::action_executor::{self, ActionExecutionError};
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 
 const REOPEN_FILE: &str = ".reopen-windows.json";
 const REOPEN_FRESH_FOR: Duration = Duration::from_secs(120);
@@ -51,7 +50,7 @@ pub(crate) fn discard_reopen_list() {
     }
 }
 
-pub fn reopen_after_restart(plugin_manager: Arc<Mutex<PluginManager>>) {
+pub fn reopen_after_restart(plugin_manager: SharedPluginManager) {
     if crate::dev_generation::is_shadow() {
         return;
     }
@@ -115,7 +114,7 @@ fn open_by_running_owner(
     })
 }
 
-fn reopen(plugin_manager: &Arc<Mutex<PluginManager>>, window: Reopen) {
+fn reopen(plugin_manager: &SharedPluginManager, window: Reopen) {
     match window {
         Reopen::PluginAction { plugin, action } => {
             run_when_ready(plugin_manager, &plugin, &action);
@@ -130,7 +129,7 @@ fn reopen(plugin_manager: &Arc<Mutex<PluginManager>>, window: Reopen) {
     }
 }
 
-fn run_when_ready(plugin_manager: &Arc<Mutex<PluginManager>>, plugin: &str, action: &str) {
+fn run_when_ready(plugin_manager: &SharedPluginManager, plugin: &str, action: &str) {
     let deadline = std::time::Instant::now() + DAEMON_READY_TIMEOUT;
     loop {
         match action_executor::try_execute_action(plugin_manager, plugin, action) {

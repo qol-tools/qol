@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::super::super::dev_runtime::DevRuntimeService;
@@ -8,7 +8,7 @@ use super::super::super::restart::{cleanup_before_restart, PendingRestart, Resta
 const RESTART_IDLE_POLL_MS: u64 = 250;
 
 pub(super) fn schedule_self_restart_after_idle(
-    plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>,
+    plugin_manager: crate::plugins::SharedPluginManager,
     runtime: Arc<DevRuntimeService>,
     restart: Arc<dyn RestartPort>,
     repo_root: PathBuf,
@@ -83,7 +83,7 @@ pub(super) fn resolve_branch_from_path(worktree_path: &Path) -> Option<String> {
 }
 
 async fn exec_restart_after_cleanup(
-    plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>,
+    plugin_manager: crate::plugins::SharedPluginManager,
     pending: PendingRestart,
     restart: &dyn RestartPort,
     staging_root: &Path,

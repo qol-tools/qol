@@ -5,7 +5,7 @@ mod result;
 mod start;
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::dev::BuildResult;
 
@@ -24,7 +24,7 @@ type RecompileResult = Result<BuildResult, tokio::task::JoinError>;
 
 struct SelfRecompileTask {
     events: Arc<crate::daemon::EventBus>,
-    plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>,
+    plugin_manager: crate::plugins::SharedPluginManager,
     runtime: Arc<DevRuntimeService>,
     restart: Arc<dyn RestartPort>,
     repo_root: PathBuf,

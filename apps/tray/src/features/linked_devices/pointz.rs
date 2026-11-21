@@ -147,9 +147,7 @@ impl PeerHostHandle {
             .lock()
             .ok()
             .and_then(|host| host.pointz.as_ref()?.options.data_root.clone());
-        let Ok(plugins) = self.plugins.lock() else {
-            return Installed::Absent;
-        };
+        let plugins = self.plugins.lock();
         installed(&plugins, data_root.as_deref())
     }
 

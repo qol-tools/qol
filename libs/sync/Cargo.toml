@@ -1,0 +1,16 @@
+[package]
+name = "qol-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mutex, RwLock and Condvar that recover a poisoned lock, log where and carry on"
+
+[dependencies]
+log.workspace = true
+workspace-hack.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -128,14 +128,16 @@ pub(super) async fn upsert_plugin_log_control(
 }
 
 fn try_restart_daemon(state: &AppState, id: &str) {
-    if let Ok(mut manager) = state.plugin_manager.lock() {
-        if let Err(error) = manager.restart_running_plugin_daemon(id) {
-            log::warn!(
-                "Updated log control for {}, but failed to restart running daemon: {}",
-                id,
-                error
-            );
-        }
+    if let Err(error) = state
+        .plugin_manager
+        .lock()
+        .restart_running_plugin_daemon(id)
+    {
+        log::warn!(
+            "Updated log control for {}, but failed to restart running daemon: {}",
+            id,
+            error
+        );
     }
 }
 

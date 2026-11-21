@@ -12,14 +12,14 @@ use axum::{
 };
 use serde::de::DeserializeOwned;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 const MAX_PROFILE_REQUEST_SIZE: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct ProfileHttpState {
     pub(crate) plugins_dir: PathBuf,
-    pub(crate) plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>,
+    pub(crate) plugin_manager: crate::plugins::SharedPluginManager,
     pub(crate) daemon: crate::daemon::Daemon,
     pub(crate) sync_service: Arc<crate::features::profile::sync::SyncService>,
     pub(crate) github_connect: Arc<crate::features::profile::sync::GitHubConnect>,
@@ -68,13 +68,7 @@ fn parse_json_body<T: DeserializeOwned>(body: Bytes) -> Result<T, Box<Response>>
 
 fn reload_after_profile_apply(state: &ProfileHttpState) {
     materialize_loaded_plugin_configs(state);
-    let mut manager = match state.plugin_manager.lock() {
-        Ok(manager) => manager,
-        Err(error) => {
-            log::error!("Plugin manager mutex poisoned: {}", error);
-            return;
-        }
-    };
+    let mut manager = state.plugin_manager.lock();
     if let Err(error) = manager.reload_plugins_if_changed() {
         log::error!("Failed to reload plugins: {}", error);
     }
@@ -87,16 +81,12 @@ fn reload_after_profile_apply(state: &ProfileHttpState) {
 }
 
 fn materialize_loaded_plugin_configs(state: &ProfileHttpState) {
-    let plugins = match state.plugin_manager.lock() {
-        Ok(manager) => manager
-            .plugins()
-            .map(|plugin| (plugin.id.to_string(), plugin.manifest.clone()))
-            .collect::<Vec<_>>(),
-        Err(error) => {
-            log::error!("Plugin manager mutex poisoned: {}", error);
-            return;
-        }
-    };
+    let plugins = state
+        .plugin_manager
+        .lock()
+        .plugins()
+        .map(|plugin| (plugin.id.to_string(), plugin.manifest.clone()))
+        .collect::<Vec<_>>();
     let manager = match crate::plugins::PluginConfigManager::new() {
         Ok(manager) => manager,
         Err(error) => {

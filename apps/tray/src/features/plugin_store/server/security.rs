@@ -458,9 +458,9 @@ mod peer_settings_tests {
                     port: 9876,
                 };
                 let app = super::super::settings::peer_routes()
-                    .with_state(super::super::settings::PeerCatalogState(Arc::new(
-                        std::sync::Mutex::new(crate::plugins::PluginManager::new()),
-                    )))
+                    .with_state(super::super::settings::PeerCatalogState(
+                        crate::plugins::PluginManager::new().into_shared(),
+                    ))
                     .layer(middleware::from_fn_with_state(
                         security.clone(),
                         require_api_access,

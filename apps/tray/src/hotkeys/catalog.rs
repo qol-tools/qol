@@ -1,20 +1,10 @@
-use crate::plugins::{Plugin, PluginManager, PluginUid};
+use crate::plugins::{Plugin, PluginUid, SharedPluginManager};
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
 
 pub(super) type AvailableActions = HashMap<PluginUid, BTreeMap<String, bool>>;
 
-pub(super) fn load_available_actions(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
-) -> AvailableActions {
-    let manager = match plugin_manager.lock() {
-        Ok(manager) => manager,
-        Err(_) => {
-            log::error!("Failed to resolve available plugin actions: plugin manager lock failed");
-            return HashMap::new();
-        }
-    };
-    catalog_for_plugins(manager.plugins())
+pub(super) fn load_available_actions(plugin_manager: &SharedPluginManager) -> AvailableActions {
+    catalog_for_plugins(plugin_manager.lock().plugins())
 }
 
 pub(super) fn catalog_for_plugins<'a, I>(plugins: I) -> AvailableActions

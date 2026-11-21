@@ -26,7 +26,7 @@ use qol_peers::service::PeerAuthority;
 use qol_peers::AuthorityError;
 use tokio::sync::{broadcast, watch};
 
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 
 pub struct LinkedDevices {
     handle: PeerHostHandle,
@@ -36,7 +36,7 @@ pub struct LinkedDevices {
 #[derive(Clone)]
 pub struct PeerHostHandle {
     inner: Arc<Mutex<Host>>,
-    plugins: Arc<Mutex<PluginManager>>,
+    plugins: SharedPluginManager,
     closing: watch::Sender<bool>,
     completion: watch::Sender<u64>,
 }
@@ -88,10 +88,7 @@ enum State {
 }
 
 impl LinkedDevices {
-    pub async fn start(
-        plugins: Arc<Mutex<PluginManager>>,
-        shutdown: broadcast::Receiver<()>,
-    ) -> Self {
+    pub async fn start(plugins: SharedPluginManager, shutdown: broadcast::Receiver<()>) -> Self {
         let root = crate::paths::base_data_dir()
             .map(|base| base.join("peers"))
             .map_err(|_| Error::RootUnavailable);
@@ -114,7 +111,7 @@ impl LinkedDevices {
 
     async fn start_at(
         root: Result<PathBuf, Error>,
-        plugins: Arc<Mutex<PluginManager>>,
+        plugins: SharedPluginManager,
         shadow: bool,
         mut shutdown: broadcast::Receiver<()>,
         options: Option<NetworkOptions>,
@@ -174,7 +171,7 @@ impl Drop for LinkedDevices {
 }
 
 impl PeerHostHandle {
-    fn new(root: Result<PathBuf, Error>, plugins: Arc<Mutex<PluginManager>>, shadow: bool) -> Self {
+    fn new(root: Result<PathBuf, Error>, plugins: SharedPluginManager, shadow: bool) -> Self {
         let state = if shadow {
             State::Standby
         } else {

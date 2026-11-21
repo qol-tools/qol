@@ -200,10 +200,7 @@ pub(super) fn apply_theme_to_running_surfaces(state: &AppState) {
         crate::settings_surface::stop();
         crate::settings_surface::prewarm();
     }
-    let Ok(mut manager) = state.plugin_manager.lock() else {
-        log::error!("Failed to lock plugin manager to broadcast the theme change");
-        return;
-    };
+    let mut manager = state.plugin_manager.lock();
     let reached = manager.broadcast_theme_to_running_gpui_daemons(&native, &accent);
     if !reached.is_empty() {
         log::info!(

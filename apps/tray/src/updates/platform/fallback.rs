@@ -1,8 +1,8 @@
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::daemon::EventBus;
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 
 use super::super::FoundUpdate;
 use super::InstallKind;
@@ -26,7 +26,7 @@ pub(super) fn detect_install_kind() -> InstallKind {
 #[allow(clippy::unused_async)]
 pub(super) async fn download_and_install(
     _events: Arc<EventBus>,
-    _plugin_manager: Arc<Mutex<PluginManager>>,
+    _plugin_manager: SharedPluginManager,
     _update: Option<FoundUpdate>,
 ) -> Result<()> {
     let _ = InstallKind::detect();

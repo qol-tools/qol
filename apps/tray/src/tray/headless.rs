@@ -1,11 +1,10 @@
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 use crate::tray::TrayManager;
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
 
 pub(super) fn run_app<F>(init: F) -> Result<()>
 where
-    F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
+    F: FnOnce() -> Result<(TrayManager, SharedPluginManager)>,
 {
     let (mut tray, plugin_manager) = init()?;
     let _signal_listener = crate::signal::install_signal_handler(tray.shutdown_sender())?;

@@ -1,7 +1,7 @@
 use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
 use crate::menu::router::EventRouter;
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 use crate::tray::TrayManager;
 use anyhow::Result;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -47,7 +47,7 @@ pub(crate) fn create_tray(
 
 pub(crate) fn run_app<F>(init: F) -> Result<()>
 where
-    F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
+    F: FnOnce() -> Result<(TrayManager, SharedPluginManager)>,
 {
     let (tray, plugin_manager) = init()?;
     let manager = plugin_manager.clone();

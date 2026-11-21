@@ -1,6 +1,5 @@
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use qol_peers::admin::{Error, Lifecycle, PointzRequest, PointzStatus, Request, Response};
@@ -11,7 +10,7 @@ use sha2::{Digest, Sha256};
 use super::{attach, authority, status};
 use crate::features::linked_devices::pointz::PointzHostOptions;
 use crate::features::linked_devices::{legacy_pointz_allowed, PeerHostHandle};
-use crate::plugins::{Plugin, PluginId, PluginManager, PluginManifest};
+use crate::plugins::{Plugin, PluginId, PluginManager, PluginManifest, SharedPluginManager};
 use crate::runtime::SharedState;
 
 static CUTOVER_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -48,7 +47,7 @@ struct Fixture {
     _temporary: tempfile::TempDir,
     root: PathBuf,
     data: PathBuf,
-    plugins: Arc<Mutex<PluginManager>>,
+    plugins: SharedPluginManager,
     host: PeerHostHandle,
     shared: SharedState,
 }
@@ -60,7 +59,7 @@ impl Fixture {
         let data_root = temporary.path().join("data");
         let data = data_root.join("plugins").join("qol-pointz");
         std::fs::create_dir_all(&data).unwrap();
-        let plugins = Arc::new(Mutex::new(PluginManager::new()));
+        let plugins = PluginManager::new().into_shared();
         let host = PeerHostHandle::new(Ok(root.clone()), plugins.clone(), false);
         host.initialize();
         host.attach_pointz(
@@ -85,14 +84,11 @@ impl Fixture {
     }
 
     fn install(&self, compatible: bool) {
-        self.plugins
-            .lock()
-            .unwrap()
-            .insert_plugin_for_test(Plugin::new(
-                PluginId::new("qol-pointz"),
-                manifest(compatible),
-                self.data.clone(),
-            ));
+        self.plugins.lock().insert_plugin_for_test(Plugin::new(
+            PluginId::new("qol-pointz"),
+            manifest(compatible),
+            self.data.clone(),
+        ));
     }
 
     fn write_legacy(&self, device: [u8; 16]) {

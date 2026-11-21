@@ -130,9 +130,9 @@ async fn invitation_validation_is_read_only_bounded_and_redacts_invalid_codes() 
         serde_json::to_string(&format!("qol-link:{}", "x".repeat(4096))).unwrap(),
     ] {
         let response = super::routes()
-            .with_state(super::CatalogState(std::sync::Arc::new(
-                std::sync::Mutex::new(crate::plugins::PluginManager::new()),
-            )))
+            .with_state(super::CatalogState(
+                crate::plugins::PluginManager::new().into_shared(),
+            ))
             .oneshot(
                 Request::post("/peers/invitation")
                     .body(Body::from(body))
@@ -153,7 +153,6 @@ async fn invitation_validation_is_read_only_bounded_and_redacts_invalid_codes() 
 #[tokio::test]
 async fn catalog_route_projects_the_live_canonical_contract_without_caching() {
     use crate::plugins::{Plugin, PluginId, PluginManager, PluginManifest};
-    use std::sync::{Arc, Mutex};
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("fixture-bin"), "fixture").unwrap();
     let manifest: PluginManifest = toml::from_str(
@@ -185,7 +184,7 @@ args = ["local"]
         manifest,
         root.path().into(),
     ));
-    let app = super::routes().with_state(super::CatalogState(Arc::new(Mutex::new(manager))));
+    let app = super::routes().with_state(super::CatalogState(manager.into_shared()));
     for available in [true, false] {
         if !available {
             std::fs::remove_file(root.path().join("fixture-bin")).unwrap();
@@ -230,27 +229,4 @@ args = ["local"]
     let failure: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(failure["kind"], "transport");
     assert!(!String::from_utf8_lossy(&bytes).contains("private-invalid-contract"));
-}
-
-#[tokio::test]
-async fn unavailable_catalog_is_an_error_instead_of_an_empty_success() {
-    let manager = std::sync::Arc::new(std::sync::Mutex::new(crate::plugins::PluginManager::new()));
-    let poison = manager.clone();
-    let _ = std::thread::spawn(move || {
-        let _guard = poison.lock().unwrap();
-        panic!("fixture poison");
-    })
-    .join();
-    let response = super::routes()
-        .with_state(super::CatalogState(manager))
-        .oneshot(Request::get("/peers/catalog").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
-    assert_eq!(response.headers()["cache-control"], "no-store");
-    let bytes = to_bytes(response.into_body(), MAX_MESSAGE_BYTES)
-        .await
-        .unwrap();
-    let failure: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(failure["kind"], "transport");
 }

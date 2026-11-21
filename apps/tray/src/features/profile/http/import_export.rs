@@ -45,14 +45,7 @@ fn export_plugins(
 ) -> Vec<crate::features::profile::core::PluginLockEntry> {
     let stored = crate::features::profile::core::load_plugins_lock()
         .unwrap_or_else(|_| crate::features::profile::core::PluginsLock::empty());
-    let Ok(manager) = state.plugin_manager.lock() else {
-        return crate::features::profile::core::PluginsLock::for_export(
-            &state.plugins_dir,
-            std::iter::empty::<&crate::plugins::Plugin>(),
-            &stored,
-        )
-        .plugins;
-    };
+    let manager = state.plugin_manager.lock();
     crate::features::profile::core::PluginsLock::for_export(
         &state.plugins_dir,
         manager.plugins(),
@@ -80,10 +73,10 @@ fn import_server_error(error: anyhow::Error) -> Response {
 #[cfg(test)]
 mod tests {
     use super::export_plugins;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     #[test]
-    fn export_plugins_refines_stored_entries_when_manager_lock_is_poisoned() {
+    fn export_plugins_refines_stored_entries_the_manager_has_not_loaded() {
         let _guard = crate::test_support::env_lock().blocking_lock();
         let root = tempfile::TempDir::new().unwrap();
         let _path_root = crate::paths::push_test_path_root(root.path());
@@ -122,19 +115,12 @@ items = []
         )
         .unwrap();
 
-        let manager = Arc::new(Mutex::new(crate::plugins::PluginManager::new()));
-        let poisoned = Arc::clone(&manager);
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            let _held = poisoned.lock().unwrap();
-            panic!("poison the plugin manager mutex");
-        }));
-
         let sync_service = Arc::new(
             crate::features::profile::sync::SyncService::new(plugins_dir.clone()).unwrap(),
         );
         let state = super::super::ProfileHttpState {
             plugins_dir: plugins_dir.clone(),
-            plugin_manager: manager,
+            plugin_manager: crate::plugins::PluginManager::new().into_shared(),
             daemon: crate::daemon::Daemon::new(),
             github_connect: Arc::new(crate::features::profile::sync::GitHubConnect::new(
                 Arc::new(crate::features::github_auth::GitHubAuthService::new()),

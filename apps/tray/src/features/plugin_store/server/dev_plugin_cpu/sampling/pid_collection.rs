@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
 
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 
 use super::super::state::PluginPidSet;
 
@@ -27,40 +26,26 @@ pub(super) fn current_cpu_by_pid(active_pids: &HashSet<i32>) -> HashMap<i32, u64
 }
 
 pub(super) fn collect_plugin_pids(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_manager: &SharedPluginManager,
 ) -> HashMap<String, PluginPidSet> {
     let daemon_pids = collect_daemon_pids(plugin_manager);
     let action_pids = collect_action_pids(plugin_manager);
     build_pid_sets(daemon_pids, action_pids)
 }
 
-fn collect_action_pids(plugin_manager: &Arc<Mutex<PluginManager>>) -> HashMap<String, Vec<u32>> {
-    match plugin_manager.lock() {
-        Ok(manager) => manager.process_tracker().action_processes_snapshot(),
-        Err(error) => {
-            log::error!(
-                "Plugin manager lock poisoned for CPU diagnostics: {}",
-                error
-            );
-            HashMap::new()
-        }
-    }
+fn collect_action_pids(plugin_manager: &SharedPluginManager) -> HashMap<String, Vec<u32>> {
+    plugin_manager
+        .lock()
+        .process_tracker()
+        .action_processes_snapshot()
 }
 
-fn collect_daemon_pids(plugin_manager: &Arc<Mutex<PluginManager>>) -> HashMap<String, u32> {
-    match plugin_manager.lock() {
-        Ok(manager) => manager
-            .plugins()
-            .filter_map(|plugin| plugin.daemon_pid().map(|pid| (plugin.id.to_string(), pid)))
-            .collect(),
-        Err(error) => {
-            log::error!(
-                "Plugin manager lock poisoned for CPU diagnostics: {}",
-                error
-            );
-            HashMap::new()
-        }
-    }
+fn collect_daemon_pids(plugin_manager: &SharedPluginManager) -> HashMap<String, u32> {
+    plugin_manager
+        .lock()
+        .plugins()
+        .filter_map(|plugin| plugin.daemon_pid().map(|pid| (plugin.id.to_string(), pid)))
+        .collect()
 }
 
 fn build_pid_sets(

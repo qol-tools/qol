@@ -7,7 +7,7 @@ use super::restart::RestartPort;
 use crate::daemon::Daemon;
 #[cfg(feature = "dev")]
 use crate::dev::state::DiscoveredPluginInfo;
-use crate::plugins::{ActionType, PluginId, PluginLoader, PluginManager};
+use crate::plugins::{ActionType, PluginId, PluginLoader, SharedPluginManager};
 use axum::extract::FromRef;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "dev")]
@@ -36,7 +36,7 @@ pub(super) const MOCK_TARGET_PLUGIN_BUILD: &str = "plugin_build";
 #[derive(Clone)]
 pub(super) struct AppState {
     pub(super) plugins_dir: PathBuf,
-    pub(super) plugin_manager: Arc<Mutex<PluginManager>>,
+    pub(super) plugin_manager: SharedPluginManager,
     pub(super) daemon: Daemon,
     pub(super) shutdown_tx: broadcast::Sender<()>,
     pub(super) github_auth_service: Arc<crate::features::github_auth::GitHubAuthService>,
@@ -67,7 +67,7 @@ pub(super) struct AppState {
 
 impl AppState {
     pub(super) fn new(
-        plugin_manager: Arc<Mutex<PluginManager>>,
+        plugin_manager: SharedPluginManager,
         daemon: &Daemon,
         shutdown_tx: broadcast::Sender<()>,
         github_auth_service: Arc<crate::features::github_auth::GitHubAuthService>,
@@ -112,12 +112,11 @@ impl AppState {
             #[cfg(feature = "dev")]
             core_log_controls,
         };
-        if let Ok(manager) = state.plugin_manager.lock() {
-            if let Err(error) =
-                crate::features::profile::core::sync_plugins_lock_from_plugins(manager.plugins())
-            {
-                log::error!("Failed to sync profile plugins lock on startup: {}", error);
-            }
+        let synced = crate::features::profile::core::sync_plugins_lock_from_plugins(
+            state.plugin_manager.lock().plugins(),
+        );
+        if let Err(error) = synced {
+            log::error!("Failed to sync profile plugins lock on startup: {}", error);
         }
         Ok(state)
     }

@@ -1,9 +1,9 @@
 use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 use crate::tray::TrayManager;
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tray_icon::Icon;
 
@@ -29,7 +29,7 @@ pub(crate) fn create_tray(
 
 pub(crate) fn run_app<F>(_init: F) -> Result<()>
 where
-    F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
+    F: FnOnce() -> Result<(TrayManager, SharedPluginManager)>,
 {
     Err(unsupported_error())
 }

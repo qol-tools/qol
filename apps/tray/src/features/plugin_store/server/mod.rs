@@ -43,15 +43,15 @@ use axum::{
 };
 #[cfg(feature = "dev")]
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::daemon::Daemon;
-use crate::plugins::PluginManager;
+use crate::plugins::SharedPluginManager;
 use types::*;
 
 pub(crate) async fn start_ui_server(
-    plugin_manager: Arc<Mutex<PluginManager>>,
+    plugin_manager: SharedPluginManager,
     daemon: &Daemon,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
     sync_service: Arc<crate::features::profile::sync::SyncService>,
@@ -156,13 +156,7 @@ fn claim_promotion(is_shadow: bool, promoted: &std::sync::atomic::AtomicBool) ->
 fn complete_promotion_in_background(app_state: AppState) {
     tokio::spawn(async move {
         let mut shutdown_rx = app_state.shutdown_tx.subscribe();
-        let lifecycle_cancellation = match app_state.plugin_manager.lock() {
-            Ok(manager) => manager.lifecycle_cancellation(),
-            Err(error) => {
-                log::error!("Plugin manager mutex poisoned during promoted startup: {error}");
-                return;
-            }
-        };
+        let lifecycle_cancellation = app_state.plugin_manager.lock().lifecycle_cancellation();
         let repair_state = app_state.clone();
         let dev_links_repaired = tokio::select! {
             _ = shutdown_rx.recv() => {
@@ -193,11 +187,8 @@ fn complete_promotion_in_background(app_state: AppState) {
             }
         }
         let plugin_manager = app_state.plugin_manager.clone();
-        tokio::task::spawn_blocking(move || match plugin_manager.lock() {
-            Ok(mut manager) => manager.reconcile_and_autostart_daemons(),
-            Err(_) => {
-                log::error!("plugin manager lock poisoned during promoted daemon autostart");
-            }
+        tokio::task::spawn_blocking(move || {
+            plugin_manager.lock().reconcile_and_autostart_daemons()
         });
         crate::hotkeys::start_capture_with_fallback(app_state.plugin_manager.clone());
         start_sync_loop(&app_state);
@@ -326,13 +317,7 @@ fn start_sync_loop(app_state: &AppState) {
     let state = app_state.clone();
     tokio::spawn(async move {
         let mut shutdown_rx = state.shutdown_tx.subscribe();
-        let lifecycle_cancellation = match state.plugin_manager.lock() {
-            Ok(manager) => manager.lifecycle_cancellation(),
-            Err(error) => {
-                log::error!("Plugin manager mutex poisoned during sync startup: {error}");
-                return;
-            }
-        };
+        let lifecycle_cancellation = state.plugin_manager.lock().lifecycle_cancellation();
         let mut interval = tokio::time::interval(
             crate::features::profile::sync::SyncService::auto_push_interval(),
         );

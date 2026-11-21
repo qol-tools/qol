@@ -24,6 +24,7 @@ pub use reload::trigger_reload;
 pub use takeover::{restore_all as restore_desktop_bindings, RestoreSummary};
 pub use types::{HotkeyAction, HotkeyBinding, HotkeyConfig};
 
+use crate::plugins::SharedPluginManager;
 use std::collections::{HashMap, HashSet};
 
 type ContinuousActions = HashSet<(crate::plugins::PluginUid, String)>;
@@ -38,11 +39,9 @@ pub(crate) fn duplicate_enabled_chord(config: &HotkeyConfig) -> Option<String> {
 
 pub(crate) fn invalid_hold(
     config: &HotkeyConfig,
-    plugin_manager: &std::sync::Mutex<crate::plugins::PluginManager>,
+    plugin_manager: &qol_sync::Mutex<crate::plugins::PluginManager>,
 ) -> Option<String> {
-    let Ok(continuous) = continuous_actions(plugin_manager) else {
-        return Some("Hotkeys cannot be checked right now. Try again.".to_string());
-    };
+    let continuous = continuous_actions(plugin_manager);
     hold::invalid_hold(config, chord_id, |binding| {
         continuous.contains(&(binding.plugin_uid.clone(), binding.action.clone()))
     })
@@ -146,9 +145,7 @@ pub(crate) fn build_capture_bindings(
         .collect()
 }
 
-pub fn start_capture(
-    plugin_manager: std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
-) -> anyhow::Result<()> {
+pub fn start_capture(plugin_manager: SharedPluginManager) -> anyhow::Result<()> {
     use crate::plugins::action_executor;
 
     let bindings = load_bindings_for_capture(&plugin_manager).unwrap_or_else(|error| {
@@ -210,19 +207,12 @@ pub fn start_capture(
     Ok(())
 }
 
-type SharedPluginManager = std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>;
-
 fn plugin_id_for(plugin_manager: &SharedPluginManager, target: &hold::Target) -> Option<String> {
-    let plugin_id = match plugin_manager.lock() {
-        Ok(manager) => manager
-            .identity_index()
-            .display_for(&target.plugin_uid)
-            .map(|d| d.id.as_str().to_owned()),
-        Err(_) => {
-            log::error!("hotkey capture: plugin manager lock failed");
-            return None;
-        }
-    };
+    let plugin_id = plugin_manager
+        .lock()
+        .identity_index()
+        .display_for(&target.plugin_uid)
+        .map(|d| d.id.as_str().to_owned());
     if plugin_id.is_none() {
         log::warn!(
             "hotkey capture: no plugin found for uid {}",
@@ -246,9 +236,7 @@ fn run_one_shot(plugin_manager: &SharedPluginManager, target: &hold::Target, kin
     crate::plugins::action_executor::execute_action(plugin_manager, &plugin_id, &target.action);
 }
 
-pub fn start_capture_with_fallback(
-    plugin_manager: std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
-) {
+pub fn start_capture_with_fallback(plugin_manager: SharedPluginManager) {
     if crate::headless_mode::active() {
         log::info!("Headless: hotkey capture is off");
         return;
@@ -285,20 +273,19 @@ pub fn start_capture_with_fallback(
 }
 
 fn load_bindings_for_capture(
-    plugin_manager: &std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
+    plugin_manager: &SharedPluginManager,
 ) -> anyhow::Result<Vec<capture::Binding>> {
     let manager = HotkeyManager::new()?;
     let config = manager.load_config()?;
-    let continuous_actions = continuous_actions(plugin_manager)?;
+    let continuous_actions = continuous_actions(plugin_manager);
     Ok(build_capture_bindings(config, &continuous_actions))
 }
 
 fn continuous_actions(
-    plugin_manager: &std::sync::Mutex<crate::plugins::PluginManager>,
-) -> anyhow::Result<ContinuousActions> {
-    Ok(plugin_manager
+    plugin_manager: &qol_sync::Mutex<crate::plugins::PluginManager>,
+) -> ContinuousActions {
+    plugin_manager
         .lock()
-        .map_err(|_| anyhow::anyhow!("plugin manager lock failed"))?
         .plugins()
         .flat_map(|plugin| {
             let uid = plugin.uid();
@@ -309,7 +296,7 @@ fn continuous_actions(
                 .filter(|(_, action)| action.continuous)
                 .map(move |(action_id, _)| (uid.clone(), action_id.clone()))
         })
-        .collect())
+        .collect()
 }
 
 #[cfg(debug_assertions)]

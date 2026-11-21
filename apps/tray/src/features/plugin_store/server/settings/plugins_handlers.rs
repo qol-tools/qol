@@ -96,10 +96,7 @@ fn install_action(state: &AppState, id: Option<&str>) -> Response {
         Ok(id) => id,
         Err(response) => return *response,
     };
-    let installed = match installed_ids(state) {
-        Ok(installed) => installed,
-        Err(response) => return *response,
-    };
+    let installed = installed_ids(state);
     match catalog_ids(state) {
         Ok(catalog) if catalog.contains(&id) || installed.contains(&id) => {}
         Ok(_) => return action_error(StatusCode::NOT_FOUND, format!("Unknown plugin: {id}")),
@@ -133,10 +130,8 @@ fn uninstall_action(state: &AppState, id: Option<&str>) -> Response {
         Ok(id) => id,
         Err(response) => return *response,
     };
-    match installed_ids(state) {
-        Ok(installed) if installed.contains(&id) => {}
-        Ok(_) => return action_error(StatusCode::NOT_FOUND, format!("Unknown plugin: {id}")),
-        Err(response) => return *response,
+    if !installed_ids(state).contains(&id) {
+        return action_error(StatusCode::NOT_FOUND, format!("Unknown plugin: {id}"));
     }
     match jobs::push(&id, Operation::Remove) {
         Ok(()) => action_ok("Removing"),
@@ -198,18 +193,12 @@ fn plugin_id(id: Option<&str>) -> HttpResult<String> {
     Ok(id.to_string())
 }
 
-fn installed_ids(state: &AppState) -> HttpResult<HashSet<String>> {
-    let installed = plugin_services::list_installed(state).map_err(|_| {
-        Box::new(action_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Plugin list unavailable",
-        ))
-    })?;
-    Ok(installed
+fn installed_ids(state: &AppState) -> HashSet<String> {
+    plugin_services::list_installed(state)
         .plugins
         .iter()
         .map(|plugin| plugin.id.as_str().to_string())
-        .collect())
+        .collect()
 }
 
 fn catalog_ids(state: &AppState) -> HttpResult<HashSet<String>> {
@@ -225,8 +214,7 @@ fn catalog_ids(state: &AppState) -> HttpResult<HashSet<String>> {
 fn collect_payload(state: &AppState) -> HttpResult<PluginsPayload> {
     let catalog = plugin_services::list_plugins(state, false)
         .map_err(|(status, message)| Box::new((status, message).into_response()))?;
-    let installed = plugin_services::list_installed(state)
-        .map_err(|status| Box::new(status.into_response()))?;
+    let installed = plugin_services::list_installed(state);
     let jobs = jobs::snapshot();
     let catalog_ids: HashSet<String> = catalog
         .plugins

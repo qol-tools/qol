@@ -3,7 +3,6 @@ use crate::plugins::resolver::{
     PluginSource, PluginUnavailable, ResolutionOrigin, ResolutionReport, ResolvedPlugin,
 };
 use crate::plugins::{PluginId, PluginManifest};
-use axum::http::StatusCode;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -13,15 +12,15 @@ use super::super::helpers::{
 };
 use super::super::types::{AppState, InstalledPlugin, InstalledPluginsResponse, PluginAction};
 
-pub(super) fn list_installed(state: &AppState) -> Result<InstalledPluginsResponse, StatusCode> {
+pub(super) fn list_installed(state: &AppState) -> InstalledPluginsResponse {
     let revision = state.daemon.events.plugins_revision();
     if let Some(cached) = cached_response_for_revision(state, revision) {
-        return Ok((*cached).clone());
+        return (*cached).clone();
     }
-    let response = compute_response(state, revision)?;
+    let response = compute_response(state, revision);
     let arc = Arc::new(response);
     store_cached_response(state, revision, arc.clone());
-    Ok((*arc).clone())
+    (*arc).clone()
 }
 
 fn cached_response_for_revision(
@@ -44,31 +43,18 @@ fn store_cached_response(state: &AppState, revision: u64, response: Arc<Installe
     *guard = Some((revision, response));
 }
 
-fn compute_response(
-    state: &AppState,
-    revision: u64,
-) -> Result<InstalledPluginsResponse, StatusCode> {
-    let manager = state
-        .plugin_manager
-        .lock()
-        .map_err(plugin_manager_lock_failed)?;
+fn compute_response(state: &AppState, revision: u64) -> InstalledPluginsResponse {
+    let manager = state.plugin_manager.lock();
     let cached_versions = cached_versions(state);
     let report = manager.last_resolution_report().clone();
     let mut plugins_by_id = loaded_plugins_by_id(&manager, &report, &cached_versions);
     drop(manager);
     add_unavailable_plugins(&report, &cached_versions, &mut plugins_by_id);
     add_unloaded_plugins(&state.plugins_dir, &cached_versions, &mut plugins_by_id);
-    Ok(InstalledPluginsResponse {
+    InstalledPluginsResponse {
         revision,
         plugins: plugins_by_id.into_values().collect(),
-    })
-}
-
-fn plugin_manager_lock_failed(
-    error: std::sync::PoisonError<std::sync::MutexGuard<'_, crate::plugins::PluginManager>>,
-) -> StatusCode {
-    log::error!("Plugin manager mutex poisoned: {}", error);
-    StatusCode::INTERNAL_SERVER_ERROR
+    }
 }
 
 fn cached_versions(state: &AppState) -> HashMap<String, String> {

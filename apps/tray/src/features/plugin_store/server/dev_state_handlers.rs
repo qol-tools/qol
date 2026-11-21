@@ -98,10 +98,9 @@ fn notify_gpui_plugins(state: &AppState) {
 }
 
 fn gpui_plugin_ids(state: &AppState) -> Vec<String> {
-    let Ok(manager) = state.plugin_manager.lock() else {
-        return Vec::new();
-    };
-    manager
+    state
+        .plugin_manager
+        .lock()
         .plugins()
         .filter(|plugin| plugin.manifest.capabilities.gpui)
         .map(|plugin| plugin.id.as_str().to_string())

@@ -237,11 +237,7 @@ peer = {{ replay = "idempotent" }}
     };
     let artifact = crate::plugins::action_executor::remote::register_fixture_artifact(executable);
     crate::plugins::register_operation_fixture(&mut plugin, child, token.into(), artifact);
-    fixture
-        .plugins()
-        .lock()
-        .unwrap()
-        .insert_plugin_for_test(plugin);
+    fixture.plugins().lock().insert_plugin_for_test(plugin);
     count
 }
 
@@ -379,13 +375,12 @@ async fn peer_operation_two_hosts_real_tls_local_api_catalog_executor_and_daemon
     let plugins = receiver.plugins();
     let original_manifest = plugins
         .lock()
-        .unwrap()
         .operation_plugin_mut_for_test("qol-operation-fixture")
         .manifest
         .clone();
     for denied in ["absent", "local", "duplicate"] {
         {
-            let mut manager = plugins.lock().unwrap();
+            let mut manager = plugins.lock();
             let plugin = manager.operation_plugin_mut_for_test("qol-operation-fixture");
             match denied {
                 "absent" => plugin.manifest.actions["count"].peer = None,
@@ -412,7 +407,7 @@ async fn peer_operation_two_hosts_real_tls_local_api_catalog_executor_and_daemon
         );
         assert_eq!(std::fs::read_to_string(&count).unwrap(), "0");
         cancel_pending(&sender, &receiver).await;
-        let mut manager = plugins.lock().unwrap();
+        let mut manager = plugins.lock();
         manager
             .operation_plugin_mut_for_test("qol-operation-fixture")
             .manifest = original_manifest.clone();
@@ -429,9 +424,9 @@ async fn peer_operation_two_hosts_real_tls_local_api_catalog_executor_and_daemon
     {
         use crate::plugins::action_executor::remote::PreparedRemote;
         let body: OperationBody = serde_json::from_str(&body("{}")).unwrap();
-        let captured = PreparedRemote::capture(&plugins.lock().unwrap()).unwrap();
+        let captured = PreparedRemote::capture(&plugins.lock()).unwrap();
         let prepared = PreparedRemote::prepare(captured, &body).unwrap();
-        let mut manager = plugins.lock().unwrap();
+        let mut manager = plugins.lock();
         manager
             .operation_plugin_mut_for_test("qol-operation-fixture")
             .manifest
@@ -444,7 +439,7 @@ async fn peer_operation_two_hosts_real_tls_local_api_catalog_executor_and_daemon
         let captured = PreparedRemote::capture(&manager).unwrap();
         drop(manager);
         let prepared = PreparedRemote::prepare(captured, &body).unwrap();
-        let mut manager = plugins.lock().unwrap();
+        let mut manager = plugins.lock();
         let child = manager.operation_replace_daemon_for_test("qol-operation-fixture", None);
         assert_eq!(prepared.recheck(&manager), Err(Failure::ChangedInstance));
         manager.operation_replace_daemon_for_test("qol-operation-fixture", child);
@@ -680,7 +675,7 @@ async fn peer_operation_two_hosts_real_tls_local_api_catalog_executor_and_daemon
     );
     assert_eq!(std::fs::read_to_string(&count).unwrap(), "4");
     reopened.close().await;
-    receiver.plugins().lock().unwrap().shutdown();
+    receiver.plugins().lock().shutdown();
     receiver.close().await;
 }
 
@@ -732,7 +727,6 @@ async fn peer_operation_external_verification_releases_guards_and_refuses_change
     let plugins = receiver.plugins();
     let original = plugins
         .lock()
-        .unwrap()
         .get("qol-operation-fixture")
         .unwrap()
         .manifest
@@ -747,7 +741,6 @@ async fn peer_operation_external_verification_releases_guards_and_refuses_change
         if change == "runtime" {
             plugins
                 .lock()
-                .unwrap()
                 .operation_plugin_mut_for_test("qol-operation-fixture")
                 .manifest
                 .actions["count"]
@@ -831,7 +824,7 @@ async fn peer_operation_external_verification_releases_guards_and_refuses_change
             "0",
             "{change}/{skip}"
         );
-        let mut manager = plugins.lock().unwrap();
+        let mut manager = plugins.lock();
         manager
             .operation_plugin_mut_for_test("qol-operation-fixture")
             .manifest = original.clone();
@@ -845,7 +838,7 @@ async fn peer_operation_external_verification_releases_guards_and_refuses_change
             ));
         }
     }
-    plugins.lock().unwrap().shutdown();
+    plugins.lock().shutdown();
     sender.close().await;
     receiver.close().await;
 }

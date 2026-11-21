@@ -7,12 +7,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::sync::OnceLock;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use qol_tray::plugins::action_executor;
-use qol_tray::plugins::manager::PluginManager;
+use qol_tray::plugins::manager::{PluginManager, SharedPluginManager};
 use qol_tray::plugins::registry::record_dev_link_create;
 use tempfile::TempDir;
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
@@ -186,10 +186,10 @@ impl Drop for FakeDaemon {
     }
 }
 
-fn loaded_manager() -> Arc<StdMutex<PluginManager>> {
+fn loaded_manager() -> SharedPluginManager {
     let mut manager = PluginManager::new();
     manager.load_plugins().expect("load_plugins after dev-link");
-    Arc::new(StdMutex::new(manager))
+    manager.into_shared()
 }
 
 #[tokio::test]
@@ -291,7 +291,7 @@ async fn query_dispatch_recovers_when_daemon_socket_becomes_ready_after_request(
     let result = action_executor::dispatch_query(&manager, plugin_id, "controllers_snapshot");
     let elapsed = started.elapsed();
     drop(server);
-    manager.lock().unwrap().shutdown();
+    manager.lock().shutdown();
 
     assert_eq!(
         result.unwrap(),

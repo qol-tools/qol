@@ -219,11 +219,7 @@ fn randomness_failure_during_startup_does_not_acquire_the_existing_writer() {
     let root = temporary.path().join("peers");
     super::persistent::populated(&root, 0);
     let snapshot = std::fs::read(root.join("state.json")).unwrap();
-    let host = PeerHostHandle::new(
-        Ok(root.clone()),
-        Arc::new(Mutex::new(PluginManager::new())),
-        false,
-    );
+    let host = PeerHostHandle::new(Ok(root.clone()), PluginManager::new().into_shared(), false);
     host.inner.lock().unwrap().activation = || Err(Error::ActivationUnavailable);
     host.initialize();
     assert_eq!(

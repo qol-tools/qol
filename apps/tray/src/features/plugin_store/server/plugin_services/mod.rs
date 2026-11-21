@@ -16,6 +16,6 @@ pub(super) fn list_plugins(
 pub(super) use catalog::claim_catalog_revalidation;
 pub(super) use operations::run_operation;
 
-pub(super) fn list_installed(state: &AppState) -> Result<InstalledPluginsResponse, StatusCode> {
+pub(super) fn list_installed(state: &AppState) -> InstalledPluginsResponse {
     installed::list_installed(state)
 }

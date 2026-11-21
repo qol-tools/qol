@@ -98,13 +98,7 @@ pub(super) fn reload_manager_and_notify_without_profile_sync(state: &AppState) {
 }
 
 fn reload_manager_and_notify_inner(state: &AppState, sync_profile: bool, plugin_id: Option<&str>) {
-    let mut manager = match state.plugin_manager.lock() {
-        Ok(m) => m,
-        Err(e) => {
-            log::error!("Plugin manager mutex poisoned: {}", e);
-            return;
-        }
-    };
+    let mut manager = state.plugin_manager.lock();
     let reload_result = match plugin_id {
         Some(plugin_id) => manager.reload_plugin(plugin_id),
         None => manager.reload_plugins(),

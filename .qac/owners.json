@@ -147,5 +147,12 @@
     "scope": "production",
     "paths": ["max_offset", "bounds_for_item", "max_offset_for_scrollbar", "scroll_px_offset_for_scrollbar", "set_offset_from_scrollbar", "scrollbar_drag_started", "scrollbar_drag_ended"],
     "allow": []
+  },
+  "locks": {
+    "owner": "libs/sync/src/",
+    "use": "qol_sync::Mutex, RwLock or Condvar, which recover a poisoned lock, log where and carry on",
+    "scope": "production",
+    "paths": ["std::sync::Mutex", "std::sync::RwLock", "std::sync::Condvar"],
+    "allow": []
   }
 }
