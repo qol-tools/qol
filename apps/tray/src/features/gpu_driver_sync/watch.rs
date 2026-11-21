@@ -1,23 +1,24 @@
 use super::{platform, policy, trace, Observation, PolicyIntent};
 use crate::surfaces::show_plugin_notification;
 use qol_runtime::protocol::{NotificationLevel, NotificationMeta};
+use qol_sync::{Condvar, Mutex};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 type Probe = Arc<dyn Fn() -> (Observation, PolicyIntent) + Send + Sync>;
 
 struct Generation {
     in_flight: AtomicUsize,
-    quiesced: std::sync::Mutex<()>,
-    condvar: std::sync::Condvar,
+    quiesced: Mutex<()>,
+    condvar: Condvar,
 }
 
 impl Generation {
     fn new() -> Self {
         Self {
             in_flight: AtomicUsize::new(0),
-            quiesced: std::sync::Mutex::new(()),
-            condvar: std::sync::Condvar::new(),
+            quiesced: Mutex::new(()),
+            condvar: Condvar::new(),
         }
     }
 
@@ -30,39 +31,27 @@ impl Generation {
 
     fn signal_quiesced(&self) {
         if self.in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
-            let _guard = self
-                .quiesced
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
+            let _guard = self.quiesced.lock();
             self.condvar.notify_all();
         }
     }
 
     fn wait_quiesced(&self, timeout: Option<std::time::Duration>) -> bool {
-        let mut guard = self
-            .quiesced
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+        let mut guard = self.quiesced.lock();
         let deadline = timeout.map(|timeout| std::time::Instant::now() + timeout);
         loop {
             if self.in_flight.load(Ordering::SeqCst) == 0 {
                 return true;
             }
             let Some(deadline) = deadline else {
-                guard = self
-                    .condvar
-                    .wait(guard)
-                    .unwrap_or_else(|poison| poison.into_inner());
+                guard = self.condvar.wait(guard);
                 continue;
             };
             let now = std::time::Instant::now();
             if now >= deadline {
                 return false;
             }
-            let (next, _) = self
-                .condvar
-                .wait_timeout(guard, deadline - now)
-                .unwrap_or_else(|poison| poison.into_inner());
+            let (next, _) = self.condvar.wait_timeout(guard, deadline - now);
             guard = next;
         }
     }
@@ -81,36 +70,27 @@ impl Drop for InFlightGuard {
 const STOP_BACKSTOP: std::time::Duration = std::time::Duration::from_secs(3);
 
 struct Gate {
-    flag: std::sync::Mutex<bool>,
-    condvar: std::sync::Condvar,
+    flag: Mutex<bool>,
+    condvar: Condvar,
 }
 
 impl Gate {
     fn new() -> Self {
         Self {
-            flag: std::sync::Mutex::new(false),
-            condvar: std::sync::Condvar::new(),
+            flag: Mutex::new(false),
+            condvar: Condvar::new(),
         }
     }
 
     fn signal(&self) {
-        *self
-            .flag
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) = true;
+        *self.flag.lock() = true;
         self.condvar.notify_all();
     }
 
     fn wait_indefinite(&self) {
-        let mut flag = self
-            .flag
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+        let mut flag = self.flag.lock();
         while !*flag {
-            flag = self
-                .condvar
-                .wait(flag)
-                .unwrap_or_else(|poison| poison.into_inner());
+            flag = self.condvar.wait(flag);
         }
     }
 }
@@ -130,15 +110,15 @@ enum WatchState {
     Stopping(WatcherControl),
 }
 
-static WATCH_STATE: OnceLock<(Mutex<WatchState>, std::sync::Condvar)> = OnceLock::new();
+static WATCH_STATE: OnceLock<(Mutex<WatchState>, Condvar)> = OnceLock::new();
 
-fn watch_state() -> &'static (Mutex<WatchState>, std::sync::Condvar) {
-    WATCH_STATE.get_or_init(|| (Mutex::new(WatchState::Idle), std::sync::Condvar::new()))
+fn watch_state() -> &'static (Mutex<WatchState>, Condvar) {
+    WATCH_STATE.get_or_init(|| (Mutex::new(WatchState::Idle), Condvar::new()))
 }
 
 pub(super) fn stop_watch() {
     let (mutex, condvar) = watch_state();
-    let mut guard = mutex.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut guard = mutex.lock();
     let control = match &mut *guard {
         WatchState::Idle => return,
         WatchState::Stopping(control) => control.clone(),
@@ -163,7 +143,7 @@ fn finish_stop(control: WatcherControl) {
 
 fn wait_until_idle_published(deadline: std::time::Instant) -> bool {
     let (mutex, condvar) = watch_state();
-    let mut guard = mutex.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut guard = mutex.lock();
     loop {
         if matches!(&*guard, WatchState::Idle) {
             return true;
@@ -172,9 +152,7 @@ fn wait_until_idle_published(deadline: std::time::Instant) -> bool {
         if now >= deadline {
             return false;
         }
-        let (next, _) = condvar
-            .wait_timeout(guard, deadline - now)
-            .unwrap_or_else(|poison| poison.into_inner());
+        let (next, _) = condvar.wait_timeout(guard, deadline - now);
         guard = next;
     }
 }
@@ -237,13 +215,11 @@ pub(super) fn spawn() {
 
 fn spawn_watcher(probe: Probe, roots: Vec<qol_watch::WatchRoot>) {
     let (mutex, condvar) = watch_state();
-    let mut guard = mutex.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut guard = mutex.lock();
     loop {
         match &*guard {
             WatchState::Stopping(_) => {
-                guard = condvar
-                    .wait(guard)
-                    .unwrap_or_else(|poison| poison.into_inner());
+                guard = condvar.wait(guard);
             }
             WatchState::Running(_) => return,
             WatchState::Idle => break,
@@ -369,7 +345,7 @@ fn supervisor_entry(
         }
     }
     let (mutex, condvar) = watch_state();
-    let mut guard = mutex.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut guard = mutex.lock();
     match &mut *guard {
         WatchState::Running(control) | WatchState::Stopping(control)
             if control.generation_id == generation_id =>
@@ -714,7 +690,7 @@ mod tests {
             let probe_gate = gate.clone();
             let probe: Probe = Arc::new(move || {
                 let _ = started_tx.send(());
-                probe_gate.lock().unwrap().recv().unwrap();
+                probe_gate.lock().recv().unwrap();
                 (Observation::NotLoaded, PolicyIntent::None)
             });
             let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -750,7 +726,7 @@ mod tests {
             let probe_gate = gate_for_probe.clone();
             let probe: Probe = Arc::new(move || {
                 let _ = started_tx.send(());
-                probe_gate.lock().unwrap().recv().unwrap();
+                probe_gate.lock().recv().unwrap();
                 (Observation::NotLoaded, PolicyIntent::None)
             });
             struct ReleaseGate {
@@ -811,12 +787,12 @@ mod lifecycle_tests {
 
     fn reset_state() {
         let (mutex, _) = watch_state();
-        *mutex.lock().unwrap_or_else(|poison| poison.into_inner()) = WatchState::Idle;
+        *mutex.lock() = WatchState::Idle;
     }
 
     fn running_watcher_count() -> usize {
         let (mutex, _) = watch_state();
-        match &*mutex.lock().unwrap_or_else(|poison| poison.into_inner()) {
+        match &*mutex.lock() {
             WatchState::Running(_) => 1,
             WatchState::Idle | WatchState::Stopping(_) => 0,
         }
@@ -824,16 +800,14 @@ mod lifecycle_tests {
 
     fn wait_until_idle(timeout: Duration) -> bool {
         let (mutex, condvar) = watch_state();
-        let mut guard = mutex.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut guard = mutex.lock();
         let deadline = std::time::Instant::now() + timeout;
         while !matches!(&*guard, WatchState::Idle) {
             let now = std::time::Instant::now();
             if now >= deadline {
                 return false;
             }
-            let (next, _) = condvar
-                .wait_timeout(guard, deadline - now)
-                .unwrap_or_else(|poison| poison.into_inner());
+            let (next, _) = condvar.wait_timeout(guard, deadline - now);
             guard = next;
         }
         true
@@ -841,10 +815,7 @@ mod lifecycle_tests {
 
     fn state_is_stopping() -> bool {
         let (mutex, _) = watch_state();
-        matches!(
-            &*mutex.lock().unwrap_or_else(|poison| poison.into_inner()),
-            WatchState::Stopping(_)
-        )
+        matches!(&*mutex.lock(), WatchState::Stopping(_))
     }
 
     fn concurrency_watermark_probe(concurrent: Arc<AtomicUsize>, peak: Arc<AtomicUsize>) -> Probe {
@@ -1096,13 +1067,7 @@ mod lifecycle_tests {
             "the failed watcher spawn must never run a probe"
         );
         assert!(
-            matches!(
-                &*watch_state()
-                    .0
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner()),
-                WatchState::Idle
-            ),
+            matches!(&*watch_state().0.lock(), WatchState::Idle),
             "the lifecycle must be Idle after the failed spawn, without any stop call"
         );
         spawner.join().unwrap();

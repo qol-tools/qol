@@ -188,7 +188,7 @@ fn randomness_failure_precedes_every_explicit_constructor_and_creates_no_storage
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("peers");
         let host = host_at(&root, false);
-        host.inner.lock().unwrap().activation = || Err(Error::ActivationUnavailable);
+        host.inner.lock().activation = || Err(Error::ActivationUnavailable);
         let shared = attach(&host);
         assert_eq!(
             shared.peer_admin(request),
@@ -204,7 +204,7 @@ fn randomness_failure_precedes_every_explicit_constructor_and_creates_no_storage
         );
         assert!(!root.exists());
         assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 0);
-        host.inner.lock().unwrap().activation = super::super::activation_id;
+        host.inner.lock().activation = super::super::activation_id;
         shared.peer_admin(Request::StartSession {
             name: "recovered".into(),
         });
@@ -220,7 +220,7 @@ fn randomness_failure_during_startup_does_not_acquire_the_existing_writer() {
     super::persistent::populated(&root, 0);
     let snapshot = std::fs::read(root.join("state.json")).unwrap();
     let host = PeerHostHandle::new(Ok(root.clone()), PluginManager::new().into_shared(), false);
-    host.inner.lock().unwrap().activation = || Err(Error::ActivationUnavailable);
+    host.inner.lock().activation = || Err(Error::ActivationUnavailable);
     host.initialize();
     assert_eq!(
         status(&attach(&host)).lifecycle,

@@ -5,9 +5,10 @@ mod spawn;
 
 use super::Plugin;
 use anyhow::Result;
+use qol_sync::Mutex;
 use std::collections::HashMap;
 use std::process::Child;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 pub(super) use listener::DaemonListener;
@@ -42,9 +43,7 @@ fn daemon_incarnations() -> &'static Mutex<HashMap<String, Incarnation>> {
 }
 
 fn bump_daemon_incarnation(plugin_id: &str) -> u64 {
-    let mut incarnations = daemon_incarnations()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut incarnations = daemon_incarnations().lock();
     let entry = incarnations.entry(plugin_id.to_string()).or_default();
     entry.generation = entry.generation.saturating_add(1);
     entry.token = None;
@@ -57,7 +56,6 @@ fn bump_daemon_incarnation(plugin_id: &str) -> u64 {
 pub(super) fn current_daemon_incarnation(plugin_id: &str) -> Option<u64> {
     daemon_incarnations()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(plugin_id)
         .map(|entry| entry.generation)
 }
@@ -108,9 +106,7 @@ pub(super) fn start_daemon_with_context(
         &token,
     )?;
     register_daemon(plugin, child, spawn_fingerprint);
-    let mut incarnations = daemon_incarnations()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
+    let mut incarnations = daemon_incarnations().lock();
     let incarnation = incarnations.entry(plugin.id.to_string()).or_default();
     incarnation.token = Some(token);
     incarnation.artifact = artifact;
@@ -255,7 +251,6 @@ pub(crate) fn stop_daemons_for_session_end(deadline: Instant) {
 fn live_daemon_processes() -> Vec<(String, DaemonProcess)> {
     daemon_incarnations()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .iter()
         .filter_map(|(plugin_id, entry)| Some((plugin_id.clone(), entry.process.clone()?)))
         .collect()
@@ -301,9 +296,7 @@ fn register_daemon(plugin: &mut Plugin, child: Child, spawn_fingerprint: Option<
     bump_daemon_incarnation(plugin.id.as_str());
     let identity = qol_process::process_identity(pid).ok();
     {
-        let mut incarnations = daemon_incarnations()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut incarnations = daemon_incarnations().lock();
         let incarnation = incarnations.entry(plugin.id.to_string()).or_default();
         incarnation.endpoint = super::action_executor::daemon_socket(plugin);
         incarnation.process = identity.map(|identity| DaemonProcess { pid, identity });
@@ -324,12 +317,7 @@ fn register_daemon(plugin: &mut Plugin, child: Child, spawn_fingerprint: Option<
 }
 
 pub(crate) fn current_daemon_token(plugin_id: &str) -> Option<String> {
-    daemon_incarnations()
-        .lock()
-        .ok()?
-        .get(plugin_id)?
-        .token
-        .clone()
+    daemon_incarnations().lock().get(plugin_id)?.token.clone()
 }
 
 fn fresh_instance_token() -> Result<String> {
@@ -347,7 +335,7 @@ pub(crate) fn register_operation_fixture(
     artifact: qol_artifact::InspectedArtifact,
 ) {
     register_daemon(plugin, child, None);
-    let mut incarnations = daemon_incarnations().lock().unwrap();
+    let mut incarnations = daemon_incarnations().lock();
     let incarnation = incarnations.entry(plugin.id.to_string()).or_default();
     incarnation.token = Some(token);
     incarnation.artifact = Some(artifact);
@@ -356,7 +344,6 @@ pub(crate) fn register_operation_fixture(
 pub(crate) fn current_daemon_endpoint(plugin_id: &str) -> Option<std::path::PathBuf> {
     daemon_incarnations()
         .lock()
-        .ok()?
         .get(plugin_id)?
         .endpoint
         .clone()
@@ -365,7 +352,6 @@ pub(crate) fn current_daemon_endpoint(plugin_id: &str) -> Option<std::path::Path
 pub(crate) fn current_daemon_artifact(plugin_id: &str) -> Option<qol_artifact::InspectedArtifact> {
     daemon_incarnations()
         .lock()
-        .ok()?
         .get(plugin_id)?
         .artifact
         .clone()

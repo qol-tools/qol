@@ -1,5 +1,6 @@
+use qol_sync::RwLock;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use super::LogControl;
 
@@ -154,7 +155,7 @@ fn any_control_matches(
     let Some(primary) = section_for_target(target) else {
         return false;
     };
-    let controls = controls.read().unwrap_or_else(|e| e.into_inner());
+    let controls = controls.read();
     if predicate(controls.get(primary)) {
         return true;
     }

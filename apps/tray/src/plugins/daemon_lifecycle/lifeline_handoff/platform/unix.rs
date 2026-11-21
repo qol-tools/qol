@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::os::fd::RawFd;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::OnceLock;
+
+use qol_sync::Mutex;
 
 const ENV_HANDOFF_FDS: &str = "QOL_TRAY_LIFELINE_HANDOFF_FDS";
 
@@ -10,20 +12,16 @@ struct HandoffRegistry {
 }
 
 impl HandoffRegistry {
-    fn lock(&self) -> MutexGuard<'_, BTreeSet<RawFd>> {
-        self.fds.lock().unwrap_or_else(|error| error.into_inner())
-    }
-
     fn register(&self, fd: RawFd) {
-        self.lock().insert(fd);
+        self.fds.lock().insert(fd);
     }
 
     fn unregister(&self, fd: RawFd) {
-        self.lock().remove(&fd);
+        self.fds.lock().remove(&fd);
     }
 
     fn handoff_payload(&self) -> Option<String> {
-        let fds: Vec<RawFd> = self.lock().iter().copied().collect();
+        let fds: Vec<RawFd> = self.fds.lock().iter().copied().collect();
         let inheritable = retain_flagged(&fds, false);
         if inheritable.is_empty() {
             return None;

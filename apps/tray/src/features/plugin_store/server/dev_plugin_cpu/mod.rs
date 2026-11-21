@@ -5,7 +5,8 @@ mod state;
 
 use crate::daemon::EventBus;
 use crate::plugins::SharedPluginManager;
-use std::sync::{Arc, Mutex};
+use qol_sync::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) use snapshot::{PluginCpuEntry, PluginCpuResponse};

@@ -5,13 +5,13 @@ mod tree;
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
 use core_foundation::base::CFTypeRef;
 use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
 use core_foundation::string::CFStringRef;
+use qol_sync::Mutex;
 
 use super::retained::{self, AppRef, Entry};
 use super::toast::{self, Mirrored};
@@ -91,7 +91,7 @@ fn note_watch(generation: u64, state: u8) {
 }
 
 pub(super) fn sync(enabled: bool) {
-    let mut watch = lock();
+    let mut watch = WATCH.lock();
     if !enabled {
         WATCH_STATE.store(NOT_LOOKED, Ordering::Relaxed);
         HIDE_FAILED.store(false, Ordering::Relaxed);
@@ -121,20 +121,15 @@ pub(super) fn sync(enabled: bool) {
     }
 }
 
-fn lock() -> std::sync::MutexGuard<'static, Option<Watch>> {
+fn is_current(generation: u64) -> bool {
     WATCH
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn is_current(generation: u64) -> bool {
-    lock()
         .as_ref()
         .is_some_and(|watch| watch.generation == generation)
 }
 
 fn register(generation: u64) -> bool {
-    let mut watch = lock();
+    let mut watch = WATCH.lock();
     match watch.as_mut() {
         Some(watch) if watch.generation == generation => {
             watch.run_loop = Some(CFRunLoop::get_current());
@@ -254,7 +249,7 @@ extern "C" fn on_created(
 }
 
 fn first_sighting(id: &str) -> bool {
-    let mut seen = SEEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut seen = SEEN.lock();
     if seen.iter().any(|known| known == id) {
         return false;
     }

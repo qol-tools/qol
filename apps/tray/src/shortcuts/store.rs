@@ -1,8 +1,9 @@
 use anyhow::Result;
+use qol_sync::{Mutex, MutexGuard};
 use std::collections::HashSet;
 use std::fmt;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::OnceLock;
 
 use super::device_programs;
 use super::model::{Shortcut, ShortcutsConfig};
@@ -17,7 +18,7 @@ pub fn load() -> Result<ShortcutsConfig> {
 pub fn save(config: &ShortcutsConfig) -> Result<()> {
     let path = crate::paths::shortcuts_path()?;
     let device_path = crate::paths::shortcut_programs_path()?;
-    let _guard = mutation_guard()?;
+    let _guard = mutation_guard();
     save_to(&path, config)?;
     device_programs::record_to(&device_path, config)
 }
@@ -102,7 +103,6 @@ fn save_to(path: &Path, config: &ShortcutsConfig) -> Result<()> {
 #[derive(Debug)]
 pub enum MutationError {
     Load(anyhow::Error),
-    Lock,
     Rejected(String),
     Save(anyhow::Error),
 }
@@ -111,7 +111,6 @@ impl fmt::Display for MutationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Load(error) => write!(formatter, "failed to load shortcuts: {error}"),
-            Self::Lock => formatter.write_str("shortcut mutation lock is poisoned"),
             Self::Rejected(error) => formatter.write_str(error),
             Self::Save(error) => write!(formatter, "failed to save shortcuts: {error}"),
         }
@@ -154,7 +153,7 @@ fn mutate_at(
     id: &str,
     mutate: impl FnOnce(&mut ShortcutsConfig) -> Result<(), String>,
 ) -> Result<ShortcutsConfig, MutationError> {
-    let _guard = mutation_guard()?;
+    let _guard = mutation_guard();
     let mut config = read_from(path).map_err(MutationError::Load)?;
     mutate(&mut config).map_err(MutationError::Rejected)?;
     device_programs::load_from(device_path).map_err(MutationError::Load)?;
@@ -164,11 +163,9 @@ fn mutate_at(
     Ok(config)
 }
 
-fn mutation_guard() -> Result<MutexGuard<'static, ()>, MutationError> {
+fn mutation_guard() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .map_err(|_| MutationError::Lock)
+    LOCK.get_or_init(|| Mutex::new(())).lock()
 }
 
 pub fn find_by_id(config: &ShortcutsConfig, id: &str) -> Option<Shortcut> {
@@ -223,7 +220,7 @@ pub fn reconcile_plugin_shortcuts<'a>(
     plugins: impl IntoIterator<Item = &'a crate::plugins::Plugin>,
 ) -> Result<bool> {
     let path = crate::paths::shortcuts_path()?;
-    let _guard = mutation_guard()?;
+    let _guard = mutation_guard();
     let mut config = read_from(&path)?;
     let changed = plugin_manifest::reconcile(&mut config, plugins);
     if changed {

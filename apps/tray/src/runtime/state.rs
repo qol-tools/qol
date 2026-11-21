@@ -151,8 +151,8 @@ fn pick_log_changed(key: PickLog) -> bool {
     if !log::log_enabled!(log::Level::Debug) {
         return false;
     }
-    static LAST: std::sync::Mutex<Option<PickLog>> = std::sync::Mutex::new(None);
-    let mut last = LAST.lock().unwrap_or_else(|poison| poison.into_inner());
+    static LAST: qol_sync::Mutex<Option<PickLog>> = qol_sync::Mutex::new(None);
+    let mut last = LAST.lock();
     if last.as_ref() == Some(&key) {
         return false;
     }
@@ -162,12 +162,9 @@ fn pick_log_changed(key: PickLog) -> bool {
 
 #[cfg(debug_assertions)]
 fn probe_pick_to_file(cursor: &Stamped, focus: &Stamped, winner: &'static str) {
-    static LAST: std::sync::Mutex<PickProbeGate> =
-        std::sync::Mutex::new(PickProbeGate { last: None });
-    let changed = LAST
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .changed(cursor, focus, winner);
+    static LAST: qol_sync::Mutex<PickProbeGate> =
+        qol_sync::Mutex::new(PickProbeGate { last: None });
+    let changed = LAST.lock().changed(cursor, focus, winner);
     if !changed {
         return;
     }

@@ -1,7 +1,8 @@
+use qol_sync::{Condvar, Mutex};
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{mpsc, Condvar, Mutex, PoisonError};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
@@ -155,7 +156,7 @@ impl HostReadiness {
     }
 
     fn mark_ready(&self) {
-        let mut ready = self.ready.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut ready = self.ready.lock();
         if *ready {
             return;
         }
@@ -164,14 +165,13 @@ impl HostReadiness {
     }
 
     fn wait(&self, timeout: Duration) -> bool {
-        let ready = self.ready.lock().unwrap_or_else(PoisonError::into_inner);
+        let ready = self.ready.lock();
         if *ready {
             return true;
         }
         let (ready, _) = self
             .signal
-            .wait_timeout_while(ready, timeout, |ready| !*ready)
-            .unwrap_or_else(PoisonError::into_inner);
+            .wait_timeout_while(ready, timeout, |ready| !*ready);
         *ready
     }
 }

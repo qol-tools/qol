@@ -1,10 +1,11 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use qol_peers::admin::{ActivationId, Error};
 use qol_peers::network::NetworkFailure;
 use qol_peers::service::network::{
     prepare_with_operations, NetworkOptions, NetworkTask, OperationDispatcher,
 };
+use qol_sync::Mutex;
 use tokio::{
     runtime::Handle,
     sync::{mpsc, watch},
@@ -29,7 +30,7 @@ impl PeerHostHandle {
         let (jobs, incoming) = mpsc::channel(1);
         let inner = self.inner.clone();
         let closing = self.closing.subscribe();
-        let mut host = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let mut host = self.inner.lock();
         let dispatcher = Arc::new(super::operations::Dispatcher {
             host: Arc::downgrade(&self.inner),
             plugins: Arc::downgrade(&self.plugins),
@@ -46,7 +47,7 @@ impl PeerHostHandle {
         let mut completion = self.completion.subscribe();
         loop {
             {
-                let host = self.inner.lock().map_err(|_| Error::HostUnavailable)?;
+                let host = self.inner.lock();
                 match &host.state {
                     State::Stopping(active) if active.cleanup_failed => {
                         return Err(Error::HostUnavailable)
@@ -65,12 +66,7 @@ impl PeerHostHandle {
     pub async fn shutdown_and_wait(&self) -> Result<(), Error> {
         self.shutdown();
         let stopped = self.wait_stopped().await;
-        let task = self
-            .inner
-            .lock()
-            .map_err(|_| Error::HostUnavailable)?
-            .driver
-            .take();
+        let task = self.inner.lock().driver.take();
         let mut driver = DriverReceipt {
             host: self.inner.clone(),
             task,
@@ -91,10 +87,7 @@ struct DriverReceipt {
 impl Drop for DriverReceipt {
     fn drop(&mut self) {
         if let Some(task) = self.task.take() {
-            self.host
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .driver = Some(task);
+            self.host.lock().driver = Some(task);
         }
     }
 }
@@ -197,7 +190,7 @@ async fn drive(
                     None => continue,
                 };
                 if let Some(id) = id {
-                    host.lock().unwrap_or_else(|error| error.into_inner()).network_completed(id, result);
+                    host.lock().network_completed(id, result);
                 }
                 activation = None;
             },
@@ -238,18 +231,9 @@ mod tests {
         let current = authority(&shared);
         host.inner
             .lock()
-            .unwrap()
             .network_completed(old.activation_id, Err(NetworkFailure::Cleanup));
         assert_eq!(authority(&shared), current);
-        assert!(
-            !host
-                .inner
-                .lock()
-                .unwrap()
-                .authority()
-                .unwrap()
-                .cleanup_failed
-        );
+        assert!(!host.inner.lock().authority().unwrap().cleanup_failed);
         host.shutdown();
     }
 }

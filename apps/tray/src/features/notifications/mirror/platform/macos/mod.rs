@@ -8,10 +8,10 @@ mod toast;
 
 use std::io::{PipeReader, PipeWriter};
 use std::path::Path;
-use std::sync::Mutex;
 
 use super::super::{ActivateOutcome, Mechanism};
 use crate::features::notifications::takeover::{Health, Permission};
+use qol_sync::Mutex;
 use signal::{Signal, Wake};
 use store::{Cursor, Session};
 
@@ -33,9 +33,7 @@ pub(in super::super) fn is_safe_banner_id(id: &str) -> bool {
 }
 
 pub(in super::super) fn apply(wanted: bool) -> Vec<Mechanism> {
-    let mut running = MIRROR
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut running = MIRROR.lock();
     banner::sync(wanted);
     if !wanted {
         if running.take().is_some() {
@@ -90,10 +88,7 @@ fn run(db: &Path, mut cursor: Cursor, mut signal: Signal, _stopped: PipeReader) 
             Wake::Changed => {}
             Wake::Stop => return,
             Wake::Failed => {
-                MIRROR
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .take();
+                MIRROR.lock().take();
                 return;
             }
         }

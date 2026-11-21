@@ -1,5 +1,6 @@
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
-use std::sync::{Mutex, OnceLock};
+use qol_sync::Mutex;
+use std::sync::OnceLock;
 
 #[derive(Default)]
 struct ReloadHub {
@@ -9,12 +10,12 @@ struct ReloadHub {
 impl ReloadHub {
     fn subscribe(&self) -> Receiver<()> {
         let (tx, rx) = bounded::<()>(1);
-        self.lock().push(tx);
+        self.senders.lock().push(tx);
         rx
     }
 
     fn trigger(&self) {
-        let mut senders = self.lock();
+        let mut senders = self.senders.lock();
         if senders.is_empty() {
             log::debug!("hotkey reload requested before any backend subscribed; ignoring");
             return;
@@ -23,12 +24,6 @@ impl ReloadHub {
             Ok(()) | Err(TrySendError::Full(())) => true,
             Err(TrySendError::Disconnected(())) => false,
         });
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Sender<()>>> {
-        self.senders
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 

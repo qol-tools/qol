@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
+use qol_sync::Mutex;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::storage::{delete_github_credential, github_auth_status, store_github_credential};
@@ -90,10 +90,7 @@ impl GitHubAuthService {
         let session_id = session_id()?;
         let interval = body.interval.unwrap_or(5);
 
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut sessions = self.sessions.lock();
         retain_live_sessions(&mut sessions);
         sessions.insert(
             session_id.clone(),
@@ -114,10 +111,7 @@ impl GitHubAuthService {
 
     pub(crate) async fn poll_session(&self, session_id: &str) -> GitHubAuthSessionResponse {
         let device_code = {
-            let sessions = self
-                .sessions
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let sessions = self.sessions.lock();
             let Some(session) = sessions.get(session_id) else {
                 return GitHubAuthSessionResponse {
                     state: GitHubAuthSessionState::Failed,
@@ -234,10 +228,7 @@ impl GitHubAuthService {
             scopes: token.scopes,
         })?;
         run_post_auth_migrations().await;
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut sessions = self.sessions.lock();
         if let Some(session) = sessions.get_mut(session_id) {
             session.status = AuthSessionStatus::Authorized {
                 login: login.clone(),
@@ -272,10 +263,7 @@ impl GitHubAuthService {
     }
 
     fn mark_failed(&self, session_id: &str, message: &str) {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut sessions = self.sessions.lock();
         if let Some(session) = sessions.get_mut(session_id) {
             session.status = AuthSessionStatus::Failed {
                 message: message.to_string(),

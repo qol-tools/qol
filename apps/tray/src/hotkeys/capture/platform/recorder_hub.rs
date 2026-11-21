@@ -1,5 +1,6 @@
 use crate::daemon::{DaemonEvent, EventBus};
-use std::sync::{Arc, Mutex, MutexGuard};
+use qol_sync::Mutex;
+use std::sync::Arc;
 
 struct ActiveRecording {
     session_id: u64,
@@ -32,7 +33,7 @@ impl RecorderHub {
         if !(self.alive)() {
             return false;
         }
-        *self.lock() = Some(ActiveRecording { session_id, events });
+        *self.active.lock() = Some(ActiveRecording { session_id, events });
         qol_runtime::probe!(
             "HOTKEY_RECORD_ARM",
             "session={session_id} backend={}",
@@ -42,7 +43,7 @@ impl RecorderHub {
     }
 
     pub(super) fn cancel(&self, session_id: u64) {
-        let mut active = self.lock();
+        let mut active = self.active.lock();
         if active
             .as_ref()
             .is_none_or(|recording| recording.session_id != session_id)
@@ -54,11 +55,11 @@ impl RecorderHub {
     }
 
     pub(super) fn recording(&self) -> bool {
-        self.lock().is_some()
+        self.active.lock().is_some()
     }
 
     pub(super) fn settle(&self, decision: Decision) {
-        let mut active = self.lock();
+        let mut active = self.active.lock();
         let Some(recording) = active.as_ref() else {
             return;
         };
@@ -81,11 +82,5 @@ impl RecorderHub {
                 events.send(DaemonEvent::HotkeyRecorded { session_id, key });
             }
         }
-    }
-
-    fn lock(&self) -> MutexGuard<'_, Option<ActiveRecording>> {
-        self.active
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }

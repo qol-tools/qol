@@ -2,9 +2,9 @@ use super::evdev_backend::{emit_key_ups, TrackedVirtualDevice};
 use crate::platform::linux::keycode::keycode_name;
 use evdev::raw_stream::RawDevice;
 use evdev::{AttributeSet, KeyCode};
+use qol_sync::Mutex;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 pub(super) fn physical_down_union(keyboards: &[(PathBuf, RawDevice)]) -> HashSet<u16> {
     let mut down = HashSet::new();

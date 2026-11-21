@@ -3,9 +3,10 @@ use super::super::{OnFire, RebuildBindings};
 use crossbeam_channel::Receiver;
 use qol_hotkeys::grammar::Modifier as Mod;
 use qol_runtime::keyremap_marker;
+use qol_sync::RwLock;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,12 +172,8 @@ pub(crate) fn spawn_reload_thread(
                         continue;
                     }
                 };
-                let (stopped, poisoned) = reload_under_lock(&matcher, bindings);
-                if poisoned {
-                    log::error!("hotkey matcher lock poisoned during reload; recovered");
-                } else {
-                    log::info!("hotkey capture: bindings reloaded");
-                }
+                let stopped = reload_under_lock(&matcher, bindings);
+                log::info!("hotkey capture: bindings reloaded");
                 for event in stopped {
                     let _ = fire_tx.send(event);
                 }
@@ -188,14 +185,8 @@ fn drain_pending(reload_rx: &Receiver<()>) {
     while reload_rx.try_recv().is_ok() {}
 }
 
-fn reload_under_lock(
-    matcher: &RwLock<KeyMatcher>,
-    bindings: Vec<Binding>,
-) -> (Vec<CaptureEvent>, bool) {
-    match matcher.write() {
-        Ok(mut guard) => (guard.reload(bindings), false),
-        Err(poisoned) => (poisoned.into_inner().reload(bindings), true),
-    }
+fn reload_under_lock(matcher: &RwLock<KeyMatcher>, bindings: Vec<Binding>) -> Vec<CaptureEvent> {
+    matcher.write().reload(bindings)
 }
 
 pub(crate) fn match_under_lock(
@@ -203,10 +194,7 @@ pub(crate) fn match_under_lock(
     transition: KeyTransition,
     observed: &KeyCombo,
 ) -> MatchOutcome {
-    match matcher.write() {
-        Ok(mut guard) => guard.match_event(transition, observed),
-        Err(poisoned) => poisoned.into_inner().match_event(transition, observed),
-    }
+    matcher.write().match_event(transition, observed)
 }
 
 pub(crate) fn marker_mods(bits: u8) -> BTreeSet<Mod> {
@@ -293,8 +281,7 @@ mod tests {
     #[test]
     fn a_reload_releases_the_matcher_before_the_caller_logs() {
         let matcher = RwLock::new(matcher(vec![binding("ctrl+a")]));
-        let (_stopped, poisoned) = reload_under_lock(&matcher, vec![binding("ctrl+b")]);
-        assert!(!poisoned);
+        let _stopped = reload_under_lock(&matcher, vec![binding("ctrl+b")]);
         assert!(
             matcher.try_write().is_ok(),
             "the reload must drop the matcher guard before the caller logs, or the hook callback waits behind a blocked stdout write and the OS drops the hook"
@@ -309,18 +296,17 @@ mod tests {
 
         let added = combo_for("Shift+Super+J");
         assert!(
-            shared.read().unwrap().match_combo(&added).is_none(),
+            shared.read().match_combo(&added).is_none(),
             "binding must not match before reload"
         );
 
-        *shared.write().unwrap() = matcher(vec![
+        *shared.write() = matcher(vec![
             binding_for("Super+R", "first", "open"),
             binding_for("Shift+Super+J", "qol-launcher", "show"),
         ]);
 
         let hit = shared
             .read()
-            .unwrap()
             .match_combo(&added)
             .cloned()
             .expect("newly added binding must match after swap");
@@ -361,11 +347,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
 
         assert!(
-            shared
-                .read()
-                .unwrap()
-                .match_combo(&combo_for("Super+R"))
-                .is_some(),
+            shared.read().match_combo(&combo_for("Super+R")).is_some(),
             "a failed rebuild must keep the previous bindings, not wipe them"
         );
     }
@@ -379,14 +361,14 @@ mod tests {
 
         let removed = combo_for("Shift+Super+J");
         assert!(
-            shared.read().unwrap().match_combo(&removed).is_some(),
+            shared.read().match_combo(&removed).is_some(),
             "binding must match before reload"
         );
 
-        *shared.write().unwrap() = matcher(vec![binding_for("Super+R", "first", "open")]);
+        *shared.write() = matcher(vec![binding_for("Super+R", "first", "open")]);
 
         assert!(
-            shared.read().unwrap().match_combo(&removed).is_none(),
+            shared.read().match_combo(&removed).is_none(),
             "removed binding must no longer match after swap"
         );
     }
@@ -398,12 +380,12 @@ mod tests {
         )])));
 
         let disabled = combo_for("Super+R");
-        assert!(shared.read().unwrap().match_combo(&disabled).is_some());
+        assert!(shared.read().match_combo(&disabled).is_some());
 
-        *shared.write().unwrap() = matcher(vec![]);
+        *shared.write() = matcher(vec![]);
 
         assert!(
-            shared.read().unwrap().match_combo(&disabled).is_none(),
+            shared.read().match_combo(&disabled).is_none(),
             "disabled (filtered-out) binding must no longer match after swap"
         );
     }

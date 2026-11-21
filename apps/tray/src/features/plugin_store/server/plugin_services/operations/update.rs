@@ -21,11 +21,9 @@ pub(super) async fn update_plugin(state: &AppState, id: &str) -> Result<(), Stri
 fn update_cached_version(state: &AppState, id: &str) {
     if let Ok(version) = read_plugin_version(&state.plugins_dir.join(id)) {
         crate::features::plugin_store::github::update_cached_version(id, &version);
-        if let Ok(mut guard) = state.plugins_cache.write() {
-            if let Some(cache) = guard.as_mut() {
-                if let Some(plugin) = cache.plugins.iter_mut().find(|p| p.id == id) {
-                    plugin.version = version;
-                }
+        if let Some(cache) = state.plugins_cache.write().as_mut() {
+            if let Some(plugin) = cache.plugins.iter_mut().find(|p| p.id == id) {
+                plugin.version = version;
             }
         }
     }

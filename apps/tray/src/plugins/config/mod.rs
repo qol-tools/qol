@@ -19,6 +19,7 @@ use crate::paths::is_safe_path_component;
 use crate::plugins::manifest::PluginUid;
 use crate::plugins::paths as plugin_paths;
 use anyhow::Result;
+use qol_sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::cell::Cell;
@@ -28,7 +29,7 @@ use std::time::{Duration, Instant};
 const RUNTIME_CONFIG_RETRY_TIMEOUT: Duration = Duration::from_millis(750);
 const RUNTIME_CONFIG_RETRY_INTERVAL: Duration = Duration::from_millis(16);
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginConfigs {
@@ -167,9 +168,7 @@ pub(crate) struct ConfigSaveReceipt {
 }
 
 pub(crate) fn profile_config_read_guard() -> ProfileConfigReadGuard {
-    let guard = profile_config_lock()
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let guard = profile_config_lock().read();
     #[cfg(test)]
     PROFILE_CONFIG_READS.with(|reads| reads.set(reads.get() + 1));
     let generation = PROFILE_CONFIG_GENERATION.load(Ordering::Acquire);
@@ -198,9 +197,7 @@ pub(crate) fn profile_config_write_guard_for_plugins(
 }
 
 pub(crate) fn profile_config_write_guard_unmarked() -> ProfileConfigWriteGuard {
-    let guard = profile_config_lock()
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let guard = profile_config_lock().write();
     ProfileConfigWriteGuard {
         _guard: guard,
         generation: std::cell::Cell::new(0),
@@ -216,9 +213,7 @@ fn profile_config_write_guard_for_scope(
 }
 
 fn mark_profile_config_changed(scope: ProfileConfigInvalidation) -> u64 {
-    let mut invalidations = profile_config_invalidations()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut invalidations = profile_config_invalidations().lock();
     let generation = PROFILE_CONFIG_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     match scope {
         ProfileConfigInvalidation::All => {
@@ -239,9 +234,7 @@ fn mark_profile_config_changed(scope: ProfileConfigInvalidation) -> u64 {
 pub(crate) fn profile_config_invalidation_since(
     last_generation: u64,
 ) -> Option<(u64, ProfileConfigInvalidation)> {
-    let invalidations = profile_config_invalidations()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let invalidations = profile_config_invalidations().lock();
     let current_generation = current_profile_config_generation();
     if current_generation == last_generation {
         return None;
@@ -265,7 +258,6 @@ pub(crate) fn profile_config_invalidation_since(
 pub(crate) fn profile_config_plugin_generation(plugin_id: &str) -> u64 {
     profile_config_invalidations()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .plugin_generations
         .get(plugin_id)
         .copied()

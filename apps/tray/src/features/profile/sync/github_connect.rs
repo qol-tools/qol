@@ -1,7 +1,8 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use qol_sync::Mutex;
 use serde::Serialize;
 
 use super::service::{has_github_access, SyncService};
@@ -39,17 +40,11 @@ impl GitHubConnect {
     }
 
     pub(crate) fn state(&self) -> GitHubConnectState {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        self.state.lock().clone()
     }
 
     fn set(&self, next: GitHubConnectState) {
-        *self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
+        *self.state.lock() = next;
     }
 
     pub(crate) async fn start(self: &Arc<Self>) -> Result<GitHubConnectState> {

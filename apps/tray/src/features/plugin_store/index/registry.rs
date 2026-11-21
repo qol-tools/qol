@@ -4,12 +4,13 @@ use crate::features::connection_health::{observe_body, SendObserved};
 use crate::features::plugin_store::release_integrity;
 use anyhow::{Context, Result};
 use qol_plugin_index::{BearerChallenge, INDEX_TAG, SIGNED_INDEX_MEDIA_TYPE};
+use qol_sync::Mutex;
 use reqwest::header::{ACCEPT, WWW_AUTHENTICATE};
 use reqwest::StatusCode;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 
 static PULL_TOKENS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Mutex::default);
 
@@ -171,13 +172,13 @@ async fn send(request: reqwest::RequestBuilder, url: &str) -> Result<reqwest::Re
 }
 
 fn remembered_token(scope: &str) -> Option<String> {
-    PULL_TOKENS.lock().ok()?.get(scope).cloned()
+    PULL_TOKENS.lock().get(scope).cloned()
 }
 
 fn remember_token(scope: &str, token: &str) {
-    if let Ok(mut tokens) = PULL_TOKENS.lock() {
-        tokens.insert(scope.to_string(), token.to_string());
-    }
+    PULL_TOKENS
+        .lock()
+        .insert(scope.to_string(), token.to_string());
 }
 
 #[derive(Deserialize)]

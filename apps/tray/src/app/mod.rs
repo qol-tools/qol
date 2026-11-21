@@ -14,10 +14,11 @@ static PENDING_HEAL_REPORT: std::sync::OnceLock<qol_tray::dev::boot_contract::He
 use qol_tray::features::{self, FeatureRegistry};
 use qol_tray::hotkeys;
 
+use qol_sync::Mutex;
 use qol_tray::plugins::{PluginManager, SharedPluginManager};
 use qol_tray::tray::{self, TrayManager};
 use qol_tray::updates;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 
@@ -191,10 +192,7 @@ struct PeerRuntime {
 }
 
 fn stop_peer_runtime(owner: &Mutex<Option<PeerRuntime>>) -> Result<()> {
-    let runtime = owner
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .take();
+    let runtime = owner.lock().take();
     if let Some(runtime) = runtime {
         runtime.handle.shutdown();
         let _ = runtime.exit.send(());
@@ -283,7 +281,7 @@ fn app_init_inner(
             result
         })
     });
-    *peers.lock().unwrap_or_else(|error| error.into_inner()) = Some(PeerRuntime {
+    *peers.lock() = Some(PeerRuntime {
         handle,
         thread,
         exit,

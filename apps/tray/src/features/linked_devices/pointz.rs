@@ -129,15 +129,12 @@ impl PeerHostHandle {
                 let _ = tokio::task::spawn_blocking(move || owner.reconcile_pointz()).await;
             }
         });
-        self.inner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .pointz = Some(PointzLauncher { runtime, options });
+        self.inner.lock().pointz = Some(PointzLauncher { runtime, options });
     }
 
     pub(super) fn reconcile_pointz(&self) {
         let installed = self.installed_pointz();
-        let mut host = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let mut host = self.inner.lock();
         host.reconcile_pointz(installed);
     }
 
@@ -145,15 +142,16 @@ impl PeerHostHandle {
         let data_root = self
             .inner
             .lock()
-            .ok()
-            .and_then(|host| host.pointz.as_ref()?.options.data_root.clone());
+            .pointz
+            .as_ref()
+            .and_then(|pointz| pointz.options.data_root.clone());
         let plugins = self.plugins.lock();
         installed(&plugins, data_root.as_deref())
     }
 
     pub(super) fn pointz_request(&self, request: PointzRequest) -> Result<Response, Error> {
         let installed = self.installed_pointz();
-        let mut host = self.inner.lock().map_err(|_| Error::HostUnavailable)?;
+        let mut host = self.inner.lock();
         match request {
             PointzRequest::Status {} => Ok(Response::PointzStatus {
                 status: host.pointz_status(&installed)?,

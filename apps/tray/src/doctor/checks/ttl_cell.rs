@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use qol_sync::Mutex;
 use std::time::{Duration, Instant};
 
 pub(super) struct TtlCell<T> {
@@ -21,10 +21,7 @@ impl<T> TtlCell<T> {
     where
         T: Clone,
     {
-        let mut cell = self
-            .cell
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut cell = self.cell.lock();
         if let Some((at, cached)) = cell.as_ref() {
             if now.saturating_duration_since(*at) < ttl {
                 return cached.clone();

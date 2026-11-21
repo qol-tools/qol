@@ -4,11 +4,12 @@ mod subscribers;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc as std_mpsc;
-use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 use qol_runtime::MonitorBounds;
+use qol_sync::{Condvar, Mutex};
 
 use super::super::state::{self, InputState, Stamped};
 use crate::desktop_state::{Platform, SharedPlatform};
@@ -62,13 +63,11 @@ impl SharedState {
     }
 
     pub(super) fn arm_lifeline(&self, plugin_id: String) {
-        *lock_or_recover(&self.armed_lifelines)
-            .entry(plugin_id)
-            .or_insert(0) += 1;
+        *self.armed_lifelines.lock().entry(plugin_id).or_insert(0) += 1;
     }
 
     pub(super) fn disarm_lifeline(&self, plugin_id: &str) {
-        let mut lifelines = lock_or_recover(&self.armed_lifelines);
+        let mut lifelines = self.armed_lifelines.lock();
         if let Some(count) = lifelines.get_mut(plugin_id) {
             *count -= 1;
             if *count == 0 {
@@ -78,10 +77,7 @@ impl SharedState {
     }
 
     pub(super) fn armed_lifelines(&self) -> Vec<String> {
-        let mut ids: Vec<String> = lock_or_recover(&self.armed_lifelines)
-            .keys()
-            .cloned()
-            .collect();
+        let mut ids: Vec<String> = self.armed_lifelines.lock().keys().cloned().collect();
         ids.sort();
         ids
     }
@@ -130,7 +126,7 @@ impl SharedState {
         if fresh.is_empty() {
             return;
         }
-        let mut monitors = lock_or_recover(&self.monitors);
+        let mut monitors = self.monitors.lock();
         if *monitors == fresh {
             return;
         }
@@ -147,7 +143,7 @@ impl SharedState {
         let Some(fresh_monitor) = state::monitor_for_point(&monitors, x, y) else {
             return;
         };
-        let mut input = lock_or_recover(&self.input);
+        let mut input = self.input.lock();
         if input
             .cursor
             .as_ref()
@@ -174,9 +170,9 @@ impl SharedState {
         let Some(fresh_monitor) = state::monitor_for_bounds(&monitors, &fresh_bounds) else {
             return;
         };
-        *lock_or_recover(&self.focused_window) = Some(fresh_bounds);
-        *lock_or_recover(&self.last_focus_bounds) = Some(fresh_bounds);
-        let mut input = lock_or_recover(&self.input);
+        *self.focused_window.lock() = Some(fresh_bounds);
+        *self.last_focus_bounds.lock() = Some(fresh_bounds);
+        let mut input = self.input.lock();
         let needs_update = match input.focus.as_ref() {
             Some(focus) => focus.monitor != fresh_monitor,
             None => true,
@@ -212,7 +208,7 @@ impl SharedState {
     }
 
     pub(super) fn focused_window(&self) -> Option<MonitorBounds> {
-        *lock_or_recover(&self.focused_window)
+        *self.focused_window.lock()
     }
 
     pub(super) fn has_subscribers(&self) -> bool {
@@ -228,15 +224,15 @@ impl SharedState {
     }
 
     pub(super) fn input(&self) -> InputState {
-        lock_or_recover(&self.input).clone()
+        self.input.lock().clone()
     }
 
     pub(super) fn monitor_at(&self, idx: usize) -> Option<MonitorBounds> {
-        lock_or_recover(&self.monitors).get(idx).copied()
+        self.monitors.lock().get(idx).copied()
     }
 
     pub(super) fn monitors(&self) -> Vec<MonitorBounds> {
-        lock_or_recover(&self.monitors).clone()
+        self.monitors.lock().clone()
     }
 
     pub(crate) fn publish(&self, events: &[RuntimeEvent]) {
@@ -248,30 +244,24 @@ impl SharedState {
     }
 
     pub(super) fn wait_for_poll_subscriber(&self) {
-        let mut subscribers = lock_or_recover(&self.subscribers);
+        let mut subscribers = self.subscribers.lock();
         while !subscribers::has_poll_subscribers_in(&subscribers) {
-            subscribers = self
-                .subscriber_changed
-                .wait(subscribers)
-                .unwrap_or_else(|error| error.into_inner());
+            subscribers = self.subscriber_changed.wait(subscribers);
         }
     }
 
     pub(super) fn wait_for_window_list_subscriber(&self) {
-        let mut subscribers = lock_or_recover(&self.subscribers);
+        let mut subscribers = self.subscribers.lock();
         while !subscribers::has_event_subscribers_in(
             &subscribers,
             RuntimeEventKind::WindowListChanged,
         ) {
-            subscribers = self
-                .subscriber_changed
-                .wait(subscribers)
-                .unwrap_or_else(|error| error.into_inner());
+            subscribers = self.subscriber_changed.wait(subscribers);
         }
     }
 
     pub(super) fn remember_focus_bounds(&self, bounds: Option<MonitorBounds>) -> bool {
-        let mut last_bounds = lock_or_recover(&self.last_focus_bounds);
+        let mut last_bounds = self.last_focus_bounds.lock();
         let changed = *last_bounds != bounds;
         if changed {
             *last_bounds = bounds;
@@ -280,7 +270,7 @@ impl SharedState {
     }
 
     pub(super) fn track_focus_window(&self, id: Option<u32>, platform: &dyn Platform) {
-        let mut tracked = lock_or_recover(&self.focus_window);
+        let mut tracked = self.focus_window.lock();
         if id.is_none() || tracked.id == id {
             return;
         }
@@ -298,7 +288,7 @@ impl SharedState {
     }
 
     pub(super) fn holds_focus(&self, bounds: Option<MonitorBounds>) -> bool {
-        let mut tracked = lock_or_recover(&self.focus_window);
+        let mut tracked = self.focus_window.lock();
         match tracked.fallback {
             Fallback::None => false,
             Fallback::Pending => {
@@ -316,36 +306,32 @@ impl SharedState {
     }
 
     pub(super) fn focus_held(&self) -> bool {
-        lock_or_recover(&self.focus_window).fallback != Fallback::None
+        self.focus_window.lock().fallback != Fallback::None
     }
 
     pub(super) fn set_cursor_pos(&self, cursor_pos: Option<(f32, f32)>) {
-        *lock_or_recover(&self.cursor_pos) = cursor_pos;
+        *self.cursor_pos.lock() = cursor_pos;
     }
 
     pub(super) fn set_monitors(&self, monitors: Vec<MonitorBounds>) {
-        *lock_or_recover(&self.monitors) = monitors;
+        *self.monitors.lock() = monitors;
     }
 
     pub(super) fn store_focused_window(&self, bounds: Option<MonitorBounds>) {
         let Some(bounds) = bounds else {
             return;
         };
-        *lock_or_recover(&self.focused_window) = Some(bounds);
+        *self.focused_window.lock() = Some(bounds);
     }
 
     pub(super) fn with_input<T>(&self, update: impl FnOnce(&mut InputState) -> T) -> T {
-        let mut input = lock_or_recover(&self.input);
+        let mut input = self.input.lock();
         update(&mut input)
     }
 
     pub(super) fn cursor_pos(&self) -> Option<(f32, f32)> {
-        *lock_or_recover(&self.cursor_pos)
+        *self.cursor_pos.lock()
     }
-}
-
-pub(super) fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
 
 #[cfg(test)]
@@ -430,7 +416,7 @@ mod tests {
         }
 
         fn close(&self, id: u32) {
-            lock_or_recover(&self.open).retain(|open| *open != id);
+            self.open.lock().retain(|open| *open != id);
         }
     }
 
@@ -448,7 +434,7 @@ mod tests {
         }
 
         fn window_open(&self, id: u32) -> Option<bool> {
-            Some(lock_or_recover(&self.open).contains(&id))
+            Some(self.open.lock().contains(&id))
         }
     }
 

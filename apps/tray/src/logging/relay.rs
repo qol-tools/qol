@@ -53,9 +53,9 @@ fn spawn_relay<R: Read + Send + 'static>(
 // race its own retention prune against the others.
 #[cfg(feature = "dev")]
 fn daemon_log_sink(
-) -> Option<&'static std::sync::Mutex<qol_log::tracing_appender::rolling::RollingFileAppender>> {
+) -> Option<&'static qol_sync::Mutex<qol_log::tracing_appender::rolling::RollingFileAppender>> {
     static SINK: std::sync::OnceLock<
-        Option<std::sync::Mutex<qol_log::tracing_appender::rolling::RollingFileAppender>>,
+        Option<qol_sync::Mutex<qol_log::tracing_appender::rolling::RollingFileAppender>>,
     > = std::sync::OnceLock::new();
     SINK.get_or_init(|| {
         let dir = qol_log::log_dir();
@@ -69,7 +69,7 @@ fn daemon_log_sink(
         qol_log::remove_unrotated(&dir, "qol-daemons");
         qol_log::rolling(&dir, "qol-daemons")
             .ok()
-            .map(std::sync::Mutex::new)
+            .map(qol_sync::Mutex::new)
     })
     .as_ref()
 }
@@ -83,20 +83,14 @@ impl std::io::Write for DaemonSink {
         let Some(sink) = daemon_log_sink() else {
             return Ok(buf.len());
         };
-        let Ok(mut appender) = sink.lock() else {
-            return Ok(buf.len());
-        };
-        appender.write(buf)
+        sink.lock().write(buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         let Some(sink) = daemon_log_sink() else {
             return Ok(());
         };
-        let Ok(mut appender) = sink.lock() else {
-            return Ok(());
-        };
-        appender.flush()
+        sink.lock().flush()
     }
 }
 

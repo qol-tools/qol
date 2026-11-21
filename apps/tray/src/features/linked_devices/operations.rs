@@ -5,12 +5,13 @@ use qol_peers::{
     service::{network::OperationDispatcher, PeerAuthority},
     session::AuthenticatedSession,
 };
-use std::sync::{Arc, Mutex, Weak};
+use qol_sync::Mutex;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 pub(super) struct Dispatcher {
     pub host: Weak<Mutex<Host>>,
-    pub plugins: Weak<qol_sync::Mutex<PluginManager>>,
+    pub plugins: Weak<Mutex<PluginManager>>,
 }
 
 impl OperationDispatcher for Dispatcher {
@@ -24,14 +25,14 @@ impl OperationDispatcher for Dispatcher {
         let host = self.host.upgrade().ok_or(Failure::Unavailable)?;
         let plugins = self.plugins.upgrade().ok_or(Failure::Unavailable)?;
         let captured = {
-            let host = host.lock().map_err(|_| Failure::Unavailable)?;
+            let host = host.lock();
             check_host(&host, session)?;
             let manager = plugins.lock();
             PreparedRemote::capture(&manager)?
         };
         let prepared = PreparedRemote::prepare(captured, &body)?;
         {
-            let host = host.lock().map_err(|_| Failure::Unavailable)?;
+            let host = host.lock();
             check_host(&host, session)?;
             let manager = plugins.lock();
             prepared.recheck(&manager)?;
@@ -81,7 +82,7 @@ impl Dispatcher {
         plugins: &SharedPluginManager,
     ) -> Result<tokio::time::Instant, Failure> {
         let captured = {
-            let host = host.lock().map_err(|_| Failure::Unavailable)?;
+            let host = host.lock();
             check_host(&host, session)?;
             let manager = plugins.lock();
             prepared.recheck(&manager)?;
@@ -89,7 +90,7 @@ impl Dispatcher {
         };
         prepared.probe(Duration::from_millis(500))?;
         let refreshed = prepared.refresh(captured)?;
-        let host = host.lock().map_err(|_| Failure::Unavailable)?;
+        let host = host.lock();
         check_host(&host, session)?;
         let manager = plugins.lock();
         prepared.recheck(&manager)?;
@@ -127,7 +128,7 @@ impl PeerHostHandle {
 
     fn operation_request_inner(&self, request: Request) -> Result<Response, Failure> {
         let (handle, incoming) = {
-            let host = self.inner.lock().map_err(|_| Failure::Unavailable)?;
+            let host = self.inner.lock();
             let active = host.authority().map_err(|_| Failure::Unavailable)?;
             let expected = match &request {
                 Request::Invoke { expected, .. }
@@ -184,7 +185,7 @@ impl PeerHostHandle {
         &self,
         change: impl FnOnce(&mut PluginManager),
     ) {
-        let _host = self.inner.lock().unwrap();
+        let _host = self.inner.lock();
         let mut manager = self.plugins.lock();
         change(&mut manager);
     }

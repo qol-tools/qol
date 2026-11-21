@@ -1,10 +1,8 @@
 use std::collections::HashSet;
 use std::sync::mpsc::Sender;
-use std::sync::Mutex;
 
 use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
-
-use super::lock_or_recover;
+use qol_sync::Mutex;
 
 pub(super) type SubscriberId = u64;
 
@@ -22,7 +20,7 @@ pub(super) fn push(
     interests: HashSet<RuntimeEventKind>,
     tx: Sender<RuntimeEvent>,
 ) {
-    lock_or_recover(subscribers).push(SubscriberEntry {
+    subscribers.lock().push(SubscriberEntry {
         id,
         plugin_id,
         interests,
@@ -31,18 +29,18 @@ pub(super) fn push(
 }
 
 pub(super) fn remove(subscribers: &Mutex<Vec<SubscriberEntry>>, id: SubscriberId) -> bool {
-    let mut subscribers = lock_or_recover(subscribers);
+    let mut subscribers = subscribers.lock();
     let before = subscribers.len();
     subscribers.retain(|entry| entry.id != id);
     subscribers.len() != before
 }
 
 pub(super) fn has_subscribers(subscribers: &Mutex<Vec<SubscriberEntry>>) -> bool {
-    !lock_or_recover(subscribers).is_empty()
+    !subscribers.lock().is_empty()
 }
 
 pub(super) fn has_poll_subscribers(subscribers: &Mutex<Vec<SubscriberEntry>>) -> bool {
-    has_poll_subscribers_in(&lock_or_recover(subscribers))
+    has_poll_subscribers_in(&subscribers.lock())
 }
 
 pub(super) fn has_poll_subscribers_in(subscribers: &[SubscriberEntry]) -> bool {
@@ -55,7 +53,7 @@ pub(super) fn has_event_subscribers(
     subscribers: &Mutex<Vec<SubscriberEntry>>,
     kind: RuntimeEventKind,
 ) -> bool {
-    has_event_subscribers_in(&lock_or_recover(subscribers), kind)
+    has_event_subscribers_in(&subscribers.lock(), kind)
 }
 
 pub(super) fn has_event_subscribers_in(
@@ -73,7 +71,7 @@ pub(super) fn publish(
     armed_lifelines: &[String],
     monitors: &[qol_runtime::MonitorBounds],
 ) -> bool {
-    let mut subscribers = lock_or_recover(subscribers);
+    let mut subscribers = subscribers.lock();
     let results = fan_out(&subscribers, events);
 
     let amc_interested = amc_interested_ids(&subscribers);

@@ -1,8 +1,9 @@
 use crate::daemon::{DaemonEvent, EventBus};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use qol_hotkeys::grammar::{self, Hotkey, Key, Modifier, NamedKey};
+use qol_sync::Mutex;
 use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{ConnectionExt, GrabMode, GrabStatus};
@@ -59,7 +60,7 @@ pub(super) struct RecorderHub {
 
 impl RecorderHub {
     pub(super) fn start(&self, session_id: u64, events: Arc<EventBus>) -> bool {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         stop_active(state.active.take());
         let (cancel_tx, cancel_rx) = bounded(1);
         let (ready_tx, ready_rx) = bounded(1);
@@ -80,7 +81,7 @@ impl RecorderHub {
     }
 
     pub(super) fn cancel(&self, session_id: u64) {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         if state
             .active
             .as_ref()
@@ -90,12 +91,6 @@ impl RecorderHub {
         }
         stop_active(state.active.take());
         qol_runtime::probe!("HOTKEY_RECORD_CANCEL", "session={session_id}");
-    }
-
-    fn lock(&self) -> MutexGuard<'_, RecorderState> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 

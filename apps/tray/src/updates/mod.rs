@@ -1,7 +1,8 @@
 use crate::features::plugin_store::release_integrity::{self, IndexedHostRelease};
 use anyhow::Result;
+use qol_sync::{Mutex, MutexGuard};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 pub(crate) mod jobs;
@@ -86,10 +87,7 @@ pub fn latest_version() -> Option<String> {
 }
 
 fn latest_update() -> Option<FoundUpdate> {
-    match lock_latest_update() {
-        Some(latest) => (*latest).clone(),
-        None => None,
-    }
+    lock_latest_update().clone()
 }
 
 pub fn checks_enabled() -> bool {
@@ -99,7 +97,7 @@ pub fn checks_enabled() -> bool {
 }
 
 pub fn host_update_available() -> bool {
-    checks_enabled() && lock_update_state().is_some_and(|state| state.update_found)
+    checks_enabled() && lock_update_state().update_found
 }
 
 pub fn note_tray_start() {
@@ -111,19 +109,12 @@ pub fn tray_start() -> SystemTime {
 }
 
 pub fn check_health() -> CheckHealth {
-    match lock_update_state() {
-        Some(state) => CheckHealth {
-            checking: state.checking,
-            last_attempt: state.last_attempt,
-            last_success: state.last_success,
-            last_error: state.last_error.clone(),
-        },
-        None => CheckHealth {
-            checking: false,
-            last_attempt: None,
-            last_success: None,
-            last_error: None,
-        },
+    let state = lock_update_state();
+    CheckHealth {
+        checking: state.checking,
+        last_attempt: state.last_attempt,
+        last_success: state.last_success,
+        last_error: state.last_error.clone(),
     }
 }
 
@@ -136,9 +127,7 @@ pub async fn check_for_updates() -> Result<bool> {
         return Ok(false);
     }
     {
-        let Some(mut state) = lock_update_state() else {
-            return Ok(false);
-        };
+        let mut state = lock_update_state();
         if let Some(running) = begin_check(&mut state, SystemTime::now()) {
             return Ok(running);
         }
@@ -147,9 +136,7 @@ pub async fn check_for_updates() -> Result<bool> {
 
     let outcome = fetch_host_update().await;
 
-    let Some(mut state) = lock_update_state() else {
-        return Ok(false);
-    };
+    let mut state = lock_update_state();
     match outcome {
         Ok(release) => {
             state.last_success = Some(SystemTime::now());
@@ -178,9 +165,7 @@ struct CheckInFlight;
 
 impl Drop for CheckInFlight {
     fn drop(&mut self) {
-        if let Some(mut state) = lock_update_state() {
-            state.checking = false;
-        }
+        lock_update_state().checking = false;
     }
 }
 
@@ -291,30 +276,16 @@ fn record_update_progress(percent: u8) {
     jobs::QUEUE.set_progress(jobs::HOST_ID, percent);
 }
 
-fn lock_latest_update() -> Option<MutexGuard<'static, Option<FoundUpdate>>> {
-    match LATEST_UPDATE.get_or_init(|| Mutex::new(None)).lock() {
-        Ok(guard) => Some(guard),
-        Err(error) => {
-            log::error!("Latest version lock is poisoned: {}", error);
-            None
-        }
-    }
+fn lock_latest_update() -> MutexGuard<'static, Option<FoundUpdate>> {
+    LATEST_UPDATE.get_or_init(|| Mutex::new(None)).lock()
 }
 
 fn store_latest_update(latest: Option<FoundUpdate>) {
-    if let Some(mut guard) = lock_latest_update() {
-        *guard = latest;
-    }
+    *lock_latest_update() = latest;
 }
 
-fn lock_update_state() -> Option<MutexGuard<'static, UpdateState>> {
-    match update_state().lock() {
-        Ok(guard) => Some(guard),
-        Err(error) => {
-            log::error!("Update state lock is poisoned: {}", error);
-            None
-        }
-    }
+fn lock_update_state() -> MutexGuard<'static, UpdateState> {
+    update_state().lock()
 }
 
 pub(crate) const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -742,11 +713,9 @@ mod tests {
 
     #[test]
     fn check_in_flight_guard_resets_the_checking_flag() {
-        if let Some(mut state) = lock_update_state() {
-            state.checking = true;
-        }
+        lock_update_state().checking = true;
         drop(CheckInFlight);
-        assert!(lock_update_state().is_some_and(|state| !state.checking));
+        assert!(!lock_update_state().checking);
     }
 
     #[test]

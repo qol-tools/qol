@@ -1,6 +1,7 @@
 use crate::features::profile::scope_store::{PluginConfigSlicePaths, ProfileScopeStore};
 use crate::plugins::manifest::PluginManifest;
 use anyhow::{bail, Result};
+use qol_sync::{Condvar, Mutex};
 #[cfg(not(test))]
 use qol_watch::{Watch, WatchNotice, WatchRoot};
 use serde_json::Value;
@@ -12,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(not(test))]
 use std::sync::Arc;
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -161,9 +162,7 @@ fn set_cache_available(available: bool) {
 
 pub(crate) fn begin_mutation(scope_dir: &Path) -> MutationGuard {
     {
-        let mut mutation = mutation_state()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut mutation = mutation_state().lock();
         let scope = mutation.scopes.entry(scope_dir.to_path_buf()).or_default();
         scope.writers += 1;
         if scope.writers == 1 {
@@ -178,9 +177,7 @@ pub(crate) fn begin_mutation(scope_dir: &Path) -> MutationGuard {
 
 pub(crate) fn begin_global_mutation() -> MutationGuard {
     {
-        let mut mutation = mutation_state()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut mutation = mutation_state().lock();
         mutation.global_writers += 1;
         if mutation.global_writers == 1 {
             GENERATION.fetch_add(1, Ordering::AcqRel);
@@ -193,9 +190,7 @@ pub(crate) fn begin_global_mutation() -> MutationGuard {
 }
 
 fn finish_profile_mutation(scope_dir: &Path) {
-    let mut mutation = mutation_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut mutation = mutation_state().lock();
     let should_clear = {
         let state = mutation
             .scopes
@@ -222,9 +217,7 @@ fn finish_profile_mutation(scope_dir: &Path) {
 }
 
 fn finish_global_mutation() {
-    let mut mutation = mutation_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut mutation = mutation_state().lock();
     mutation.global_writers = mutation
         .global_writers
         .checked_sub(1)
@@ -251,29 +244,20 @@ fn mutation_notifier() -> &'static MutationNotifier {
 
 fn notify_mutation_change() {
     let notifier = mutation_notifier();
-    let mut epoch = notifier
-        .epoch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut epoch = notifier.epoch.lock();
     *epoch = epoch.wrapping_add(1);
     notifier.changed.notify_all();
 }
 
 pub(crate) fn mutation_epoch() -> u64 {
-    *mutation_notifier()
-        .epoch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    *mutation_notifier().epoch.lock()
 }
 
 pub(crate) fn wait_for_mutation_change(observed_epoch: &mut u64, deadline: Instant) -> bool {
     #[cfg(test)]
     before_wait();
     let notifier = mutation_notifier();
-    let mut epoch = notifier
-        .epoch
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut epoch = notifier.epoch.lock();
     if *epoch != *observed_epoch {
         *observed_epoch = *epoch;
         return true;
@@ -282,10 +266,7 @@ pub(crate) fn wait_for_mutation_change(observed_epoch: &mut u64, deadline: Insta
     if remaining.is_zero() {
         return false;
     }
-    let (next_epoch, timeout) = notifier
-        .changed
-        .wait_timeout(epoch, remaining)
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (next_epoch, timeout) = notifier.changed.wait_timeout(epoch, remaining);
     epoch = next_epoch;
     let changed = *epoch != *observed_epoch;
     *observed_epoch = *epoch;
@@ -293,9 +274,7 @@ pub(crate) fn wait_for_mutation_change(observed_epoch: &mut u64, deadline: Insta
 }
 
 pub(crate) fn stable_cache_version(scope_dir: &Path) -> Option<CacheVersion> {
-    let mutation = mutation_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mutation = mutation_state().lock();
     let generation = GENERATION.load(Ordering::Acquire);
     if !generation.is_multiple_of(2) {
         return None;
@@ -322,14 +301,10 @@ pub(crate) fn invalidate() {
 
 pub(crate) fn invalidate_active_profile() {
     advance_generation(2, true);
-    *active_scope_store_cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    *active_scope_store_cache().lock() = None;
     #[cfg(test)]
     {
-        *active_marker_cache()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *active_marker_cache().lock() = None;
     }
 }
 
@@ -340,23 +315,14 @@ pub(crate) fn active_scope_store() -> Result<ProfileScopeStore> {
         let content = std::fs::read(&path).ok();
         (path, content)
     };
-    if let Some(store) = active_scope_store_cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
-    {
+    if let Some(store) = active_scope_store_cache().lock().clone() {
         #[cfg(not(test))]
         {
             ensure_watcher(&store);
             return Ok(store);
         }
         #[cfg(test)]
-        if active_marker_cache()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-            == Some(&marker)
-        {
+        if active_marker_cache().lock().as_ref() == Some(&marker) {
             return Ok(store);
         }
     }
@@ -364,14 +330,10 @@ pub(crate) fn active_scope_store() -> Result<ProfileScopeStore> {
     let store = ProfileScopeStore::from_active()?;
     #[cfg(not(test))]
     ensure_watcher(&store);
-    *active_scope_store_cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(store.clone());
+    *active_scope_store_cache().lock() = Some(store.clone());
     #[cfg(test)]
     {
-        *active_marker_cache()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(marker);
+        *active_marker_cache().lock() = Some(marker);
     }
     Ok(store)
 }
@@ -406,12 +368,8 @@ pub(crate) fn lookup_for_identity(
         return None;
     }
     let key = cache_key(scope_store, plugin_id);
-    let mutation = mutation_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let cache = cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mutation = mutation_state().lock();
+    let cache = cache().lock();
     let entry = cache.get(&key)?;
     if !entry_is_fresh(entry, &key.profile_dir, identity, &mutation) {
         return None;
@@ -439,12 +397,8 @@ pub(crate) fn is_fresh_for_identity(
         return false;
     }
     let key = cache_key(scope_store, plugin_id);
-    let mutation = mutation_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let cache = cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mutation = mutation_state().lock();
+    let cache = cache().lock();
     cache
         .get(&key)
         .is_some_and(|entry| entry_is_fresh(entry, &key.profile_dir, identity, &mutation))
@@ -459,13 +413,9 @@ pub(crate) fn action_cache_status(
         return ActionCacheStatus::Miss;
     }
     let key = cache_key(scope_store, plugin_id);
-    let mutation = mutation_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mutation = mutation_state().lock();
     let cache_is_fresh = {
-        let cache = cache()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let cache = cache().lock();
         match cache.get(&key) {
             None => false,
             Some(entry) if entry.manifest_identity != *identity => {
@@ -481,9 +431,7 @@ pub(crate) fn action_cache_status(
     if mutation_scope == "none" {
         return ActionCacheStatus::Miss;
     }
-    let readiness = action_readiness()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let readiness = action_readiness().lock();
     if readiness
         .get(&key)
         .is_some_and(|cached_identity| cached_identity == identity)
@@ -506,12 +454,8 @@ pub(crate) fn publish_if_unchanged(
     if !cache_available() || source_before != source_after {
         return false;
     }
-    let mutation = mutation_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut cache = cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mutation = mutation_state().lock();
+    let mut cache = cache().lock();
     if version.generation != GENERATION.load(Ordering::Acquire)
         || current_scope_generation(&mutation, &scope_store.dir()) != Some(version.scope_generation)
     {
@@ -519,9 +463,7 @@ pub(crate) fn publish_if_unchanged(
     }
     let key = cache_key(scope_store, plugin_id);
     let manifest_identity = ManifestIdentity::from(manifest);
-    let mut readiness = action_readiness()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut readiness = action_readiness().lock();
     cache.insert(
         key.clone(),
         CacheEntry {
@@ -576,16 +518,12 @@ fn entry_is_fresh(
 }
 
 pub(crate) fn mutation_active(scope_dir: &Path) -> bool {
-    let mutation = mutation_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mutation = mutation_state().lock();
     mutation_active_for(&mutation, scope_dir)
 }
 
 pub(crate) fn mutation_scope(scope_dir: &Path) -> &'static str {
-    let mutation = mutation_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mutation = mutation_state().lock();
     mutation_scope_for(&mutation, scope_dir)
 }
 
@@ -620,12 +558,8 @@ fn current_scope_generation(mutation: &MutationState, scope_dir: &Path) -> Optio
 }
 
 fn clear_scope_entries(scope_dir: &Path, preserve_readiness: bool) {
-    let mut cache = cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut readiness = action_readiness()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut cache = cache().lock();
+    let mut readiness = action_readiness().lock();
     cache.retain(|key, _| key.profile_dir != scope_dir);
     if !preserve_readiness {
         readiness.retain(|key, _| key.profile_dir != scope_dir);
@@ -633,23 +567,15 @@ fn clear_scope_entries(scope_dir: &Path, preserve_readiness: bool) {
 }
 
 fn clear_all_entries() {
-    let mut cache = cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut readiness = action_readiness()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut cache = cache().lock();
+    let mut readiness = action_readiness().lock();
     cache.clear();
     readiness.clear();
 }
 
 fn clear_all_entries_preserving_active_profiles(mutation: &MutationState) {
-    let mut cache = cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut readiness = action_readiness()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut cache = cache().lock();
+    let mut readiness = action_readiness().lock();
     cache.clear();
     readiness.retain(|key, _| {
         mutation
@@ -660,15 +586,9 @@ fn clear_all_entries_preserving_active_profiles(mutation: &MutationState) {
 }
 
 fn advance_generation(step: u64, clear_readiness: bool) {
-    let mutation = mutation_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut cache = cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut readiness = action_readiness()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mutation = mutation_state().lock();
+    let mut cache = cache().lock();
+    let mut readiness = action_readiness().lock();
     GENERATION.fetch_add(step, Ordering::AcqRel);
     cache.clear();
     if clear_readiness {
@@ -718,9 +638,7 @@ fn file_digest(path: &Path) -> Result<Option<[u8; 32]>> {
 fn ensure_watcher(store: &ProfileScopeStore) {
     let root = store.profile_root().to_path_buf();
     {
-        let mut current = watcher()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut current = watcher().lock();
         if !WATCHER_REARM.load(Ordering::Acquire)
             && current.as_ref().is_some_and(|state| state.root == root)
         {
@@ -785,9 +703,7 @@ fn ensure_watcher(store: &ProfileScopeStore) {
         set_cache_available(false);
         return;
     }
-    *watcher()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(WatcherState {
+    *watcher().lock() = Some(WatcherState {
         root,
         _watcher: next,
     });
@@ -796,9 +712,7 @@ fn ensure_watcher(store: &ProfileScopeStore) {
     if watcher_failed.load(Ordering::Acquire) {
         WATCHER_REARM.store(true, Ordering::Release);
         set_cache_available(false);
-        *watcher()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *watcher().lock() = None;
     }
 }
 
@@ -859,7 +773,6 @@ pub(super) fn before_publish() {
     let hook = BEFORE_PUBLISH
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
     if let Some(hook) = hook {
         hook();
@@ -868,19 +781,12 @@ pub(super) fn before_publish() {
 
 #[cfg(test)]
 pub(super) fn set_before_publish_hook(hook: Option<BeforePublishHook>) {
-    *BEFORE_PUBLISH
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = hook;
+    *BEFORE_PUBLISH.get_or_init(|| Mutex::new(None)).lock() = hook;
 }
 
 #[cfg(test)]
 pub(super) fn before_wait() {
-    let hook = BEFORE_WAIT
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
+    let hook = BEFORE_WAIT.get_or_init(|| Mutex::new(None)).lock().clone();
     if let Some(hook) = hook {
         hook();
     }
@@ -888,28 +794,21 @@ pub(super) fn before_wait() {
 
 #[cfg(test)]
 pub(super) fn set_before_wait_hook(hook: Option<BeforePublishHook>) {
-    *BEFORE_WAIT
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = hook;
+    *BEFORE_WAIT.get_or_init(|| Mutex::new(None)).lock() = hook;
 }
 
 #[cfg(test)]
 pub(super) fn reset_for_tests() {
     CACHE_AVAILABLE.store(true, Ordering::Release);
     clear_all_entries();
-    *active_scope_store_cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-    *active_marker_cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    *active_scope_store_cache().lock() = None;
+    *active_marker_cache().lock() = None;
     TEST_STATS.with(|stats| *stats.borrow_mut() = TestStats::default());
     if let Some(hook) = BEFORE_PUBLISH.get() {
-        *hook.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *hook.lock() = None;
     }
     if let Some(hook) = BEFORE_WAIT.get() {
-        *hook.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *hook.lock() = None;
     }
 }
 

@@ -1,8 +1,8 @@
 #![cfg(feature = "dev")]
 
+use qol_sync::Mutex;
 use serde::Serialize;
 use std::cmp::Ordering;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use super::sampling::now_millis;
@@ -46,17 +46,12 @@ pub(super) fn build_snapshot(
 }
 
 fn snapshot_timestamp(state: &Mutex<PluginCpuState>) -> u64 {
-    let fallback = now_millis();
-    let Ok(state) = state.lock() else {
-        return fallback;
-    };
-    state.last_timestamp_ms.max(fallback)
+    let now = now_millis();
+    state.lock().last_timestamp_ms.max(now)
 }
 
 fn snapshot_plugins(state: &Mutex<PluginCpuState>) -> Vec<PluginCpuEntry> {
-    let Ok(state) = state.lock() else {
-        return Vec::new();
-    };
+    let state = state.lock();
 
     let mut plugins = state
         .plugin_rows

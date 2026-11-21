@@ -1,14 +1,12 @@
+use qol_sync::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 static NAMES: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
 pub(super) fn display_name(bundle_id: &str) -> String {
-    let mut names = NAMES
+    NAMES
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    names
         .get_or_insert_with(HashMap::new)
         .entry(bundle_id.to_string())
         .or_insert_with(|| installed_name(bundle_id).unwrap_or_else(|| fallback_name(bundle_id)))

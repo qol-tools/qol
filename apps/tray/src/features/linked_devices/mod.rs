@@ -14,7 +14,7 @@ pub(crate) use pointz::{is_legacy_pointz, legacy_pointz_allowed};
 pub(crate) mod tests;
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use qol_peers::admin::{
@@ -24,6 +24,7 @@ use qol_peers::network::NetworkFailure;
 use qol_peers::service::network::{NetworkControl, NetworkOptions};
 use qol_peers::service::PeerAuthority;
 use qol_peers::AuthorityError;
+use qol_sync::Mutex;
 use tokio::sync::{broadcast, watch};
 
 use crate::plugins::SharedPluginManager;
@@ -161,11 +162,7 @@ impl Drop for LinkedDevices {
     fn drop(&mut self) {
         self.handle.shutdown();
         if let Some(task) = self.shutdown_task.take() {
-            self.handle
-                .inner
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .observer = Some(task);
+            self.handle.inner.lock().observer = Some(task);
         }
     }
 }
@@ -198,7 +195,7 @@ impl PeerHostHandle {
     }
 
     fn initialize(&self) {
-        let mut host = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let mut host = self.inner.lock();
         if matches!(host.state, State::Inactive) {
             host.open_existing();
         }
@@ -206,7 +203,7 @@ impl PeerHostHandle {
     }
 
     fn fail_initialization(&self) {
-        let mut host = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let mut host = self.inner.lock();
         if matches!(host.state, State::Inactive | State::Unavailable(_)) {
             host.state = State::Unavailable(Error::HostUnavailable);
         }
@@ -214,7 +211,7 @@ impl PeerHostHandle {
     }
 
     pub fn promote(&self) {
-        let mut host = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let mut host = self.inner.lock();
         if !matches!(host.state, State::Standby) {
             return;
         }
@@ -223,7 +220,7 @@ impl PeerHostHandle {
     }
 
     pub fn shutdown(&self) {
-        let mut host = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let mut host = self.inner.lock();
         if matches!(host.state, State::Shutdown) {
             return;
         }

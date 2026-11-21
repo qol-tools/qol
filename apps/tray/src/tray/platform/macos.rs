@@ -4,7 +4,8 @@ use crate::menu::router::EventRouter;
 use crate::plugins::SharedPluginManager;
 use crate::tray::TrayManager;
 use anyhow::Result;
-use std::sync::{Arc, Mutex, OnceLock};
+use qol_sync::Mutex;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::broadcast;
 use tray_icon::menu::MenuEvent;
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
@@ -66,9 +67,7 @@ where
 
 fn register_shutdown_fn(f: impl FnOnce() + Send + 'static) {
     let cell = SHUTDOWN_FN.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = cell.lock() {
-        *guard = Some(Box::new(f));
-    }
+    *cell.lock() = Some(Box::new(f));
 }
 
 fn spawn_tray(
@@ -116,10 +115,9 @@ fn stop_event_loop() {
 
     extern "C" fn terminate_on_main(_: *mut std::ffi::c_void) {
         if let Some(cell) = SHUTDOWN_FN.get() {
-            if let Ok(mut guard) = cell.lock() {
-                if let Some(f) = guard.take() {
-                    f();
-                }
+            let mut guard = cell.lock();
+            if let Some(f) = guard.take() {
+                f();
             }
         }
         let mtm = MainThreadMarker::new().unwrap();

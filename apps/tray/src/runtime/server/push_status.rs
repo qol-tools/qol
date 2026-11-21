@@ -12,7 +12,9 @@
 //! instead of waiting for the next refresh.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+
+use qol_sync::Mutex;
 
 use crate::daemon::DaemonEvent;
 
@@ -33,9 +35,7 @@ impl PluginStatusRegistry {
     /// Records the latest status for `plugin_id`, replacing any previous one,
     /// and broadcasts it to the daemon event bus when one is installed.
     pub(crate) fn set(&self, plugin_id: &str, status: serde_json::Value) {
-        let Ok(mut statuses) = self.statuses.lock() else {
-            return;
-        };
+        let mut statuses = self.statuses.lock();
         statuses.insert(plugin_id.to_string(), status.clone());
         if let Some(events) = super::super::publisher::events() {
             events.send(DaemonEvent::StatusChanged {
@@ -46,9 +46,7 @@ impl PluginStatusRegistry {
     }
 
     pub(crate) fn clear(&self, plugin_id: &str) {
-        let Ok(mut statuses) = self.statuses.lock() else {
-            return;
-        };
+        let mut statuses = self.statuses.lock();
         if statuses.remove(plugin_id).is_none() {
             return;
         }
@@ -63,10 +61,7 @@ impl PluginStatusRegistry {
 
     /// A copy of every plugin id mapped to its latest status.
     pub(crate) fn snapshot(&self) -> HashMap<String, serde_json::Value> {
-        let Ok(statuses) = self.statuses.lock() else {
-            return HashMap::new();
-        };
-        statuses.clone()
+        self.statuses.lock().clone()
     }
 }
 
