@@ -59,7 +59,10 @@ where
     G::Target: fmt::Display,
 {
     match taken {
-        Ok(guard) => format!("the logger took the lock holding {}", *guard),
+        Ok(guard) => {
+            let held: &G::Target = &guard;
+            format!("the logger took the lock holding {held}")
+        }
         Err(WouldBlock) => String::from("the logger found the lock held"),
     }
 }
