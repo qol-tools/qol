@@ -1,4 +1,6 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use qol_sync::Mutex;
 
 use super::super::snapshot::PluginCpuEntry;
 use super::super::state::{PluginCpuRow, PluginCpuState};
@@ -6,9 +8,7 @@ use super::super::state::{PluginCpuRow, PluginCpuState};
 pub(super) fn snapshot_for_broadcast(
     state: &Arc<Mutex<PluginCpuState>>,
 ) -> Option<(u64, Vec<PluginCpuEntry>)> {
-    let Ok(guard) = state.lock() else {
-        return None;
-    };
+    let guard = state.lock();
     if guard.plugin_rows.is_empty() {
         return None;
     }

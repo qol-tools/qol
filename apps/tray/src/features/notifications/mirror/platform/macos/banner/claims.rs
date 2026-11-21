@@ -1,5 +1,5 @@
+use qol_sync::Mutex;
 use std::collections::VecDeque;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const KEEP: Duration = Duration::from_secs(120);
@@ -8,17 +8,11 @@ const CAPACITY: usize = 64;
 static SHOWN: Mutex<Claims> = Mutex::new(Claims::new());
 
 pub(super) fn record(title: &str, body: &str) {
-    lock().record(Instant::now(), title, body);
+    SHOWN.lock().record(Instant::now(), title, body);
 }
 
 pub(in super::super) fn claimed(title: &str, body: &str) -> bool {
-    lock().take(Instant::now(), title, body)
-}
-
-fn lock() -> std::sync::MutexGuard<'static, Claims> {
-    SHOWN
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    SHOWN.lock().take(Instant::now(), title, body)
 }
 
 struct Claims {

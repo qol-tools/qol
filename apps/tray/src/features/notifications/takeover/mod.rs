@@ -1,7 +1,8 @@
 mod quiet;
 mod state;
 
-use std::sync::{Condvar, Mutex, MutexGuard, Once};
+use qol_sync::{Condvar, Mutex};
+use std::sync::Once;
 use std::time::Duration;
 
 pub use state::{Health, Mechanism, Outcome, Permission, TakeoverState};
@@ -30,12 +31,12 @@ pub fn started() -> bool {
 }
 
 pub fn poke() {
-    *lock(&CHANGES) += 1;
+    *CHANGES.lock() += 1;
     CHANGED.notify_all();
 }
 
 pub fn state() -> TakeoverState {
-    lock(&STATE).clone().unwrap_or_else(TakeoverState::off)
+    STATE.lock().clone().unwrap_or_else(TakeoverState::off)
 }
 
 pub fn holds_banner_switch() -> bool {
@@ -47,7 +48,7 @@ pub fn holds_banner_switch() -> bool {
 fn run() {
     let mut quiet = quiet::Quiet::default();
     loop {
-        let changes = *lock(&CHANGES);
+        let changes = *CHANGES.lock();
         let wanted = super::takeover_wanted();
         let mut mechanisms = super::mirror::apply(wanted);
         mechanisms.extend(quiet.apply(wanted));
@@ -59,7 +60,7 @@ fn run() {
 }
 
 fn publish(next: TakeoverState) {
-    let mut state = lock(&STATE);
+    let mut state = STATE.lock();
     if state.as_ref() == Some(&next) {
         return;
     }
@@ -82,24 +83,16 @@ fn recheck_after(outcome: Outcome) -> Option<Duration> {
 }
 
 fn wait_for_change(seen: u64, recheck: Option<Duration>) {
-    let mut changes = lock(&CHANGES);
+    let mut changes = CHANGES.lock();
     match recheck {
         Some(limit) if *changes == seen => drop(CHANGED.wait_timeout(changes, limit)),
         Some(_) => {}
         None => {
             while *changes == seen {
-                changes = CHANGED
-                    .wait(changes)
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                changes = CHANGED.wait(changes);
             }
         }
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]

@@ -11,11 +11,12 @@ use qol_platform::native::input::key_held;
 use qol_platform::native::security::process_elevated;
 use qol_runtime::hook_liveness::SeenInput;
 use qol_runtime::keyremap_marker::KeyRemapMarker;
+use qol_sync::RwLock;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::Threading::{
@@ -131,7 +132,7 @@ fn run_hook(ready_tx: Sender<Result<(), String>>, arm_state: Arc<AtomicU8>) {
     if let Some(state) = HOOK_STATE.get() {
         log::info!(
             "Windows keyboard hook armed with {} bindings",
-            state.matcher.read().map(|m| m.binding_count()).unwrap_or(0)
+            state.matcher.read().binding_count()
         );
     }
     let _ = ready_tx.send(Ok(()));
@@ -268,10 +269,7 @@ fn refresh_layout(matcher: &RwLock<KeyMatcher>) {
     if LAYOUT.with(|current| current.replace(layout)) == layout {
         return;
     }
-    match matcher.write() {
-        Ok(mut guard) => guard.re_resolve(),
-        Err(poisoned) => poisoned.into_inner().re_resolve(),
-    }
+    matcher.write().re_resolve();
     qol_runtime::probe!("HOTKEY_LAYOUT", "layout={:#x}", layout);
 }
 
@@ -282,10 +280,7 @@ fn foreground_layout() -> HKL {
 }
 
 fn is_swallowing(matcher: &RwLock<KeyMatcher>, key: VIRTUAL_KEY) -> bool {
-    match matcher.read() {
-        Ok(guard) => guard.is_swallowing(key),
-        Err(poisoned) => poisoned.into_inner().is_swallowing(key),
-    }
+    matcher.read().is_swallowing(key)
 }
 
 fn send_menu_mask() {

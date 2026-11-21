@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
 
 use anyhow::{anyhow, bail, Result};
+use qol_sync::Mutex;
 
 use super::banner::{self, BannerMatch};
 
@@ -65,17 +65,11 @@ pub(super) fn next_id() -> String {
 }
 
 pub(super) fn insert(id: &str, entry: Entry) {
-    lock().insert(id, entry);
-}
-
-fn lock() -> std::sync::MutexGuard<'static, Store> {
-    STORE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    STORE.lock().insert(id, entry);
 }
 
 pub(super) fn activate(id: &str) -> Result<Outcome> {
-    let Some(entry) = lock().pop(id) else {
+    let Some(entry) = STORE.lock().pop(id) else {
         return Ok(Outcome::Missing);
     };
     if let Some(matcher) = entry.matcher.as_ref() {

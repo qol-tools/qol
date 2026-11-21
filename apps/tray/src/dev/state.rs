@@ -1,4 +1,4 @@
-use std::sync::RwLock;
+use qol_sync::RwLock;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DiscoveredPluginInfo {
@@ -56,7 +56,7 @@ impl Default for DevState {
 }
 
 fn try_begin_discovery(state: &DevState) -> bool {
-    let mut guard = state.discovery.write().unwrap();
+    let mut guard = state.discovery.write();
     if guard.status == DiscoveryStatus::Discovering {
         return false;
     }
@@ -80,7 +80,7 @@ fn run_discovery(
         })
         .collect();
     {
-        let mut guard = state.discovery.write().unwrap();
+        let mut guard = state.discovery.write();
         guard.status = DiscoveryStatus::Complete;
         guard.plugins = plugins.clone();
     }

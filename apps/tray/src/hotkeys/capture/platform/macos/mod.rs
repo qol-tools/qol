@@ -15,10 +15,11 @@ use qol_hotkeys::grammar::{Key, Modifier as Mod};
 use qol_hotkeys::macos_keycode;
 use qol_runtime::event_tap_trace::{TraceSink, QUEUE_DEPTH};
 use qol_runtime::keyremap_marker::{self, KeyRemapMarker};
+use qol_sync::RwLock;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 mod layout;
@@ -226,7 +227,7 @@ fn run_tap(
     tap.enable();
     log::error!(
         "macOS hotkey tap armed with {} bindings",
-        armed_matcher.read().map(|m| m.binding_count()).unwrap_or(0)
+        armed_matcher.read().binding_count()
     );
     let _ = ready_tx.send(Ok(()));
     CFRunLoop::run_current();

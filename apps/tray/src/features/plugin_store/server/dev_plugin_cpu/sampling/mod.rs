@@ -1,7 +1,8 @@
 #![cfg(feature = "dev")]
 
+use qol_sync::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::daemon::{DaemonEvent, EventBus};
@@ -29,9 +30,7 @@ pub(super) fn sample_once(
     let current_cpu_by_pid = pid_collection::current_cpu_by_pid(&active_pids);
     let now = Instant::now();
     let timestamp_ms = now_millis();
-    let Ok(mut guard) = state.lock() else {
-        return;
-    };
+    let mut guard = state.lock();
     let elapsed = rows::elapsed_seconds(&guard, now);
     guard.last_sample_at = Some(now);
     guard.last_timestamp_ms = timestamp_ms;

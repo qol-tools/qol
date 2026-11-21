@@ -537,7 +537,6 @@ fn reducing_grants_preserves_unavailable_operations_but_cannot_add_another() {
     let grants = host
         .inner
         .lock()
-        .unwrap()
         .authority()
         .unwrap()
         .authority
@@ -558,7 +557,6 @@ fn reducing_grants_preserves_unavailable_operations_but_cannot_add_another() {
     let actual = host
         .inner
         .lock()
-        .unwrap()
         .authority()
         .unwrap()
         .authority

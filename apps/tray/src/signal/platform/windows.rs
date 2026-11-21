@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use qol_sync::{Condvar, Mutex};
 use tokio::sync::broadcast;
 use windows_sys::core::w;
 use windows_sys::Win32::Foundation::{BOOL, FALSE, HWND, LPARAM, LRESULT, TRUE, WPARAM};
@@ -37,12 +37,8 @@ impl Drop for SignalListener {
         if session_thread != 0 {
             unsafe { PostThreadMessageW(session_thread, WM_QUIT, 0, 0) };
         }
-        *SESSION_END
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        *SHUTDOWN_TX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *SESSION_END.lock() = None;
+        *SHUTDOWN_TX.lock() = None;
     }
 }
 
@@ -50,18 +46,12 @@ pub(super) fn install_signal_handler(
     shutdown_tx: broadcast::Sender<()>,
     session_end: fn(Instant),
 ) -> std::io::Result<SignalListener> {
-    *SESSION_END
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(session_end);
-    *SHUTDOWN_TX
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(shutdown_tx);
+    *SESSION_END.lock() = Some(session_end);
+    *SHUTDOWN_TX.lock() = Some(shutdown_tx);
     set_finished(false);
     if unsafe { SetConsoleCtrlHandler(Some(console_ctrl_handler), TRUE) } == 0 {
         let error = std::io::Error::last_os_error();
-        *SHUTDOWN_TX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *SHUTDOWN_TX.lock() = None;
         return Err(error);
     }
     let session_window = std::thread::Builder::new()
@@ -87,10 +77,7 @@ unsafe extern "system" fn console_ctrl_handler(event: u32) -> BOOL {
 }
 
 fn request_shutdown(source: &str, name: &str) -> bool {
-    let sender = SHUTDOWN_TX
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
+    let sender = SHUTDOWN_TX.lock().clone();
     let Some(sender) = sender else {
         return false;
     };
@@ -215,9 +202,7 @@ fn ends_process_on_return(event: u32) -> bool {
 
 fn finish_session_end() {
     let started = Instant::now();
-    let session_end = *SESSION_END
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let session_end = *SESSION_END.lock();
     if let Some(session_end) = session_end {
         session_end(started + DAEMON_STOP_BUDGET);
     }
@@ -225,16 +210,12 @@ fn finish_session_end() {
 }
 
 fn set_finished(value: bool) {
-    *FINISHED
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = value;
+    *FINISHED.lock() = value;
     FINISHED_CHANGED.notify_all();
 }
 
 fn wait_until_finished(timeout: Duration) {
-    let finished = FINISHED
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let finished = FINISHED.lock();
     let _ = FINISHED_CHANGED.wait_timeout_while(finished, timeout, |finished| !*finished);
 }
 
@@ -245,21 +226,22 @@ mod tests {
     static SEEN_DEADLINE: Mutex<Option<Instant>> = Mutex::new(None);
 
     fn record_deadline(deadline: Instant) {
-        *SEEN_DEADLINE.lock().unwrap() = Some(deadline);
+        *SEEN_DEADLINE.lock() = Some(deadline);
     }
 
     #[test]
     fn session_end_stops_daemons_by_a_deadline_inside_the_exit_grace() {
-        *SESSION_END.lock().unwrap() = Some(record_deadline);
+        *SESSION_END.lock() = Some(record_deadline);
         set_finished(true);
         let started = Instant::now();
 
         finish_session_end();
 
-        let deadline = SEEN_DEADLINE.lock().unwrap().expect("session end hook ran");
+        let seen = *SEEN_DEADLINE.lock();
+        let deadline = seen.expect("session end hook ran");
         assert!(deadline <= Instant::now() + DAEMON_STOP_BUDGET);
         assert!(deadline + Duration::from_secs(1) < started + EXIT_GRACE);
-        *SESSION_END.lock().unwrap() = None;
+        *SESSION_END.lock() = None;
     }
 
     #[test]

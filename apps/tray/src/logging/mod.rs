@@ -48,7 +48,7 @@ pub fn init_logger() -> CoreControlsHandle {
     use tracing_subscriber::prelude::*;
 
     let controls = load_core_controls_from_shared_config();
-    let handle = std::sync::Arc::new(std::sync::RwLock::new(controls));
+    let handle = std::sync::Arc::new(qol_sync::RwLock::new(controls));
 
     #[cfg(any(test, debug_assertions))]
     if let Some(dir) = crate::paths::test_log_dir() {

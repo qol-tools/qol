@@ -45,7 +45,7 @@ struct CacheSnapshot {
 }
 
 fn read_cache_snapshot(state: &AppState) -> Option<CacheSnapshot> {
-    let guard = state.plugins_cache.read().ok()?;
+    let guard = state.plugins_cache.read();
     let cache = guard.as_ref()?;
     Some(snapshot_from_cache(cache, current_timestamp()))
 }
@@ -138,9 +138,7 @@ fn claim_revalidation(
                     timestamp: current_timestamp(),
                     plugins: plugins.into_iter().map(Into::into).collect(),
                 };
-                if let Ok(mut guard) = cache.write() {
-                    *guard = Some(new_cache);
-                }
+                *cache.write() = Some(new_cache);
                 events.send_plugins_changed();
             }
             Err(error) => {

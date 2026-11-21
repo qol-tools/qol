@@ -12,9 +12,10 @@ use evdev::{
     uinput::VirtualDevice, AttributeSet, AttributeSetRef, EventSummary, EventType, InputEvent,
     KeyCode, SynchronizationCode,
 };
+use qol_sync::Mutex;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, Once, OnceLock};
+use std::sync::{Arc, Once, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The virtual keyboard plus the set of key codes currently emitted as down
@@ -92,9 +93,7 @@ pub(super) fn emit_key_ups(
     if events.is_empty() {
         return;
     }
-    let mut vd = virtual_device
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut vd = virtual_device.lock();
     if let Err(error) = vd.emit(&events) {
         log::warn!("evdev: seeded held-key release failed: {error}");
     }
@@ -111,8 +110,7 @@ pub(super) fn release_held_keys() {
     };
     match target.try_lock() {
         Ok(mut vd) => vd.release_held(),
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner().release_held(),
-        Err(std::sync::TryLockError::WouldBlock) => {
+        Err(qol_sync::WouldBlock) => {
             log::warn!("evdev: virtual keyboard busy during exit flush; a held key may stick");
         }
     }
@@ -271,19 +269,13 @@ pub(super) fn install(
             .filter_map(|(_, device)| device.supported_keys()),
     )));
     let virtual_device = Arc::new(Mutex::new(TrackedVirtualDevice::new(build_virtual_device(
-        &key_caps
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        &key_caps.lock(),
     )?)));
     let _ = FLUSH_TARGET.set(virtual_device.clone());
     let physical_down = heal::physical_down_union(&keyboards);
     let to_grab = {
-        let guard = grabbed
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let quarantine = quarantined
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let guard = grabbed.lock();
+        let quarantine = quarantined.lock();
         devices_to_grab(
             &guard,
             &quarantine,
@@ -302,13 +294,7 @@ pub(super) fn install(
         grabbed_keyboards.push(keyboard);
     }
 
-    heal::heal_stuck_keys(
-        &virtual_device,
-        &physical_down,
-        &key_caps
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
-    );
+    heal::heal_stuck_keys(&virtual_device, &physical_down, &key_caps.lock());
 
     if grabbed_keyboards.is_empty() {
         anyhow::bail!(
@@ -317,9 +303,7 @@ pub(super) fn install(
     }
 
     {
-        let Ok(mut guard) = matcher.lock() else {
-            anyhow::bail!("evdev: matcher lock poisoned during startup seeding");
-        };
+        let mut guard = matcher.lock();
         guard.seed_held(held_at_grab);
     }
 
@@ -434,9 +418,7 @@ fn grab_keyboard(
         }
     }
     {
-        let mut guard = grabbed
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard = grabbed.lock();
         if !guard.insert(path.clone()) {
             let _ = device.ungrab();
             return None;
@@ -471,12 +453,8 @@ fn spawn_rescan_thread(
                 continue;
             };
             let to_grab = {
-                let guard = grabbed
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let quarantine = quarantined
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let guard = grabbed.lock();
+                let quarantine = quarantined.lock();
                 devices_to_grab(
                     &guard,
                     &quarantine,
@@ -488,7 +466,8 @@ fn spawn_rescan_thread(
                     continue;
                 };
                 log::info!("evdev: rescan grabbed {}", keyboard.path.display());
-                if let Ok(mut guard) = matcher.lock() {
+                {
+                    let mut guard = matcher.lock();
                     guard.seed_held(keyboard.held.iter().map(|key| key.0));
                 }
                 merge_capabilities(&keyboard, &key_caps, &virtual_device, &keyboard.path);
@@ -531,10 +510,7 @@ fn merge_capabilities(
     virtual_device: &Mutex<TrackedVirtualDevice>,
     path: &std::path::Path,
 ) {
-    let Ok(mut caps) = key_caps.lock() else {
-        log::error!("evdev: key caps lock poisoned; skipping capability merge");
-        return;
-    };
+    let mut caps = key_caps.lock();
     let before = caps.iter().count();
     if let Some(keys) = keyboard.device.supported_keys() {
         for code in keys.iter() {
@@ -546,14 +522,13 @@ fn merge_capabilities(
     }
     match build_virtual_device(&caps) {
         Ok(new_device) => {
-            if let Ok(mut vd) = virtual_device.lock() {
-                vd.device = new_device;
-                log::info!(
-                    "evdev: virtual device rebuilt with {} key capabilities after grabbing {}",
-                    caps.iter().count(),
-                    path.display()
-                );
-            }
+            let mut vd = virtual_device.lock();
+            vd.device = new_device;
+            log::info!(
+                "evdev: virtual device rebuilt with {} key capabilities after grabbing {}",
+                caps.iter().count(),
+                path.display()
+            );
         }
         Err(error) => {
             log::error!(
@@ -584,20 +559,8 @@ fn spawn_reload_thread(
                         continue;
                     }
                 };
-                let stopped = match matcher.lock() {
-                    Ok(mut guard) => {
-                        let stopped = guard.reload(bindings);
-                        log::info!("linux evdev hotkey capture: bindings reloaded");
-                        stopped
-                    }
-                    Err(poisoned) => {
-                        log::error!(
-                            "linux evdev matcher lock poisoned during reload; recovering: {poisoned}"
-                        );
-                        let mut guard = poisoned.into_inner();
-                        guard.reload(bindings)
-                    }
-                };
+                let stopped = matcher.lock().reload(bindings);
+                log::info!("linux evdev hotkey capture: bindings reloaded");
                 for event in stopped {
                     let _ = dispatch.send(event);
                 }
@@ -640,10 +603,7 @@ fn run_reader(
                     path.display(),
                     event.event_type()
                 );
-                quarantined
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .insert(path.clone());
+                quarantined.lock().insert(path.clone());
                 break 'read_loop;
             }
             let EventSummary::Synchronization(_, SynchronizationCode::SYN_DROPPED, _) =
@@ -680,10 +640,7 @@ fn run_reader(
     if let Err(error) = device.ungrab() {
         log::warn!("evdev: ungrab on reader exit failed: {error}");
     }
-    grabbed
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .remove(&path);
+    grabbed.lock().remove(&path);
     for code in reader_held.exit_release_codes() {
         replay_state(&virtual_device, &matcher, &dispatch, &device_name, code, 0);
     }
@@ -751,19 +708,15 @@ fn replay_state(
     value: i32,
 ) {
     trace_capture_replay(device, value);
-    let events = match matcher.lock() {
-        Ok(mut guard) => guard.reconcile(code, value),
-        Err(_) => Vec::new(),
-    };
+    let events = matcher.lock().reconcile(code, value);
     for capture_event in events {
         let _ = dispatch.send(capture_event);
     }
     let key_event = InputEvent::new(EventType::KEY.0, code, value);
     let sync_event = InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0);
-    if let Ok(mut vd) = virtual_device.lock() {
-        if let Err(error) = vd.emit(&[key_event, sync_event]) {
-            log::warn!("evdev: virtual emit failed: {error}");
-        }
+    let mut vd = virtual_device.lock();
+    if let Err(error) = vd.emit(&[key_event, sync_event]) {
+        log::warn!("evdev: virtual emit failed: {error}");
     }
 }
 
@@ -786,13 +739,7 @@ fn process_event(
     }
     trace_capture_key(device, value);
     reader_held.observe(key_code.0, value);
-    let decision = match matcher.lock() {
-        Ok(mut m) => m.observe(key_code.0, value),
-        Err(_) => {
-            forward(event, virtual_device);
-            return;
-        }
-    };
+    let decision = matcher.lock().observe(key_code.0, value);
     if decision.forward {
         forward(event, virtual_device);
         trace_capture_emit(value);
@@ -811,10 +758,9 @@ fn process_event(
 }
 
 fn forward(event: InputEvent, virtual_device: &Mutex<TrackedVirtualDevice>) {
-    if let Ok(mut vd) = virtual_device.lock() {
-        if let Err(error) = vd.emit(&[event]) {
-            log::warn!("evdev: virtual emit failed: {error}");
-        }
+    let mut vd = virtual_device.lock();
+    if let Err(error) = vd.emit(&[event]) {
+        log::warn!("evdev: virtual emit failed: {error}");
     }
 }
 
@@ -1182,11 +1128,7 @@ mod tests {
         );
 
         let tracked = Mutex::new(TrackedVirtualDevice::new(device));
-        tracked
-            .lock()
-            .expect("lock loopback tracked device")
-            .held
-            .insert(KeyCode::KEY_DOWN.0);
+        tracked.lock().held.insert(KeyCode::KEY_DOWN.0);
         emit_key_ups(&tracked, [KeyCode::KEY_DOWN.0]);
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);

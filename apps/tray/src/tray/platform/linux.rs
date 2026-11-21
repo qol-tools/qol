@@ -11,7 +11,7 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 type StartupResult = std::result::Result<(), String>;
 type StartupTx = std::sync::mpsc::Sender<StartupResult>;
 
-static SHUTDOWN_RX: OnceCell<std::sync::Mutex<Option<broadcast::Receiver<()>>>> = OnceCell::new();
+static SHUTDOWN_RX: OnceCell<qol_sync::Mutex<Option<broadcast::Receiver<()>>>> = OnceCell::new();
 
 pub(crate) const ICON_SIZE: u32 = 32;
 pub(crate) const ICON_SIDE_PADDING: u32 = 0;
@@ -62,12 +62,12 @@ where
 }
 
 fn store_shutdown_rx(rx: broadcast::Receiver<()>) {
-    let _ = SHUTDOWN_RX.set(std::sync::Mutex::new(Some(rx)));
+    let _ = SHUTDOWN_RX.set(qol_sync::Mutex::new(Some(rx)));
 }
 
 fn run_event_loop() {
     if let Some(mutex) = SHUTDOWN_RX.get() {
-        if let Some(mut rx) = mutex.lock().unwrap().take() {
+        if let Some(mut rx) = mutex.lock().take() {
             let _ = rx.blocking_recv();
         }
     }

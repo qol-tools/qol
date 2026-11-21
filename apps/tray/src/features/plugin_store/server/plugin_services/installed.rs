@@ -27,7 +27,7 @@ fn cached_response_for_revision(
     state: &AppState,
     revision: u64,
 ) -> Option<Arc<InstalledPluginsResponse>> {
-    let guard = state.installed_cache.lock().ok()?;
+    let guard = state.installed_cache.lock();
     let (cached_revision, cached) = guard.as_ref()?;
     if *cached_revision == revision {
         Some(cached.clone())
@@ -37,10 +37,7 @@ fn cached_response_for_revision(
 }
 
 fn store_cached_response(state: &AppState, revision: u64, response: Arc<InstalledPluginsResponse>) {
-    let Ok(mut guard) = state.installed_cache.lock() else {
-        return;
-    };
-    *guard = Some((revision, response));
+    *state.installed_cache.lock() = Some((revision, response));
 }
 
 fn compute_response(state: &AppState, revision: u64) -> InstalledPluginsResponse {
@@ -58,9 +55,7 @@ fn compute_response(state: &AppState, revision: u64) -> InstalledPluginsResponse
 }
 
 fn cached_versions(state: &AppState) -> HashMap<String, String> {
-    let Ok(guard) = state.plugins_cache.read() else {
-        return HashMap::new();
-    };
+    let guard = state.plugins_cache.read();
     let Some(cache) = guard.as_ref() else {
         return HashMap::new();
     };

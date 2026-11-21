@@ -89,7 +89,6 @@ impl Fixture {
             .handle
             .inner
             .lock()
-            .unwrap()
             .authority()
             .unwrap()
             .network
@@ -117,7 +116,6 @@ impl Fixture {
             .handle
             .inner
             .lock()
-            .unwrap()
             .authority()
             .unwrap()
             .network
@@ -298,7 +296,6 @@ impl Fixture {
             .handle()
             .inner
             .lock()
-            .unwrap()
             .authority()
             .unwrap()
             .network
@@ -320,7 +317,6 @@ impl Fixture {
             .handle()
             .inner
             .lock()
-            .unwrap()
             .authority()
             .unwrap()
             .network

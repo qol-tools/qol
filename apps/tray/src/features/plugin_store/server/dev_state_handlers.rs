@@ -118,16 +118,7 @@ fn clamp_payload_opacity(value: Option<f32>) -> Option<f32> {
 pub(super) async fn get_discovery_state(
     State(state): State<AppState>,
 ) -> Json<DiscoveryStateResponse> {
-    let guard = match state.dev_state.discovery.read() {
-        Ok(guard) => guard,
-        Err(error) => {
-            log::error!("Discovery state lock poisoned: {}", error);
-            return Json(DiscoveryStateResponse {
-                status: "idle".to_string(),
-                plugins: Vec::new(),
-            });
-        }
-    };
+    let guard = state.dev_state.discovery.read();
     let status = match guard.status {
         DiscoveryStatus::Idle => "idle",
         DiscoveryStatus::Discovering => "discovering",

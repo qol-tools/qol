@@ -1,5 +1,5 @@
+use qol_sync::Mutex;
 use std::collections::HashMap;
-use std::sync::Mutex;
 
 #[derive(Default)]
 pub(crate) struct ProcessTracker {
@@ -10,18 +10,12 @@ pub(crate) struct ProcessTracker {
 impl ProcessTracker {
     #[cfg(any(test, feature = "dev"))]
     pub(crate) fn action_processes_snapshot(&self) -> HashMap<String, Vec<u32>> {
-        self.action_processes
-            .lock()
-            .map(|processes| processes.clone())
-            .unwrap_or_default()
+        self.action_processes.lock().clone()
     }
 
     #[cfg(test)]
     pub(super) fn running_actions_snapshot(&self) -> HashMap<String, u32> {
-        self.running_actions
-            .lock()
-            .map(|actions| actions.clone())
-            .unwrap_or_default()
+        self.running_actions.lock().clone()
     }
 
     pub(crate) fn kill_all_plugin_processes(&self) {
@@ -36,9 +30,7 @@ impl ProcessTracker {
 
     pub(super) fn reserve_runtime_spawn(&self, plugin_id: &str, action_id: &str) -> bool {
         let key = action_key(plugin_id, action_id);
-        let Ok(mut running) = self.running_actions.lock() else {
-            return false;
-        };
+        let mut running = self.running_actions.lock();
 
         let Some(existing_pid) = running.get(&key).copied() else {
             running.insert(key, 0);
@@ -68,9 +60,7 @@ impl ProcessTracker {
 
     pub(super) fn clear_runtime_spawn_reservation(&self, plugin_id: &str, action_id: &str) {
         let key = action_key(plugin_id, action_id);
-        let Ok(mut running) = self.running_actions.lock() else {
-            return;
-        };
+        let mut running = self.running_actions.lock();
         if running.get(&key).copied() == Some(0) {
             running.remove(&key);
         }
@@ -94,25 +84,18 @@ impl ProcessTracker {
     }
 
     fn clear_running_actions(&self) {
-        let Ok(mut running) = self.running_actions.lock() else {
-            return;
-        };
+        let mut running = self.running_actions.lock();
         running.clear();
     }
 
     fn clear_running_actions_for_plugin(&self, plugin_id: &str) {
-        let Ok(mut running) = self.running_actions.lock() else {
-            return;
-        };
+        let mut running = self.running_actions.lock();
         let prefix = format!("{plugin_id}::");
         running.retain(|key, _| !key.starts_with(&prefix));
     }
 
     fn kill_tracked_processes(&self) {
-        let Ok(mut processes) = self.action_processes.lock() else {
-            log::error!("Failed to lock action processes");
-            return;
-        };
+        let mut processes = self.action_processes.lock();
 
         for (plugin_id, pids) in processes.drain() {
             for pid in pids {
@@ -122,10 +105,7 @@ impl ProcessTracker {
     }
 
     fn kill_tracked_processes_for_plugin(&self, plugin_id: &str) {
-        let Ok(mut processes) = self.action_processes.lock() else {
-            log::error!("Failed to lock action processes");
-            return;
-        };
+        let mut processes = self.action_processes.lock();
         let Some(pids) = processes.remove(plugin_id) else {
             return;
         };
@@ -135,9 +115,7 @@ impl ProcessTracker {
     }
 
     fn push_action_process(&self, plugin_id: &str, pid: u32) {
-        let Ok(mut processes) = self.action_processes.lock() else {
-            return;
-        };
+        let mut processes = self.action_processes.lock();
         processes
             .entry(plugin_id.to_string())
             .or_default()
@@ -145,16 +123,12 @@ impl ProcessTracker {
     }
 
     fn remember_running_action(&self, plugin_id: &str, action_id: &str, pid: u32) {
-        let Ok(mut running) = self.running_actions.lock() else {
-            return;
-        };
+        let mut running = self.running_actions.lock();
         running.insert(action_key(plugin_id, action_id), pid);
     }
 
     fn remove_action_process(&self, plugin_id: &str, pid: u32) {
-        let Ok(mut processes) = self.action_processes.lock() else {
-            return;
-        };
+        let mut processes = self.action_processes.lock();
         let remove_entry = process_entry_empty(plugin_id, pid, &mut processes);
         if remove_entry {
             processes.remove(plugin_id);
@@ -163,9 +137,7 @@ impl ProcessTracker {
 
     fn forget_running_action(&self, plugin_id: &str, action_id: &str, pid: u32) {
         let key = action_key(plugin_id, action_id);
-        let Ok(mut running) = self.running_actions.lock() else {
-            return;
-        };
+        let mut running = self.running_actions.lock();
         if running.get(&key).copied() == Some(pid) {
             running.remove(&key);
         }

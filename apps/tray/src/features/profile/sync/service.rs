@@ -8,8 +8,9 @@ use qol_profile_sync::{
     SignatureSpec, SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest,
     SyncIncident, SyncIncidentKind, SyncLock, SyncPaths, SyncStateFile, SyncStatus, SyncToggles,
 };
+use qol_sync::Mutex;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -111,10 +112,10 @@ impl SyncService {
             push_on_change: request.push_on_change,
         };
         save_toggles(&sync_paths()?, new_toggles)?;
-        *self.toggles_mut() = new_toggles;
+        *self.toggles.lock() = new_toggles;
 
         let head = repo.head_sha()?;
-        let mut state = self.state_mut();
+        let mut state = self.state.lock();
         state.head_sha = head;
         state.last_sync_at = Some(now_rfc3339());
         state.last_error = None;
@@ -155,7 +156,7 @@ impl SyncService {
         })
         .await
         .context("join sync disconnect task")??;
-        let mut state = self.state_mut();
+        let mut state = self.state.lock();
         *state = SyncStateFile::default();
         save_state_file(&sync_paths()?, &state)?;
         let cleared = state.clone();
@@ -229,7 +230,7 @@ impl SyncService {
 
     pub fn set_auto_sync(&self, toggles: SyncToggles) -> Result<SyncStatus> {
         save_toggles(&sync_paths()?, toggles)?;
-        *self.toggles_mut() = toggles;
+        *self.toggles.lock() = toggles;
         Ok(self.status())
     }
 
@@ -367,7 +368,7 @@ impl SyncService {
             PullOutcome::Diverged { .. } if auto_applied => "Merged remote changes".to_string(),
             PullOutcome::Diverged { .. } => format!("{} setting(s) need review", conflicts.len()),
         };
-        let mut state = self.state_mut();
+        let mut state = self.state.lock();
         if conflicts.is_empty() {
             state.incident = None;
             state.last_error = None;
@@ -419,7 +420,7 @@ impl SyncService {
             0 => "Conflicts resolved".to_string(),
             count => format!("{count} setting(s) need review"),
         };
-        let mut state = self.state_mut();
+        let mut state = self.state.lock();
         state.conflicts = output.conflicts;
         state.incident = output.incident;
         state.last_error = None;
@@ -466,7 +467,7 @@ impl SyncService {
         } else {
             "Nothing to push".to_string()
         };
-        let mut state = self.state_mut();
+        let mut state = self.state.lock();
         if output.conflicts.is_empty() {
             state.conflicts.clear();
             state.incident = None;
@@ -520,7 +521,7 @@ impl SyncService {
         error: anyhow::Error,
         target: Option<&SyncTarget>,
     ) -> Result<SyncActionResult> {
-        let mut state = self.state_mut();
+        let mut state = self.state.lock();
         state.last_error = Some(format!("{error:#}"));
         save_state_file(&sync_paths()?, &state)?;
         let saved = state.clone();
@@ -546,20 +547,12 @@ impl SyncService {
         )
     }
 
-    fn state_mut(&self) -> std::sync::MutexGuard<'_, SyncStateFile> {
-        self.state.lock().unwrap_or_else(|p| p.into_inner())
-    }
-
     fn snapshot_state(&self) -> SyncStateFile {
-        self.state_mut().clone()
-    }
-
-    fn toggles_mut(&self) -> std::sync::MutexGuard<'_, SyncToggles> {
-        self.toggles.lock().unwrap_or_else(|p| p.into_inner())
+        self.state.lock().clone()
     }
 
     fn snapshot_toggles(&self) -> SyncToggles {
-        *self.toggles_mut()
+        *self.toggles.lock()
     }
 }
 

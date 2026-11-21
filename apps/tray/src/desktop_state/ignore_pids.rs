@@ -1,5 +1,6 @@
+use qol_sync::RwLock;
 use std::collections::HashSet;
-use std::sync::{OnceLock, RwLock};
+use std::sync::OnceLock;
 
 static IGNORE_PIDS: OnceLock<RwLock<HashSet<u32>>> = OnceLock::new();
 
@@ -8,24 +9,19 @@ fn ignore_pids() -> &'static RwLock<HashSet<u32>> {
 }
 
 pub(crate) fn add_ignore_pid(pid: u32) {
-    if let Ok(mut set) = ignore_pids().write() {
-        set.insert(pid);
-        log::debug!("[runtime/ignore_pids] ADD {} → set={:?}", pid, *set);
-    }
+    let mut set = ignore_pids().write();
+    set.insert(pid);
+    log::debug!("[runtime/ignore_pids] ADD {} → set={:?}", pid, *set);
 }
 
 pub(crate) fn remove_ignore_pid(pid: u32) {
-    if let Ok(mut set) = ignore_pids().write() {
-        set.remove(&pid);
-        log::debug!("[runtime/ignore_pids] REMOVE {} → set={:?}", pid, *set);
-    }
+    let mut set = ignore_pids().write();
+    set.remove(&pid);
+    log::debug!("[runtime/ignore_pids] REMOVE {} → set={:?}", pid, *set);
 }
 
 pub(crate) fn is_ignored_pid(pid: u32) -> bool {
-    ignore_pids()
-        .read()
-        .map(|set| set.contains(&pid))
-        .unwrap_or(false)
+    ignore_pids().read().contains(&pid)
 }
 
 #[cfg(test)]
@@ -34,7 +30,7 @@ mod tests {
     use std::collections::HashSet;
 
     fn snapshot() -> HashSet<u32> {
-        ignore_pids().read().unwrap().clone()
+        ignore_pids().read().clone()
     }
 
     #[test]

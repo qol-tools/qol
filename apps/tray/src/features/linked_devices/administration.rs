@@ -26,7 +26,7 @@ impl PeerHostHandle {
         } else {
             None
         };
-        let mut host = self.inner.lock().map_err(|_| Error::HostUnavailable)?;
+        let mut host = self.inner.lock();
         match request {
             Request::Pointz { request } => {
                 drop(host);

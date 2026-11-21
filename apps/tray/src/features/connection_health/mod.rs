@@ -1,8 +1,9 @@
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use qol_connection_health::{ConnectionHealth, Outcome, Thresholds, Ticket, Tracker};
 use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
+use qol_sync::{Mutex, MutexGuard};
 use tokio::sync::Notify;
 
 use service::Probes;
@@ -42,28 +43,28 @@ impl Shared {
     }
 
     fn published(&self) -> ConnectionHealth {
-        *lock(&self.published)
+        *self.published.lock()
     }
 
     fn announce(&self, health: ConnectionHealth, publish: impl FnOnce(ConnectionHealth)) {
-        let mut published = lock(&self.published);
+        let mut published = self.published.lock();
         *published = health;
         publish(health);
     }
 
     fn probes(&self) -> Probes {
-        *lock(&self.probes)
+        *self.probes.lock()
     }
 
     fn probe_started(&self, now: Instant) {
-        let mut probes = lock(&self.probes);
+        let mut probes = self.probes.lock();
         probes.last = Some(now);
         probes.running = true;
     }
 
     fn probe_finished(&self, outcome: Option<Outcome>) {
         {
-            let mut probes = lock(&self.probes);
+            let mut probes = self.probes.lock();
             probes.running = false;
             match outcome {
                 Some(Outcome::Answered) => probes.failures = 0,
@@ -75,16 +76,16 @@ impl Shared {
     }
 
     fn tracker(&self) -> MutexGuard<'_, Tracker> {
-        lock(&self.tracker)
+        self.tracker.lock()
     }
 
     fn note_interest(&self, now: Instant) {
-        *lock(&self.interest_until) = Some(now + INTEREST_WINDOW);
+        *self.interest_until.lock() = Some(now + INTEREST_WINDOW);
         self.wake.notify_one();
     }
 
     fn watching(&self, now: Instant) -> bool {
-        lock(&self.interest_until).is_some_and(|until| until > now)
+        self.interest_until.lock().is_some_and(|until| until > now)
     }
 }
 
@@ -208,8 +209,4 @@ impl Drop for Watch {
 
 fn shared() -> &'static Shared {
     SHARED.get_or_init(Shared::new)
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

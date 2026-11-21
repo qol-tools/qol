@@ -1,6 +1,7 @@
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, OnceLock};
 
 use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
+use qol_sync::Mutex;
 
 use crate::daemon::EventBus;
 
@@ -50,10 +51,7 @@ pub fn is_subscribed(kind: RuntimeEventKind) -> bool {
 }
 
 pub fn replay_on_subscribe(kind: RuntimeEventKind, replay: Replay) {
-    let mut replays = REPLAYS
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut replays = REPLAYS.get_or_init(Mutex::default).lock();
     replays.retain(|(registered, _)| *registered != kind);
     replays.push((kind, replay));
 }
@@ -64,7 +62,6 @@ pub(super) fn replays_for(events: &[RuntimeEventKind]) -> Vec<RuntimeEvent> {
     };
     let wanted: Vec<Replay> = replays
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
         .iter()
         .filter(|(kind, _)| events.contains(kind))
         .map(|(_, replay)| *replay)

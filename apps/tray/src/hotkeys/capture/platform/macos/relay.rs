@@ -7,11 +7,12 @@ use qol_runtime::hotkey_relay::{
     self, HotkeyCombo, HotkeyLease, HotkeyModifier, HotkeyPress, RelayMessage,
 };
 use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
+use qol_sync::{Mutex, RwLock};
 use std::io::ErrorKind;
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DATAGRAM_BYTES: usize = 1024;
@@ -39,19 +40,16 @@ static LEASE: Mutex<Lease> = Mutex::new(Lease {
     renewed: None,
 });
 
-fn lease() -> MutexGuard<'static, Lease> {
-    LEASE.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 fn renew(lease: &HotkeyLease, now: Instant) {
-    let mut held = self::lease();
+    let mut held = LEASE.lock();
     held.armed = lease.lease;
     held.unrelayed = lease.unrelayed.iter().map(key_combo).collect();
     held.renewed = Some(now);
 }
 
 pub(super) fn leased(observed: &KeyCombo) -> bool {
-    let relayed = announced()
+    let relayed = ANNOUNCED
+        .lock()
         .hotkeys
         .iter()
         .any(|combo| key_combo(combo) == *observed);
@@ -59,7 +57,7 @@ pub(super) fn leased(observed: &KeyCombo) -> bool {
 }
 
 fn leased_at(observed: &KeyCombo, now: Instant) -> bool {
-    let lease = lease();
+    let lease = LEASE.lock();
     lease.armed
         && lease
             .renewed
@@ -67,12 +65,8 @@ fn leased_at(observed: &KeyCombo, now: Instant) -> bool {
         && !lease.unrelayed.contains(observed)
 }
 
-fn announced() -> MutexGuard<'static, Announced> {
-    ANNOUNCED.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 fn current() -> RuntimeEvent {
-    let announced = announced();
+    let announced = ANNOUNCED.lock();
     RuntimeEvent::HotkeysChanged {
         hotkeys: announced.hotkeys.clone(),
         relay: announced.relay.clone(),
@@ -100,7 +94,7 @@ pub(super) fn start(matcher: Arc<RwLock<KeyMatcher>>, fire_tx: Sender<CaptureEve
         .name("hotkey-relay".into())
         .spawn(move || serve(socket, &relay_path, &matcher, &fire_tx));
     match spawned {
-        Ok(_) => announced().relay = Some(path),
+        Ok(_) => ANNOUNCED.lock().relay = Some(path),
         Err(error) => log::warn!("hotkey relay thread did not start: {error}"),
     }
 }
@@ -108,7 +102,7 @@ pub(super) fn start(matcher: Arc<RwLock<KeyMatcher>>, fire_tx: Sender<CaptureEve
 pub(super) fn announce(bindings: &[Binding]) {
     let hotkeys = relayed(bindings);
     {
-        let mut announced = announced();
+        let mut announced = ANNOUNCED.lock();
         if announced.hotkeys == hotkeys {
             return;
         }

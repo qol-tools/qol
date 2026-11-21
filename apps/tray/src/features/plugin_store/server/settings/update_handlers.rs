@@ -93,8 +93,8 @@ impl CatalogHealth {
         let fetched_at = state
             .plugins_cache
             .read()
-            .ok()
-            .and_then(|cache| cache.as_ref().map(|cache| cache.timestamp));
+            .as_ref()
+            .map(|cache| cache.timestamp);
         Self {
             checking: state.plugins_revalidating.load(Ordering::SeqCst),
             failed: state.plugins_revalidation_failed_at.load(Ordering::SeqCst) != 0,

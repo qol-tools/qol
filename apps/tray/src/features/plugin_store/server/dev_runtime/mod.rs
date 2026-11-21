@@ -3,7 +3,9 @@ mod mock;
 mod snapshot;
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use qol_sync::Mutex;
 
 use crate::daemon::EventBus;
 use crate::dev::adapters::{CoreEventSink, DevRuntimeStateStore};
@@ -34,9 +36,7 @@ impl DevRuntimeService {
     }
 
     pub(super) fn set_restart_progress(&self, progress: Option<RestartProgressSnapshot>) {
-        if let Ok(mut restart) = self.restart.lock() {
-            *restart = progress;
-        }
+        *self.restart.lock() = progress;
     }
 
     pub(super) fn build_in_progress(&self) -> bool {
@@ -69,7 +69,7 @@ impl DevRuntimeService {
 
     pub(super) fn build_state_snapshot(&self) -> BuildStateResponse {
         let mut snapshot = snapshot::build_state_snapshot(self.state.as_ref());
-        snapshot.restart = self.restart.lock().ok().and_then(|restart| restart.clone());
+        snapshot.restart = self.restart.lock().clone();
         snapshot
     }
 

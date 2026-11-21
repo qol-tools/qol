@@ -108,12 +108,8 @@ fn fallback_plugin_ids(state: &AppState) -> Vec<String> {
         .dev_state
         .discovery
         .read()
-        .map(|discovery| {
-            discovery
-                .plugins
-                .iter()
-                .map(|plugin| plugin.id.clone())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
+        .plugins
+        .iter()
+        .map(|plugin| plugin.id.clone())
+        .collect()
 }

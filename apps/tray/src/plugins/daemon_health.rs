@@ -226,7 +226,7 @@ mod unix_tests {
 /// state that later arrives live as a `readiness_changed` event.
 #[derive(Default)]
 pub struct ReadinessRegistry {
-    warming: std::sync::Mutex<std::collections::HashMap<String, PluginRuntimeStatus>>,
+    warming: qol_sync::Mutex<std::collections::HashMap<String, PluginRuntimeStatus>>,
 }
 
 static READINESS: std::sync::OnceLock<ReadinessRegistry> = std::sync::OnceLock::new();
@@ -237,10 +237,7 @@ impl ReadinessRegistry {
     }
 
     pub fn snapshot(&self) -> std::collections::HashMap<String, PluginRuntimeStatus> {
-        match self.warming.lock() {
-            Ok(warming) => warming.clone(),
-            Err(_) => std::collections::HashMap::new(),
-        }
+        self.warming.lock().clone()
     }
 
     /// Replaces the warming set with the `Starting` plugins of `projected` and
@@ -251,9 +248,7 @@ impl ReadinessRegistry {
             .filter(|health| matches!(health.status, PluginRuntimeStatus::Starting { .. }))
             .map(|health| (health.plugin_id.clone(), health.status.clone()))
             .collect();
-        let Ok(mut warming) = self.warming.lock() else {
-            return;
-        };
+        let mut warming = self.warming.lock();
         if *warming == next {
             return;
         }

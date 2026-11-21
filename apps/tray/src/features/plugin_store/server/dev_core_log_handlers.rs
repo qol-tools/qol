@@ -24,11 +24,7 @@ pub(super) fn routes() -> Router<AppState> {
 async fn get_core_log_controls(
     State(state): State<AppState>,
 ) -> Json<std::collections::HashMap<String, crate::logging::LogControl>> {
-    let controls = state
-        .core_log_controls
-        .read()
-        .map(|c| c.clone())
-        .unwrap_or_default();
+    let controls = state.core_log_controls.read().clone();
     Json(controls)
 }
 
@@ -61,9 +57,7 @@ async fn upsert_core_log_control(
 
     match crate::logging::upsert_core_control(&config_dir, &section, control.clone()) {
         Ok(()) => {
-            if let Ok(mut controls) = state.core_log_controls.write() {
-                sync_control_cache(&mut controls, section, control);
-            }
+            sync_control_cache(&mut state.core_log_controls.write(), section, control);
             (StatusCode::OK, "Updated".to_string()).into_response()
         }
         Err(e) => {

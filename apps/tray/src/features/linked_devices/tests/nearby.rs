@@ -75,7 +75,7 @@ fn resolved(advertisement: &Advertisement) -> DiscoveryEvent {
 
 async fn device(root: &std::path::Path, lan: &Lan, defaults: Defaults) -> Fixture {
     let fixture = Fixture::with_discovery(root, Arc::new(lan.clone())).await;
-    fixture.owner.handle.inner.lock().unwrap().defaults = defaults;
+    fixture.owner.handle.inner.lock().defaults = defaults;
     fixture
 }
 
@@ -227,7 +227,6 @@ fn connected(fixture: &Fixture, peer: PeerId) -> bool {
         .handle
         .inner
         .lock()
-        .unwrap()
         .authority()
         .unwrap()
         .network
@@ -247,7 +246,6 @@ fn redeemed(fixture: &Fixture, peer: PeerId) -> bool {
         .handle
         .inner
         .lock()
-        .unwrap()
         .authority()
         .unwrap()
         .authority
@@ -263,7 +261,6 @@ fn linked(fixture: &Fixture, peer: PeerId) -> bool {
         .handle
         .inner
         .lock()
-        .unwrap()
         .authority()
         .unwrap()
         .authority

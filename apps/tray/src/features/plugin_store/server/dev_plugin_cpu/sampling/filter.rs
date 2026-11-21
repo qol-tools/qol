@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use qol_sync::Mutex;
 
 use super::super::state::{PluginCpuState, PluginPidSet};
 use super::now_millis;
@@ -22,9 +24,7 @@ pub(super) fn filter_monitored_plugins(
 
 pub(super) fn set_monitored_plugins(state: &Mutex<PluginCpuState>, plugin_ids: Vec<String>) {
     let monitored_plugin_ids = plugin_ids.into_iter().collect::<HashSet<_>>();
-    let Ok(mut state) = state.lock() else {
-        return;
-    };
+    let mut state = state.lock();
     state.monitoring_filter_enabled = true;
     state.monitored_plugin_ids = monitored_plugin_ids;
     let monitored = state.monitored_plugin_ids.clone();
@@ -38,9 +38,7 @@ pub(super) fn set_monitored_plugins(state: &Mutex<PluginCpuState>, plugin_ids: V
 }
 
 fn monitored_plugin_filter(state: &Arc<Mutex<PluginCpuState>>) -> Option<HashSet<String>> {
-    let Ok(guard) = state.lock() else {
-        return None;
-    };
+    let guard = state.lock();
     if !guard.monitoring_filter_enabled {
         return None;
     }
@@ -48,9 +46,7 @@ fn monitored_plugin_filter(state: &Arc<Mutex<PluginCpuState>>) -> Option<HashSet
 }
 
 fn clear_sample_state(state: &Arc<Mutex<PluginCpuState>>) {
-    let Ok(mut guard) = state.lock() else {
-        return;
-    };
+    let mut guard = state.lock();
     guard.plugin_rows.clear();
     guard.pid_cpu_micros.clear();
     guard.last_sample_at = None;

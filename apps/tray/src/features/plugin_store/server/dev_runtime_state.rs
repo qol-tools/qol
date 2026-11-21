@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use qol_sync::Mutex;
 
 use crate::dev::adapters::{
     BuildStateProgress, BuildStateStore, DevMockTarget, DevRuntimeStateStore,
@@ -40,64 +42,49 @@ impl InMemoryDevRuntimeState {
             DevMockTarget::PluginBuild => &self.mock_plugin_build,
         }
     }
-
-    fn with_build_state<T>(&self, default: T, op: impl FnOnce(&mut RuntimeBuildState) -> T) -> T {
-        match self.build_state.lock() {
-            Ok(mut guard) => op(&mut guard),
-            Err(error) => {
-                log::error!("Build state lock poisoned: {}", error);
-                default
-            }
-        }
-    }
 }
 
 impl BuildStateStore for InMemoryDevRuntimeState {
     fn mark_started(&self) {
-        self.with_build_state((), |s| {
-            s.building = true;
-            s.progress.clear();
-            s.last_results = None;
-        });
+        let mut state = self.build_state.lock();
+        state.building = true;
+        state.progress.clear();
+        state.last_results = None;
     }
 
     fn update_plugin(&self, plugin_id: &str, status: BuildStatus, percent: u8, phase: &str) {
-        self.with_build_state((), |s| {
-            s.building = true;
-            s.progress.insert(
-                plugin_id.to_string(),
-                BuildStateProgress {
-                    status,
-                    percent,
-                    phase: phase.to_string(),
-                },
-            );
-        });
+        let mut state = self.build_state.lock();
+        state.building = true;
+        state.progress.insert(
+            plugin_id.to_string(),
+            BuildStateProgress {
+                status,
+                percent,
+                phase: phase.to_string(),
+            },
+        );
     }
 
     fn mark_finished(&self) {
-        self.with_build_state((), |s| {
-            s.building = false;
-            s.progress.clear();
-        });
+        let mut state = self.build_state.lock();
+        state.building = false;
+        state.progress.clear();
     }
 
     fn store_results(&self, results: Vec<BuildResultInfo>) {
-        self.with_build_state((), |s| {
-            s.last_results = Some(results);
-        });
+        self.build_state.lock().last_results = Some(results);
     }
 
     fn last_results(&self) -> Option<Vec<BuildResultInfo>> {
-        self.with_build_state(None, |s| s.last_results.clone())
+        self.build_state.lock().last_results.clone()
     }
 
     fn is_building(&self) -> bool {
-        self.with_build_state(false, |s| s.building)
+        self.build_state.lock().building
     }
 
     fn snapshot(&self) -> HashMap<String, BuildStateProgress> {
-        self.with_build_state(HashMap::new(), |s| s.progress.clone())
+        self.build_state.lock().progress.clone()
     }
 }
 

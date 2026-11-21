@@ -9,12 +9,13 @@ use crate::daemon::Daemon;
 use crate::dev::state::DiscoveredPluginInfo;
 use crate::plugins::{ActionType, PluginId, PluginLoader, SharedPluginManager};
 use axum::extract::FromRef;
+use qol_sync::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "dev")]
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use super::super::github::PluginCache;
@@ -61,8 +62,7 @@ pub(super) struct AppState {
     #[cfg(feature = "dev")]
     pub(super) promoted_to_stable: Arc<AtomicBool>,
     #[cfg(feature = "dev")]
-    pub(super) core_log_controls:
-        Arc<std::sync::RwLock<HashMap<String, crate::logging::LogControl>>>,
+    pub(super) core_log_controls: crate::logging::CoreControlsHandle,
 }
 
 impl AppState {
@@ -75,9 +75,7 @@ impl AppState {
         #[cfg(feature = "dev")] daemon_health: tokio::sync::watch::Receiver<
             crate::plugins::daemon_health::HealthSnapshot,
         >,
-        #[cfg(feature = "dev")] core_log_controls: Arc<
-            std::sync::RwLock<HashMap<String, crate::logging::LogControl>>,
-        >,
+        #[cfg(feature = "dev")] core_log_controls: crate::logging::CoreControlsHandle,
     ) -> anyhow::Result<Self> {
         let plugins_dir = PluginLoader::default_plugin_dir()?;
         let github_connect = Arc::new(crate::features::profile::sync::GitHubConnect::new(
