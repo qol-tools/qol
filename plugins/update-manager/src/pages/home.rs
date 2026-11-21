@@ -2,9 +2,10 @@ use chrono::NaiveDateTime;
 use qol_config::pages::{Row, Tone};
 
 use super::cleanup;
+use super::restart::finish_names;
 use super::settings::AUTO;
 use super::updates::{failed_line, held_phrase, listed, problems, total, WAITING};
-use super::words::{join, night_of, title};
+use super::words::night_of;
 use super::{Sheet, ROOT};
 use crate::session::Session;
 use crate::updates::{day, sources};
@@ -91,10 +92,9 @@ fn restart(sheet: &mut Sheet, session: &Session, now: NaiveDateTime) {
         ([], None) => return,
         ([], Some((night, clock))) => Row::new("restart", format!("Restart {night} at {clock}")),
         (rows, planned) => {
-            let names: Vec<String> = rows.iter().map(|row| row.name.clone()).collect();
             let row = Row::new("restart", "Restart to finish").detail(format!(
                 "{} finish{} at the restart",
-                title(&join(&names)),
+                finish_names(session),
                 if rows.len() == 1 { "es" } else { "" }
             ));
             match planned {

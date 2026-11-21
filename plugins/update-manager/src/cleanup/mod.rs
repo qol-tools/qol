@@ -405,7 +405,7 @@ fn sweep_by(
         }
         match remove(&found, consent) {
             Ok(()) => {}
-            Err(refusal @ (Refusal::Dismissed | Refusal::Denied | Refusal::TimedOut)) => {
+            Err(refusal) if refusal.stops() => {
                 failed.push(format!(
                     "{}: {refusal}, so nothing more was removed",
                     kind.name

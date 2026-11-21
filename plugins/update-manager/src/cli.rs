@@ -182,7 +182,7 @@ fn remove_kinds(
             Err(refusal) if cleanup::why(kind).is_some() && !confirm => {
                 failed.push_str(&format!("{}: {refusal}; add --confirm\n", kind.name))
             }
-            Err(refusal @ (Refusal::Dismissed | Refusal::Denied | Refusal::TimedOut)) => {
+            Err(refusal) if refusal.stops() => {
                 failed.push_str(&format!(
                     "{}: {refusal}, so nothing more was removed\n",
                     kind.name

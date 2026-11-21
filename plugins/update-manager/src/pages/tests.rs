@@ -359,9 +359,22 @@ fn states() -> Vec<Session> {
         },
         at("2026-10-14 13:58"),
     );
+    let mut held = mint();
+    held.borrowed = true;
+    held.ask = Some(crate::session::Proposal::Tonight);
+    held.host.restart_at = Some(at("2026-10-15 01:30"));
+    held.host.admin = false;
+    held.failed = Some(crate::session::Failed {
+        updates: vec![held.list()[0].clone()],
+        failure: Failure {
+            done: 0,
+            reason: Reason::Locked(Some("another updater".into())),
+        },
+    });
     vec![
         mint(),
         borrowed,
+        held,
         hours,
         switch,
         locked,
@@ -1271,6 +1284,32 @@ fn cleanup_removes_with_the_consent_the_command_line_asks_for() {
     });
     let refused = press(&mut session, "cleanup", "all", now());
     assert!(matches!(refused.notice, Some(Notice::Failure(_))));
+    let mut session = sized();
+    session.busy.insert(Op::RestartNow);
+    let restarting = press(&mut session, "cleanup", "all", now());
+    assert!(matches!(restarting.notice, Some(Notice::Failure(_))));
+    assert!(restarting.task.is_none());
+    assert!(!session.busy.contains(&Op::Remove));
+}
+
+#[test]
+fn a_failed_hours_change_shows_on_the_hours_page() {
+    let mut session = mint();
+    session
+        .errors
+        .insert(Op::Hours, "the password was not accepted".into());
+    let pages = build(&session, now()).pages;
+    assert_eq!(
+        label(&pages, "hours", "error"),
+        "Could not change the hours"
+    );
+    assert_eq!(
+        detail(&pages, "hours", "error"),
+        "the password was not accepted"
+    );
+    assert!(page(&pages, "hours")
+        .row("error")
+        .is_some_and(|row| row.attention));
 }
 
 #[test]

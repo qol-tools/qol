@@ -172,6 +172,14 @@ fn hours(session: &Session, now: NaiveDateTime) -> Sheet {
         "between",
         "the automatic update starts at a random minute in this window.",
     );
+    if let Some(error) = session.errors.get(&Op::Hours) {
+        sheet.row(
+            Row::new("error", "Could not change the hours")
+                .detail(error.as_str())
+                .tone(Tone::Attention)
+                .attention(true),
+        );
+    }
     let from = Row::new("from", "From")
         .detail("The earliest start")
         .value(hours.from.to_string())
