@@ -5,8 +5,10 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
+
+use qol_sync::Mutex;
 
 use super::media;
 
@@ -153,10 +155,7 @@ impl LifecycleCleanupTracker {
     }
 
     fn with_proof<T>(&self, apply: impl FnOnce(&mut LifecycleCleanupProof) -> T) -> T {
-        let mut proof = match self.proof.lock() {
-            Ok(proof) => proof,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut proof = self.proof.lock();
         apply(&mut proof)
     }
 }

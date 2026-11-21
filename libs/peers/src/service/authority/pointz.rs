@@ -12,7 +12,7 @@ const DEVICE_FALLBACK_NAME: &str = "Phone";
 
 impl PeerAuthority {
     pub fn pointz(&self) -> Result<Option<PointzProjection>, AuthorityError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         Ok(inner.state.pointz.as_ref().map(|pointz| PointzProjection {
             server_id: pointz.seed.server_id(),
             import: pointz.import,
@@ -53,7 +53,7 @@ impl PeerAuthority {
     }
 
     pub fn initialize_pointz(&self) -> Result<Option<StoreRevision>, AuthorityError> {
-        if self.lock()?.state.pointz.is_some() {
+        if self.lock().state.pointz.is_some() {
             return Ok(None);
         }
         let seed = Seed::generate().ok_or(AuthorityError::Identity)?;
@@ -92,7 +92,7 @@ impl PeerAuthority {
     }
 
     pub(crate) fn pointz_seed(&self) -> Result<Seed, AuthorityError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         inner
             .state
@@ -103,7 +103,7 @@ impl PeerAuthority {
     }
 
     pub(crate) fn pointz_key(&self, device: &PointzDeviceId) -> Option<DeviceKey> {
-        let inner = self.lock().ok()?;
+        let inner = self.lock();
         inner.ensure_ready().ok()?;
         inner
             .state

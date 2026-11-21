@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+use qol_sync::Mutex;
 
 enum StreamMessage {
     Frame {
@@ -37,7 +39,7 @@ impl StreamClient {
             return;
         };
         let (sender, receiver) = mpsc::channel();
-        *self.sender.lock().expect("stream sender lock") = Some(sender);
+        *self.sender.lock() = Some(sender);
         std::thread::Builder::new()
             .name("qol-settings-stream".into())
             .spawn(move || write_loop(url, token, receiver))
@@ -51,7 +53,7 @@ impl StreamClient {
         if self.count.fetch_sub(1, Ordering::SeqCst) > 1 {
             return;
         }
-        let sender = self.sender.lock().expect("stream sender lock").take();
+        let sender = self.sender.lock().take();
         if let Some(sender) = sender {
             let _ = sender.send(StreamMessage::Close);
         }
@@ -61,7 +63,7 @@ impl StreamClient {
         if self.count.load(Ordering::SeqCst) == 0 {
             return;
         }
-        let sender = self.sender.lock().expect("stream sender lock").clone();
+        let sender = self.sender.lock().clone();
         if let Some(sender) = sender {
             let _ = sender.send(StreamMessage::Frame {
                 stream: stream.to_string(),

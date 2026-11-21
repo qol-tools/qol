@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
-use std::sync::{mpsc, Mutex, PoisonError};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use qol_desktop_settings::gsettings;
 use qol_runtime::protocol::NotificationLevel;
 use qol_runtime::Notification;
+use qol_sync::Mutex;
 use zbus::blocking::Proxy;
 
 use super::NotificationPlatform;
@@ -165,7 +166,7 @@ fn parse_notification_id(output: &str) -> Option<u32> {
 }
 
 fn remembered_id(key: &str) -> Option<u32> {
-    let ids = REPLACE_IDS.lock().unwrap_or_else(PoisonError::into_inner);
+    let ids = REPLACE_IDS.lock();
     ids.get(key).copied()
 }
 
@@ -173,7 +174,7 @@ fn remember_id(key: &str, id: Option<u32>) {
     let Some(id) = id else {
         return;
     };
-    let mut ids = REPLACE_IDS.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut ids = REPLACE_IDS.lock();
     ids.insert(key.to_string(), id);
 }
 

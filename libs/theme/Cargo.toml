@@ -11,6 +11,7 @@ qol-color.workspace = true
 qol-conventions.workspace = true
 qol-headless.workspace = true
 qol-log.workspace = true
+qol-sync.workspace = true
 workspace-hack.workspace = true
 
 [dev-dependencies]

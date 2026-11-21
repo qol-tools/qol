@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
+
+use qol_sync::Mutex;
 
 use super::CliRuntimeState;
 
@@ -51,7 +52,7 @@ impl RuntimeTail {
         else {
             return read(path);
         };
-        let mut known = self.known.lock().unwrap_or_else(|error| error.into_inner());
+        let mut known = self.known.lock();
         if let Some((known_stamp, runtime)) = known.get(path) {
             if known_stamp.still_matches(&stamp) {
                 return *runtime;

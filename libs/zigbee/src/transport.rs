@@ -1,10 +1,11 @@
 use std::io::Read;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossbeam_channel::{bounded, Receiver, Sender};
+use qol_sync::Mutex;
 
 use super::frame::ZnpFrame;
 
@@ -45,10 +46,7 @@ impl Transport {
 
     pub fn send(&self, frame: &ZnpFrame) -> Result<()> {
         let bytes = frame.encode();
-        let mut writer = self
-            .writer
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+        let mut writer = self.writer.lock();
         use std::io::Write;
         writer
             .write_all(&bytes)

@@ -9,10 +9,11 @@ mod nearby;
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use qol_conventions::operations::OperationKey;
+use qol_sync::Mutex;
 use tokio::sync::{mpsc, watch};
 
 use crate::admin::{AttemptState, EnrollmentFailure, Error};
@@ -102,7 +103,7 @@ impl Control {
             .map_or(endpoints, |invitation| invitation.endpoints().to_vec());
         validate_endpoints(&endpoints, self.loopback)?;
         authority.admit_enrollment(expected, transaction, invitation.as_ref(), |pin| {
-            let mut attempts = self.attempts.lock().map_err(|_| Error::HostUnavailable)?;
+            let mut attempts = self.attempts.lock();
             if attempts
                 .get(&transaction)
                 .is_some_and(|attempt| attempt.cancel.is_some())
@@ -150,20 +151,17 @@ impl Control {
         self.gate.hold_for_nearby()
     }
 
-    pub(super) fn attempt(&self, transaction: TransactionId) -> Result<AttemptState, Error> {
-        let attempts = self.attempts.lock().map_err(|_| Error::HostUnavailable)?;
-        Ok(attempts
+    pub(super) fn attempt(&self, transaction: TransactionId) -> AttemptState {
+        let attempts = self.attempts.lock();
+        attempts
             .get(&transaction)
             .map_or(AttemptState::Unavailable {}, |attempt| {
                 attempt.state.clone()
-            }))
+            })
     }
 
     pub(super) fn cancel(&self, transaction: TransactionId) {
-        let attempts = self
-            .attempts
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let attempts = self.attempts.lock();
         if let Some(cancel) = attempts
             .get(&transaction)
             .and_then(|attempt| attempt.cancel.as_ref())
@@ -210,10 +208,7 @@ impl Owner {
     }
 
     fn state(&self, transaction: TransactionId, state: AttemptState, complete: bool) {
-        let mut attempts = self
-            .attempts
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut attempts = self.attempts.lock();
         if let Some(attempt) = attempts.get_mut(&transaction) {
             attempt.state = state;
             if complete {

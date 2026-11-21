@@ -41,7 +41,6 @@ fn a_flush_writes_the_latest_queued_state_once() {
     for open in [true, false] {
         PENDING
             .lock()
-            .unwrap()
             .insert(key.into(), (store.clone(), state(key, open)));
     }
     flush_key(key);
@@ -59,7 +58,6 @@ fn flush_all_drains_every_pending_window() {
     for key in keys {
         PENDING
             .lock()
-            .unwrap()
             .insert(key.into(), (store.clone(), state(key, true)));
     }
     flush_all();
@@ -277,7 +275,6 @@ fn a_user_size_reads_a_queued_save_before_the_file() {
     let queued = state(key, false);
     PENDING
         .lock()
-        .unwrap()
         .insert(key.into(), (store.clone(), queued.clone()));
     assert_eq!(latest(&store, key), Some(queued));
     flush_key(key);

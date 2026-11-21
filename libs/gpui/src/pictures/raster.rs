@@ -1,7 +1,8 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use gpui::RenderImage;
+use qol_sync::Mutex;
 
 use super::{fitted, PictureContext, Tone};
 
@@ -250,7 +251,7 @@ fn stack_part(
 
 fn cached(key: &CacheKey) -> Option<Arc<RenderImage>> {
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let guard = cache.lock().ok()?;
+    let guard = cache.lock();
     guard.get(key).cloned()
 }
 
@@ -302,7 +303,7 @@ fn raster(
     }
     let rendered = crate::image::render_image_rgba(pixels, width_px, height_px)?;
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().ok()?;
+    let mut guard = cache.lock();
     guard.insert(key, rendered.clone());
     Some(rendered)
 }

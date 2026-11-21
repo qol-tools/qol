@@ -162,7 +162,7 @@ impl NetworkControl {
     pub fn nearby_links(
         &self,
     ) -> Result<Vec<(crate::PeerId, String, crate::admin::NearbyLink)>, crate::admin::Error> {
-        self.enrollment.nearby_links()
+        Ok(self.enrollment.nearby_links())
     }
 
     fn running(&self) -> Result<(), crate::admin::Error> {
@@ -178,7 +178,7 @@ impl NetworkControl {
         &self,
         transaction: crate::enrollment::TransactionId,
     ) -> Result<crate::admin::AttemptState, crate::admin::Error> {
-        self.enrollment.attempt(transaction)
+        Ok(self.enrollment.attempt(transaction))
     }
 
     pub fn cancel_enrollment(&self, transaction: crate::enrollment::TransactionId) {

@@ -31,7 +31,7 @@ fn failed_commit_denies_all_trust_and_grants_until_durable_reconciliation() {
         }
         let clone = authority.clone();
         let before = authority.projection().unwrap();
-        authority.inner.lock().unwrap().storage.fail_next(fault);
+        authority.inner.lock().storage.fail_next(fault);
         assert_eq!(
             authority.revoke(before.revision, pin(1).peer_id()),
             Err(AuthorityError::Storage)
@@ -153,7 +153,6 @@ async fn existing_tls_configuration_denies_after_uncertain_storage_failure() {
     authority
         .inner
         .lock()
-        .unwrap()
         .storage
         .fail_next(CommitFault::AfterReplace);
     assert_eq!(

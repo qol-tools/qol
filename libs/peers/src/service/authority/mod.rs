@@ -10,13 +10,10 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
-use std::{
-    path::Path,
-    sync::{Arc, Mutex, MutexGuard},
-    time::SystemTime,
-};
+use std::{path::Path, sync::Arc, time::SystemTime};
 
 use qol_conventions::operations::OperationKey;
+use qol_sync::{Mutex, MutexGuard};
 
 use super::{Identity, NormalServerConfig, PeerPin, TrustPolicy};
 use crate::{AuthorityProjection, AuthorityStatus, PeerId, PeerProjection, StoreRevision};
@@ -131,7 +128,7 @@ impl PeerAuthority {
     }
 
     pub fn projection(&self) -> Result<AuthorityProjection, AuthorityError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         let state = &inner.state;
         Ok(AuthorityProjection {
             peer_id: state.identity.pin().peer_id(),
@@ -152,13 +149,13 @@ impl PeerAuthority {
     }
 
     pub fn local_pin(&self) -> Result<PeerPin, AuthorityError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         Ok(inner.state.identity.pin().clone())
     }
 
     pub fn server_config(&self) -> Result<NormalServerConfig, AuthorityError> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         let identity = inner.state.identity.clone();
         drop(inner);
@@ -167,9 +164,7 @@ impl PeerAuthority {
     }
 
     pub fn has_grant(&self, peer: PeerId, grant: &OperationKey) -> bool {
-        let Ok(inner) = self.lock() else {
-            return false;
-        };
+        let inner = self.lock();
         inner.status == AuthorityStatus::Ready
             && validate_grant(grant).is_ok()
             && inner
@@ -253,7 +248,7 @@ impl PeerAuthority {
         expected: StoreRevision,
         edit: impl FnOnce(&mut State) -> Result<(), AuthorityError>,
     ) -> Result<StoreRevision, AuthorityError> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         if inner.state.revision != expected {
             return Err(AuthorityError::StaleRevision {
@@ -271,7 +266,7 @@ impl PeerAuthority {
         &self,
         edit: impl FnOnce(&mut State) -> Result<(), AuthorityError>,
     ) -> Result<StoreRevision, AuthorityError> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         let mut candidate = inner.state.clone();
         edit(&mut candidate)?;
@@ -299,6 +294,7 @@ impl PeerAuthority {
         candidate.validate()?;
         let encoded = inner.storage.encode(&candidate)?;
         before_replace()?;
+        inner.status = AuthorityStatus::Faulted;
         if let Err(error) = inner
             .storage
             .publish(encoded.as_ref().map(|bytes| bytes.as_slice()))
@@ -309,20 +305,19 @@ impl PeerAuthority {
             return Err(error.into());
         }
         inner.state = candidate;
+        inner.status = AuthorityStatus::Ready;
         self.changes.send_replace(());
         Ok(revision)
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, Inner>, AuthorityError> {
-        self.inner.lock().map_err(|_| AuthorityError::Faulted)
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock()
     }
 }
 
 impl TrustPolicy for PeerAuthority {
     fn is_trusted(&self, pin: &PeerPin) -> bool {
-        let Ok(inner) = self.lock() else {
-            return false;
-        };
+        let inner = self.lock();
         inner.status == AuthorityStatus::Ready
             && inner
                 .state

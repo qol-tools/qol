@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
+use qol_sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::{IdentityError, SpawnIdentity, TerminalError};
@@ -247,13 +248,11 @@ impl TerminalSnapshot {
     }
 
     pub(crate) fn cached_screen(&self, target: &SessionBinding) -> Option<String> {
-        self.screens.lock().ok()?.get(target).cloned()
+        self.screens.lock().get(target).cloned()
     }
 
     pub(crate) fn cache_screen(&self, target: SessionBinding, screen: String) {
-        if let Ok(mut screens) = self.screens.lock() {
-            screens.insert(target, screen);
-        }
+        self.screens.lock().insert(target, screen);
     }
 }
 

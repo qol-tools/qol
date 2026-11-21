@@ -4,8 +4,10 @@ pub use platform::show_normal_window_by_title;
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use qol_sync::{Mutex, MutexGuard};
 
 use crate::runtime_config::load_gpui_runtime_config;
 
@@ -110,9 +112,7 @@ pub fn framed_windows_join_dock() -> bool {
 }
 
 pub(crate) fn presentation_guard() -> MutexGuard<'static, ()> {
-    PRESENTATION_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    PRESENTATION_LOCK.lock()
 }
 
 pub(crate) fn reassert_if_current(
@@ -145,7 +145,7 @@ pub fn reassert_focus_until_held(
 }
 
 pub(crate) fn read_title(title: &Mutex<String>) -> String {
-    title.lock().map(|title| title.clone()).unwrap_or_default()
+    title.lock().clone()
 }
 
 pub(crate) fn reassert_focus_until_held_with(

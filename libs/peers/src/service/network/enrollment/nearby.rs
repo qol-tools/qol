@@ -1,11 +1,7 @@
-use std::{
-    collections::BTreeMap,
-    net::SocketAddr,
-    sync::{Arc, Mutex, MutexGuard},
-    time::Duration,
-};
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use qol_conventions::operations::OperationKey;
+use qol_sync::Mutex;
 use tokio::{
     net::TcpStream,
     sync::watch,
@@ -54,12 +50,8 @@ enum OfferState {
 pub(super) struct Offers(Arc<Mutex<BTreeMap<PeerId, (String, OfferState)>>>);
 
 impl Offers {
-    fn lock(&self) -> MutexGuard<'_, BTreeMap<PeerId, (String, OfferState)>> {
-        self.0.lock().unwrap_or_else(|error| error.into_inner())
-    }
-
     pub(super) fn finished(&self, peer: PeerId, result: Result<NearbyOffer, EnrollmentError>) {
-        let mut offers = self.lock();
+        let mut offers = self.0.lock();
         let Some((_, state)) = offers.get_mut(&peer) else {
             return;
         };
@@ -82,7 +74,7 @@ impl Offers {
 
     pub(super) fn pending(&self) -> bool {
         let now = Instant::now();
-        self.lock().values().any(|(_, state)| match state {
+        self.0.lock().values().any(|(_, state)| match state {
             OfferState::Connecting { .. } => true,
             OfferState::Ready { deadline, .. } => *deadline > now,
             OfferState::Confirmed { .. } | OfferState::Failed { .. } => false,
@@ -90,7 +82,7 @@ impl Offers {
     }
 
     pub(super) fn close(&self) {
-        for (_, state) in self.lock().values_mut() {
+        for (_, state) in self.0.lock().values_mut() {
             if matches!(
                 state,
                 OfferState::Connecting { .. } | OfferState::Ready { .. }
@@ -114,13 +106,13 @@ impl Control {
     ) -> Result<(), Error> {
         validate_endpoints(&endpoints, self.loopback)?;
         authority.nearby_client_config(peer)?;
-        let mut offers = self.offers.lock();
+        let mut offers = self.offers.0.lock();
         match offers.get(&peer).map(|(_, state)| state) {
             Some(OfferState::Connecting { .. }) => {
                 return Err(refusal(EnrollmentFailure::AlreadyRunning));
             }
             Some(OfferState::Confirmed { transaction, .. })
-                if self.attempt(*transaction)?.is_active() =>
+                if self.attempt(*transaction).is_active() =>
             {
                 return Err(refusal(EnrollmentFailure::AlreadyRunning));
             }
@@ -162,7 +154,7 @@ impl Control {
         expected: StoreRevision,
         peer: PeerId,
     ) -> Result<AttemptState, Error> {
-        let mut offers = self.offers.lock();
+        let mut offers = self.offers.0.lock();
         let Some((
             name,
             OfferState::Ready {
@@ -202,7 +194,7 @@ impl Control {
         &self,
         peer: PeerId,
     ) -> Option<TransactionId> {
-        match self.offers.lock().remove(&peer)?.1 {
+        match self.offers.0.lock().remove(&peer)?.1 {
             OfferState::Connecting { cancel, .. } => {
                 cancel.send_replace(true);
                 None
@@ -215,10 +207,8 @@ impl Control {
         }
     }
 
-    pub(in crate::service::network) fn nearby_links(
-        &self,
-    ) -> Result<Vec<(PeerId, String, NearbyLink)>, Error> {
-        let offers = self.offers.lock();
+    pub(in crate::service::network) fn nearby_links(&self) -> Vec<(PeerId, String, NearbyLink)> {
+        let offers = self.offers.0.lock();
         let now = Instant::now();
         let mut links = Vec::new();
         for (peer, (name, state)) in offers.iter() {
@@ -238,7 +228,7 @@ impl Control {
                     state: NearbyState::Confirm {},
                 },
                 OfferState::Confirmed { transaction, code } => {
-                    let state = match self.attempt(*transaction)? {
+                    let state = match self.attempt(*transaction) {
                         AttemptState::Queued {} | AttemptState::Running {} => {
                             NearbyState::WaitingForPeer {}
                         }
@@ -263,7 +253,7 @@ impl Control {
             };
             links.push((*peer, name.clone(), link));
         }
-        Ok(links)
+        links
     }
 }
 

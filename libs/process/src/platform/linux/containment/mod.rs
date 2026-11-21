@@ -4,10 +4,10 @@ use std::io;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use qol_platform::Os;
+use qol_sync::{Condvar, Mutex};
 
 use crate::{PlatformSpawnFailure, PreparedSpawnCleanup};
 
@@ -21,7 +21,7 @@ use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Condvar};
+use std::sync::Arc;
 
 const WAIT_INTERVAL: Duration = Duration::from_millis(50);
 const PREPARED_ABORT_TIMEOUT: Duration = Duration::from_millis(250);
@@ -272,10 +272,7 @@ impl ProcessTreeGuard {
         let _ = self.abort_prepared_result();
     }
     fn assign_prepared_child(&self, child: &Child, prepared: &PreparedSpawn) -> io::Result<()> {
-        let mut target = self
-            .target
-            .lock()
-            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?;
+        let mut target = self.target.lock();
         if target.is_some() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -344,17 +341,12 @@ impl ProcessTreeGuard {
     }
 
     pub(crate) fn terminate_and_wait(&self, timeout: Duration) -> io::Result<()> {
-        let target = self
-            .target
-            .lock()
-            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?
-            .clone()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotConnected,
-                    "process tree has no assigned process",
-                )
-            })?;
+        let target = self.target.lock().clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "process tree has no assigned process",
+            )
+        })?;
         let started = Instant::now();
         let deadline = started.checked_add(timeout).ok_or_else(|| {
             io::Error::new(
@@ -386,17 +378,12 @@ impl ProcessTreeGuard {
     }
 
     pub(crate) fn terminate_root_and_wait(&self, timeout: Duration) -> io::Result<()> {
-        let target = self
-            .target
-            .lock()
-            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?
-            .clone()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotConnected,
-                    "process tree has no assigned process",
-                )
-            })?;
+        let target = self.target.lock().clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "process tree has no assigned process",
+            )
+        })?;
         let Some(root) = target.root.as_ref() else {
             return Ok(());
         };
@@ -418,16 +405,12 @@ impl ProcessTreeGuard {
     }
 
     fn assigned_target(&self) -> io::Result<ProcessTreeTarget> {
-        self.target
-            .lock()
-            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?
-            .clone()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotConnected,
-                    "process tree has no assigned process",
-                )
-            })
+        self.target.lock().clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "process tree has no assigned process",
+            )
+        })
     }
     fn disarm_guardian(&self) -> io::Result<()> {
         self.guardian
@@ -496,9 +479,9 @@ impl FailedChildReaper {
             .name("qol-process-failed-spawn-reaper".to_string())
             .spawn(move || {
                 let (state, ready) = &*worker;
-                let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+                let mut state = state.lock();
                 while state.child.is_none() && !state.closed {
-                    state = ready.wait(state).unwrap_or_else(|error| error.into_inner());
+                    state = ready.wait(state);
                 }
                 let Some(mut child) = state.child.take() else {
                     return;
@@ -517,7 +500,7 @@ impl FailedChildReaper {
 
     fn handoff(self, child: Child) {
         let (state, ready) = &*self.state;
-        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = state.lock();
         state.child = Some(child);
         state.closed = true;
         ready.notify_one();
@@ -527,7 +510,7 @@ impl FailedChildReaper {
 impl Drop for FailedChildReaper {
     fn drop(&mut self) {
         let (state, ready) = &*self.state;
-        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = state.lock();
         state.closed = true;
         ready.notify_one();
     }

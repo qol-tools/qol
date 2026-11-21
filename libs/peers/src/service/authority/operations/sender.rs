@@ -14,7 +14,7 @@ impl PeerAuthority {
         session: AuthenticatedSession,
         epoch: OperationEpoch,
     ) -> Result<(), Failure> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.check_operation_session(session)?;
         let current = inner
             .state
@@ -36,7 +36,7 @@ impl PeerAuthority {
 
     pub fn prepare_operation(&self, peer: PeerId, body: String) -> Result<Invocation, Failure> {
         decode_body(&body)?;
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         if !inner.operation_sessions.contains_key(&peer) {
             return Err(Failure::Unavailable);
@@ -79,7 +79,7 @@ impl PeerAuthority {
         handle: &RequestHandle,
         outcome: Outcome,
     ) -> Result<(), Failure> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.check_operation_session(session)?;
         if handle.recipient != session.remote_peer {
             return Err(Failure::Untrusted);
@@ -133,7 +133,7 @@ impl PeerAuthority {
     }
 
     pub fn operation_requests(&self, peer: PeerId) -> Result<Vec<RequestStatus>, Failure> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         let link = inner.state.operation_link(peer)?;
         let mut requests: Vec<_> = link.history.iter().rev().take(4).cloned().collect();
@@ -148,7 +148,7 @@ impl PeerAuthority {
     }
 
     pub fn check_operation_handle(&self, handle: &RequestHandle) -> Result<(), Failure> {
-        let inner = self.lock()?;
+        let inner = self.lock();
         inner.ensure_ready()?;
         let link = inner.state.operation_link(handle.recipient)?;
         if !link.history.iter().any(|entry| entry.handle == *handle)

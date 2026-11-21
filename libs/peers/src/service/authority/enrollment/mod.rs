@@ -27,7 +27,7 @@ impl PeerAuthority {
     }
 
     pub(in crate::service) fn invitation_open_until(&self) -> Option<Instant> {
-        let inner = self.lock().ok()?;
+        let inner = self.lock();
         let now = Instant::now();
         inner
             .invitations
@@ -39,7 +39,7 @@ impl PeerAuthority {
 
     pub fn enrollment_server_config(&self) -> Result<EnrollmentServerConfig, EnrollmentError> {
         let identity = {
-            let inner = self.lock()?;
+            let inner = self.lock();
             inner.ensure_ready()?;
             inner.state.identity.clone()
         };
@@ -51,7 +51,7 @@ impl PeerAuthority {
         pin: PeerPin,
     ) -> Result<EnrollmentClientConfig, EnrollmentError> {
         let identity = {
-            let inner = self.lock()?;
+            let inner = self.lock();
             inner.ensure_ready()?;
             check_remote(&inner, &pin)?;
             inner.state.identity.clone()
@@ -80,7 +80,7 @@ impl PeerAuthority {
         endpoints: Vec<SocketAddr>,
         nearby: Option<NearbyBinding>,
     ) -> Result<Invitation, EnrollmentError> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         if let Some(expected) = expected {
             check_revision(&inner, expected)?;
@@ -152,7 +152,7 @@ impl PeerAuthority {
         expected: Option<crate::StoreRevision>,
         id: InvitationId,
     ) -> Result<(), EnrollmentError> {
-        let mut inner = self.lock()?;
+        let mut inner = self.lock();
         inner.ensure_ready()?;
         if let Some(expected) = expected {
             check_revision(&inner, expected)?;

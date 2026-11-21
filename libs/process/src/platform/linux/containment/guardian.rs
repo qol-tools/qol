@@ -2,8 +2,9 @@ use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+use qol_sync::Mutex;
 
 const PROTOCOL_VERSION: &str = "2";
 const PROTOCOL_ENV: &str = "QOL_PROCESS_GUARDIAN_PROTOCOL";
@@ -86,10 +87,7 @@ impl Guardian {
                 "only the process guardian creator may disarm it",
             ));
         }
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| io::Error::other("process guardian state is unavailable"))?;
+        let mut state = self.state.lock();
         state.finish(true)
     }
 
@@ -101,10 +99,7 @@ impl Guardian {
 impl Drop for Guardian {
     fn drop(&mut self) {
         let is_creator = self.is_creator();
-        let state = self
-            .state
-            .get_mut()
-            .unwrap_or_else(|error| error.into_inner());
+        let state = self.state.get_mut();
         if !is_creator {
             state.close_inherited_copy();
             return;

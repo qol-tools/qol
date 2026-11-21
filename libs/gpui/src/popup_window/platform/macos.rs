@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
-use std::sync::{Mutex, Once, OnceLock, PoisonError};
+use std::sync::{Once, OnceLock};
 
 use block2::{DynBlock, RcBlock};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
@@ -20,6 +20,7 @@ use objc2_app_kit::{
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSNotificationCenter, NSPoint, NSRect, NSSize,
 };
+use qol_sync::Mutex;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::PopupPresentation;
@@ -72,18 +73,14 @@ extern "C" {
 static NATIVE_WINDOW_NUMBERS: Mutex<Option<HashMap<String, u32>>> = Mutex::new(None);
 
 fn note_window_number(title: &str, window: &NSWindow) {
-    let mut registry = NATIVE_WINDOW_NUMBERS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut registry = NATIVE_WINDOW_NUMBERS.lock();
     registry
         .get_or_insert_with(HashMap::new)
         .insert(title.to_owned(), window.windowNumber() as u32);
 }
 
 fn forget_window_number(title: &str) {
-    let mut registry = NATIVE_WINDOW_NUMBERS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut registry = NATIVE_WINDOW_NUMBERS.lock();
     if let Some(map) = registry.as_mut() {
         map.remove(title);
     }
@@ -916,9 +913,7 @@ pub fn visible_windows_by_title_prefix(prefix: &str) -> usize {
             .count();
     }
     let onscreen = onscreen_window_numbers();
-    let registry = NATIVE_WINDOW_NUMBERS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let registry = NATIVE_WINDOW_NUMBERS.lock();
     let Some(map) = registry.as_ref() else {
         return 0;
     };
@@ -1394,14 +1389,9 @@ pub fn hold_input(title: &str) -> bool {
             None,
         );
     }
-    HELD_TITLE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .replace(title.to_owned());
+    HELD_TITLE.lock().replace(title.to_owned());
     HOLD_REASSERTS.store(0, Ordering::Relaxed);
-    *HOLD_LAST_REASSERT
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = None;
+    *HOLD_LAST_REASSERT.lock() = None;
     INPUT_HELD.store(true, Ordering::Release);
     qol_runtime::probe!(
         "HOLD_IN",
@@ -1415,13 +1405,8 @@ pub fn hold_input(title: &str) -> bool {
 pub fn release_input(title: &str) {
     INPUT_HELD.store(false, Ordering::Release);
     HOLD_REASSERTS.store(0, Ordering::Relaxed);
-    *HOLD_LAST_REASSERT
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = None;
-    HELD_TITLE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take();
+    *HOLD_LAST_REASSERT.lock() = None;
+    HELD_TITLE.lock().take();
     let observer = HOLD_OBSERVER.load(Ordering::Acquire);
     if !observer.is_null() {
         let center = NSNotificationCenter::defaultCenter();
@@ -1455,10 +1440,7 @@ fn reassert_held_input(reason: &'static str) {
         yield_held_input(reason);
         return;
     }
-    let since_last = HOLD_LAST_REASSERT
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .map(|at| at.elapsed());
+    let since_last = HOLD_LAST_REASSERT.lock().map(|at| at.elapsed());
     let delay = reassert_delay(since_last);
     if delay.is_zero() {
         reassert_held_input_now(reason);
@@ -1487,11 +1469,7 @@ fn yield_held_input(reason: &str) {
 }
 
 fn held_title() -> Option<String> {
-    HELD_TITLE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_ref()
-        .cloned()
+    HELD_TITLE.lock().as_ref().cloned()
 }
 
 fn held_window_lost_focus() -> bool {
@@ -1515,9 +1493,7 @@ fn reassert_held_input_now(reason: &str) {
     let Some(window) = find_window_by_title(mtm, &title) else {
         return;
     };
-    *HOLD_LAST_REASSERT
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(std::time::Instant::now());
+    *HOLD_LAST_REASSERT.lock() = Some(std::time::Instant::now());
     let attempt = HOLD_REASSERTS.fetch_add(1, Ordering::AcqRel) + 1;
     let app = NSApplication::sharedApplication(mtm);
     #[allow(deprecated)]
@@ -1728,9 +1704,7 @@ pub fn window_holds_input_focus(title: &str) -> Option<bool> {
     let Some(frontmost) = onscreen_window_numbers().first().copied() else {
         return Some(false);
     };
-    let registry = NATIVE_WINDOW_NUMBERS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let registry = NATIVE_WINDOW_NUMBERS.lock();
     let Some(&number) = registry.as_ref().and_then(|map| map.get(title)) else {
         return Some(false);
     };

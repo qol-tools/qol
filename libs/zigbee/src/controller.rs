@@ -1,9 +1,10 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossbeam_channel::{bounded, Receiver, Sender};
+use qol_sync::Mutex;
 
 use super::coordinator::{self, NetworkConfig};
 use super::device::{Device, DeviceRegistry, Endpoint};
@@ -92,10 +93,7 @@ impl ZigbeeController {
     }
 
     pub fn devices(&self) -> Vec<Device> {
-        self.registry
-            .lock()
-            .map(|r| r.devices().to_vec())
-            .unwrap_or_default()
+        self.registry.lock().devices().to_vec()
     }
 
     pub fn send_cluster_command(
@@ -124,7 +122,7 @@ impl ZigbeeController {
 
     pub fn resolve_nwk_address(&self, ieee: &[u8; 8]) -> Result<u16> {
         let nwk = coordinator::resolve_nwk_address(&self.engine, ieee)?;
-        let mut reg = self.registry.lock().unwrap();
+        let mut reg = self.registry.lock();
         if let Some(dev) = reg.by_ieee_address(ieee).cloned() {
             if dev.network_address != nwk {
                 log::debug!(
@@ -142,12 +140,7 @@ impl ZigbeeController {
     }
 
     pub fn remove_device(&self, ieee: &[u8; 8]) -> Result<()> {
-        let known = self
-            .registry
-            .lock()
-            .map_err(|_| anyhow::anyhow!("device table lock poisoned"))?
-            .by_ieee_address(ieee)
-            .cloned();
+        let known = self.registry.lock().by_ieee_address(ieee).cloned();
         let Some(known) = known else {
             return Ok(());
         };
@@ -155,9 +148,7 @@ impl ZigbeeController {
             .resolve_nwk_address(ieee)
             .unwrap_or(known.network_address);
         let left = coordinator::request_leave(&self.engine, nwk, ieee);
-        if let Ok(mut registry) = self.registry.lock() {
-            registry.remove(ieee);
-        }
+        self.registry.lock().remove(ieee);
         left
     }
 
@@ -199,9 +190,7 @@ fn handle_device_announce(
         endpoints: vec![],
     };
 
-    if let Ok(mut reg) = registry.lock() {
-        reg.register(base_device);
-    }
+    registry.lock().register(base_device);
 
     let endpoints = match query_endpoints(engine, nwk_addr) {
         Ok(eps) => eps,
@@ -214,9 +203,7 @@ fn handle_device_announce(
         endpoints,
     };
 
-    if let Ok(mut reg) = registry.lock() {
-        reg.register(updated_device.clone());
-    }
+    registry.lock().register(updated_device.clone());
 
     log::debug!(
         "device joined: addr=0x{:04X} ieee={:02X?} endpoints={:?}",

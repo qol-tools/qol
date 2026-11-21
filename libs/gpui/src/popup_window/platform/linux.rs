@@ -8,8 +8,10 @@ use x11rb::wrapper::ConnectionExt as _;
 use std::collections::BTreeMap;
 use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use qol_sync::Mutex;
 
 use super::PopupPresentation;
 
@@ -47,16 +49,11 @@ static GHOST_ALPHA: AtomicU32 = AtomicU32::new(0);
 static OPACITY_CACHE: Mutex<BTreeMap<String, (u32, Option<u32>)>> = Mutex::new(BTreeMap::new());
 
 fn cached_card(title: &str) -> Option<u32> {
-    OPACITY_CACHE
-        .lock()
-        .ok()
-        .and_then(|cache| cache.get(title).and_then(|entry| entry.1))
+    OPACITY_CACHE.lock().get(title).and_then(|entry| entry.1)
 }
 
 fn store_card(title: &str, wid: u32, card: Option<u32>) {
-    if let Ok(mut cache) = OPACITY_CACHE.lock() {
-        cache.insert(title.to_string(), (wid, card));
-    }
+    OPACITY_CACHE.lock().insert(title.to_string(), (wid, card));
 }
 
 fn cached_valid_wid(
@@ -65,7 +62,7 @@ fn cached_valid_wid(
     utf8_atom: u32,
     title: &str,
 ) -> Option<u32> {
-    let wid = OPACITY_CACHE.lock().ok()?.get(title).map(|entry| entry.0)?;
+    let wid = OPACITY_CACHE.lock().get(title).map(|entry| entry.0)?;
     let matches = window_title_matches(conn, wid, name_atom, utf8_atom, title)
         || window_title_matches(
             conn,
@@ -448,9 +445,7 @@ fn remember_input_region(title: &str, x: i16, y: i16, width: u16, height: u16) -
         width,
         height,
     };
-    if let Ok(mut regions) = INPUT_REGIONS.lock() {
-        regions.insert(title.to_string(), region);
-    }
+    INPUT_REGIONS.lock().insert(title.to_string(), region);
     region
 }
 
@@ -471,10 +466,7 @@ fn set_input_rectangles(conn: &impl Connection, wid: u32, rectangles: &[Rectangl
 }
 
 fn restore_input(conn: &impl Connection, wid: u32, title: &str) -> bool {
-    let region = INPUT_REGIONS
-        .lock()
-        .ok()
-        .and_then(|regions| regions.get(title).copied());
+    let region = INPUT_REGIONS.lock().get(title).copied();
     match region {
         Some(region) => set_input_rectangles(conn, wid, &[region]),
         None => set_input_passthrough(conn, wid, false),
@@ -679,27 +671,19 @@ pub fn visible_windows_by_title_prefix(prefix: &str) -> usize {
 fn cached_titles_by_prefix(prefix: &str) -> Vec<String> {
     OPACITY_CACHE
         .lock()
-        .map(|cache| {
-            cache
-                .keys()
-                .filter(|title| title.starts_with(prefix))
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default()
+        .keys()
+        .filter(|title| title.starts_with(prefix))
+        .cloned()
+        .collect()
 }
 
 fn cached_windows_by_prefix(prefix: &str) -> Vec<u32> {
     OPACITY_CACHE
         .lock()
-        .map(|cache| {
-            cache
-                .iter()
-                .filter(|(title, _)| title.starts_with(prefix))
-                .map(|(_, (wid, _))| *wid)
-                .collect()
-        })
-        .unwrap_or_default()
+        .iter()
+        .filter(|(title, _)| title.starts_with(prefix))
+        .map(|(_, (wid, _))| *wid)
+        .collect()
 }
 
 pub fn hide_for_capture(title: &str, _window: &mut gpui::Window) -> bool {
@@ -1346,9 +1330,7 @@ pub fn capture_focus_return() {
         return;
     };
     let target = active_window(&conn, root);
-    if let Ok(mut slot) = FOCUS_RETURN.lock() {
-        *slot = target;
-    }
+    *FOCUS_RETURN.lock() = target;
     qol_runtime::probe!("FOCUS_RETURN", "phase=captured target={target:?}");
 }
 
@@ -1359,8 +1341,8 @@ fn take_input_focus(
     active_before: Option<u32>,
 ) -> bool {
     let previous = focus_return_target(wid, active_before, active_window(conn, root));
-    if let (Some(previous), Ok(mut slot)) = (previous, FOCUS_RETURN.lock()) {
-        *slot = Some(previous);
+    if let Some(previous) = previous {
+        *FOCUS_RETURN.lock() = Some(previous);
     }
     if !window_is_override_redirect(conn, wid) {
         return false;
@@ -1483,22 +1465,10 @@ pub fn hold_input(title: &str) -> bool {
         return false;
     };
     let alive = Arc::new(AtomicBool::new(true));
-    let stored = INPUT_HOLD
-        .lock()
-        .map(|mut slot| {
-            *slot = Some(InputHold {
-                stop_write,
-                alive: Arc::clone(&alive),
-            });
-        })
-        .is_ok();
-    if !stored {
-        unsafe {
-            libc::close(stop_write);
-            libc::close(stop_read);
-        }
-        return false;
-    }
+    *INPUT_HOLD.lock() = Some(InputHold {
+        stop_write,
+        alive: Arc::clone(&alive),
+    });
     INPUT_HELD.store(true, Ordering::Relaxed);
     let spawned = std::thread::Builder::new()
         .name("qol-input-hold".to_string())
@@ -1524,7 +1494,7 @@ pub fn input_held() -> bool {
 }
 
 fn stop_input_hold_thread() {
-    let hold = INPUT_HOLD.lock().ok().and_then(|mut slot| slot.take());
+    let hold = INPUT_HOLD.lock().take();
     if let Some(hold) = hold {
         hold.alive.store(false, Ordering::Relaxed);
         signal_stop(hold.stop_write);
@@ -1673,8 +1643,7 @@ fn release_input_focus(conn: &impl Connection, root: u32, wid: u32) {
     }
     let target = FOCUS_RETURN
         .lock()
-        .ok()
-        .and_then(|mut slot| slot.take())
+        .take()
         .unwrap_or_else(|| u32::from(InputFocus::POINTER_ROOT));
     let activated = if target == u32::from(InputFocus::POINTER_ROOT) {
         false
@@ -1745,9 +1714,7 @@ pub fn force_composite_below(owner: &str) {
     if !window_is_fullscreen(&conn, active) {
         return;
     }
-    let Ok(mut lease) = COMPOSITE_LEASE.lock() else {
-        return;
-    };
+    let mut lease = COMPOSITE_LEASE.lock();
     let mut forced = None;
     if lease.needs_force(active) {
         let original = read_bypass_compositor(&conn, active);
@@ -1765,10 +1732,7 @@ pub fn force_composite_below(owner: &str) {
 }
 
 pub fn restore_composite(owner: &str) {
-    let forced = COMPOSITE_LEASE
-        .lock()
-        .map(|mut lease| lease.release(owner))
-        .unwrap_or_default();
+    let forced = COMPOSITE_LEASE.lock().release(owner);
     if forced.is_empty() {
         return;
     }
@@ -1854,9 +1818,7 @@ static SERVER_TIME: Mutex<ServerTime> = Mutex::new(ServerTime {
 
 fn server_activation_time(conn: &impl Connection, root: u32) -> u32 {
     let now = Instant::now();
-    let Ok(mut state) = SERVER_TIME.lock() else {
-        return 0;
-    };
+    let mut state = SERVER_TIME.lock();
     if let Some((server_ms, at)) = state.anchor {
         return server_ms.wrapping_add(now.saturating_duration_since(at).as_millis() as u32);
     }

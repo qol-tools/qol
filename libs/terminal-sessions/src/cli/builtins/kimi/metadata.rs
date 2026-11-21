@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use qol_sync::Mutex;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -66,15 +67,11 @@ impl KimiMetadataResolver {
     }
 
     pub fn resolve(&self, session: &SessionFacts) -> KimiMetadata {
-        let mut cache = self.cache.lock().ok();
-        let location = cache
-            .as_mut()
-            .and_then(|cache| cached_location(session, self.environment.as_ref(), cache));
-        let facts = cache.as_mut().and_then(|cache| {
-            location
-                .as_ref()
-                .and_then(|l| cached_facts(&l.state_path, cache))
-        });
+        let mut cache = self.cache.lock();
+        let location = cached_location(session, self.environment.as_ref(), &mut cache);
+        let facts = location
+            .as_ref()
+            .and_then(|l| cached_facts(&l.state_path, &mut cache));
         let activity = match (facts.as_ref(), location.as_ref()) {
             (Some(facts), Some(location)) => {
                 let newest = location.state_path.parent().and_then(newest_write);
@@ -96,7 +93,7 @@ impl KimiMetadataResolver {
     }
 
     pub fn subscription_path(&self, session: &SessionFacts) -> Option<PathBuf> {
-        let mut cache = self.cache.lock().ok()?;
+        let mut cache = self.cache.lock();
         cached_location(session, self.environment.as_ref(), &mut cache)
             .map(|location| location.state_path)
     }

@@ -9,6 +9,7 @@ description = "Zigbee Network Processor (ZNP) serial stack for qol-tools"
 anyhow = "1.0"
 crossbeam-channel = "0.5"
 log.workspace = true
+qol-sync.workspace = true
 serde.workspace = true
 serialport = { version = "4", default-features = false }
 workspace-hack.workspace = true

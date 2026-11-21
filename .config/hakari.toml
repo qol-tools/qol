@@ -35,6 +35,7 @@ workspace-members = [
     "qol-platform",
     "qol-plugin-index",
     "qol-plugin-registry",
+    "qol-sync",
 ]
 third-party = [
     { name = "gpui", path = "vendor/gpui" },

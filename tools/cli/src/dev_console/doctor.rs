@@ -1,8 +1,10 @@
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
+
+use qol_sync::Mutex;
 
 use qol_conventions::doctor_wire::{
     FixReport as DoctorFixReport, Outcome, OutcomeStatus, Report as DoctorReport,
@@ -48,10 +50,7 @@ const DOCTOR_PREBUILT_ERROR: &str =
 
 impl ManualDoctor {
     fn progress_step(&self) -> String {
-        self.progress
-            .lock()
-            .map(|step| step.clone())
-            .unwrap_or_default()
+        self.progress.lock().clone()
     }
 
     pub(super) fn activity(&self, now_ms: u64) -> Activity {
@@ -377,9 +376,7 @@ fn resolve_manual_doctor_binary(
 }
 
 fn set_progress(progress: &Arc<Mutex<String>>, step: &str) {
-    if let Ok(mut current) = progress.lock() {
-        *current = step.to_string();
-    }
+    *progress.lock() = step.to_string();
 }
 
 fn run_doctor_streaming(
@@ -604,7 +601,7 @@ mod tests {
         let resolved = prebuilt_doctor_binary_path(root.path());
 
         assert_eq!(resolved, binary);
-        assert_eq!(progress.lock().unwrap().as_str(), "");
+        assert_eq!(progress.lock().as_str(), "");
     }
 
     #[test]
@@ -615,10 +612,7 @@ mod tests {
         let error = resolve_manual_doctor_binary(root.path(), &progress).unwrap_err();
 
         assert_eq!(error, DOCTOR_PREBUILT_ERROR);
-        assert_eq!(
-            progress.lock().unwrap().as_str(),
-            "using prebuilt doctor binary"
-        );
+        assert_eq!(progress.lock().as_str(), "using prebuilt doctor binary");
     }
 
     fn outcome(id: &str, status: OutcomeStatus, message: &str, fix_available: bool) -> Outcome {

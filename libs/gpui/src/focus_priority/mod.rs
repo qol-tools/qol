@@ -1,8 +1,8 @@
 mod store;
 
-use std::sync::{Mutex, PoisonError};
 use std::time::SystemTime;
 
+use qol_sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 pub use store::FocusClaim;
@@ -39,11 +39,11 @@ pub enum Summon {
 static HELD: Mutex<Option<FocusPriority>> = Mutex::new(None);
 
 fn held() -> Option<FocusPriority> {
-    *HELD.lock().unwrap_or_else(PoisonError::into_inner)
+    *HELD.lock()
 }
 
 fn set_held(priority: Option<FocusPriority>) {
-    *HELD.lock().unwrap_or_else(PoisonError::into_inner) = priority;
+    *HELD.lock() = priority;
 }
 
 fn own_pid() -> u32 {
@@ -91,7 +91,7 @@ pub fn summon(priority: FocusPriority, title: &str) -> Summon {
 }
 
 pub fn release(priority: FocusPriority) {
-    let mut slot = HELD.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut slot = HELD.lock();
     if *slot == Some(priority) {
         *slot = None;
     }

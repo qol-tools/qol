@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Mutex, MutexGuard};
 
+use qol_sync::Mutex;
 use tokio::sync::Notify;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +63,7 @@ impl<T: Clone + Send + 'static> WorkQueue<T> {
 
     pub fn push(&self, key: &str, task: T, run: Run) -> Result<(), Busy> {
         {
-            let mut inner = self.lock();
+            let mut inner = self.inner.lock();
             if inner.refuses(key) {
                 return Err(Busy);
             }
@@ -83,7 +83,7 @@ impl<T: Clone + Send + 'static> WorkQueue<T> {
     }
 
     pub fn cancel_queued(&self, matches: impl Fn(&str, &T) -> bool) -> usize {
-        let mut inner = self.lock();
+        let mut inner = self.inner.lock();
         let before = inner.slots.len();
         inner.slots.retain(|key, slot| {
             slot.entry.state != State::Queued || !matches(key, &slot.entry.task)
@@ -92,17 +92,22 @@ impl<T: Clone + Send + 'static> WorkQueue<T> {
     }
 
     pub fn set_progress(&self, key: &str, percent: u8) {
-        if let Some(slot) = self.lock().slots.get_mut(key) {
+        if let Some(slot) = self.inner.lock().slots.get_mut(key) {
             slot.entry.progress = Some(percent);
         }
     }
 
     pub fn get(&self, key: &str) -> Option<Entry<T>> {
-        self.lock().slots.get(key).map(|slot| slot.entry.clone())
+        self.inner
+            .lock()
+            .slots
+            .get(key)
+            .map(|slot| slot.entry.clone())
     }
 
     pub fn snapshot(&self) -> HashMap<String, Entry<T>> {
-        self.lock()
+        self.inner
+            .lock()
             .slots
             .iter()
             .map(|(key, slot)| (key.clone(), slot.entry.clone()))
@@ -110,7 +115,7 @@ impl<T: Clone + Send + 'static> WorkQueue<T> {
     }
 
     pub fn busy(&self) -> bool {
-        self.lock().slots.values().any(Slot::active)
+        self.inner.lock().slots.values().any(Slot::active)
     }
 
     pub async fn run<F, Fut>(&self, mut work: F)
@@ -131,7 +136,7 @@ impl<T: Clone + Send + 'static> WorkQueue<T> {
     }
 
     fn start_next(&self) -> Option<(String, T)> {
-        let mut inner = self.lock();
+        let mut inner = self.inner.lock();
         let key = inner.next()?;
         let slot = inner.slots.get_mut(&key)?;
         slot.entry.state = State::Running;
@@ -139,7 +144,7 @@ impl<T: Clone + Send + 'static> WorkQueue<T> {
     }
 
     fn settle(&self, key: &str, outcome: Result<(), String>) {
-        let mut inner = self.lock();
+        let mut inner = self.inner.lock();
         match outcome {
             Ok(()) => {
                 inner.slots.remove(key);
@@ -152,12 +157,6 @@ impl<T: Clone + Send + 'static> WorkQueue<T> {
                 }
             }
         }
-    }
-
-    fn lock(&self) -> MutexGuard<'_, Inner<T>> {
-        self.inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 

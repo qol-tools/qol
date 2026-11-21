@@ -7,8 +7,9 @@
 //! owner releases.
 
 use gpui::{App, RenderImage, Window};
+use qol_sync::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 
 /// Process-wide single-owner registry. Every cache that holds an
 /// `Arc<RenderImage>` (PickerState, SharedPreviewCache, SharedIconCache) routes
@@ -34,9 +35,7 @@ impl ImageRegistry {
     /// Record that one more owner now holds this image. Cheap; safe to call
     /// from any thread (including `BackgroundExecutor` paths).
     pub fn retain(&self, image: &Arc<RenderImage>) {
-        let Ok(mut inner) = self.inner.lock() else {
-            return;
-        };
+        let mut inner = self.inner.lock();
         *inner.refs.entry(image.id).or_insert(0) += 1;
         #[cfg(debug_assertions)]
         {
@@ -63,9 +62,7 @@ impl ImageRegistry {
         current_window: Option<&mut Window>,
     ) {
         let should_drop = {
-            let Ok(mut inner) = self.inner.lock() else {
-                return;
-            };
+            let mut inner = self.inner.lock();
             let Some(count) = inner.refs.get_mut(&image.id) else {
                 #[cfg(debug_assertions)]
                 log::warn!("release without retain: id={:?}", image.id);
@@ -169,7 +166,7 @@ mod tests {
         let r = ImageRegistry::new();
         let a = img();
         r.retain(&a);
-        assert_eq!(r.inner.lock().unwrap().refs[&a.id], 1);
+        assert_eq!(r.inner.lock().refs[&a.id], 1);
     }
 
     #[test]
@@ -178,7 +175,7 @@ mod tests {
         let a = img();
         r.retain(&a);
         r.retain(&a);
-        assert_eq!(r.inner.lock().unwrap().refs[&a.id], 2);
+        assert_eq!(r.inner.lock().refs[&a.id], 2);
     }
 
     #[test]
@@ -188,6 +185,6 @@ mod tests {
         let b = img();
         r.retain(&a);
         r.retain(&b);
-        assert_eq!(r.inner.lock().unwrap().refs.len(), 2);
+        assert_eq!(r.inner.lock().refs.len(), 2);
     }
 }

@@ -2,10 +2,11 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use gpui::{point, px, size, App, AppContext, AsyncApp, Bounds, Pixels, Size};
+use qol_sync::Mutex;
 use qol_window_state::{Monitor, Reopen, WindowState, WindowStateStore, SCHEMA_VERSION};
 use qol_windowing::{DisplayEnumerator, MonitorBounds, WindowRect};
 
@@ -288,7 +289,6 @@ impl Remembered {
         *self.last.borrow_mut() = Some(state.clone());
         PENDING
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
             .insert(self.key.clone(), (self.store.clone(), state));
     }
 }
@@ -301,11 +301,7 @@ static PENDING: LazyLock<Mutex<PendingWrites>> = LazyLock::new(|| Mutex::new(Has
 static WRITE_ORDER: Mutex<()> = Mutex::new(());
 
 fn latest(store: &WindowStateStore, key: &str) -> Option<WindowState> {
-    let pending = PENDING
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(key)
-        .map(|(_, state)| state.clone());
+    let pending = PENDING.lock().get(key).map(|(_, state)| state.clone());
     pending.or_else(|| store.load(key))
 }
 
@@ -324,24 +320,16 @@ fn fitted_user_size(
 }
 
 fn flush_key(key: &str) {
-    let _order = WRITE_ORDER.lock().unwrap_or_else(PoisonError::into_inner);
-    let pending = PENDING
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .remove(key);
+    let _order = WRITE_ORDER.lock();
+    let pending = PENDING.lock().remove(key);
     if let Some((store, state)) = pending {
         write(&store, &state);
     }
 }
 
 pub(crate) fn flush_all() {
-    let _order = WRITE_ORDER.lock().unwrap_or_else(PoisonError::into_inner);
-    let pending: Vec<_> = PENDING
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .drain()
-        .map(|(_, entry)| entry)
-        .collect();
+    let _order = WRITE_ORDER.lock();
+    let pending: Vec<_> = PENDING.lock().drain().map(|(_, entry)| entry).collect();
     for (store, state) in pending {
         write(&store, &state);
     }

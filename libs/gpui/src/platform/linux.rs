@@ -1,4 +1,5 @@
-use std::sync::{Mutex, OnceLock};
+use qol_sync::Mutex;
+use std::sync::OnceLock;
 use x11rb::protocol::xproto::ConnectionExt;
 use x11rb::rust_connection::RustConnection;
 
@@ -8,7 +9,7 @@ fn keymap_conn() -> &'static Mutex<Option<RustConnection>> {
 }
 
 fn query_keymap_keys() -> Option<[u8; 32]> {
-    let mut guard = keymap_conn().lock().ok()?;
+    let mut guard = keymap_conn().lock();
     let keys = {
         let conn = guard.as_ref()?;
         conn.query_keymap().ok()?.reply().ok().map(|r| r.keys)
@@ -44,9 +45,7 @@ const ENABLE_ANIMATIONS: &str = "Gtk/EnableAnimations";
 
 pub fn reduce_motion() -> bool {
     static CACHE: Mutex<Option<(std::time::Instant, bool)>> = Mutex::new(None);
-    let Ok(mut cache) = CACHE.lock() else {
-        return false;
-    };
+    let mut cache = CACHE.lock();
     if let Some((read_at, reduce)) = *cache {
         if read_at.elapsed() < MOTION_READ_INTERVAL {
             return reduce;
@@ -60,7 +59,7 @@ pub fn reduce_motion() -> bool {
 }
 
 fn xsettings_blob() -> Option<Vec<u8>> {
-    let guard = keymap_conn().lock().ok()?;
+    let guard = keymap_conn().lock();
     let conn = guard.as_ref()?;
     let selection = conn
         .intern_atom(true, b"_XSETTINGS_S0")
@@ -171,10 +170,7 @@ pub fn has_process_focus() -> bool {
     if !should_poll_focus() {
         return true;
     }
-    let mut guard = match keymap_conn().lock() {
-        Ok(g) => g,
-        Err(_) => return true,
-    };
+    let mut guard = keymap_conn().lock();
     let focus_opt = {
         let conn = match &*guard {
             Some(c) => c,

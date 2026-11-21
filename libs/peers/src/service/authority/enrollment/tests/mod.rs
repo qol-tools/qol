@@ -143,7 +143,7 @@ async fn absent_or_false_client_possession_cannot_create_an_authority_reservatio
     };
     for malicious in [false, true] {
         let inviter = session("inviter");
-        let identity = inviter.inner.lock().unwrap().state.identity.clone();
+        let identity = inviter.inner.lock().state.identity.clone();
         let mut roots = rustls::RootCertStore::empty();
         roots
             .add(CertificateDer::from(identity.certificate_der().to_vec()))
@@ -212,7 +212,7 @@ async fn simultaneous_duplicate_redemptions_share_one_commit() {
     }
     assert_eq!(revision(&inviter).value(), 1);
     assert_eq!(revision(&joiner).value(), 2);
-    assert_eq!(inviter.inner.lock().unwrap().state.receipts.len(), 1);
+    assert_eq!(inviter.inner.lock().state.receipts.len(), 1);
     assert!(inviter.is_trusted(&joiner.local_pin().unwrap()));
 }
 
@@ -311,7 +311,7 @@ async fn normal_session_cannot_enter_enrollment_exchange() {
             "inviter".into(),
         )
         .unwrap();
-    let identity = joiner.inner.lock().unwrap().state.identity.clone();
+    let identity = joiner.inner.lock().state.identity.clone();
     let client =
         crate::service::NormalClientConfig::new(&identity, inviter.local_pin().unwrap()).unwrap();
     let server = inviter.server_config().unwrap();
@@ -441,7 +441,7 @@ async fn completed_enrollment_feeds_both_live_normal_tls_trust_policies() {
         (&joiner, &inviter, &inviter_server),
         (&inviter, &joiner, &joiner_server),
     ] {
-        let identity = source.inner.lock().unwrap().state.identity.clone();
+        let identity = source.inner.lock().state.identity.clone();
         let client =
             crate::service::NormalClientConfig::new(&identity, target.local_pin().unwrap())
                 .unwrap();
@@ -458,7 +458,7 @@ async fn completed_enrollment_feeds_both_live_normal_tls_trust_policies() {
     inviter
         .revoke(revision(&inviter), joiner.local_pin().unwrap().peer_id())
         .unwrap();
-    let identity = joiner.inner.lock().unwrap().state.identity.clone();
+    let identity = joiner.inner.lock().state.identity.clone();
     let client =
         crate::service::NormalClientConfig::new(&identity, inviter.local_pin().unwrap()).unwrap();
     let (client_io, server_io) = tokio::io::duplex(16 * 1024);

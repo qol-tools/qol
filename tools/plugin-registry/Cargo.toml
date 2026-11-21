@@ -12,6 +12,7 @@ flate2 = "1"
 pico-args = "0.5"
 qol-plugin-index.workspace = true
 qol-platform.workspace = true
+qol-sync.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{Datelike, Local};
+use qol_sync::Mutex;
 use serde_json::Value;
 
 use crate::cli::chat::{read_chat, ChatRole, ChatTurn};
@@ -65,10 +66,8 @@ impl CodexMetadataResolver {
     }
 
     pub fn resolve(&self, session: &SessionFacts) -> CodexMetadata {
-        let mut cache = self.cache.lock().ok();
-        let rollout = cache
-            .as_mut()
-            .and_then(|cache| rollout_path(session, self.environment.as_ref(), cache));
+        let mut cache = self.cache.lock();
+        let rollout = rollout_path(session, self.environment.as_ref(), &mut cache);
         let external_id = rollout.as_deref().and_then(uuid_from_path);
         let activity = rollout
             .as_deref()
@@ -81,10 +80,9 @@ impl CodexMetadataResolver {
                 })
             })
             .unwrap_or_default();
-        let indexed_name = cache
-            .as_mut()
-            .zip(external_id.as_deref())
-            .and_then(|(cache, id)| thread_name(id, self.environment.as_ref(), cache));
+        let indexed_name = external_id
+            .as_deref()
+            .and_then(|id| thread_name(id, self.environment.as_ref(), &mut cache));
         let title_name = title_thread_name(&session.title, &session.cwd)
             .filter(|name| Some(name.as_str()) != external_id.as_deref());
         CodexMetadata {
@@ -100,7 +98,7 @@ impl CodexMetadataResolver {
     }
 
     pub fn subscription_path(&self, session: &SessionFacts) -> Option<PathBuf> {
-        let mut cache = self.cache.lock().ok()?;
+        let mut cache = self.cache.lock();
         rollout_path(session, self.environment.as_ref(), &mut cache)
     }
 

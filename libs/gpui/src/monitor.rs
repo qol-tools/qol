@@ -1,9 +1,9 @@
 use std::error::Error;
 use std::fmt;
-use std::sync::Mutex;
 
 use gpui::*;
 use qol_runtime::{CursorPos, MonitorBounds, PlatformState, PlatformStateClient};
+use qol_sync::Mutex;
 
 use crate::window::MonitorKey;
 
@@ -208,23 +208,19 @@ static ACTIVE_MONITOR: Mutex<Option<ActiveMonitor>> = Mutex::new(None);
 
 pub fn record_active_monitor(event: &crate::protocol::RuntimeEvent) -> Option<ActiveMonitor> {
     let monitor = ActiveMonitor::from_event(event)?;
-    if let Ok(mut slot) = ACTIVE_MONITOR.lock() {
-        *slot = Some(monitor.clone());
-    }
+    *ACTIVE_MONITOR.lock() = Some(monitor.clone());
     Some(monitor)
 }
 
 pub fn active_monitor() -> Option<ActiveMonitor> {
-    ACTIVE_MONITOR.lock().ok().and_then(|slot| slot.clone())
+    ACTIVE_MONITOR.lock().clone()
 }
 
 pub fn refresh_active_monitor_from_state() {
     let fresh = PlatformStateClient::from_env()
         .get_state()
         .and_then(|state| state.active_monitor().map(ActiveMonitor::from_bounds));
-    if let Ok(mut slot) = ACTIVE_MONITOR.lock() {
-        *slot = fresh;
-    }
+    *ACTIVE_MONITOR.lock() = fresh;
 }
 
 pub fn resolve_active_monitor() -> Option<ActiveMonitor> {

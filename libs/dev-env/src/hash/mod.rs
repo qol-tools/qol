@@ -1,7 +1,9 @@
 use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+
+use qol_sync::Mutex;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -83,7 +85,6 @@ fn memory_hit(
 ) -> Option<CachedHash> {
     cache
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(path)
         .filter(|entry| entry.schema == CACHE_SCHEMA && entry.stamp == *stamp)
         .cloned()
@@ -94,10 +95,7 @@ fn store_memory(
     path: &Path,
     hit: CachedHash,
 ) {
-    cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(path.to_path_buf(), hit);
+    cache.lock().insert(path.to_path_buf(), hit);
 }
 
 fn read_disk_cache(path: &Path, stamp: &FileStamp) -> Result<Option<CachedHash>> {

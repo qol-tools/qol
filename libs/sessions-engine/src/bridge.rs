@@ -4,10 +4,11 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
+use qol_sync::Mutex;
 use qol_terminal_sessions::bridge::BridgeCheckpoint;
 use qol_terminal_sessions::cli::{CliSessionInterpreter, ComposerGuard, Typing};
 use qol_terminal_sessions::{
@@ -138,10 +139,7 @@ impl BridgeOwner {
 
 impl Drop for BridgeOwner {
     fn drop(&mut self) {
-        let mut attaches = self
-            .attaches
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut attaches = self.attaches.lock();
         if let Some(attach) = &self.attach {
             if attaches
                 .get(&self.binding)
@@ -849,7 +847,7 @@ impl PendingBridgeStore {
             .context("failed to open bridge owner lock")?;
         let deadline = Instant::now() + ATTACH_TAKEOVER_BUDGET;
         let mut attaches = loop {
-            let attaches = self.attaches.lock().unwrap();
+            let attaches = self.attaches.lock();
             match file.try_lock() {
                 Ok(()) => break attaches,
                 Err(TryLockError::WouldBlock) => {
