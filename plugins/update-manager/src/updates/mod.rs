@@ -12,7 +12,7 @@ mod platform;
 pub(crate) use clock::Clock;
 pub(crate) use platform::{
     boot_id, install, is_mint, missing, read_updates, restart_now, schedule_restart, set_hours,
-    set_skips, supported, Helper,
+    set_skips, sources, supported, Helper,
 };
 
 pub(crate) fn read_host() -> Host {
@@ -142,6 +142,14 @@ pub(crate) struct Auto {
     pub(crate) packages: bool,
     pub(crate) spices: bool,
     pub(crate) flatpak: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Source {
+    pub(crate) key: AutoKey,
+    pub(crate) name: &'static str,
+    pub(crate) short: &'static str,
+    pub(crate) when: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -316,15 +324,15 @@ fn glob(pattern: &str, text: &str) -> bool {
 impl Held {
     pub(crate) fn phrase(self) -> &'static str {
         match self {
-            Self::Phasing(_) => "held by Ubuntu",
+            Self::Phasing(_) => "rolling out slowly",
             Self::Administrator => "held by an administrator",
-            Self::KeptBack => "kept back by apt",
+            Self::KeptBack => "kept back",
         }
     }
 
     pub(crate) fn title(self) -> &'static str {
         match self {
-            Self::Phasing(_) => "Held by Ubuntu",
+            Self::Phasing(_) => "Rolling out slowly",
             Self::Administrator => "Held by an administrator",
             Self::KeptBack => "Kept back by the system",
         }
@@ -404,18 +412,31 @@ impl AutoKey {
     }
 
     pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::Packages => "System packages",
-            Self::Spices => "Cinnamon add-ons",
-            Self::Flatpak => "Flatpak",
-            Self::Switch(switch) => switch.name,
-        }
+        self.source().name
     }
 
-    pub(crate) fn changed(self) -> String {
+    pub(crate) fn short(self) -> &'static str {
+        self.source().short
+    }
+
+    fn source(self) -> Source {
         match self {
-            Self::Switch(switch) => switch.doing.into(),
-            other => format!("{} on their own", other.name()),
+            Self::Switch(switch) => Source {
+                key: self,
+                name: switch.name,
+                short: switch.short,
+                when: switch.when,
+            },
+            other => sources()
+                .iter()
+                .copied()
+                .find(|source| source.key == other)
+                .unwrap_or(Source {
+                    key: other,
+                    name: other.id(),
+                    short: other.id(),
+                    when: "",
+                }),
         }
     }
 
@@ -514,7 +535,7 @@ mod tests {
         );
         assert_eq!(
             update(Some(Held::Phasing(10)), false, 3, Unit::Packages).wait(),
-            "3 packages, held by Ubuntu"
+            "3 packages, rolling out slowly"
         );
         assert_eq!(
             update(None, false, 8, Unit::Runtimes).wait(),

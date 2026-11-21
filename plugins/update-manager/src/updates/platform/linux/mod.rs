@@ -8,7 +8,7 @@ use chrono::{Local, NaiveDateTime};
 use crate::platform::linux::command::{found, lenient, run};
 use crate::platform::linux::privileged::refused;
 use crate::platform::Refusal;
-use crate::updates::{AutoKey, Failure, Host, Hours, Reason, Update, Updates};
+use crate::updates::{AutoKey, Failure, Host, Hours, Reason, Source, Update, Updates};
 
 mod apt;
 mod boot;
@@ -161,6 +161,10 @@ pub(crate) fn install(
         progress(done);
     }
     Ok(())
+}
+
+pub(crate) fn sources() -> &'static [Source] {
+    mint::sources()
 }
 
 pub(crate) fn set_auto(key: AutoKey, on: bool) -> Result<(), Refusal> {

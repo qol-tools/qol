@@ -9,7 +9,7 @@ use crate::session::{position, Act, Op, Session};
 use crate::updates::{Held, Update};
 use qol_config::text::plural;
 
-pub(super) const SHOWN: usize = 6;
+pub(super) const WAITING: &str = "waiting";
 
 pub(super) fn total<'a>(updates: impl Iterator<Item = &'a Update>) -> usize {
     updates.map(Update::count).sum()
@@ -164,10 +164,32 @@ pub(super) fn install_row(sheet: &mut Sheet, session: &Session) {
     }
 }
 
-pub(super) fn skipped_row(sheet: &mut Sheet, session: &Session) {
+pub(super) fn problems(session: &Session) -> Vec<&String> {
+    session
+        .updates
+        .iter()
+        .flat_map(|updates| updates.problems.iter())
+        .chain(session.host.problems.iter())
+        .collect()
+}
+
+fn skipped(session: &Session) -> bool {
+    !session.skips().is_empty()
+        || session.busy.contains(&Op::Skips)
+        || session.errors.contains_key(&Op::Skips)
+}
+
+pub(super) fn listed(session: &Session) -> bool {
+    !session.list().is_empty()
+        || session.job.is_some()
+        || session.failed.is_some()
+        || skipped(session)
+        || !problems(session).is_empty()
+}
+
+fn skipped_row(sheet: &mut Sheet, session: &Session) {
     let busy = session.busy.contains(&Op::Skips);
-    let failed = session.errors.contains_key(&Op::Skips);
-    if session.skips().is_empty() && !busy && !failed {
+    if !skipped(session) {
         return;
     }
     sheet.row(with_error(
@@ -182,10 +204,7 @@ pub(super) fn skipped_row(sheet: &mut Sheet, session: &Session) {
 
 pub(super) fn pages(session: &Session) -> Vec<Sheet> {
     let mut sheets = Vec::new();
-    if session.list().is_empty() && session.job.is_none() {
-        return sheets;
-    }
-    if session.list().len() > SHOWN {
+    if listed(session) {
         sheets.extend(waiting(session));
     }
     let available = session.available();
@@ -205,16 +224,43 @@ pub(super) fn pages(session: &Session) -> Vec<Sheet> {
 }
 
 fn waiting(session: &Session) -> Vec<Sheet> {
-    let mut sheet = Sheet::new("waiting", "waiting");
-    sheet.heading("install");
-    install_row(&mut sheet, session);
+    let mut sheet = Sheet::new(WAITING, "waiting");
+    sheet.group("problems", "what did not work, and why.");
+    if let Some((label, detail)) = failed_line(session) {
+        sheet.row(
+            Row::new("failed", label)
+                .detail(detail)
+                .tone(Tone::Attention)
+                .open("failed"),
+        );
+    }
+    for (index, problem) in problems(session).into_iter().enumerate() {
+        let row = match problem.split_once(": ") {
+            Some((label, detail)) => Row::new(format!("problem:{index}"), label).detail(detail),
+            None => Row::new(format!("problem:{index}"), problem.as_str()),
+        };
+        sheet.row(row.tone(Tone::Attention));
+    }
+    sheet.group("install", "everything that can install now, in one go.");
+    if !session.list().is_empty() {
+        install_row(&mut sheet, session);
+    }
     let list = sorted(session);
     let tagged = !shared_tag(&list);
     let rows = list
         .into_iter()
         .map(|update| row(session, update, tagged))
         .collect();
-    sheet.list("waiting", rows)
+    let mut sheets = sheet.list(
+        "waiting",
+        "every update found, those that need a restart first.",
+        rows,
+    );
+    if let Some(first) = sheets.first_mut() {
+        first.group("skipped", "updates you chose to leave out.");
+        skipped_row(first, session);
+    }
+    sheets
 }
 
 fn version(update: &Update) -> String {
@@ -252,10 +298,13 @@ fn one(session: &Session, update: &Update) -> Sheet {
     let mut sheet = Sheet::new(format!("update:{}", update.id), update.label.to_lowercase());
     let idle = session.job.is_none();
     if idle && update.installable() && warns(session, update) {
-        sheet.heading("before you install");
+        sheet.group(
+            "before you install",
+            "what this update does besides installing.",
+        );
         warnings(&mut sheet, session, update);
     }
-    sheet.heading("choose");
+    sheet.group("choose", "what to do with this update.");
     if let Some(detail) = job_detail(session, update) {
         sheet.row(Row::new("state", cap(&detail)));
     } else if let Some(held) = update.held.filter(|_| !update.installable()) {
@@ -317,13 +366,20 @@ fn packages(update: &Update) -> Vec<Sheet> {
             }
         })
         .collect();
-    sheet.list(update.unit.heading(), rows)
+    sheet.list(
+        update.unit.heading(),
+        "everything this update installs.",
+        rows,
+    )
 }
 
 fn install(session: &Session, id: &str, set: &[&Update]) -> Sheet {
     let count = total(set.iter().copied());
     let mut sheet = Sheet::new(id, "install all");
-    sheet.heading("before you install");
+    sheet.group(
+        "before you install",
+        "what installing them all does besides installing.",
+    );
     let restart: Vec<&Update> = set
         .iter()
         .copied()
@@ -385,7 +441,7 @@ fn install(session: &Session, id: &str, set: &[&Update]) -> Sheet {
             .dim(true),
         );
     }
-    sheet.heading("choose");
+    sheet.group("choose", "install them all now, or go back.");
     sheet.press_then(
         Row::new(
             "go",
@@ -406,11 +462,7 @@ fn failed(session: &Session) -> Option<Sheet> {
     sheet.group(
         label.to_lowercase(),
         if failed.failure.done > 0 {
-            format!(
-                "{} of {} installed before it stopped.",
-                failed.failure.done,
-                total(failed.updates.iter())
-            )
+            "some installed before it stopped. the rest still wait.".to_string()
         } else if one {
             "nothing changed. it still waits.".to_string()
         } else {

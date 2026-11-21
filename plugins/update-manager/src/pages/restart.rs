@@ -1,7 +1,7 @@
 use chrono::NaiveDateTime;
 use qol_config::pages::{Go, Row, Tone};
 
-use super::words::{join, night_of, title};
+use super::words::{cap, join, night_of, title};
 use super::Sheet;
 use crate::session::{Act, Op, Proposal, Session};
 
@@ -9,7 +9,7 @@ pub(super) fn finish_word(session: &Session) -> Option<String> {
     match session.finish().as_slice() {
         [] => None,
         [one] => Some(format!("{} finishes", one.label.to_lowercase())),
-        many => Some(format!("{} updates finish", many.len())),
+        _ => Some("the installed updates finish".to_string()),
     }
 }
 
@@ -53,7 +53,7 @@ fn restart(session: &Session, now: NaiveDateTime) -> Sheet {
     );
     let run_at = session.run_at();
     let time = if session.moved() {
-        "After your update hours. It waits if Mint's run is still going.".to_string()
+        "After your update hours. It waits if the automatic update is still going.".to_string()
     } else if let Some(run) = run_at.as_deref() {
         format!("If {run} is still going then, the restart waits for it")
     } else {
@@ -96,7 +96,8 @@ fn restart(session: &Session, now: NaiveDateTime) -> Sheet {
         {
             sheet.row(
                 Row::new(format!("next:{}", update.id), update.label.as_str()).detail(format!(
-                    "{run} installs it before the restart, so it finishes too"
+                    "{} installs it before the restart, so it finishes too",
+                    cap(run)
                 )),
             );
         }
@@ -119,10 +120,11 @@ fn tonight(sheet: &mut Sheet, session: &Session, now: NaiveDateTime) {
                 .unwrap_or_default()
         )
     } else if session.locked() {
-        "Asks for an administrator's password once, so it can wait for Mint's run.".to_string()
+        "Asks for an administrator's password once, so it can wait for the automatic update."
+            .to_string()
     } else {
         format!(
-            "{}Stays set if qol stops.",
+            "{}Stays set if Update Manager stops.",
             run_at
                 .as_deref()
                 .map(|run| format!("After {run} ends. "))
@@ -201,13 +203,15 @@ fn restart_now(session: &Session) -> Sheet {
             .value("closes"),
     );
     sheet.row(if session.borrowed {
-        Row::new("qol", "qol stops with it").detail("Start it again after the restart")
+        Row::new("qol", "Update Manager stops with it").detail("Start it again after the restart")
     } else if session.rules.guard || session.rules.hold {
-        Row::new("qol", "qol starts again after it").detail("Its rules start off again")
+        Row::new("qol", "Update Manager starts again after it")
+            .detail("Pause all and Wait while sound plays start off again")
     } else {
-        Row::new("qol", "qol starts again after it").detail("With its rules as you left them")
+        Row::new("qol", "Update Manager starts again after it")
+            .detail("With its switches as you left them")
     });
-    sheet.group("choose", "esc cancels too.");
+    sheet.group("choose", "restart now, or go back.");
     sheet.row(
         Row::new("cancel", "Cancel")
             .detail("Back to the page, nothing restarts")

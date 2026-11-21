@@ -5,14 +5,15 @@ use super::restart::{finish_names, planned_at, with_error};
 use super::words::{cap, night_of, on_off};
 use super::Sheet;
 use crate::session::{Act, Helper, Op, Proposal, Session, MINT_DEFAULT};
-use crate::updates::{day, when, AutoKey, Clock, Hours, RunBy};
+use crate::updates::{sources, when, AutoKey, Clock, Hours, RunBy};
 
-const LOCKED: &str = "Needs an administrator once, to pause Mint's run.";
-const ASKING: &str = "Waiting for the password, to hold Mint's run";
+pub(super) const AUTO: &str = "auto";
+const LOCKED: &str = "Needs an administrator once, to pause the automatic update.";
+const ASKING: &str = "Waiting for the password, to hold the automatic update";
 
-pub(super) fn hours_value(session: &Session) -> String {
+fn hours_value(session: &Session) -> String {
     let hours = session.hours();
-    format!("{} to {}", hours.from, hours.until)
+    format!("{} and {}", hours.from, hours.until)
 }
 
 fn could_not(row: Row, refusal: &impl std::fmt::Display) -> Row {
@@ -23,21 +24,23 @@ fn could_not(row: Row, refusal: &impl std::fmt::Display) -> Row {
         .toggle(true)
 }
 
-pub(super) fn rules(sheet: &mut Sheet, session: &Session) {
-    if session.mint().is_none() {
-        sheet.row(
-            Row::new("rules", "Nothing installs on its own here")
-                .detail("So there is nothing for qol to hold"),
-        );
-        return;
-    }
+fn rules(sheet: &mut Sheet, session: &Session) {
     let failed = match &session.rules.helper {
         Helper::Failed(refusal) => Some(refusal),
-        _ => None,
+        Helper::Off | Helper::Starting | Helper::Ready => None,
     };
     let asking = matches!(session.rules.helper, Helper::Off | Helper::Starting);
     let (guard, hold) = (session.rules.guard, session.rules.hold);
-    let row = Row::new("guard", "Wait while in use");
+    let row = Row::new("hold", "Pause all");
+    let (row, act) = match failed {
+        Some(refusal) if hold => (could_not(row, refusal), Act::Hold(false)),
+        _ if hold && asking => (row.detail(ASKING).toggle(true).busy(true), Act::Hold(false)),
+        _ if hold => (row.toggle(true), Act::Hold(false)),
+        _ if session.locked() => (row.detail(LOCKED).toggle(false), Act::Hold(true)),
+        _ => (row.toggle(false), Act::Hold(true)),
+    };
+    sheet.press(row, act);
+    let row = Row::new("guard", "Wait while sound plays");
     let row = match failed {
         Some(refusal) if guard => could_not(row, refusal),
         _ if guard && asking => row.detail(ASKING).toggle(true).busy(true),
@@ -50,19 +53,10 @@ pub(super) fn rules(sheet: &mut Sheet, session: &Session) {
         _ => row.toggle(false),
     };
     sheet.press(row, Act::Guard);
-    let row = Row::new("hold", "Hold all");
-    let (row, act) = match failed {
-        Some(refusal) if hold => (could_not(row, refusal), Act::Hold(false)),
-        _ if hold && asking => (row.detail(ASKING).toggle(true).busy(true), Act::Hold(false)),
-        _ if hold => (row.toggle(true), Act::Hold(false)),
-        _ if session.locked() => (row.detail(LOCKED).toggle(false), Act::Hold(true)),
-        _ => (row.toggle(false), Act::Hold(true)),
-    };
-    sheet.press(row, act);
     if failed.is_some() && (guard || hold) {
         sheet.press(
             Row::new("retry", "Try again")
-                .detail("Asks for the password again, to hold Mint's run")
+                .detail("Asks for the password again, to hold the automatic update")
                 .button("retry"),
             Act::Retry,
         );
@@ -70,17 +64,19 @@ pub(super) fn rules(sheet: &mut Sheet, session: &Session) {
 }
 
 pub(super) fn pages(session: &Session, now: NaiveDateTime) -> Vec<Sheet> {
-    let mut sheets = vec![changes(session, now)];
+    let mut sheets = Vec::new();
     if let Some(sheet) = ask(session, now) {
         sheets.push(sheet);
     }
-    if session.mint().is_none() || session.locked() {
+    if session.mint().is_none() {
         return sheets;
     }
-    sheets.push(hours(session, now));
-    sheets.push(from(session));
-    sheets.push(until(session));
     sheets.push(auto(session));
+    sheets.push(hours(session, now));
+    if !session.locked() {
+        sheets.push(from(session));
+        sheets.push(until(session));
+    }
     sheets
 }
 
@@ -121,90 +117,107 @@ fn ours(session: &Session) -> bool {
     session.mint().is_some_and(|mint| mint.ours)
 }
 
+fn auto(session: &Session) -> Sheet {
+    let auto = session.auto();
+    let locked = session.locked();
+    let mut sheet = Sheet::new(AUTO, "installs on its own");
+    sheet.group("what", "what may install by itself.");
+    for source in sources() {
+        let key = source.key;
+        let on = auto.get(key);
+        let row = Row::new(key.id(), source.name).detail(source.when);
+        if locked {
+            sheet.row(row.value(on_off(on)));
+            continue;
+        }
+        let row = with_error(
+            row.toggle(on).busy(session.busy.contains(&Op::Auto(key))),
+            session,
+            Op::Auto(key),
+        );
+        press_auto(&mut sheet, session, row, key, !on);
+    }
+    sheet.group(
+        "when",
+        "when those installs may run, and what holds them back.",
+    );
+    let busy = session.busy.contains(&Op::Hours);
+    sheet.row(
+        with_error(
+            Row::new("hours", "Between")
+                .value(hours_value(session))
+                .busy(busy),
+            session,
+            Op::Hours,
+        )
+        .open("hours"),
+    );
+    rules(&mut sheet, session);
+    if ours(session) && !session.locked() {
+        let row = Row::new("default", "Set back to the default")
+            .detail("Around midnight, and after each startup")
+            .button("set back")
+            .busy(busy);
+        press_hours(&mut sheet, session, row, None, None);
+    }
+    sheet
+}
+
 fn hours(session: &Session, now: NaiveDateTime) -> Sheet {
-    let mut sheet = Sheet::new("hours", "update hours");
+    let mut sheet = Sheet::new("hours", "between");
     let hours = session.hours();
+    let locked = session.locked();
     let busy = session.busy.contains(&Op::Hours);
     sheet.group(
-        "update hours",
-        "when mint installs system packages on its own.",
+        "between",
+        "the automatic update starts at a random minute in this window.",
     );
-    if let Some(error) = session.errors.get(&Op::Hours) {
-        sheet.row(
-            Row::new("error", "Could not change the hours")
-                .detail(error.as_str())
-                .tone(Tone::Attention)
-                .attention(true),
-        );
+    let from = Row::new("from", "From")
+        .detail("The earliest start")
+        .value(hours.from.to_string())
+        .busy(busy);
+    let until = Row::new("until", "Until")
+        .detail("The latest start. A long run can finish after it.")
+        .value(hours.until.to_string())
+        .busy(busy);
+    if locked {
+        sheet.row(from);
+        sheet.row(until);
+    } else {
+        sheet.row(from.open("from"));
+        sheet.row(until.open("until"));
     }
-    sheet.row(
-        Row::new("from", "From")
-            .detail("Mint's run starts at a random minute between From and Until")
-            .value(hours.from.to_string())
-            .busy(busy)
-            .open("from"),
-    );
-    sheet.row(
-        Row::new("until", "Until")
-            .detail("The latest start. A long run can finish after it.")
-            .value(hours.until.to_string())
-            .busy(busy)
-            .open("until"),
-    );
     let like = session
         .host
         .runs
         .iter()
         .find(|run| run.by == RunBy::Automatic && run.after_startup.is_some())
-        .map(|run| format!("Mint's default, like {}", when(run.start, now)));
-    let startup = Row::new("startup", "Also after each startup")
-        .detail(if hours.startup {
-            like.unwrap_or_else(|| "Mint's default".to_string())
-        } else {
-            "A missed night waits for the next.".to_string()
-        })
-        .toggle(hours.startup)
-        .busy(busy);
-    press_hours(
-        &mut sheet,
-        session,
-        startup,
-        target(Hours {
-            startup: !hours.startup,
-            ..hours
-        }),
-        None,
-    );
-    if ours(session) {
-        sheet.group(
-            "what changes",
-            "your setting, written to mint's timer. it stays when qol stops.",
+        .map(|run| format!("The default, like {}", when(run.start, now)));
+    let startup = Row::new("startup", "Also after each startup").detail(if hours.startup {
+        like.unwrap_or_else(|| "The default".to_string())
+    } else {
+        "A missed night waits for the next.".to_string()
+    });
+    if locked {
+        sheet.row(startup.value(on_off(hours.startup)));
+    } else {
+        press_hours(
+            &mut sheet,
+            session,
+            startup.toggle(hours.startup).busy(busy),
+            target(Hours {
+                startup: !hours.startup,
+                ..hours
+            }),
+            None,
         );
+    }
+    if let (Some(at), true, true) = (session.host.restart_at, session.moved(), ours(session)) {
         sheet.row(
-            Row::new("timer", "Mint's timer")
-                .detail(format!(
-                    "Runs {} to {}{}.",
-                    hours.from,
-                    hours.until,
-                    if hours.startup {
-                        ""
-                    } else {
-                        ", and no run after startup"
-                    }
-                ))
-                .value("stays"),
+            Row::new("moved", format!("{}'s restart", cap(&night_of(at, now))))
+                .detail("Moved after these hours, and still waits if the automatic update is going")
+                .value(at.format("%H:%M").to_string()),
         );
-        if let (Some(at), true) = (session.host.restart_at, session.moved()) {
-            sheet.row(
-                Row::new("moved", format!("{}'s restart", cap(&night_of(at, now))))
-                    .detail("Moved after the update hours, and still waits if Mint's run is going")
-                    .value(at.format("%H:%M").to_string()),
-            );
-        }
-        let row = Row::new("default", "Set back to Mint's default")
-            .detail("Around midnight, and after each startup")
-            .button("set back");
-        press_hours(&mut sheet, session, row, None, None);
     }
     sheet
 }
@@ -214,7 +227,7 @@ fn from(session: &Session) -> Sheet {
     let mut sheet = Sheet::new("from", "from");
     sheet.group(
         "updates from",
-        "mint's run starts at a random minute after this. until moves with it.",
+        "the automatic update starts at a random minute after this. until moves with it.",
     );
     for hour in 0..24 {
         let clock = Clock::hm(hour, 0);
@@ -253,105 +266,6 @@ fn until(session: &Session) -> Sheet {
     sheet
 }
 
-fn auto(session: &Session) -> Sheet {
-    let auto = session.auto();
-    let mut sheet = Sheet::new("auto", "installs on its own");
-    sheet.heading(if session.borrowed {
-        "the owner's switches"
-    } else {
-        "mint's switches"
-    });
-    for key in AutoKey::INSTALLS {
-        let on = auto.get(key);
-        let value = match key {
-            AutoKey::Packages => "in hours",
-            AutoKey::Spices | AutoKey::Flatpak => "at login",
-            AutoKey::Switch(switch) => switch.when,
-        };
-        let row = with_error(
-            Row::new(key.id(), key.name())
-                .value(value)
-                .toggle(on)
-                .busy(session.busy.contains(&Op::Auto(key))),
-            session,
-            Op::Auto(key),
-        );
-        press_auto(&mut sheet, session, row, key, !on);
-    }
-    sheet.row(Row::new("firmware", "Firmware").value("never"));
-    sheet
-}
-
-fn changes(session: &Session, now: NaiveDateTime) -> Sheet {
-    let mut sheet = Sheet::new("changes", "what qol changed");
-    sheet.group(
-        "stays when qol stops",
-        "your settings, written with the system's own tools.",
-    );
-    let mut any = false;
-    if ours(session) {
-        any = true;
-        let detail = match session.journal.hours {
-            Some(change) => format!(
-                "Set by you {}. Was {}.",
-                day(change.at, now),
-                change.was.unwrap_or(MINT_DEFAULT).span()
-            ),
-            None => "Set through qol".to_string(),
-        };
-        let row = Row::new("hours", "Update hours")
-            .detail(detail)
-            .value(hours_value(session))
-            .button("set back");
-        press_hours(&mut sheet, session, row, None, None);
-    }
-    if let Some(at) = session.host.restart_at {
-        any = true;
-        let detail = match session.journal.restart {
-            Some(set) => format!(
-                "Set by you {}. Happens even if qol has stopped; waits for Mint's run.",
-                day(set, now)
-            ),
-            None => "Happens even if qol has stopped; waits for Mint's run.".to_string(),
-        };
-        sheet.press(
-            Row::new("restart", format!("Restart {}", night_of(at, now)))
-                .detail(detail)
-                .value(at.format("%H:%M").to_string())
-                .button("cancel"),
-            Act::Tonight(false),
-        );
-    }
-    for (key, was) in session.auto_changed() {
-        any = true;
-        let detail = match session.journal.auto.iter().find(|change| change.key == key) {
-            Some(change) => format!("Set by you {}. Was {}.", day(change.at, now), on_off(was)),
-            None => format!("Was {}.", on_off(was)),
-        };
-        let row = Row::new(format!("auto:{}", key.id()), key.changed())
-            .detail(detail)
-            .value(on_off(session.switch(key)))
-            .button("set back");
-        press_auto(&mut sheet, session, row, key, was);
-    }
-    if !any {
-        sheet.row(
-            Row::new("nothing", "Nothing yet")
-                .detail("A setting you change here is listed until you set it back"),
-        );
-    }
-    sheet
-}
-
-fn lower(key: AutoKey) -> &'static str {
-    match key {
-        AutoKey::Packages => "system packages",
-        AutoKey::Spices => "Cinnamon add-ons",
-        AutoKey::Flatpak => "Flatpak",
-        AutoKey::Switch(switch) => switch.short,
-    }
-}
-
 fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
     let proposal = session.ask?;
     let mut sheet;
@@ -365,7 +279,7 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
             );
             sheet.row(
                 Row::new("now", "Now")
-                    .detail("Mint's timer, as the owner left it")
+                    .detail("As the owner left it")
                     .value(session.hours().span()),
             );
             sheet.row(
@@ -373,7 +287,7 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
                     .detail("Stays until the owner changes it back")
                     .value(after.span()),
             );
-            sheet.group("choose", "esc cancels too.");
+            sheet.group("choose", "change them, or leave them as they are.");
             sheet.row(
                 Row::new("cancel", "Cancel")
                     .detail("Leave the owner's hours as they are")
@@ -392,7 +306,7 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
             }
             sheet.press_then(
                 Row::new("change", "Change the owner's hours")
-                    .detail("Writes Mint's timer. It stays after you leave.")
+                    .detail("Writes the system's timer. It stays after you leave.")
                     .button("change"),
                 Act::Hours(hours),
                 Go::Back,
@@ -423,7 +337,7 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
                     names
                 }),
             );
-            sheet.group("choose", "esc cancels too.");
+            sheet.group("choose", "set the restart, or leave it.");
             sheet.row(
                 Row::new("cancel", "Cancel")
                     .detail(format!("No restart {word}"))
@@ -441,7 +355,7 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
             let on = session.switch(key);
             sheet = Sheet::new("ask", "the owner's switch");
             sheet.group(
-                format!("change the owner's {} switch?", lower(key)),
+                format!("change the owner's {} switch?", key.short()),
                 "this computer is not yours. the change stays after you leave.",
             );
             sheet.row(
@@ -454,7 +368,7 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
                     .detail("Stays until the owner changes it back")
                     .value(on_off(!on)),
             );
-            sheet.group("choose", "esc cancels too.");
+            sheet.group("choose", "change it, or leave it as it is.");
             sheet.row(
                 Row::new("cancel", "Cancel")
                     .detail("Leave the owner's switch as it is")
@@ -463,9 +377,9 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
             sheet.press_then(
                 Row::new("change", "Change the owner's switch")
                     .detail(if key.removes() {
-                        "Writes the system's own setting. It stays after you leave."
+                        "Writes the system's own cleanup setting. It stays after you leave."
                     } else {
-                        "Writes Mint's own setting. It stays after you leave."
+                        "Writes the system's own install setting. It stays after you leave."
                     })
                     .button("change"),
                 Act::Auto(key, !on),

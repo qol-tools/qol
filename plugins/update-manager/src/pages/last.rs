@@ -11,7 +11,7 @@ const SHOWN: usize = 8;
 
 pub(super) fn who(run: &Run) -> String {
     match &run.by {
-        RunBy::Automatic => "mint".to_string(),
+        RunBy::Automatic => "on its own".to_string(),
         RunBy::Qol => "you".to_string(),
         RunBy::Person(name) => name.clone(),
     }
@@ -35,7 +35,7 @@ pub(super) fn pages(session: &Session, now: NaiveDateTime) -> Vec<Sheet> {
 
 fn page(session: &Session, now: NaiveDateTime) -> Sheet {
     let mut sheet = Sheet::new("last", "history");
-    sheet.heading("history");
+    sheet.group("history", "what installed lately, newest first.");
     if session.host.runs.is_empty() {
         sheet.row(Row::new("none", "No run yet").value("nothing in the log"));
     }
@@ -64,11 +64,14 @@ fn one(index: usize, run: &Run, now: NaiveDateTime) -> Sheet {
         format!("run:{index}"),
         heading(run.start, now).to_lowercase(),
     );
-    sheet.heading(match &run.by {
-        RunBy::Automatic => "by mint".to_string(),
-        RunBy::Qol => "by you".to_string(),
-        RunBy::Person(name) => format!("by {name}"),
-    });
+    sheet.group(
+        match &run.by {
+            RunBy::Automatic => "on its own".to_string(),
+            RunBy::Qol => "by you".to_string(),
+            RunBy::Person(name) => format!("by {name}"),
+        },
+        "what this run changed.",
+    );
     for (name, count) in &run.groups {
         sheet.row(
             Row::new(format!("group:{name}"), name.as_str())

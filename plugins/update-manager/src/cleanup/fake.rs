@@ -8,7 +8,7 @@ use crate::platform::Refusal;
 
 const MINT: Owner = Owner {
     title: "mint's cleanup",
-    colophon: "mint's own cleanup. it stays when qol stops.",
+    colophon: "the system's own cleanup. it keeps running when update manager stops.",
 };
 const KEPT: &str = "Old kernels stay until you remove them.";
 const MINT_ON: &str =
@@ -140,7 +140,6 @@ pub(crate) static MINT_KERNELS: Switch = Switch {
     owner: MINT,
     name: "Old kernels and leftovers",
     short: "old kernel removal",
-    doing: "Removing old kernels",
     when: "removed weekly",
     words: Words {
         on: MINT_ON,
@@ -158,7 +157,6 @@ pub(crate) static MINT_BY_HAND: Switch = Switch {
     owner: MINT,
     name: "Include kernels installed by hand",
     short: "hand-installed kernel removal",
-    doing: "Removing kernels installed by hand",
     when: "removed weekly",
     words: Words {
         on: BY_HAND_ON,
@@ -175,11 +173,10 @@ pub(crate) static UNATTENDED_KERNELS: Switch = Switch {
     id: "kernels",
     owner: Owner {
         title: "automatic updates",
-        colophon: "automatic updates, unattended-upgrades. it stays when qol stops.",
+        colophon: "part of automatic updates. it keeps running when update manager stops.",
     },
     name: "Old kernels",
     short: "old kernel removal",
-    doing: "Removing old kernels",
     when: "removed with updates",
     words: Words {
         on: "When automatic updates run. The running kernel and the two newest stay.",

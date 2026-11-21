@@ -110,7 +110,7 @@ pub fn run() -> ExitCode {
         return ExitCode::FAILURE;
     }
     if let Err(error) = spawn("survey", &shared, survey) {
-        log::warn!("update-manager: cannot start measuring what updates left behind: {error}");
+        log::warn!("update-manager: cannot start measuring what updates no longer need: {error}");
         shared.lock().surveying = false;
         shared.wake.notify_all();
     }
@@ -308,6 +308,7 @@ fn work(shared: &Shared, task: Task) {
             remove,
             system,
         } => updates::set_skips(add, remove, *system),
+        Task::Remove { kinds, consent } => cleanup::sweep(kinds, *consent),
         Task::Open(path) => {
             if let Err(error) = qol_apps::desktop_integration::open_with_default_app_checked(path) {
                 log::warn!("update-manager: {path} could not be opened: {error}");

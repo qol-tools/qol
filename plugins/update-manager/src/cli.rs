@@ -8,7 +8,8 @@ use qol_headless::{
 };
 
 use crate::cleanup::{
-    self, leftovers, primary, Consent, Found, Leftover, Live, Measure, Origin, Size, State, Survey,
+    self, empty, leftovers, primary, Consent, Found, Leftover, Live, Measure, Origin, Size, State,
+    Survey,
 };
 use crate::platform::Refusal;
 use crate::updates;
@@ -36,7 +37,7 @@ fn app() -> HeadlessApp {
         )
         .command(
             Command::new("cleanup")
-                .about("List what updates left behind, the space it takes, and what removes it on its own; or remove it.")
+                .about("List what updates no longer need, the space it takes, and what removes it on its own; or remove it.")
                 .usage(format!("{PLUGIN_ID} cleanup [remove <kind>|all] [--confirm]"))
                 .detail("`remove all` leaves out kinds that are the last way back or were installed by hand; name one of those and add --confirm to remove it. A kind that needs an administrator asks for the password, and closing that prompt stops `remove all`.")
                 .output("One line per kind with its id and size, the total, when it was measured, then the switches that remove leftovers on their own. `remove` prints one line per kind removed.")
@@ -232,13 +233,6 @@ fn choose(
         Consent::All
     };
     Ok((vec![kind], consent))
-}
-
-fn empty(found: &Found) -> bool {
-    found
-        .amount
-        .as_ref()
-        .is_none_or(|amount| amount.count == 0 && !matches!(amount.size, Size::Unknown(_)))
 }
 
 fn listing(survey: &Survey, switches: &[Live]) -> String {

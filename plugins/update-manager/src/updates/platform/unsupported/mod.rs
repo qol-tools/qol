@@ -3,7 +3,7 @@ use std::path::Path;
 use chrono::NaiveDateTime;
 
 use crate::platform::Refusal;
-use crate::updates::{AutoKey, Failure, Holding, Host, Hours, Reason, Update, Updates};
+use crate::updates::{AutoKey, Failure, Holding, Host, Hours, Reason, Source, Update, Updates};
 
 const UNSUPPORTED: &str = "Update Manager reads Linux Mint only so far";
 
@@ -54,6 +54,10 @@ pub(crate) fn install(
         done: 0,
         reason: Reason::Stopped(UNSUPPORTED.into()),
     })
+}
+
+pub(crate) fn sources() -> &'static [Source] {
+    &[]
 }
 
 pub(crate) fn set_auto(_key: AutoKey, _on: bool) -> Result<(), Refusal> {

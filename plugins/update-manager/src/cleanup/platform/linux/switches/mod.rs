@@ -7,11 +7,11 @@ mod unattended;
 
 const MINT: Owner = Owner {
     title: "mint's cleanup",
-    colophon: "mint's own cleanup. it stays when qol stops.",
+    colophon: "the system's own cleanup. it keeps running when update manager stops.",
 };
 const UNATTENDED: Owner = Owner {
     title: "automatic updates",
-    colophon: "automatic updates, unattended-upgrades. it stays when qol stops.",
+    colophon: "part of automatic updates. it keeps running when update manager stops.",
 };
 const ON_MINT: Requires = Requires::Path(linux::MINT_AUTOMATION);
 const KEPT: &str = "Old kernels stay until you remove them.";
@@ -26,7 +26,6 @@ static SWITCHES: [Switch; 3] = [
         owner: MINT,
         name: "Old kernels and leftovers",
         short: "old kernel removal",
-        doing: "Removing old kernels",
         when: "removed weekly",
         words: Words {
             on: MINT_ON,
@@ -43,7 +42,6 @@ static SWITCHES: [Switch; 3] = [
         owner: MINT,
         name: "Include kernels installed by hand",
         short: "hand-installed kernel removal",
-        doing: "Removing kernels installed by hand",
         when: "removed weekly",
         words: Words {
             on: BY_HAND_ON,
@@ -60,7 +58,6 @@ static SWITCHES: [Switch; 3] = [
         owner: UNATTENDED,
         name: "Old kernels",
         short: "old kernel removal",
-        doing: "Removing old kernels",
         when: "removed with updates",
         words: Words {
             on: "When automatic updates run. The running kernel and the two newest stay.",
@@ -110,8 +107,8 @@ mod tests {
             assert_eq!(real.id, fake.id);
             assert_eq!(real.owner, fake.owner, "{}", real.name);
             assert_eq!(
-                (real.name, real.short, real.doing, real.when),
-                (fake.name, fake.short, fake.doing, fake.when)
+                (real.name, real.short, real.when),
+                (fake.name, fake.short, fake.when)
             );
             assert_eq!(real.words, fake.words, "{}", real.name);
             assert_eq!(ids(real), ids(fake), "{}", real.name);
