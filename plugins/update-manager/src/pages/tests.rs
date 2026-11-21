@@ -371,10 +371,21 @@ fn states() -> Vec<Session> {
             reason: Reason::Locked(Some("another updater".into())),
         },
     });
+    let mut skipping = mint();
+    for (update, choice) in [
+        ("update:apt:urllib3", "skip"),
+        ("update:apt:nvidia", "never"),
+    ] {
+        let task = press(&mut skipping, update, choice, now())
+            .task
+            .expect("skip task");
+        skipping.done(&task, Ok(()), now());
+    }
     vec![
         mint(),
         borrowed,
         held,
+        skipping,
         hours,
         switch,
         locked,
