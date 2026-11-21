@@ -100,6 +100,21 @@ pub(super) fn trace_geometry(
 }
 
 #[inline]
+pub(super) fn trace_animation_pause(pid: i32, paused: bool) {
+    #[cfg(debug_assertions)]
+    {
+        if paused {
+            qol_runtime::probe!(
+                "WINACT_AX",
+                "op=animation_pause pid={pid} attribute=AXEnhancedUserInterface outcome=paused"
+            );
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (pid, paused);
+}
+
+#[inline]
 pub(super) fn trace_screen_snapshot(source: &str, displays: usize, start: std::time::Instant) {
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
