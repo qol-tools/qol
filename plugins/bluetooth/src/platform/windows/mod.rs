@@ -706,11 +706,11 @@ pub fn remove_device(address: &str) -> Result<()> {
 
 pub fn search_devices(config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
     paired::ensure_powered::<WindowsStack>(config.power_on_adapter)?;
-    paired::mark_search_starting()?;
+    paired::mark_search_starting();
     let records = match find_records(true) {
         Ok(records) => records,
         Err(error) => {
-            paired::reset_discovery_state()?;
+            paired::reset_discovery_state();
             return Err(error);
         }
     };
@@ -719,12 +719,12 @@ pub fn search_devices(config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
         .iter()
         .map(|record| device_info(record, &endpoints))
         .collect::<Vec<_>>();
-    if paired::searching()? {
+    if paired::searching() {
         for device in &found {
-            paired::record_discovered_device(device.clone())?;
+            paired::record_discovered_device(device.clone());
         }
     }
-    paired::mark_search_stopped()?;
+    paired::mark_search_stopped();
     qol_runtime::probe!("BLUETOOTH_SEARCH", "stage=stop found={}", found.len());
     Ok(found)
 }

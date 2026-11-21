@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use qol_sessions_engine::attention::{AttentionRow, AttentionSnapshot, AttentionState};
+use qol_sync::Mutex;
 use qol_terminal_sessions::bridge::LiveBridgeReader;
 use qol_terminal_sessions::cli::generic_tool;
 use qol_terminal_sessions::cli::{
@@ -90,9 +91,7 @@ impl Messaging {
         panes: &[Pane],
         wall_now: u64,
     ) {
-        let Ok(keys) = registry.lock().map(|reg| reg.keys()) else {
-            return;
-        };
+        let keys = registry.lock().keys();
         let counts = keys
             .into_iter()
             .map(|key| {
@@ -100,7 +99,7 @@ impl Messaging {
                 (key, counts)
             })
             .collect();
-        let Ok(mut reg) = registry.lock() else { return };
+        let mut reg = registry.lock();
         reg.set_mail(&counts);
         let rows = attention_rows(&reg);
         let recipients = knocks::recipients(panes, &reg);
@@ -221,11 +220,9 @@ pub fn tick_with_caches(
     let mut notices = Vec::new();
     #[cfg(debug_assertions)]
     let tick_start = std::time::Instant::now();
-    let focus_read = registry.lock().ok().map(|reg| reg.focus_read());
+    let focus_read = registry.lock().focus_read();
     let panes = host.discover();
-    if let (Some(read), Ok(mut reg)) = (focus_read, registry.lock()) {
-        reg.observe_focus(read, &panes);
-    }
+    registry.lock().observe_focus(focus_read, &panes);
     let bridges = live_bridge_sessions(&mut caches.bridges);
     let parked = live_parked_sessions(caches.parked_dir.as_deref());
     let closing = closing_sessions(caches.parked_dir.as_deref());
@@ -335,7 +332,8 @@ pub fn tick_with_caches(
             reduction.transition.map(|transition| transition.reason)
         );
         let branch = caches.branch.branch(&pane.cwd, wall_now);
-        if let Ok(mut reg) = registry.lock() {
+        {
+            let mut reg = registry.lock();
             let (notice, status) = apply(
                 &mut reg,
                 ApplyInput {
@@ -573,7 +571,7 @@ fn cached_screen(
 fn prune_missing(registry: &Arc<Mutex<Registry>>, caches: &mut ReconcileCaches, panes: &[Pane]) {
     let live: HashSet<SessionId> = panes.iter().map(|pane| pane.id.clone()).collect();
     caches.screens.retain(|id, _| live.contains(id));
-    let Ok(mut reg) = registry.lock() else { return };
+    let mut reg = registry.lock();
     reg.prune(pid_alive);
     let stale: Vec<SessionId> = reg
         .sorted()
@@ -598,13 +596,7 @@ fn persist_if_changed(registry: &Arc<Mutex<Registry>>, caches: &mut ReconcileCac
         );
         return;
     };
-    let Ok(reg) = registry.lock() else {
-        qol_runtime::probe!(
-            "CLI_SESSIONS_RECON",
-            "phase=persist outcome=skip reason=registry_lock"
-        );
-        return;
-    };
+    let reg = registry.lock();
     let sessions = reg.sorted();
     drop(reg);
     if caches
@@ -656,9 +648,7 @@ fn short(s: &str) -> String {
 }
 
 fn snapshot(registry: &Arc<Mutex<Registry>>, id: &SessionId) -> (Attention, Option<u64>) {
-    let Ok(reg) = registry.lock() else {
-        return (Attention::default(), None);
-    };
+    let reg = registry.lock();
     match reg.get(id) {
         Some(s) => (
             Attention {
@@ -1070,7 +1060,7 @@ fn show_detached_parks(
             }
         })
         .collect::<Vec<_>>();
-    let Ok(mut reg) = registry.lock() else { return };
+    let mut reg = registry.lock();
     let gone: Vec<SessionId> = reg
         .sorted()
         .into_iter()
@@ -1179,25 +1169,14 @@ mod bridge_tests {
             let pane = pane();
             let reg = Arc::new(Mutex::new(Registry::default()));
             for _ in 0..3 {
-                let (notice, status) = frame(
-                    &mut reg.lock().unwrap(),
-                    &pane,
-                    Status::YourTurn,
-                    bridged,
-                    driving,
-                );
+                let (notice, status) =
+                    frame(&mut reg.lock(), &pane, Status::YourTurn, bridged, driving);
                 assert_eq!(status, expected);
                 assert!(notice.is_none());
                 assert!(!status.is_attention());
                 assert_eq!(snapshot(&reg, &pane.id).0.status, Status::YourTurn);
             }
-            let (notice, status) = frame(
-                &mut reg.lock().unwrap(),
-                &pane,
-                Status::YourTurn,
-                false,
-                false,
-            );
+            let (notice, status) = frame(&mut reg.lock(), &pane, Status::YourTurn, false, false);
             assert_eq!(status, Status::YourTurn);
             assert!(notice.is_some());
         }

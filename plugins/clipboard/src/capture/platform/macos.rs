@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicIsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::Duration;
 
 use objc2::rc::{autoreleasepool, Retained};
@@ -9,6 +9,7 @@ use objc2_app_kit::{
     NSWorkspace,
 };
 use objc2_foundation::{NSData, NSDictionary, NSString};
+use qol_sync::Mutex;
 
 use crate::capture::{Capture, CaptureError, Clipboard, Content, Payload, Support, MAX_CLIP_BYTES};
 
@@ -59,7 +60,7 @@ impl Clipboard for MacClipboard {
         loop {
             std::thread::sleep(CHANGE_POLL);
             let capture = autoreleasepool(|_| {
-                let _held = lock(&self.pasteboard);
+                let _held = self.pasteboard.lock();
                 let pasteboard = NSPasteboard::generalPasteboard();
                 let count = pasteboard.changeCount();
                 if self.seen.swap(count, Ordering::AcqRel) == count
@@ -77,7 +78,7 @@ impl Clipboard for MacClipboard {
 
     fn write(&self, payload: Payload) -> Result<(), CaptureError> {
         autoreleasepool(|_| {
-            let _held = lock(&self.pasteboard);
+            let _held = self.pasteboard.lock();
             let pasteboard = NSPasteboard::generalPasteboard();
             pasteboard.clearContents();
             let written = match &payload {
@@ -103,21 +104,21 @@ impl Clipboard for MacClipboard {
                     "The clipboard did not take this clip. Try copying again.".to_string(),
                 ));
             }
-            *lock(&self.secret) = matches!(payload, Payload::Secret { .. }).then_some(payload);
+            *self.secret.lock() = matches!(payload, Payload::Secret { .. }).then_some(payload);
             Ok(())
         })
     }
 
     fn clear_expired_secret(&self) -> Result<(), CaptureError> {
         {
-            let mut secret = lock(&self.secret);
+            let mut secret = self.secret.lock();
             if !secret.as_ref().is_some_and(Payload::is_expired_secret) {
                 return Ok(());
             }
             *secret = None;
         }
         autoreleasepool(|_| {
-            let _held = lock(&self.pasteboard);
+            let _held = self.pasteboard.lock();
             let pasteboard = NSPasteboard::generalPasteboard();
             if pasteboard.changeCount() == self.written.load(Ordering::Acquire) {
                 pasteboard.clearContents();
@@ -215,12 +216,6 @@ fn within_cap(data: &NSData) -> bool {
 fn frontmost_app() -> Option<String> {
     let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
     Some(app.localizedName()?.to_string())
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]

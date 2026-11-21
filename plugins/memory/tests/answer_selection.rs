@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use qol_memory::aliases::AliasMap;
 use qol_memory::app::request;
@@ -9,6 +9,7 @@ use qol_memory::store::Store;
 use qol_memory::warm::WarmState;
 use qol_plugin_daemon::daemon::ReadResult;
 use qol_runtime::protocol::DaemonRequest;
+use qol_sync::Mutex;
 use serde_json::{json, Value};
 
 const HOME: &str = "/fixture/agent";
@@ -507,7 +508,7 @@ fn daemon_rows_and_cold_ask_select_the_same_fact() {
         );
         assert_eq!(result["verdict"], "candidates", "{result}");
         assert!(fixture.ask(query, 5)["answer"].is_null());
-        state.lock().unwrap().invalidate_layers();
+        state.lock().invalidate_layers();
     }
 }
 

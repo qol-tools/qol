@@ -5,7 +5,7 @@ use crate::input::{
     ScreenBoundsCache,
 };
 use anyhow::Result;
-use std::sync::Mutex;
+use qol_sync::Mutex;
 use std::time::Duration;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -218,10 +218,7 @@ impl InputHandlerTrait for InputHandlerImpl {
     }
 
     fn modifier_press(&self, modifier: &str) -> Result<()> {
-        let mut state = self
-            .modifier_state
-            .lock()
-            .expect("Modifier state mutex poisoned");
+        let mut state = self.modifier_state.lock();
         match modifier.to_lowercase().as_str() {
             "ctrl" | "control" => {
                 state.ctrl = true;
@@ -301,10 +298,7 @@ impl InputHandlerTrait for InputHandlerImpl {
     }
 
     fn modifier_release(&self, modifier: &str) -> Result<()> {
-        let mut state = self
-            .modifier_state
-            .lock()
-            .expect("Modifier state mutex poisoned");
+        let mut state = self.modifier_state.lock();
         match modifier.to_lowercase().as_str() {
             "ctrl" | "control" => {
                 state.ctrl = false;
@@ -386,7 +380,7 @@ impl InputHandlerTrait for InputHandlerImpl {
 
 impl InputHandlerImpl {
     fn apply_modifiers(state: &Mutex<ModifierKeys>, modifiers: &ModifierKeys) -> Result<()> {
-        let mut state_guard = state.lock().expect("Modifier state mutex poisoned");
+        let mut state_guard = state.lock();
 
         if modifiers.ctrl && !state_guard.ctrl {
             unsafe {

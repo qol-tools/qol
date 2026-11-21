@@ -23,6 +23,7 @@ qol-fs.workspace = true
 gpui.workspace = true
 qol-gpui.workspace = true
 qol-config.workspace = true
+qol-sync.workspace = true
 workspace-hack.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

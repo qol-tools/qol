@@ -17,6 +17,7 @@ qol-headless.workspace = true
 qol-host-fixes.workspace = true
 qol-plugin-daemon.workspace = true
 qol-process.workspace = true
+qol-sync.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 workspace-hack.workspace = true

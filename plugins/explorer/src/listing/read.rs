@@ -3,9 +3,11 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use qol_sync::Mutex;
 
 use super::{Entry, ListingError};
 
@@ -264,7 +266,7 @@ pub(super) struct CountClaim(PathBuf);
 
 impl CountClaim {
     pub(super) fn take(folder: &Path) -> Option<Self> {
-        let mut counting = COUNTING.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut counting = COUNTING.lock();
         if counting.iter().any(|busy| busy == folder) {
             return None;
         }
@@ -275,7 +277,7 @@ impl CountClaim {
 
 impl Drop for CountClaim {
     fn drop(&mut self) {
-        let mut counting = COUNTING.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut counting = COUNTING.lock();
         if let Some(index) = counting.iter().position(|busy| *busy == self.0) {
             counting.swap_remove(index);
         }

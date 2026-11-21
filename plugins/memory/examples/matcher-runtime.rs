@@ -1,13 +1,14 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use qol_memory::verification::{ollama::Ollama, Fact};
 use qol_memory::verification::{service::Verifier, Prediction};
 use qol_memory::warm::WarmState;
+use qol_sync::Mutex;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -28,7 +29,6 @@ impl Verifier for Recorded {
         let prediction = self.provider.verify(query, facts)?;
         self.observations
             .lock()
-            .unwrap()
             .push(json!({"query":query,"facts":facts,"prediction":prediction}));
         Ok(prediction)
     }
@@ -107,7 +107,7 @@ fn main() -> Result<()> {
             qol_fs::atomic_write(
                 &root.join(format!("round-{repeat}.json")),
                 &serde_json::to_vec(
-                    &json!({"results":results,"observations":*observations.lock().unwrap()}),
+                    &json!({"results":results,"observations":*observations.lock()}),
                 )?,
             )?;
         }
@@ -115,9 +115,7 @@ fn main() -> Result<()> {
     }
     println!(
         "{}",
-        serde_json::to_string(
-            &json!({"rounds":rounds,"observations":*observations.lock().unwrap()})
-        )?
+        serde_json::to_string(&json!({"rounds":rounds,"observations":*observations.lock()}))?
     );
     Ok(())
 }

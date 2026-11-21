@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use qol_sync::Mutex;
 
 use crate::host::Pane;
 
@@ -105,10 +107,7 @@ impl SystemServiceProbe {
     }
 
     fn process_snapshot(&self) -> Option<Arc<ProcessSnapshot>> {
-        let mut cache = self
-            .shared
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut cache = self.shared.lock();
         if snapshot_fresh(cache.loaded_at, Instant::now()) {
             qol_runtime::probe!(
                 "CLI_SESSIONS_RECON",

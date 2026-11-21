@@ -6,8 +6,8 @@ use crate::input::{
 };
 use anyhow::Result;
 use qol_platform::{permission_status, Permission};
+use qol_sync::Mutex;
 use rdev::{simulate, Button, EventType, Key, SimulateError};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 #[repr(C)]
@@ -171,10 +171,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         log::debug!("[SERVER] Received: x={:.2} y={:.2}", x, y);
 
         let bounds = self.bounds.current();
-        let button = *self
-            .button_state
-            .lock()
-            .expect("Button state mutex poisoned");
+        let button = *self.button_state.lock();
         let (new_x, new_y) = self.cursor.advance(&bounds, x, y);
 
         log::debug!(
@@ -203,20 +200,14 @@ impl InputHandlerTrait for InputHandlerImpl {
         let position = self.resolve_pointer_position();
 
         {
-            let mut state = self
-                .button_state
-                .lock()
-                .expect("Button state mutex poisoned");
+            let mut state = self.button_state.lock();
             *state = Some(button_enum);
         }
 
         Self::send_mouse_button_event(position, button_enum, true, click_state)?;
         std::thread::sleep(Duration::from_millis(ServerConfig::MOUSE_CLICK_DELAY_MS));
         {
-            let mut state = self
-                .button_state
-                .lock()
-                .expect("Button state mutex poisoned");
+            let mut state = self.button_state.lock();
             *state = None;
         }
         Self::send_mouse_button_event(position, button_enum, false, click_state)?;
@@ -226,12 +217,9 @@ impl InputHandlerTrait for InputHandlerImpl {
     fn mouse_down(&self, button: u8) -> Result<()> {
         let button_enum = Self::map_button(button);
 
-        *self
-            .button_state
-            .lock()
-            .expect("Button state mutex poisoned") = Some(button_enum);
+        *self.button_state.lock() = Some(button_enum);
 
-        let mut drag = self.drag_state.lock().expect("Drag state mutex poisoned");
+        let mut drag = self.drag_state.lock();
         drag.pending_x = 0.0;
         drag.pending_y = 0.0;
         drag.last_flush = Instant::now();
@@ -246,12 +234,9 @@ impl InputHandlerTrait for InputHandlerImpl {
 
         self.flush_pending_drag()?;
 
-        *self
-            .button_state
-            .lock()
-            .expect("Button state mutex poisoned") = None;
+        *self.button_state.lock() = None;
 
-        let mut drag = self.drag_state.lock().expect("Drag state mutex poisoned");
+        let mut drag = self.drag_state.lock();
         drag.pending_x = 0.0;
         drag.pending_y = 0.0;
         drag.button = None;
@@ -293,10 +278,7 @@ impl InputHandlerTrait for InputHandlerImpl {
     }
 
     fn modifier_press(&self, modifier: &str) -> Result<()> {
-        let mut state = self
-            .modifier_state
-            .lock()
-            .expect("Modifier state mutex poisoned");
+        let mut state = self.modifier_state.lock();
         match modifier.to_lowercase().as_str() {
             "ctrl" | "control" => {
                 state.ctrl = true;
@@ -320,10 +302,7 @@ impl InputHandlerTrait for InputHandlerImpl {
     }
 
     fn modifier_release(&self, modifier: &str) -> Result<()> {
-        let mut state = self
-            .modifier_state
-            .lock()
-            .expect("Modifier state mutex poisoned");
+        let mut state = self.modifier_state.lock();
         match modifier.to_lowercase().as_str() {
             "ctrl" | "control" => {
                 state.ctrl = false;
@@ -362,7 +341,7 @@ impl InputHandlerImpl {
     }
 
     fn next_click_count(&self, button: u8) -> i64 {
-        let mut last_click = self.last_click.lock().expect("Last click mutex poisoned");
+        let mut last_click = self.last_click.lock();
         let now = Instant::now();
         let timeout = Duration::from_millis(DOUBLE_CLICK_TIMEOUT_MS);
 
@@ -517,7 +496,7 @@ impl InputHandlerImpl {
     }
 
     fn apply_modifiers(state: &Mutex<ModifierKeys>, modifiers: &ModifierKeys) -> Result<()> {
-        let mut state_guard = state.lock().expect("Modifier state mutex poisoned");
+        let mut state_guard = state.lock();
 
         if modifiers.ctrl && !state_guard.ctrl {
             send_event(EventType::KeyPress(Key::ControlLeft))?;
@@ -564,7 +543,7 @@ impl InputHandlerImpl {
         target_y: f64,
         button: Option<Button>,
     ) -> Result<()> {
-        let mut drag = self.drag_state.lock().expect("Drag state mutex poisoned");
+        let mut drag = self.drag_state.lock();
 
         drag.pending_x += delta_x;
         drag.pending_y += delta_y;
@@ -583,7 +562,7 @@ impl InputHandlerImpl {
     }
 
     fn flush_pending_drag(&self) -> Result<()> {
-        let mut drag = self.drag_state.lock().expect("Drag state mutex poisoned");
+        let mut drag = self.drag_state.lock();
 
         if drag.pending_x != 0.0 || drag.pending_y != 0.0 {
             let pos = self.resolve_pointer_position();
@@ -687,7 +666,7 @@ mod tests {
     fn test_drag_batching_accumulates_movement() {
         let handler = InputHandlerImpl::new().unwrap();
 
-        let mut drag = handler.drag_state.lock().unwrap();
+        let mut drag = handler.drag_state.lock();
         drag.pending_x = 0.0;
         drag.pending_y = 0.0;
 
@@ -698,7 +677,7 @@ mod tests {
     #[test]
     fn test_drag_state_initialized() {
         let handler = InputHandlerImpl::new().unwrap();
-        let drag = handler.drag_state.lock().unwrap();
+        let drag = handler.drag_state.lock();
 
         assert_eq!(drag.pending_x, 0.0);
         assert_eq!(drag.pending_y, 0.0);

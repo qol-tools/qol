@@ -1,9 +1,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, SocketSource};
+use qol_sync::Mutex;
 
 use crate::capture::{self, Clipboard, SecretEcho};
 use crate::history::{now_ms, Clip, History, Recorded, SecretPolicy, Store};
@@ -43,7 +44,7 @@ impl Daemon {
     }
 
     pub(crate) fn paused_reason(&self) -> Option<String> {
-        lock(&self.paused).clone()
+        self.paused.lock().clone()
     }
 }
 
@@ -69,7 +70,7 @@ pub fn run_daemon() -> Result<()> {
         }
         Err(error) => {
             log::warn!("{error}");
-            *lock(&paused) = Some(error.to_string());
+            *paused.lock() = Some(error.to_string());
             None
         }
     };
@@ -99,7 +100,7 @@ fn spawn_watcher(
                     Err(error) => {
                         log::error!("clipboard capture stopped: {error}");
                         qol_runtime::probe!("QOL_CLIPBOARD", "event=capture_stopped error={error}");
-                        *lock(&paused) = Some(error.to_string());
+                        *paused.lock() = Some(error.to_string());
                         return;
                     }
                 };
@@ -178,12 +179,6 @@ fn next_secret_deadline(clips: &[Clip], secret_ttl: Duration) -> u64 {
         })
         .min()
         .unwrap_or(NO_SECRET)
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]

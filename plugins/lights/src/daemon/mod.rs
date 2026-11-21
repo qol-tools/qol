@@ -7,13 +7,14 @@ mod presets;
 mod state;
 pub mod ws;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::DaemonRequest;
+use qol_sync::Mutex;
 use serde_json::Value;
 
 use crate::backend::zigbee::ZigbeeBackend;
@@ -91,11 +92,9 @@ fn device_monitor_loop(
                 if !counted {
                     continue;
                 }
-                if let Ok(guard) = service.lock() {
-                    if let Some(svc) = guard.as_ref() {
-                        let _ = svc.backend().permit_join(0);
-                        log::info!("pairing auto-stopped after device joined");
-                    }
+                if let Some(svc) = service.lock().as_ref() {
+                    let _ = svc.backend().permit_join(0);
+                    log::info!("pairing auto-stopped after device joined");
                 }
             }
         }
@@ -244,9 +243,7 @@ fn light_rows(runtime: &DaemonRuntime) -> Vec<LightRow> {
         return stored_light_rows(&store::load().unwrap_or_default());
     };
     let guard = state.shared_service();
-    let Ok(lock) = guard.lock() else {
-        return Vec::new();
-    };
+    let lock = guard.lock();
     let Some(svc) = lock.as_ref() else {
         return Vec::new();
     };
@@ -255,7 +252,7 @@ fn light_rows(runtime: &DaemonRuntime) -> Vec<LightRow> {
     drop(lock);
     let shared_looks = state.shared_looks();
     let looks_view = {
-        let mut guard = looks::lock(&shared_looks);
+        let mut guard = shared_looks.lock();
         guard.set_fallback(&config);
         guard.clone()
     };
@@ -348,9 +345,7 @@ fn dongle_status(runtime: &DaemonRuntime) -> DongleStatus {
     match runtime {
         DaemonRuntime::Ready(state) => {
             let guard = state.shared_service();
-            let Ok(lock) = guard.lock() else {
-                return DongleStatus::Offline("service lock poisoned".into());
-            };
+            let lock = guard.lock();
             match lock.as_ref() {
                 Some(svc) => DongleStatus::Ready {
                     port: svc.backend().serial_port().to_string(),

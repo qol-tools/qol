@@ -1,8 +1,9 @@
 use std::fs::File;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Result};
+use qol_sync::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -190,7 +191,7 @@ impl History {
 
     pub fn toggle_pin(&self, id: &str, now: u64, retention: Retention) -> Result<bool> {
         let _writer = self.write_lock()?;
-        if self.secrets().iter().any(|clip| clip.id == id) {
+        if self.secrets.lock().iter().any(|clip| clip.id == id) {
             bail!("secrets clear on their own and cannot be pinned");
         }
         let (mut clips, _) = self.load_retained(now, retention)?;
@@ -210,7 +211,7 @@ impl History {
     pub fn forget(&self, id: &str) -> Result<()> {
         let _writer = self.write_lock()?;
         {
-            let mut held = self.secrets();
+            let mut held = self.secrets.lock();
             if let Some(index) = held.iter().position(|clip| clip.id == id) {
                 held.remove(index);
                 return Ok(());
@@ -236,7 +237,7 @@ impl History {
         self.store
             .save_keeping(&kept, |unread| !include_pinned && unread.pinned)?;
         self.remove_blobs(&removed);
-        let secrets = std::mem::take(&mut *self.secrets()).len();
+        let secrets = std::mem::take(&mut *self.secrets.lock()).len();
         Ok(removed.len() + secrets)
     }
 
@@ -244,12 +245,8 @@ impl History {
         self.store.lock()
     }
 
-    fn secrets(&self) -> MutexGuard<'_, Vec<Clip>> {
-        self.secrets.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
     fn hold_secret(&self, clip: Clip) {
-        let mut held = self.secrets();
+        let mut held = self.secrets.lock();
         held.push(clip);
         let bytes = |held: &[Clip]| held.iter().map(|clip| clip.bytes as usize).sum::<usize>();
         while held.len() > MAX_HELD_SECRETS || bytes(&held) > MAX_HELD_SECRET_BYTES {
@@ -258,7 +255,7 @@ impl History {
     }
 
     fn held_secrets(&self, now: u64, retention: Retention) -> (Vec<Clip>, usize) {
-        let mut held = self.secrets();
+        let mut held = self.secrets.lock();
         let before = held.len();
         held.retain(|clip| !crate::secrets::expired(clip.copied_at_ms, now, retention.secret_ttl));
         (held.clone(), before - held.len())

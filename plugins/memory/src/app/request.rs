@@ -1,8 +1,9 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use qol_plugin_daemon::daemon::ReadResult;
 use qol_runtime::protocol::DaemonRequest;
+use qol_sync::Mutex;
 use serde_json::{json, Value};
 
 use crate::ask::{AskRequest, LogOptions};
@@ -46,7 +47,7 @@ fn ask(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
         fact: optional_string_field(input, "log_fact", "ask")?,
         no_log: bool_field(input, "no_log", "ask")?.unwrap_or(false),
     };
-    let mut warm = lock_state(state);
+    let mut warm = state.lock();
     let started = std::time::Instant::now();
     let caller = qol_agent_homes::Registry::load().resolve_caller(req.agent_home.as_deref());
     let lifecycle = warm.lifecycle();
@@ -72,7 +73,7 @@ fn ask(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
 }
 
 fn status(state: &Arc<Mutex<WarmState>>) -> Result<Value> {
-    let mut warm = lock_state(state);
+    let mut warm = state.lock();
     let (store, _aliases, units, notes) = warm.views()?;
     crate::ask::status_with_layers(store, units, notes)
 }
@@ -80,7 +81,7 @@ fn status(state: &Arc<Mutex<WarmState>>) -> Result<Value> {
 fn continue_request(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
     let request: crate::continue_recall::ContinueRequest = serde_json::from_value(input.clone())
         .context("continue: input.cwd and input.session must be strings")?;
-    let warm = lock_state(state);
+    let warm = state.lock();
     let outcome = crate::continue_recall::run(warm.store(), &request)?;
     serde_json::to_value(outcome).context("failed to encode the qol-memory continue response")
 }
@@ -113,7 +114,7 @@ fn capture(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
     if let Some(fields) = unit.as_object_mut() {
         fields.insert("agent_home".to_string(), json!(caller));
     }
-    let mut warm = lock_state(state);
+    let mut warm = state.lock();
     let store = warm.store().clone();
     let appended = crate::ingest::append_units(&store, std::slice::from_ref(&unit), warm.keys())?;
     if appended > 0 {
@@ -156,7 +157,7 @@ fn supersede(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
     }
     let caller = qol_agent_homes::Registry::load()
         .resolve_caller(optional_string_field(input, "agent_home", "supersede")?.as_deref());
-    let mut warm = lock_state(state);
+    let mut warm = state.lock();
     let visible = nameable(&mut warm, &caller)?;
     let keys = visible.resolve(&raw_keys)?;
     let store = warm.store().clone();
@@ -188,7 +189,7 @@ fn forget(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
     }
     let caller = qol_agent_homes::Registry::load()
         .resolve_caller(optional_string_field(input, "agent_home", "forget")?.as_deref());
-    let mut warm = lock_state(state);
+    let mut warm = state.lock();
     let keys = nameable(&mut warm, &caller)?.resolve(&raw_keys)?;
     crate::lifecycle::forget(warm.store(), &keys, reason, &caller)?;
     Ok(json!({ "forgotten": keys }))
@@ -277,7 +278,7 @@ fn rows(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
         fact: None,
         no_log: bool_field(input, "no_log", "rows")?.unwrap_or(false),
     };
-    let mut warm = lock_state(state);
+    let mut warm = state.lock();
     let caller = qol_agent_homes::Registry::load().resolve_caller(req.agent_home.as_deref());
     let lifecycle = warm.lifecycle();
     let (store, aliases, units, notes, indexes) = warm.ask_views(&caller)?;
@@ -322,7 +323,7 @@ fn feedback(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
     let query = string_field(input, "query", "feedback")?;
     let key = string_field(input, "key", "feedback")?;
     let vote = vote_field(input, "feedback")?;
-    let warm = lock_state(state);
+    let warm = state.lock();
     let store = warm.store().clone();
     let norm = crate::retrieval_log::normalize_query(&query);
     crate::feedback::append_vote(store.root(), &norm, &key, vote);
@@ -330,17 +331,11 @@ fn feedback(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
 }
 
 fn reindex(state: &Arc<Mutex<WarmState>>) -> Result<Value> {
-    let mut warm = lock_state(state);
+    let mut warm = state.lock();
     let store = warm.store().clone();
     let layers = crate::warm::reindex(&store)?;
     warm.invalidate_layers();
     Ok(json!({ "layers": layers }))
-}
-
-fn lock_state(state: &Arc<Mutex<WarmState>>) -> MutexGuard<'_, WarmState> {
-    state
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn string_field(input: &Value, field: &str, action: &str) -> Result<String> {
@@ -394,8 +389,9 @@ fn vote_field(input: &Value, action: &str) -> Result<i64> {
 mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
+    use qol_sync::Mutex;
     use serde_json::json;
 
     use super::*;
@@ -559,7 +555,7 @@ mod tests {
         };
         assert_eq!(value["appended"], 1);
 
-        let warm = state.lock().expect("lock");
+        let warm = state.lock();
         let stored = std::fs::read_to_string(warm.store().units_path()).expect("read units");
         assert!(stored.contains("u-cap-1"));
     }
@@ -735,7 +731,7 @@ mod tests {
         ) else {
             panic!("capture must answer with data for action `capture`");
         };
-        let warm = state.lock().expect("lock");
+        let warm = state.lock();
         let stored = std::fs::read_to_string(warm.store().units_path()).expect("read units");
         assert_eq!(stored.lines().filter(|line| !line.is_empty()).count(), 2);
         assert!(stored.contains("\"agent_home\":\"/tmp/qol-home-mine\""));
@@ -754,7 +750,7 @@ mod tests {
         };
         assert_eq!(value["recorded"], true);
 
-        let warm = state.lock().expect("lock");
+        let warm = state.lock();
         let raw = std::fs::read_to_string(warm.store().root().join("feedback.jsonl"))
             .expect("read feedback.jsonl");
         let line: Value = serde_json::from_str(raw.lines().next().expect("one line"))
@@ -806,7 +802,7 @@ mod tests {
             "non-numeric vote must be rejected"
         );
 
-        let warm = state.lock().expect("lock");
+        let warm = state.lock();
         assert!(
             !warm.store().root().join("feedback.jsonl").exists(),
             "rejected votes must not touch feedback.jsonl"
@@ -955,7 +951,7 @@ mod tests {
             json!({ "text": OLD_LANES, "cwd": "/fixture/project" }),
         );
         let key = captured["key"].as_str().expect("capture answers a key");
-        let units_path = state.lock().expect("lock").store().units_path();
+        let units_path = state.lock().store().units_path();
         let stored = std::fs::read_to_string(&units_path).expect("read units");
         let long_reason = "x".repeat(crate::lifecycle::MAX_REASON_CHARS + 1);
         let too_long = format!(
@@ -1023,7 +1019,7 @@ mod tests {
             let message = refusal(&mut state, action, input);
             assert!(message.contains(expected), "{action}: {message}");
         }
-        let warm = state.lock().expect("lock");
+        let warm = state.lock();
         assert_eq!(
             std::fs::read_to_string(&units_path).expect("read units"),
             stored,
@@ -1047,7 +1043,7 @@ mod tests {
             .as_str()
             .expect("capture answers a key")
             .to_string();
-        let store = state.lock().expect("lock").store().clone();
+        let store = state.lock().store().clone();
         crate::lifecycle::forget(
             &store,
             std::slice::from_ref(&their_key),

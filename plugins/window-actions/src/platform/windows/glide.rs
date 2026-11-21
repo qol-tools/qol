@@ -1,8 +1,9 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use qol_sync::Mutex;
 use qol_windowing::platform::windows::Window;
 use qol_windowing::{WindowId, WindowRect};
 
@@ -268,7 +269,7 @@ fn advance(state: &Mutex<State>, plan: Plan, mover: &impl Mover) -> bool {
         Plan::Hold => true,
         Plan::Move(step) => {
             let placed = step.apply(mover);
-            lock(state).settle(step.generation, placed)
+            state.lock().settle(step.generation, placed)
         }
     }
 }
@@ -301,26 +302,26 @@ impl GlideController {
     }
 
     pub(crate) fn stop_all(&mut self) -> Result<(), String> {
-        self.lock().reset();
+        self.state.lock().reset();
         self.join_worker();
         Ok(())
     }
 
     pub(crate) fn maintain(&mut self) -> Option<Result<(), String>> {
         let expired = {
-            let state = self.lock();
+            let state = self.state.lock();
             !state.motion.is_empty() && Instant::now() > state.expires_at
         };
         expired.then(|| self.stop_all())
     }
 
     pub(crate) fn is_active(&self) -> bool {
-        !self.lock().motion.is_empty()
+        !self.state.lock().motion.is_empty()
     }
 
     fn start(&mut self, direction: Direction, speed: f64) -> Result<String, String> {
         let plan = {
-            let mut state = self.lock();
+            let mut state = self.state.lock();
             let fresh = state.target.is_none();
             if fresh {
                 let window = Window::foreground().ok_or("No focused window")?;
@@ -346,17 +347,17 @@ impl GlideController {
         };
         if let Some(plan) = plan {
             if !advance(&self.state, plan, &Win32Mover) {
-                self.lock().reset();
+                self.state.lock().reset();
                 return Err("The focused window can no longer be moved".into());
             }
         }
-        let observation = self.lock().observation();
+        let observation = self.state.lock().observation();
         self.ensure_worker();
         Ok(observation)
     }
 
     fn heartbeat(&mut self, speed: f64) -> String {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         if state.motion.is_empty() {
             return "active=none reason=no-active-glide".into();
         }
@@ -366,7 +367,7 @@ impl GlideController {
     }
 
     fn stop(&mut self, direction: Direction) -> String {
-        let mut state = self.lock();
+        let mut state = self.state.lock();
         state.motion.release(direction);
         let observation = state.observation();
         let finished = state.motion.is_empty();
@@ -389,7 +390,13 @@ impl GlideController {
             return;
         }
         self.join_worker();
-        let Some(generation) = self.lock().target.as_ref().map(|target| target.generation) else {
+        let Some(generation) = self
+            .state
+            .lock()
+            .target
+            .as_ref()
+            .map(|target| target.generation)
+        else {
             return;
         };
         let state = Arc::clone(&self.state);
@@ -404,22 +411,12 @@ impl GlideController {
             join_within(worker, WORKER_STOP_WAIT);
         }
     }
-
-    fn lock(&self) -> MutexGuard<'_, State> {
-        lock(&self.state)
-    }
 }
 
 impl Drop for GlideController {
     fn drop(&mut self) {
         let _ = self.stop_all();
     }
-}
-
-fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
-    state
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn join_within(worker: JoinHandle<()>, limit: Duration) -> bool {
@@ -438,7 +435,7 @@ fn run(state: &Mutex<State>, generation: u64) {
     loop {
         std::thread::sleep(TICK);
         let plan = {
-            let mut state = lock(state);
+            let mut state = state.lock();
             if !state.is_current(generation) {
                 return;
             }
@@ -664,7 +661,7 @@ mod tests {
             }
         }
         let state = Mutex::new(gliding(&[Direction::Right], 1200.0));
-        let plan = lock(&state).plan(Instant::now(), 0.016);
+        let plan = state.lock().plan(Instant::now(), 0.016);
         assert!(advance(&state, plan, &Probe(&state)));
     }
 

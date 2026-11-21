@@ -3,10 +3,11 @@ use std::fs::{self, DirBuilder, Permissions};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use qol_process::BoundedCommandOutput;
+use qol_sync::Mutex;
 
 use super::super::super::{Flavor, ThumbError};
 use super::cache::Stamp;
@@ -125,7 +126,7 @@ fn work_folder(folder: &Path) -> std::io::Result<PathBuf> {
     static RUNS: AtomicU64 = AtomicU64::new(0);
     static SWEPT: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
     {
-        let mut swept = SWEPT.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut swept = SWEPT.lock();
         if !swept.iter().any(|known| known == folder) {
             sweep(folder);
             swept.push(folder.to_path_buf());

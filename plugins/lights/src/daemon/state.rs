@@ -1,8 +1,9 @@
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::znp::{Device, Endpoint};
 use anyhow::Result;
+use qol_sync::Mutex;
 use serde_json::Value;
 
 use crate::backend::zigbee::ZigbeeBackend;
@@ -46,10 +47,7 @@ pub struct DaemonState {
 pub type SharedTarget = Arc<Mutex<LightTarget>>;
 
 pub fn current_target(target: &SharedTarget) -> LightTarget {
-    target
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+    target.lock().clone()
 }
 
 struct Delivery {
@@ -127,7 +125,6 @@ impl DaemonState {
     pub fn events(&self) -> crossbeam_channel::Receiver<crate::znp::ZigbeeEvent> {
         self.service
             .lock()
-            .expect("service lock poisoned during events()")
             .as_ref()
             .expect("service not initialized")
             .backend()
@@ -290,7 +287,7 @@ impl DaemonState {
     }
 
     fn forget_light(&mut self, ieee: &str, network_address: Option<u16>) {
-        looks::lock(&self.looks).forget(ieee);
+        self.looks.lock().forget(ieee);
         self.config
             .devices
             .retain(|_, entry| looks::normalize(&entry.ieee_address) != ieee);
@@ -298,10 +295,7 @@ impl DaemonState {
             && looks::names_light(&self.config.main_target_id, ieee, network_address);
         if named {
             self.config.main_target_id.clear();
-            *self
-                .main_target
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = self.config.main_target();
+            *self.main_target.lock() = self.config.main_target();
         }
         persist::submit(Change::Forget {
             ieee: ieee.to_string(),
@@ -310,10 +304,8 @@ impl DaemonState {
     }
 
     fn addresses(&self) -> Vec<LightAddress> {
-        if let Ok(guard) = self.service.lock() {
-            if let Some(svc) = guard.as_ref() {
-                return looks::light_addresses(&svc.backend().devices());
-            }
+        if let Some(svc) = self.service.lock().as_ref() {
+            return looks::light_addresses(&svc.backend().devices());
         }
         looks::config_addresses(&self.config.devices)
     }
@@ -323,7 +315,7 @@ impl DaemonState {
         let target = current_target(&self.main_target);
         let addresses = self.addresses();
         let result = presets::apply(&mut edited, action, input, |ieee| {
-            looks::look_for(ieee, &target, &addresses, &looks::lock(&self.looks))
+            looks::look_for(ieee, &target, &addresses, &self.looks.lock())
         });
         match result {
             Ok(()) => {
@@ -339,9 +331,7 @@ impl DaemonState {
         &self,
         f: impl FnOnce(&mut LightService<ZigbeeBackend>) -> T,
     ) -> Result<T, String> {
-        let Ok(mut guard) = self.service.lock() else {
-            return Err("service lock poisoned".into());
-        };
+        let mut guard = self.service.lock();
         let Some(svc) = guard.as_mut() else {
             return Err("service not available".into());
         };
@@ -421,7 +411,7 @@ impl DaemonState {
 
     fn fresh_config(&self) -> Result<PluginConfig, DaemonOutcome> {
         let config = store::load().map_err(|error| DaemonOutcome::Error(error.to_string()))?;
-        looks::lock(&self.looks).set_fallback(&config);
+        self.looks.lock().set_fallback(&config);
         Ok(config)
     }
 
@@ -450,13 +440,10 @@ impl DaemonState {
             Ok(c) => c,
             Err(e) => return DaemonOutcome::Error(e.to_string()),
         };
-        *self
-            .main_target
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = config.main_target();
+        *self.main_target.lock() = config.main_target();
         self.current_brightness = config.live_brightness;
         self.current_mirek = config.live_mirek;
-        looks::lock(&self.looks).adopt(&config);
+        self.looks.lock().adopt(&config);
         self.config = config;
         DaemonOutcome::Handled
     }

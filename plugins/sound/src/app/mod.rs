@@ -5,11 +5,12 @@
 //! second process.
 
 use std::process::ExitCode;
-use std::sync::{mpsc, Mutex, PoisonError};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use qol_audio::meter::Meter;
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
+use qol_sync::Mutex;
 use serde::Serialize;
 
 use crate::config::SoundConfig;
@@ -222,9 +223,7 @@ fn apply_saved_output(config: &SoundConfig) -> bool {
 }
 
 fn note_saved_output(device: &str) -> bool {
-    let mut last = LAST_SAVED_OUTPUT
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut last = LAST_SAVED_OUTPUT.lock();
     let changed = last.as_deref().is_some_and(|saved| saved != device);
     if last.as_deref() != Some(device) {
         *last = Some(device.to_owned());
@@ -382,7 +381,7 @@ fn levels() -> ReadResult<Command> {
 }
 
 fn read_levels(now: Instant) -> Levels {
-    let mut guard = METERS.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut guard = METERS.lock();
     let opened = guard.is_none();
     let meters = guard.get_or_insert_with(|| Meters {
         output: None,
@@ -426,14 +425,14 @@ fn spawn_idle_close() {
         .spawn(close_meters_when_idle);
     if let Err(error) = spawned {
         log::warn!("sound: cannot watch the level meters for idleness, closing them: {error}");
-        *METERS.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        *METERS.lock() = None;
     }
 }
 
 fn close_meters_when_idle() {
     loop {
         let wait = {
-            let mut guard = METERS.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut guard = METERS.lock();
             let Some(meters) = guard.as_ref() else {
                 return;
             };

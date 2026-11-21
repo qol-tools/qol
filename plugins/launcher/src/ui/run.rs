@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use gpui::*;
@@ -9,6 +9,7 @@ use crate::app;
 use crate::discovery::{self, PreloadedEntries, SharedEntries, SharedEntryState};
 use crate::monitor::MonitorTracker;
 use qol_gpui::command_loop::LoopFlow;
+use qol_sync::Mutex;
 
 use super::keepalive;
 use super::window_host::{
@@ -192,7 +193,7 @@ fn warm_icons(cx: &mut App, entries: Arc<PreloadedEntries>) {
 async fn wait_for_entries(entries: &SharedEntries, cx: &AsyncApp) {
     let executor = cx.background_executor().clone();
     loop {
-        let ready = entries.lock().map(|g| g.loaded_once).unwrap_or(false);
+        let ready = entries.lock().loaded_once;
         if ready {
             break;
         }

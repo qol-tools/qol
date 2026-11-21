@@ -1,9 +1,10 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadinessGate, SocketSource};
 use qol_runtime::protocol::{DaemonResponse, ReadinessPhase};
+use qol_sync::Mutex;
 
 use crate::ingest::{self, IngestRoots};
 use crate::store::{Store, STALE_TEMP_AGE};
@@ -83,10 +84,7 @@ fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate, notes_
         Some(format!("ingesting transcripts 0/{total}")),
     );
     for chunk in paths.chunks(16) {
-        let mut warm = match state.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut warm = state.lock();
         let store = warm.store().clone();
         match ingest::ingest_paths(&store, &roots, chunk, warm.keys()) {
             Ok(_) => {}
@@ -106,18 +104,12 @@ fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate, notes_
     }
     warming.set_phase(ReadinessPhase::Warming, Some("distilling notes".to_owned()));
     let store = {
-        let warm = match state.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let warm = state.lock();
         warm.store().clone()
     };
     match crate::distill::run(&store, notes_runs_kept) {
         Ok(report) if !report.unchanged => {
-            let mut warm = match state.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let mut warm = state.lock();
             warm.invalidate_notes_index();
         }
         Ok(_) => {}
@@ -137,10 +129,7 @@ fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate, notes_
         Some("building warm index".to_owned()),
     );
     {
-        let mut warm = match state.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut warm = state.lock();
         if let Err(error) = warm.layers() {
             log::warn!("initial warm build failed: {error:#}");
             qol_runtime::probe!(
