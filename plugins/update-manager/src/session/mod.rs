@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDateTime;
 
+use crate::platform::Refusal;
 use crate::updates::{
-    visible, Auto, AutoKey, Cleanup, Clock, Failure, Finish, Holding, Host, Hours, Mint, Refusal,
-    Update, Updates,
+    visible, Auto, AutoKey, Cleanup, Clock, Failure, Finish, Holding, Host, Hours, Mint, Update,
+    Updates,
 };
 
 mod journal;

@@ -2,7 +2,8 @@ use std::path::Path;
 
 use chrono::NaiveDateTime;
 
-use crate::updates::{AutoKey, Failure, Holding, Host, Hours, Reason, Refusal, Update, Updates};
+use crate::platform::Refusal;
+use crate::updates::{AutoKey, Failure, Holding, Host, Hours, Reason, Update, Updates};
 
 const UNSUPPORTED: &str = "Update Manager reads Linux Mint only so far";
 

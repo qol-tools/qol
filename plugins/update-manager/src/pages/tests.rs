@@ -2,10 +2,11 @@ use chrono::NaiveDateTime;
 use qol_config::pages::{Control, Enter, Go, Notice, Page, Pages};
 
 use super::{build, press, ROOT};
+use crate::platform::Refusal;
 use crate::session::{Act, Helper, InUse, Journal, Session, Task, MINT_DEFAULT};
 use crate::updates::{
     Auto, AutoKey, ByHand, Cleaner, Cleanup, Failure, Finish, Held, Hours, Mint, Package, Reason,
-    Refusal, Run, RunBy, Unit, Update, Updates,
+    Run, RunBy, Unit, Update, Updates,
 };
 
 fn at(text: &str) -> NaiveDateTime {

@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::IndexMap;
 
-use super::names::{self, base};
-use super::{lenient, output, Running};
+use super::names;
+use super::Running;
+use crate::platform::linux::command::{lenient, output};
+use crate::platform::linux::packages::base;
 use crate::updates::{Held, Package, Unit, Update};
 
 const PHASED: &str = "The following upgrades have been deferred due to phasing:";

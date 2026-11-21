@@ -3,9 +3,9 @@ use std::io::ErrorKind;
 
 use qol_desktop_settings::gsettings;
 
-use super::privileged::run_script;
-use super::READ;
-use crate::updates::Refusal;
+use crate::platform::linux::command::READ;
+use crate::platform::linux::privileged::run_script;
+use crate::platform::Refusal;
 
 const SCHEMA: &str = "com.linuxmint.updates";
 const KEY: &str = "blacklisted-packages";

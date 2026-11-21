@@ -1,10 +1,11 @@
 use std::path::Path;
 
-use super::super::lenient;
 use super::super::mint::parse_timer;
-use super::super::names::kernel_abi;
-use super::super::privileged::run_script;
-use crate::updates::{ByHand, Cleaner, Cleanup, Refusal};
+use crate::platform::linux::command::lenient;
+use crate::platform::linux::packages::kernel_abi;
+use crate::platform::linux::privileged::run_script;
+use crate::platform::Refusal;
+use crate::updates::{ByHand, Cleaner, Cleanup};
 
 const TIMER: &str = "mintupdate-automation-autoremove.timer";
 const SERVICE: &str = "mintupdate-automation-autoremove.service";

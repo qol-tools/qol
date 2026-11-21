@@ -13,8 +13,9 @@ use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, S
 use serde::Serialize;
 
 use crate::pages;
+use crate::platform::Refusal;
 use crate::session::{Helper as HelperState, InUse, Journal, Rules, Session, Task};
-use crate::updates::{self, Failure, Helper, Reason, Refusal};
+use crate::updates::{self, Failure, Helper, Reason};
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,

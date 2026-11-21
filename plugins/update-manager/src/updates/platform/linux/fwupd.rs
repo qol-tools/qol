@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use super::{run, READ};
+use crate::platform::linux::command::{found, run, READ};
 use crate::updates::{Package, Unit, Update};
 
 #[derive(Debug, Default, Deserialize)]
@@ -34,7 +34,7 @@ struct Release {
 }
 
 pub(super) fn read() -> Result<Vec<Update>, String> {
-    if !super::found("fwupdmgr") {
+    if !found("fwupdmgr") {
         return Ok(Vec::new());
     }
     let done = run("fwupdmgr", &["get-updates", "--json"], READ)?;

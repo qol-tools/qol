@@ -1,13 +1,14 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
 
 use chrono::{Local, NaiveDateTime};
-use qol_process::{run_owned_with_output_timeout, BoundedCommandOutput};
 
-use crate::updates::{AutoKey, Failure, Host, Hours, Reason, Refusal, Update, Updates};
+use crate::platform::linux::command::{found, lenient, run};
+use crate::platform::linux::privileged::refused;
+use crate::platform::Refusal;
+use crate::updates::{AutoKey, Failure, Host, Hours, Reason, Update, Updates};
 
 mod apt;
 mod boot;
@@ -20,82 +21,19 @@ mod names;
 mod privileged;
 mod skips;
 
+pub(crate) use crate::platform::linux::is_mint;
 use boot::Running;
 pub(crate) use privileged::Helper;
 
-const READ: Duration = Duration::from_secs(120);
 const INSTALL: Duration = Duration::from_secs(3600);
-const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 const HISTORY: &str = "/var/log/apt/history.log";
 const HISTORY_ROTATED: &str = "/var/log/apt/history.log.1.gz";
-const MINT_AUTOMATION: &str = "/usr/bin/mintupdate-automation";
 const ADMIN_GROUPS: [&str; 3] = ["sudo", "admin", "wheel"];
 const RUNS_SHOWN: usize = 2;
 
-struct Done {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
-}
-
-impl Done {
-    fn reason(&self) -> String {
-        [&self.stderr, &self.stdout]
-            .into_iter()
-            .find_map(|text| {
-                text.lines()
-                    .rev()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-                    .map(String::from)
-            })
-            .unwrap_or_else(|| match self.code {
-                Some(code) => format!("exited with code {code}"),
-                None => "stopped by a signal".into(),
-            })
-    }
-}
-
-fn run(program: &str, args: &[&str], timeout: Duration) -> Result<Done, String> {
-    let mut command = Command::new(program);
-    command.args(args).env("LANG", "C").env("LC_ALL", "C");
-    match run_owned_with_output_timeout(command, timeout, OUTPUT_LIMIT) {
-        Ok(BoundedCommandOutput::Completed(output)) => Ok(Done {
-            code: output.status.code(),
-            stdout: String::from_utf8_lossy(output.stdout.as_bytes()).into_owned(),
-            stderr: String::from_utf8_lossy(output.stderr.as_bytes()).into_owned(),
-        }),
-        Ok(BoundedCommandOutput::TimedOut { .. }) => Err(format!(
-            "{program} did not finish within {} minutes",
-            timeout.as_secs() / 60
-        )),
-        Err(error) => Err(format!("{program} could not start: {error}")),
-    }
-}
-
-fn output(program: &str, args: &[&str]) -> Result<String, String> {
-    let done = run(program, args, READ)?;
-    if done.code == Some(0) {
-        Ok(done.stdout)
-    } else {
-        Err(format!("{program}: {}", done.reason()))
-    }
-}
-
-fn lenient(program: &str, args: &[&str]) -> String {
-    run(program, args, READ)
-        .map(|done| done.stdout)
-        .unwrap_or_default()
-}
-
-fn found(program: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
-}
-
 pub(crate) fn read_updates() -> Updates {
     let running = boot::running();
-    let tag = if Path::new(MINT_AUTOMATION).exists() {
+    let tag = if is_mint() {
         "Update Manager"
     } else {
         "System"
@@ -213,7 +151,7 @@ pub(crate) fn install(
         let finished = run(program, &args, INSTALL).map_err(|reason| stopped(done, reason))?;
         let _ = write!(file, "{}{}", finished.stdout, finished.stderr);
         if finished.code != Some(0) {
-            let reason = if privileged::refused(&finished.stderr) {
+            let reason = if refused(&finished.stderr) {
                 Reason::Refused(Refusal::Denied)
             } else {
                 Reason::Stopped(finished.reason())
@@ -259,10 +197,6 @@ pub(crate) fn boot_id() -> Option<String> {
 
 pub(crate) fn supported() -> Result<(), &'static str> {
     Ok(())
-}
-
-pub(crate) fn is_mint() -> bool {
-    Path::new(MINT_AUTOMATION).exists()
 }
 
 pub(crate) fn missing(programs: &[&'static str]) -> Vec<&'static str> {

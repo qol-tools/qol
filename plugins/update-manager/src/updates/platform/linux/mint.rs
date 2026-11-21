@@ -3,9 +3,10 @@ use std::path::Path;
 use chrono::NaiveDateTime;
 use qol_desktop_settings::gsettings;
 
-use super::privileged::{refused, run_script};
-use super::{lenient, run, READ};
-use crate::updates::{Auto, AutoKey, Clock, Hours, Mint, Refusal};
+use crate::platform::linux::command::{lenient, run, READ};
+use crate::platform::linux::privileged::{refused, run_script};
+use crate::platform::Refusal;
+use crate::updates::{Auto, AutoKey, Clock, Hours, Mint};
 
 const UPGRADE: &str = "mintupdate-automation-upgrade";
 pub(super) const TIMER: &str = "mintupdate-automation-upgrade.timer";

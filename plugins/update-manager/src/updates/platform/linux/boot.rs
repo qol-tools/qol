@@ -3,8 +3,9 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, Duration, Local, NaiveDateTime};
 
-use super::lenient;
-use super::names::{kernel_abi, two_parts};
+use super::names::two_parts;
+use crate::platform::linux::command::lenient;
+use crate::platform::linux::packages::kernel_abi;
 use crate::updates::{when, Finish};
 
 const OSRELEASE: &str = "/proc/sys/kernel/osrelease";

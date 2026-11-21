@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use crate::updates::{AutoKey, Cleaner, Cleanup, Refusal};
+use crate::platform::Refusal;
+use crate::updates::{AutoKey, Cleaner, Cleanup};
 
 mod mint;
 mod unattended;

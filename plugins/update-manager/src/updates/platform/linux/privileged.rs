@@ -1,19 +1,15 @@
 use std::collections::BTreeSet;
-use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, ExitStatus};
+use std::process::{Child, ChildStdin, ChildStdout};
 use std::time::{Duration, Instant};
 
-use qol_host_fixes::elevation::{
-    run_privileged, spawn_privileged_piped, wait_until_authorized, PrivilegedExit, PromptTimedOut,
-};
+use qol_host_fixes::elevation::wait_until_authorized;
 
-use crate::updates::{Failure, Holding, Reason, Refusal};
+use crate::platform::linux::privileged::{classify, refusal, spawn};
+use crate::platform::Refusal;
+use crate::updates::{Failure, Holding, Reason};
 
-const SHELL: &str = "/bin/sh";
-const LABEL: &str = "qol-update-manager";
 const STOP_WAIT: Duration = Duration::from_secs(5);
 const READY: &str = "ready";
 const REFRESHED: &str = "refreshed";
@@ -118,42 +114,6 @@ impl Drop for Helper {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
-}
-
-fn spawn(script: &str, args: &[String]) -> Result<Child, Refusal> {
-    let mut all: Vec<OsString> = vec!["-c".into(), script.into(), LABEL.into()];
-    all.extend(args.iter().map(OsString::from));
-    spawn_privileged_piped(LABEL, Path::new(SHELL), &all)
-        .map_err(|error| Refusal::Failed(format!("{error:#}")))
-}
-
-fn refusal(status: ExitStatus) -> Refusal {
-    match PrivilegedExit::check(status) {
-        Ok(()) => Refusal::Failed("the helper stopped".into()),
-        Err(error) => classify(&error),
-    }
-}
-
-fn classify(error: &anyhow::Error) -> Refusal {
-    if error.is::<PromptTimedOut>() {
-        return Refusal::TimedOut;
-    }
-    match error.downcast_ref::<PrivilegedExit>() {
-        Some(exit) if exit.dismissed() => Refusal::Dismissed,
-        Some(exit) if exit.not_authorized() => Refusal::Denied,
-        _ => Refusal::Failed(format!("{error:#}")),
-    }
-}
-
-pub(super) fn refused(stderr: &str) -> bool {
-    let stderr = stderr.to_ascii_lowercase();
-    stderr.contains("not authorized")
-        || stderr.contains("access denied")
-        || stderr.contains("interactive authentication required")
-}
-
-pub(super) fn run_script(script: &str, args: &[String]) -> Result<(), Refusal> {
-    run_privileged(LABEL, script, args).map_err(|error| classify(&error))
 }
 
 pub(super) fn install_apt(
@@ -306,22 +266,13 @@ mod tests {
     }
 
     #[test]
-    fn polkit_refusals_are_recognised() {
-        assert!(refused(
-            "Failed to reboot system via logind: Interactive authentication required."
-        ));
-        assert!(refused("Access denied"));
-        assert!(!refused("Unit not found"));
+    fn lock_holders_read_as_names() {
         assert_eq!(holder("unattended-upgr"), "Unattended upgrades");
         assert_eq!(holder("apt-get"), "Another apt-get");
     }
 
     #[test]
-    fn a_password_prompt_left_open_is_a_timed_out_refusal() {
-        assert_eq!(
-            classify(&anyhow::Error::from(PromptTimedOut)),
-            Refusal::TimedOut
-        );
+    fn the_install_script_refreshes_first_and_restores_holds() {
         assert_eq!(
             Reason::Refused(Refusal::TimedOut).label(),
             "The password prompt timed out"
