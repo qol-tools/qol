@@ -1,8 +1,8 @@
 mod protocol;
 
+use qol_sync::Mutex;
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Sender};
-use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -199,9 +199,7 @@ struct WebSocketTranscriptionSession {
 
 impl TranscriptionSession for WebSocketTranscriptionSession {
     fn submit_audio(&self, frame: AudioFrame) -> Result<AudioSubmit, TranscriptionError> {
-        let mut audio_sequence = self.audio_sequence.lock().map_err(|_| {
-            TranscriptionError::StreamClosed("audio sequence lock is unavailable".to_owned())
-        })?;
+        let mut audio_sequence = self.audio_sequence.lock();
         let sequence = audio_sequence.saturating_add(1);
         match self.audio.try_send(SequencedAudio { sequence, frame }) {
             Ok(()) => {
@@ -216,9 +214,7 @@ impl TranscriptionSession for WebSocketTranscriptionSession {
     }
 
     fn finalize_user_turn(&self) -> Result<(), TranscriptionError> {
-        let after_audio_sequence = *self.audio_sequence.lock().map_err(|_| {
-            TranscriptionError::StreamClosed("audio sequence lock is unavailable".to_owned())
-        })?;
+        let after_audio_sequence = *self.audio_sequence.lock();
         self.control
             .send(Control::FinalizeUserTurn {
                 after_audio_sequence,
@@ -230,10 +226,7 @@ impl TranscriptionSession for WebSocketTranscriptionSession {
 impl Drop for WebSocketTranscriptionSession {
     fn drop(&mut self) {
         let _ = self.control.send(Control::Shutdown);
-        let Ok(worker) = self.worker.get_mut() else {
-            return;
-        };
-        let Some(worker) = worker.take() else {
+        let Some(worker) = self.worker.get_mut().take() else {
             return;
         };
         let _ = worker.join();

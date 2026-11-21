@@ -229,7 +229,7 @@ fn probe_rendered_front(
     rendering: RenderingFlow,
     visible: bool,
 ) {
-    use std::sync::Mutex;
+    use qol_sync::Mutex;
     type RenderedSlot = Option<(u32, Option<gpui::ImageId>, bool)>;
     static LAST: Mutex<[RenderedSlot; 2]> = Mutex::new([None, None]);
 
@@ -251,7 +251,7 @@ fn probe_rendered_front(
             None
         };
         {
-            let mut last = LAST.lock().unwrap();
+            let mut last = LAST.lock();
             if last[pos] == Some((win.id, img_id, renders_gpui_preview)) {
                 continue;
             }

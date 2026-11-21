@@ -1,6 +1,7 @@
+use qol_sync::RwLock;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -39,21 +40,16 @@ impl AppTracker {
     }
 
     fn update(&self, snapshot: AppSnapshot) {
-        if let Ok(mut guard) = self.snapshot.write() {
-            if guard.pid != snapshot.pid {
-                self.last_key_target.store(0, Ordering::Relaxed);
-            }
-            *guard = snapshot;
+        let mut guard = self.snapshot.write();
+        if guard.pid != snapshot.pid {
+            self.last_key_target.store(0, Ordering::Relaxed);
         }
+        *guard = snapshot;
     }
 
     pub fn bundle_id_for_target(&self, target_pid: i32) -> String {
-        self.snapshot
-            .read()
-            .map(|snapshot| {
-                bundle_id_for_event_target(snapshot.pid, &snapshot.bundle_id, target_pid).to_owned()
-            })
-            .unwrap_or_default()
+        let snapshot = self.snapshot.read();
+        bundle_id_for_event_target(snapshot.pid, &snapshot.bundle_id, target_pid).to_owned()
     }
 
     pub fn note_key_target(&self, target_pid: i32) {

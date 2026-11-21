@@ -1,9 +1,9 @@
 mod layout;
 mod recognizer;
 
+use qol_sync::Mutex;
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Sender, SyncSender, TrySendError};
-use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
@@ -163,10 +163,7 @@ impl TranscriptionSession for SherpaOnnxSession {
 impl Drop for SherpaOnnxSession {
     fn drop(&mut self) {
         let _ = self.commands.send(Command::Shutdown);
-        let Ok(worker) = self.worker.get_mut() else {
-            return;
-        };
-        let Some(worker) = worker.take() else {
+        let Some(worker) = self.worker.get_mut().take() else {
             return;
         };
         let _ = worker.join();

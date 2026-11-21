@@ -1,7 +1,8 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
+use qol_sync::Mutex;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct RevealTarget {
@@ -28,11 +29,7 @@ impl RevealTarget {
     }
 
     pub(crate) fn open(&self, source: &str) -> Result<()> {
-        let mut opened = self
-            .state
-            .opened
-            .lock()
-            .map_err(|_| anyhow!("folder reveal state lock was poisoned"))?;
+        let mut opened = self.state.opened.lock();
         if *opened {
             trace_reveal(source, "already-opened", self.path());
             return Ok(());

@@ -1,6 +1,7 @@
 use futures::{channel::mpsc as futures_mpsc, future::select, FutureExt, StreamExt};
+use qol_sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -101,48 +102,36 @@ impl WarmerControl {
         let generation = self
             .state
             .lock()
-            .map(|mut state| state.record_activity_at(Instant::now(), focus_refresh))
-            .unwrap_or(0);
+            .record_activity_at(Instant::now(), focus_refresh);
         wake_warmer();
         generation
     }
 
     fn record_focus_generation(&self) -> u64 {
-        self.state
-            .lock()
-            .map(|mut state| state.record_focus_generation_at())
-            .unwrap_or(0)
+        self.state.lock().record_focus_generation_at()
     }
 
     fn prepare_refresh_request(&self, request: RefreshRequest) -> RefreshRequest {
-        self.state
-            .lock()
-            .map(|state| state.prepare_refresh_request(request))
-            .unwrap_or(request)
+        self.state.lock().prepare_refresh_request(request)
     }
 
     fn mark_refresh_applied(&self, focus_generation: u64, success: bool) {
         if focus_generation == 0 {
             return;
         }
-        if let Ok(mut state) = self.state.lock() {
+        {
+            let mut state = self.state.lock();
             state.mark_refresh_applied(focus_generation, success);
         }
         wake_warmer();
     }
 
     fn next_wait(&self, now: Instant) -> Option<Duration> {
-        self.state
-            .lock()
-            .ok()
-            .and_then(|state| state.next_wait(now))
+        self.state.lock().next_wait(now)
     }
 
     fn take_due(&self, now: Instant) -> WarmerDecision {
-        self.state
-            .lock()
-            .map(|mut state| state.take_due(now))
-            .unwrap_or(WarmerDecision::Idle)
+        self.state.lock().take_due(now)
     }
 }
 
@@ -447,12 +436,7 @@ fn enqueue_warmer_from_cache(inputs: &ListenerInputs, activity_generation: u64, 
         );
         return;
     }
-    let windows = inputs
-        .window_cache
-        .lock()
-        .ok()
-        .map(|windows| windows.clone())
-        .unwrap_or_default();
+    let windows = inputs.window_cache.lock().clone();
     let Some(window) = capture_target_for_lane(CaptureLane::HiddenWarmer, &windows) else {
         return;
     };
@@ -514,7 +498,7 @@ async fn recv(
     rx: Arc<Mutex<mpsc::Receiver<RefreshRequest>>>,
 ) -> Option<RefreshRequest> {
     cx.background_executor()
-        .spawn(async move { rx.lock().ok()?.recv().ok() })
+        .spawn(async move { rx.lock().recv().ok() })
         .await
 }
 
@@ -522,7 +506,8 @@ fn drain(
     rx: &Arc<Mutex<mpsc::Receiver<RefreshRequest>>>,
     mut request: RefreshRequest,
 ) -> RefreshRequest {
-    if let Ok(guard) = rx.lock() {
+    {
+        let guard = rx.lock();
         while let Ok(next) = guard.try_recv() {
             request = request.merge(next);
         }
@@ -777,7 +762,7 @@ async fn refresh_data(
             config.reset_selection_on_open
         };
         let active_target = if picker_visible {
-            *crate::picker::ACTIVE_PICKER_MONITOR.lock().unwrap()
+            *crate::picker::ACTIVE_PICKER_MONITOR.lock()
         } else {
             let active_monitor =
                 qol_gpui::monitor::active_monitor().or_else(|| inputs.tracker.snapshot_monitor());
@@ -905,7 +890,8 @@ mod tests {
     };
     use crate::discovery::WindowInfo;
     use crate::picker::gather::{capture_target_for_lane, CaptureLane};
-    use std::sync::{mpsc, Arc, Mutex};
+    use qol_sync::Mutex;
+    use std::sync::{mpsc, Arc};
     use std::time::{Duration, Instant};
 
     fn window(id: u32) -> WindowInfo {
@@ -991,12 +977,12 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let rx = Arc::new(Mutex::new(rx));
         tx.send(focus_request).unwrap();
-        let first_request = rx.lock().unwrap().recv().unwrap();
+        let first_request = rx.lock().recv().unwrap();
         let first = super::drain(&rx, first_request);
         assert_eq!(first.lane_name(), "focus_leave");
 
         tx.send(pre_stamped_ordinary).unwrap();
-        let stale_request = rx.lock().unwrap().recv().unwrap();
+        let stale_request = rx.lock().recv().unwrap();
         let stale_successor = super::drain(&rx, stale_request);
         let successor = warmer.prepare_refresh_request(stale_successor);
         assert_eq!(successor.focus_generation, focus_generation);

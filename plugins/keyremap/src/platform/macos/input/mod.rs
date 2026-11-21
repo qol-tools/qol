@@ -1,9 +1,9 @@
 pub(crate) mod backends;
 pub(crate) mod selection;
 
+use qol_sync::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use qol_runtime::keyremap_marker;
@@ -105,28 +105,22 @@ pub(crate) struct MarkerBook {
 
 impl MarkerBook {
     pub(crate) fn insert(&self, keycode: u16, marker: i64) {
-        self.entries().insert(keycode, (marker, None));
+        self.entries.lock().insert(keycode, (marker, None));
     }
 
     pub(crate) fn release(&self, keycode: u16, now: Instant) {
-        if let Some(entry) = self.entries().get_mut(&keycode) {
+        if let Some(entry) = self.entries.lock().get_mut(&keycode) {
             entry.1 = Some(now);
         }
     }
 
     pub(crate) fn lookup(&self, keycode: u16, key_down: bool, now: Instant) -> Option<i64> {
-        let mut entries = self.entries();
+        let mut entries = self.entries.lock();
         entries.retain(|_, (_, released)| {
             released.is_none_or(|at| now.saturating_duration_since(at) <= MARKER_GRACE)
         });
         let (marker, released) = entries.get(&keycode)?;
         (!key_down || released.is_none()).then_some(*marker)
-    }
-
-    fn entries(&self) -> std::sync::MutexGuard<'_, HashMap<u16, (i64, Option<Instant>)>> {
-        self.entries
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 

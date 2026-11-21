@@ -1,5 +1,6 @@
+use qol_sync::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 #[derive(Clone, Copy)]
@@ -44,10 +45,12 @@ pub(crate) fn live_snapshot(wid: u32) -> Option<Snapshot> {
 }
 
 pub(crate) fn retain_active(active: &HashSet<u32>) {
-    if let Ok(mut stamps) = shared_stamps().lock() {
+    {
+        let mut stamps = shared_stamps().lock();
         stamps.retain(|wid, _| active.contains(wid));
     }
-    if let Ok(mut stamps) = live_stamps().lock() {
+    {
+        let mut stamps = live_stamps().lock();
         stamps.retain(|wid, _| active.contains(wid));
     }
 }
@@ -58,7 +61,8 @@ fn record_many(
     source: &'static str,
 ) {
     let now = Instant::now();
-    if let Ok(mut stamps) = stamps.lock() {
+    {
+        let mut stamps = stamps.lock();
         for id in ids {
             stamps.insert(id, Stamp { source, at: now });
         }
@@ -66,13 +70,8 @@ fn record_many(
 }
 
 fn snapshot(stamps: &'static Mutex<HashMap<u32, Stamp>>, wid: u32) -> Option<Snapshot> {
-    stamps
-        .lock()
-        .ok()?
-        .get(&wid)
-        .copied()
-        .map(|stamp| Snapshot {
-            source: stamp.source,
-            age_ms: stamp.at.elapsed().as_millis(),
-        })
+    stamps.lock().get(&wid).copied().map(|stamp| Snapshot {
+        source: stamp.source,
+        age_ms: stamp.at.elapsed().as_millis(),
+    })
 }

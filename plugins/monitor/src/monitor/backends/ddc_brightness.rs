@@ -1,5 +1,5 @@
+use qol_sync::Mutex;
 use std::collections::HashSet;
-use std::sync::Mutex;
 
 use crate::monitor::backends::i2c_ddc::I2cError;
 
@@ -10,7 +10,7 @@ pub(crate) struct DdcWrites {
 
 impl DdcWrites {
     pub(crate) fn dropped(&self, connector: &str) -> bool {
-        self.dropped.lock().unwrap().contains(connector)
+        self.dropped.lock().contains(connector)
     }
 
     pub(crate) fn refuse_dropped(&self, connector: &str) -> Result<(), I2cError> {
@@ -45,7 +45,7 @@ impl DdcWrites {
                 return Ok(());
             }
         }
-        self.dropped.lock().unwrap().insert(connector.to_string());
+        self.dropped.lock().insert(connector.to_string());
         Ok(())
     }
 }

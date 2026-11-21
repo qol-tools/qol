@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use qol_plugin_daemon::notification::send_notification;
+use qol_sync::{Condvar, Mutex};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::capture::frozen_frame::{FrozenCrop, FrozenFrame};
@@ -103,21 +104,17 @@ impl CaptureFileReady {
     fn complete(&self, result: FileWriteResult) {
         let outcome = if result.is_ok() { "ok" } else { "failed" };
         let (state, wake) = &*self.state;
-        if let Ok(mut state) = state.lock() {
-            *state = Some(result);
-            wake.notify_all();
-            qol_runtime::probe!("SHOT_FILE_READY", "phase=signaled outcome={outcome}");
-        }
+        let mut state = state.lock();
+        *state = Some(result);
+        wake.notify_all();
+        qol_runtime::probe!("SHOT_FILE_READY", "phase=signaled outcome={outcome}");
     }
 
     pub(crate) fn wait(&self) -> Result<()> {
         let (state, wake) = &*self.state;
-        let state = state
-            .lock()
-            .map_err(|_| anyhow!("screenshot file readiness lock poisoned"))?;
-        let (state, timeout) = wake
-            .wait_timeout_while(state, Duration::from_secs(10), |state| state.is_none())
-            .map_err(|_| anyhow!("screenshot file readiness lock poisoned"))?;
+        let state = state.lock();
+        let (state, timeout) =
+            wake.wait_timeout_while(state, Duration::from_secs(10), |state| state.is_none());
         if timeout.timed_out() && state.is_none() {
             return Err(anyhow!("timed out waiting for screenshot file"));
         }
@@ -154,21 +151,15 @@ impl CaptureFileStart {
 
     pub(crate) fn start(&self) {
         let (state, wake) = &*self.state;
-        if let Ok(mut started) = state.lock() {
-            *started = true;
-            wake.notify_all();
-        }
+        let mut started = state.lock();
+        *started = true;
+        wake.notify_all();
     }
 
-    fn wait(&self) -> Result<()> {
+    fn wait(&self) {
         let (state, wake) = &*self.state;
-        let started = state
-            .lock()
-            .map_err(|_| anyhow!("screenshot file start lock poisoned"))?;
-        let _started = wake
-            .wait_while(started, |started| !*started)
-            .map_err(|_| anyhow!("screenshot file start lock poisoned"))?;
-        Ok(())
+        let started = state.lock();
+        let _started = wake.wait_while(started, |started| !*started);
     }
 }
 
@@ -370,10 +361,7 @@ fn spawn_frozen_file_write(
     let start = CaptureFileStart::pending();
     let worker_start = start.clone();
     std::thread::spawn(move || {
-        if let Err(error) = worker_start.wait() {
-            worker_ready.complete(Err(format!("{error:#}")));
-            return;
-        }
+        worker_start.wait();
         let started = Instant::now();
         let result = frame
             .crop(rect)
@@ -410,10 +398,7 @@ fn spawn_file_write(rect: Rect, path: PathBuf) -> (CaptureFileReady, CaptureFile
     let start = CaptureFileStart::pending();
     let worker_start = start.clone();
     std::thread::spawn(move || {
-        if let Err(error) = worker_start.wait() {
-            worker_ready.complete(Err(format!("{error:#}")));
-            return;
-        }
+        worker_start.wait();
         let started = Instant::now();
         let result = platform::capture_screenshot(&rect, &path);
         match &result {
@@ -463,7 +448,7 @@ mod tests {
         let worker_start = start.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            worker_start.wait().unwrap();
+            worker_start.wait();
             tx.send(()).unwrap();
         });
 

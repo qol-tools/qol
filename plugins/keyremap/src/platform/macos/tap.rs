@@ -1,8 +1,9 @@
+use qol_sync::RwLock;
 use std::mem::ManuallyDrop;
 use std::os::raw::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use core_foundation::base::TCFType;
 use core_foundation::mach_port::{CFMachPort, CFMachPortInvalidate, CFMachPortRef};
@@ -63,16 +64,11 @@ impl TapState {
 
     pub fn swap_config(&self, new_config: ResolvedConfig) {
         let new = Arc::new(new_config);
-        if let Ok(mut guard) = self.config.write() {
-            *guard = new;
-        }
+        *self.config.write() = new;
     }
 
     pub(crate) fn config(&self) -> Arc<ResolvedConfig> {
-        self.config
-            .read()
-            .map(|g| g.clone())
-            .unwrap_or_else(|p| p.into_inner().clone())
+        Arc::clone(&self.config.read())
     }
 
     pub(crate) fn input(&self) -> &Arc<InputState> {

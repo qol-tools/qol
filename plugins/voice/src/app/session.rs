@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use qol_sync::Mutex;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
@@ -62,7 +63,7 @@ impl SessionManager {
         let selection = RouteSelection::resolve(config, || self.conversation_sink.targets());
         let target = selection.binding().cloned();
         {
-            let mut control = lock_routing_control(&self.routing_control)?;
+            let mut control = self.routing_control.lock();
             control.update(selection).map_err(anyhow::Error::msg)?;
         }
         let Some(target) = target else {
@@ -85,12 +86,11 @@ impl SessionManager {
         Ok(())
     }
 
-    pub fn record_failure(&mut self, error: String) -> Result<()> {
+    pub fn record_failure(&mut self, error: String) {
         qol_runtime::probe!("VOICE_SESSION", "event=activation_failed error={error}");
-        let mut status = lock_status(&self.status)?;
+        let mut status = self.status.lock();
         status.state = LifecycleState::Failed;
         status.error = Some(error);
-        Ok(())
     }
 
     pub fn start(&mut self, config: Config) -> Result<SessionStatus> {
@@ -106,10 +106,10 @@ impl SessionManager {
             listening: config.listen_config(),
             transcription: config.transcriber_request(),
         })?;
-        let route = lock_routing_control(&self.routing_control)?.decision();
+        let route = self.routing_control.lock().decision();
         let routing_revision = route.revision;
         let router = ConversationRouter::new(route);
-        let routing = lock_routing_control(&self.routing_control)?.status();
+        let routing = self.routing_control.lock().status();
         let info = session.info().clone();
         let status = SessionStatus {
             state: LifecycleState::Listening,
@@ -124,7 +124,7 @@ impl SessionManager {
             routing,
             error: None,
         };
-        *lock_status(&self.status)? = status.clone();
+        *self.status.lock() = status.clone();
         let stop = session.stop_handle();
         let control = session.control_handle();
         let worker_status = self.status.clone();
@@ -145,10 +145,9 @@ impl SessionManager {
                 )
             })
             .inspect_err(|error| {
-                if let Ok(mut status) = self.status.lock() {
-                    status.state = LifecycleState::Failed;
-                    status.error = Some(error.to_string());
-                }
+                let mut status = self.status.lock();
+                status.state = LifecycleState::Failed;
+                status.error = Some(error.to_string());
             })
             .context("failed to start voice-session worker")?;
         self.running = Some(RunningSession {
@@ -164,28 +163,28 @@ impl SessionManager {
     pub fn stop(&mut self) -> Result<SessionStatus> {
         self.reap_finished()?;
         let Some(running) = self.running.take() else {
-            *lock_status(&self.status)? = SessionStatus::default();
-            return self.snapshot();
+            *self.status.lock() = SessionStatus::default();
+            return Ok(self.snapshot());
         };
         {
-            let mut status = lock_status(&self.status)?;
+            let mut status = self.status.lock();
             status.state = LifecycleState::Stopping;
         }
-        let session_id = self.snapshot()?.session_id.unwrap_or_default();
+        let session_id = self.snapshot().session_id.unwrap_or_default();
         running.stop.stop();
         running
             .worker
             .join()
             .map_err(|_| anyhow!("voice-session worker panicked"))?;
         let status = SessionStatus::default();
-        *lock_status(&self.status)? = status;
+        *self.status.lock() = status;
         trace_lifecycle(session_id, "stopped");
-        self.snapshot()
+        Ok(self.snapshot())
     }
 
     pub fn status(&mut self) -> Result<SessionStatus> {
         self.reap_finished()?;
-        self.snapshot()
+        Ok(self.snapshot())
     }
 
     pub fn request_assistant_turn(
@@ -205,11 +204,11 @@ impl SessionManager {
             .map_err(Into::into)
     }
 
-    pub fn events(&self, after: u64) -> Result<SessionEventPage> {
+    pub fn events(&self, after: u64) -> SessionEventPage {
         self.events.page(after)
     }
 
-    pub(super) fn transcripts(&self) -> Result<Vec<TranscriptItem>> {
+    pub(super) fn transcripts(&self) -> Vec<TranscriptItem> {
         self.events.transcripts()
     }
 
@@ -217,10 +216,10 @@ impl SessionManager {
         self.conversation_sink.targets().map_err(Into::into)
     }
 
-    fn snapshot(&self) -> Result<SessionStatus> {
-        let mut status = lock_status(&self.status)?.clone();
-        status.routing = lock_routing_control(&self.routing_control)?.status();
-        Ok(status)
+    fn snapshot(&self) -> SessionStatus {
+        let mut status = self.status.lock().clone();
+        status.routing = self.routing_control.lock().status();
+        status
     }
 
     fn reap_finished(&mut self) -> Result<()> {
@@ -265,16 +264,4 @@ fn trace_lifecycle(session_id: u64, state: &str) {
         "VOICE_SESSION",
         "session={session_id} event=lifecycle state={state}"
     );
-}
-
-fn lock_status(status: &Mutex<SessionStatus>) -> Result<MutexGuard<'_, SessionStatus>> {
-    status
-        .lock()
-        .map_err(|_| anyhow!("voice-session status is unavailable"))
-}
-
-fn lock_routing_control(control: &Mutex<RoutingControl>) -> Result<MutexGuard<'_, RoutingControl>> {
-    control
-        .lock()
-        .map_err(|_| anyhow!("voice routing configuration is unavailable"))
 }

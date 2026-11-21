@@ -6,10 +6,11 @@ use crate::picker::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
 use crate::picker::{AltTabApp, IconMap, PreviewMap, SharedIconCache, PICKER_VISIBLE};
 use futures::channel::oneshot;
 use gpui::*;
+use qol_sync::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -116,7 +117,7 @@ fn spawn_capture_worker(
     let _ = thread::Builder::new()
         .name(format!("qol-alt-tab-capture-{index}"))
         .spawn(move || loop {
-            let job = queue.lock().ok().and_then(|queue| queue.recv().ok());
+            let job = queue.lock().recv().ok();
             let Some(job) = job else {
                 return;
             };
@@ -304,9 +305,7 @@ impl PreviewCaptureScheduler {
         let show_id = request.show_id;
         let wid = request.window.id;
         let state = self.state(lane);
-        let Ok(mut state) = state.lock() else {
-            return;
-        };
+        let mut state = state.lock();
         let admission = state.admit(request);
         match admission {
             Admission::Start(job) => {
@@ -353,10 +352,7 @@ impl PreviewCaptureScheduler {
     }
 
     fn is_current(&self, lane: CaptureLane, generation: usize) -> bool {
-        self.state(lane)
-            .lock()
-            .map(|state| state.is_current(generation))
-            .unwrap_or(false)
+        self.state(lane).lock().is_current(generation)
     }
 
     fn start(&self, lane: CaptureLane, job: Queued<PreviewCaptureRequest>, cx: &mut App) {
@@ -394,11 +390,7 @@ impl PreviewCaptureScheduler {
         started: Instant,
         cx: &mut AsyncApp,
     ) {
-        let next = self
-            .state(lane)
-            .lock()
-            .ok()
-            .and_then(|mut state| state.finish(generation));
+        let next = self.state(lane).lock().finish(generation);
         let active_workers = self.active_workers.fetch_sub(1, Ordering::AcqRel) - 1;
         let elapsed = started.elapsed();
         let pending = next.is_some();
@@ -485,8 +477,8 @@ pub(super) fn gather(
         }
     }
 
-    let icons = icon_cache.lock().map(|c| c.clone()).unwrap_or_default();
-    let previews = preview_cache.lock().map(|c| c.clone()).unwrap_or_default();
+    let icons = icon_cache.lock().clone();
+    let previews = preview_cache.lock().clone();
 
     #[cfg(debug_assertions)]
     probe_preview_gather(&windows, &previews);
@@ -502,11 +494,7 @@ fn windows_from_cache_or_discovery(
     _config: &AltTabConfig,
     window_cache: &WindowCache,
 ) -> Vec<WindowInfo> {
-    window_cache
-        .lock()
-        .ok()
-        .map(|c| c.clone())
-        .unwrap_or_default()
+    window_cache.lock().clone()
 }
 
 #[cfg(debug_assertions)]
@@ -588,7 +576,8 @@ fn commit_icons_foreground(
         // SharedCache mutation runs at App level (no Window leased): pass
         // None. View update enters handle.update where window IS leased and
         // forwards Some(window) into the registry release path.
-        if let Ok(mut icache) = cache.lock() {
+        {
+            let mut icache = cache.lock();
             qol_gpui::image_registry::extend_with(&mut *icache, rendered.clone(), cx, None);
         }
         let _ = handle.update(cx, |view, window, cx| {
@@ -842,7 +831,8 @@ fn commit_preview(
             if cancellation_reason(scheduler, lane, generation).is_some() {
                 return false;
             }
-            if let Ok(mut cache) = cache.lock() {
+            {
+                let mut cache = cache.lock();
                 qol_gpui::image_registry::extend_with(&mut *cache, shared_previews, cx, None);
                 #[cfg(debug_assertions)]
                 crate::rendering::preview_trace::record_shared_fill([wid]);

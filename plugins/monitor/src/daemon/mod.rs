@@ -1,7 +1,8 @@
+use qol_sync::Mutex;
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use qol_host_fixes::residency::HostResidency;
@@ -319,9 +320,7 @@ fn live_query_from(
     name: &str,
 ) -> ReadResult<Command> {
     let (control, preferred, night_kelvin, night_payload, mut cache) = {
-        let Ok(runtime) = live.lock() else {
-            return ReadResult::Error("monitor daemon state is poisoned".into());
-        };
+        let runtime = live.lock();
         (
             Arc::clone(runtime.session().control()),
             runtime.preferred.clone(),
@@ -339,7 +338,8 @@ fn live_query_from(
         _ => unreachable!("live_query only handles declared queries"),
     };
     if matches!(name, "displays" | "status" | "layout") {
-        if let Ok(runtime) = live.lock() {
+        {
+            let runtime = live.lock();
             runtime.session.merge_brightness_cache(&cache);
         }
     }
@@ -900,7 +900,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             }
             recovery
         };
-        *self.config.lock().unwrap() = policy_config(config);
+        *self.config.lock() = policy_config(config);
         self.preferred = config::load_preferred(self.config_root.as_deref());
         self.adopt_startup_snapshots(&handoffs);
         self.session.adopt_layout_handoff();
@@ -1142,7 +1142,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
 
     fn display_state_for(&self, handle: &DisplayHandle) -> (DisplayState, String) {
         let (limited, refusal) = {
-            let watch = self.display_watch.lock().unwrap();
+            let watch = self.display_watch.lock();
             let entry = watch.get(handle.id());
             (
                 entry.and_then(|entry| entry.limited.clone()),
@@ -1161,7 +1161,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             return Vec::new();
         };
         {
-            let mut watch = self.display_watch.lock().unwrap();
+            let mut watch = self.display_watch.lock();
             watch.retain(|id, _| handles.iter().any(|handle| handle.id() == id));
         }
         handles
@@ -1182,7 +1182,6 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     fn reclaim_allowed(&self, display_id: &str) -> bool {
         self.display_watch
             .lock()
-            .unwrap()
             .get(display_id)
             .map(DisplayWatch::reclaim_allowed)
             .unwrap_or(true)
@@ -1191,7 +1190,6 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     fn gamma_limited(&self, display_id: &str) -> bool {
         self.display_watch
             .lock()
-            .unwrap()
             .get(display_id)
             .is_some_and(|entry| entry.limited.is_some())
     }
@@ -1201,7 +1199,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         if owned.is_empty() {
             return false;
         }
-        let watch = self.display_watch.lock().unwrap();
+        let watch = self.display_watch.lock();
         owned.iter().all(|display| {
             watch
                 .get(display.handle.id())
@@ -1212,7 +1210,6 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     fn mark_gamma_limited(&self, display_id: &str, reason: impl Into<String>) {
         self.display_watch
             .lock()
-            .unwrap()
             .entry(display_id.to_string())
             .or_default()
             .limited = Some(reason.into());
@@ -1221,26 +1218,25 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     fn mark_coordination_refusal(&self, display_id: &str, reason: &'static str) {
         self.display_watch
             .lock()
-            .unwrap()
             .entry(display_id.to_string())
             .or_default()
             .coordination_refusal = Some(reason);
     }
 
     fn clear_coordination_refusal(&self, display_id: &str) {
-        if let Some(entry) = self.display_watch.lock().unwrap().get_mut(display_id) {
+        if let Some(entry) = self.display_watch.lock().get_mut(display_id) {
             entry.coordination_refusal = None;
         }
     }
 
     fn clear_gamma_refusals(&self, display_id: &str) {
-        if let Some(entry) = self.display_watch.lock().unwrap().get_mut(display_id) {
+        if let Some(entry) = self.display_watch.lock().get_mut(display_id) {
             entry.clear_refusals();
         }
     }
 
     fn note_gamma_refusal(&self, display_id: &str) -> bool {
-        let mut watch = self.display_watch.lock().unwrap();
+        let mut watch = self.display_watch.lock();
         watch
             .entry(display_id.to_string())
             .or_default()
@@ -1248,7 +1244,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     }
 
     fn reset_gamma_reclaims(&self, display_ids: impl IntoIterator<Item = String>) {
-        let mut watch = self.display_watch.lock().unwrap();
+        let mut watch = self.display_watch.lock();
         for display_id in display_ids {
             if let Some(entry) = watch.get_mut(&display_id) {
                 entry.reset_reclaims();
@@ -1270,7 +1266,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     }
 
     fn reset_all_gamma_reclaims(&self) {
-        for entry in self.display_watch.lock().unwrap().values_mut() {
+        for entry in self.display_watch.lock().values_mut() {
             entry.reset_reclaims();
         }
     }
@@ -1293,7 +1289,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     }
 
     fn begin_applet_probe(&self, display_id: &str) -> bool {
-        let mut watch = self.display_watch.lock().unwrap();
+        let mut watch = self.display_watch.lock();
         let entry = watch.entry(display_id.to_string()).or_default();
         if entry.applet_probed {
             return false;
@@ -1303,7 +1299,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     }
 
     fn rearm_applet_probe(&self, display_id: &str) {
-        if let Some(entry) = self.display_watch.lock().unwrap().get_mut(display_id) {
+        if let Some(entry) = self.display_watch.lock().get_mut(display_id) {
             entry.applet_probed = false;
         }
     }
@@ -1364,7 +1360,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             return;
         }
         self.session.release_applet_claims();
-        for entry in self.display_watch.lock().unwrap().values_mut() {
+        for entry in self.display_watch.lock().values_mut() {
             entry.applet_probed = false;
         }
     }
@@ -1424,7 +1420,6 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 let shape = self
                     .display_watch
                     .lock()
-                    .unwrap()
                     .get(handle.id())
                     .and_then(|entry| entry.last_foreign_shape);
                 qol_runtime::probe!(
@@ -1452,7 +1447,6 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                     self.clear_gamma_refusals(handle.id());
                     self.display_watch
                         .lock()
-                        .unwrap()
                         .entry(handle.id().to_string())
                         .or_default()
                         .note_reclaim(verdict.shape);
@@ -1515,7 +1509,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     fn note_host_night_light_reclaim(&self) {
         let reason = self.host_night_light_reclaim_reason();
         let owned = self.session.gamma_ownership();
-        let mut watch = self.display_watch.lock().unwrap();
+        let mut watch = self.display_watch.lock();
         for display in &owned {
             let entry = watch.entry(display.handle.id().to_string()).or_default();
             if entry.reclaim_allowed() {
@@ -1700,7 +1694,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     }
 
     pub fn config(&self) -> DeviceConfig {
-        self.config.lock().unwrap().clone()
+        self.config.lock().clone()
     }
 
     fn apply_preferred_map(&mut self) -> usize {
@@ -2207,7 +2201,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     }
 
     pub fn reload_config(&mut self, next: &DeviceConfig) -> usize {
-        let previous = std::mem::replace(&mut *self.config.lock().unwrap(), policy_config(next));
+        let previous = std::mem::replace(&mut *self.config.lock(), policy_config(next));
         let stable_ids: HashSet<String> = self
             .session
             .control()
@@ -2372,19 +2366,14 @@ fn run_loop<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized>(
 ) {
     let mut deadline: Option<Instant> = None;
     loop {
-        let timeout = runtime
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .next_night_wait();
+        let timeout = runtime.lock().next_night_wait();
         let now = Instant::now();
         deadline = timeout.map(|wait| deadline.unwrap_or(now + wait).min(now + wait));
         let timeout = deadline.map(|until| until.saturating_duration_since(now));
         let Ok(Some(command)) = receive_commands(rx, timeout) else {
             break;
         };
-        let mut runtime = runtime
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut runtime = runtime.lock();
         if deadline.is_some_and(|until| Instant::now() >= until) {
             if !matches!(command, Command::Tick) {
                 runtime.handle(Command::Tick);
@@ -2425,7 +2414,7 @@ pub fn run() -> Result<(), String> {
         return Err(format!("failed to start {PLUGIN_ID} daemon listener"));
     }
     set_live_state(Arc::clone(&runtime));
-    let recovery = runtime.lock().unwrap().start(&device);
+    let recovery = runtime.lock().start(&device);
     trace_startup(&recovery);
     let _sigterm = install_signal_handlers(tx, Command::Kill, Command::Handoff);
     run_loop(&runtime, &rx);
@@ -7157,7 +7146,7 @@ mod tests {
             std::thread::yield_now();
         }
         std::thread::sleep(HOLD_DEBOUNCE + Duration::from_millis(10));
-        let held = runtime.lock().unwrap();
+        let held = runtime.lock();
         for _ in 0..3 {
             tx.send(Command::Brightness {
                 direction: -1,
@@ -7202,12 +7191,7 @@ mod tests {
         let mut runtime = runtime_with(control.clone(), store.clone());
         runtime.stepper = HoldStepper::new(Duration::MAX);
         let runtime = Mutex::new(runtime);
-        runtime
-            .lock()
-            .unwrap()
-            .session()
-            .mutate(&display, 60)
-            .unwrap();
+        runtime.lock().session().mutate(&display, 60).unwrap();
         control.calls.lock().unwrap().clear();
         let (tx, rx) = mpsc::channel();
         for command in [
@@ -7297,12 +7281,7 @@ mod tests {
             BrightnessSource::Ddc,
         ));
         let runtime = Mutex::new(runtime_with(control.clone(), store.clone()));
-        runtime
-            .lock()
-            .unwrap()
-            .session()
-            .mutate(&display, 60)
-            .unwrap();
+        runtime.lock().session().mutate(&display, 60).unwrap();
         control.calls.lock().unwrap().clear();
         let (tx, rx) = mpsc::channel();
         let _sigterm = install_signal_handlers(tx, Command::Kill, Command::Handoff);
@@ -7336,12 +7315,7 @@ mod tests {
             BrightnessSource::Ddc,
         ));
         let runtime = Mutex::new(runtime_with(control.clone(), store.clone()));
-        runtime
-            .lock()
-            .unwrap()
-            .session()
-            .mutate(&display, 60)
-            .unwrap();
+        runtime.lock().session().mutate(&display, 60).unwrap();
         control.calls.lock().unwrap().clear();
         let (tx, rx) = mpsc::channel();
         let _sighup = install_signal_handlers(tx, Command::Kill, Command::Handoff);
@@ -8814,7 +8788,7 @@ mod tests {
         }
         if acquired {
             assert!(
-                !runtime.lock().unwrap().handle(Command::Kill),
+                !runtime.lock().handle(Command::Kill),
                 "the kill must be handled while the query is blocked"
             );
         }

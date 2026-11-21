@@ -17,8 +17,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
-pub(crate) static ACTIVE_PICKER_MONITOR: std::sync::Mutex<Option<qol_gpui::window::MonitorKey>> =
-    std::sync::Mutex::new(None);
+pub(crate) static ACTIVE_PICKER_MONITOR: qol_sync::Mutex<Option<qol_gpui::window::MonitorKey>> =
+    qol_sync::Mutex::new(None);
 
 const BLUR_GUARD_MS: u64 = 250;
 
@@ -68,9 +68,7 @@ impl AltTabApp {
         if !PICKER_VISIBLE.load(Ordering::Relaxed) {
             return false;
         }
-        let Ok(lock) = ACTIVE_PICKER_MONITOR.lock() else {
-            return false;
-        };
+        let lock = ACTIVE_PICKER_MONITOR.lock();
         let Some(target) = *lock else {
             return false;
         };
@@ -701,7 +699,8 @@ impl AltTabApp {
         picker::platform::cancel_picker_focus_reassert();
         picker::release_focus_priority();
         PICKER_VISIBLE.store(false, Ordering::Relaxed);
-        if let Ok(mut lock) = ACTIVE_PICKER_MONITOR.lock() {
+        {
+            let mut lock = ACTIVE_PICKER_MONITOR.lock();
             *lock = None;
         }
         self.sync_keyboard(window);

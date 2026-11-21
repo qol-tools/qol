@@ -1,10 +1,11 @@
 use anyhow::{anyhow, Context, Result};
 use qol_audio::capture::{Capture, CaptureStop, Pcm16Format};
+use qol_sync::Mutex;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::mixer::{self, Clock};
@@ -145,7 +146,7 @@ fn spawn_reader(mut capture: Capture) -> Result<Track> {
                         return;
                     }
                 };
-                let mut track = writer.lock().unwrap_or_else(|poison| poison.into_inner());
+                let mut track = writer.lock();
                 mixer::push_pcm(&mut track, &mut carry, &bytes[..count]);
                 mixer::trim_backlog(&mut track, max_samples, usize::from(CHANNELS));
             }
@@ -163,7 +164,7 @@ fn serve(
     let mut stream = accept_reader(listener, stop, reader)?;
     let _ = stream.set_nodelay(true);
     for track in tracks {
-        lock(track).clear();
+        track.lock().clear();
     }
     let started = Instant::now();
     let mut clock = Clock::new(SAMPLE_RATE);
@@ -225,15 +226,11 @@ fn write_tick(stream: &mut TcpStream, tracks: &[Track], samples: usize) -> Resul
     }
     let taken = tracks
         .iter()
-        .map(|track| mixer::take_padded(&mut lock(track), samples))
+        .map(|track| mixer::take_padded(&mut track.lock(), samples))
         .collect::<Vec<_>>();
     stream
         .write_all(&mixer::to_le_bytes(&mixer::mix(&taken, samples)))
         .context("ffmpeg stopped reading the audio feed")
-}
-
-fn lock(track: &Track) -> std::sync::MutexGuard<'_, VecDeque<i16>> {
-    track.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
 fn backlog_samples() -> usize {

@@ -328,11 +328,11 @@ mod tests {
         .unwrap();
         assert!(matches!(hear(&client), ToDaemon::Welcome { .. }));
         assert_eq!(generation, 1);
-        assert!(shared.lock().watchdog.is_current(1));
+        assert!(shared.state.lock().watchdog.is_current(1));
 
         drop(client);
         for _ in 0..50 {
-            if !shared.lock().watchdog.is_current(1) {
+            if !shared.state.lock().watchdog.is_current(1) {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -362,7 +362,7 @@ mod tests {
         .unwrap_err();
         assert!(format!("{error:#}").contains("certificate"), "{error:#}");
         assert_eq!(generation, 0);
-        assert!(!shared.lock().watchdog.is_current(1));
+        assert!(!shared.state.lock().watchdog.is_current(1));
         let ToDaemon::Refused { protocol, reason } = hear(&client) else {
             panic!("expected a refusal")
         };

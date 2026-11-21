@@ -474,10 +474,9 @@ fn push_updates(
     let delegate = delegate.clone();
     let this = this.clone();
     cx.update(|app_cx| {
-        let mut cache_write = false;
-        if let Ok(mut cache) = preview_cache.lock() {
+        {
+            let mut cache = preview_cache.lock();
             qol_gpui::image_registry::extend_with(&mut *cache, shared_updates, app_cx, None);
-            cache_write = true;
         }
         // App-level: no Window leased here, so insert_preview's release path
         // passes None. The picker window stays in App::windows and gets
@@ -488,7 +487,7 @@ fn push_updates(
         let _ = this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| cx.notify());
         PreviewUpdateResult {
             state_update: true,
-            cache_write,
+            cache_write: true,
         }
     })
     .unwrap_or_default()

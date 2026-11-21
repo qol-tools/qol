@@ -1,6 +1,6 @@
+use qol_sync::Mutex;
 use std::ffi::c_void;
 use std::fmt;
-use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
@@ -206,7 +206,7 @@ impl<R: AvSymbolResolver> ResolvedSymbols<R> {
     }
 
     pub(crate) fn get(&self, name: &'static str) -> Result<usize, AvError> {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock();
         if let Some((_, symbol)) = cache.iter().find(|(known, _)| *known == name) {
             return Ok(*symbol);
         }
@@ -509,7 +509,7 @@ mod tests {
 
         fn write(&self, service: &AvService, payload: &[u8]) -> Result<(), AvError> {
             self.symbols.get("IOAVServiceWriteI2C")?;
-            let mut monitor = self.monitor(service).lock().unwrap();
+            let mut monitor = self.monitor(service).lock();
             monitor.frames_written.push(payload.to_vec());
             if payload.len() < 4 || !matches!(payload[0], LENGTH_GET | LENGTH_SET) {
                 return Err(AvError::Protocol {
@@ -558,7 +558,7 @@ mod tests {
 
         fn read(&self, service: &AvService, buffer: &mut [u8]) -> Result<(), AvError> {
             self.symbols.get("IOAVServiceReadI2C")?;
-            let mut monitor = self.monitor(service).lock().unwrap();
+            let mut monitor = self.monitor(service).lock();
             let writes_so_far = monitor.frames_written.len();
             monitor.read_after_writes.push(writes_so_far);
             let Some(pending) = monitor.pending_reply.take() else {
@@ -625,7 +625,7 @@ mod tests {
             &[("cg-1", identity(1, 2, 3))],
         );
         backend.get_brightness(&handle("cg-1")).unwrap();
-        let monitor = backend.transport.monitors[0].lock().unwrap();
+        let monitor = backend.transport.monitors[0].lock();
         assert_eq!(
             monitor.frames_written[0].as_slice(),
             &[0x82, 0x01, 0x10, 0xfd]
@@ -644,7 +644,7 @@ mod tests {
             &[("cg-1", identity(1, 2, 3))],
         );
         backend.set_brightness(&handle("cg-1"), 50).unwrap();
-        let monitor = backend.transport.monitors[0].lock().unwrap();
+        let monitor = backend.transport.monitors[0].lock();
         assert_eq!(
             monitor.frames_written[2].as_slice(),
             &[0x84, 0x03, 0x10, 0x00, 0x32, 0x9a]
@@ -665,7 +665,7 @@ mod tests {
         let state = backend.get_brightness(&handle("cg-1")).unwrap();
         assert_eq!(state.value, 20);
         assert_eq!(state.source, BrightnessSource::Ddc);
-        let monitor = backend.transport.monitors[0].lock().unwrap();
+        let monitor = backend.transport.monitors[0].lock();
         assert_eq!(
             monitor.frames_written.len(),
             2,
@@ -691,7 +691,7 @@ mod tests {
             &[("cg-1", identity(1, 2, 3))],
         );
         backend.set_brightness(&handle("cg-1"), 50).unwrap();
-        let monitor = backend.transport.monitors[0].lock().unwrap();
+        let monitor = backend.transport.monitors[0].lock();
         assert_eq!(
             monitor.frames_written.len(),
             10,
@@ -803,7 +803,7 @@ mod tests {
         }
         let caps = backend.probe(&handle("cg-1")).unwrap();
         assert!(!caps.brightness_ddc);
-        let monitor = backend.transport.monitors[0].lock().unwrap();
+        let monitor = backend.transport.monitors[0].lock();
         assert_eq!(
             monitor.frames_written.len(),
             0,
@@ -839,7 +839,7 @@ mod tests {
         );
         backend.set_brightness(&handle("cg-1"), 50).unwrap();
         {
-            let monitor = backend.transport.monitors[0].lock().unwrap();
+            let monitor = backend.transport.monitors[0].lock();
             assert_eq!(
                 monitor.frames_written.len(),
                 22,

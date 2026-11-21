@@ -1,5 +1,6 @@
+use qol_sync::Mutex;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use qol_windowing::{WindowId, WindowOps, WindowRect};
@@ -69,9 +70,7 @@ pub fn activate_window(window_id: u32) -> bool {
 }
 
 fn activate_window_with(window_id: u32, starter: impl Fn() -> Sender<u32>) -> bool {
-    let mut slot = ACTIVATOR
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut slot = ACTIVATOR.lock();
     if slot.is_none() {
         *slot = Some(starter());
     }
@@ -353,9 +352,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn reset_activator_slot() {
-        *ACTIVATOR
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *ACTIVATOR.lock() = None;
     }
 
     #[test]

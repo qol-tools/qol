@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use qol_sync::Mutex;
+use std::sync::Arc;
 
 use crate::turn::Effect;
 use crate::voice_session::{
@@ -26,13 +27,12 @@ pub(super) fn run_session(
                 observe_event(&status, &events, &mut router, &delivery_dispatcher, &event);
             }
             Ok(None) => {
-                if let Ok(mut status) = status.lock() {
-                    *status = SessionStatus::default();
-                }
+                *status.lock() = SessionStatus::default();
                 return;
             }
             Err(error) => {
-                if let Ok(mut status) = status.lock() {
+                {
+                    let mut status = status.lock();
                     status.state = LifecycleState::Failed;
                     status.error = Some(error.to_string());
                 }
@@ -70,7 +70,8 @@ fn observe_event(
 }
 
 fn observe_update(status: &Mutex<SessionStatus>, update: &VoiceSessionUpdate) {
-    if let Ok(mut status) = status.lock() {
+    {
+        let mut status = status.lock();
         status.last_sequence = Some(update.snapshot.last_sequence);
         status.assistant_state = Some(assistant_state(&update.snapshot));
         status.user_state = Some(user_state(&update.snapshot));
@@ -113,9 +114,7 @@ fn sync_router(
     revision: &mut u64,
     router: &mut ConversationRouter,
 ) {
-    let Ok(control) = control.lock() else {
-        return;
-    };
+    let control = control.lock();
     let decision = control.decision();
     if decision.revision == *revision {
         return;

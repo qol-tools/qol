@@ -1,9 +1,10 @@
 use super::ffi;
 use super::ffi::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef, CFRelease, CFRetain};
 use super::CgWindow;
+use qol_sync::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const AX_MESSAGING_TIMEOUT_SECONDS: f32 = 0.05;
@@ -209,7 +210,7 @@ fn ax_windows_cache() -> &'static Mutex<HashMap<i32, CachedAxEntry>> {
 }
 
 fn cached_ax_windows(pid: i32) -> Option<AxWindowsResult> {
-    let cache = ax_windows_cache().lock().ok()?;
+    let cache = ax_windows_cache().lock();
     let entry = cache.get(&pid)?;
     if entry.captured_at.elapsed() >= AX_CACHE_TTL {
         return None;
@@ -218,9 +219,7 @@ fn cached_ax_windows(pid: i32) -> Option<AxWindowsResult> {
 }
 
 fn remember_ax_windows(pid: i32, value: &AxWindowsResult) {
-    let Ok(mut cache) = ax_windows_cache().lock() else {
-        return;
-    };
+    let mut cache = ax_windows_cache().lock();
     cache.insert(
         pid,
         CachedAxEntry {

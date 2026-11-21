@@ -209,7 +209,8 @@ fn on_open_failure() {
     log::warn!("failed to open picker window");
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
     super::release_focus_priority();
-    if let Ok(mut lock) = ACTIVE_PICKER_MONITOR.lock() {
+    {
+        let mut lock = ACTIVE_PICKER_MONITOR.lock();
         *lock = None;
     }
 }

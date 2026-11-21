@@ -1,9 +1,10 @@
 use super::super::{DiscoveryError, WindowDiscovery, WindowInfo};
 use crate::config::SwitchablePanelOverride;
 use qol_app_icon::RgbaImage;
+use qol_sync::Mutex;
 use qol_windowing::WindowRect;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::protocol::xproto::*;
@@ -129,7 +130,7 @@ fn order_picker(
     let ids: Vec<u32> = windows.iter().map(|w| w.id).collect();
     let focused_id = focused_window_id(&ids, focused, active);
     let mru = {
-        let mut guard = mru_state().lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = mru_state().lock();
         *guard = next_mru(&guard, &ids, focused_id);
         guard.clone()
     };
@@ -175,9 +176,7 @@ const ATOM_NAMES: &[&str] = &[
 ];
 
 pub fn get_open_windows() -> Vec<WindowInfo> {
-    let Ok(mut guard) = discovery_session().lock() else {
-        return Vec::new();
-    };
+    let mut guard = discovery_session().lock();
     let session = match &*guard {
         Some(s) => s,
         None => {
@@ -434,13 +433,7 @@ fn hydrate_icons(conn: &impl Connection, atoms: &AtomMap, windows: &mut [WindowI
 }
 
 fn fill_cached_icons(windows: &mut [WindowInfo]) -> Vec<(usize, u32)> {
-    let Ok(cache) = icon_cache().lock() else {
-        return windows
-            .iter()
-            .enumerate()
-            .map(|(idx, window)| (idx, window.id))
-            .collect();
-    };
+    let cache = icon_cache().lock();
     let mut missing = Vec::new();
     for (idx, window) in windows.iter_mut().enumerate() {
         if let Some(icon) = cache.get(window.id, &window.app_name) {
@@ -475,13 +468,7 @@ fn remember_fetched_icons(
     missing: Vec<(usize, u32)>,
     replies: Vec<Option<GetPropertyReply>>,
 ) {
-    let Ok(mut cache) = icon_cache().lock() else {
-        for ((idx, _), reply) in missing.into_iter().zip(replies) {
-            windows[idx].icon = reply.and_then(|reply| extract_x11_icon(&reply));
-        }
-        return;
-    };
-
+    let mut cache = icon_cache().lock();
     for ((idx, window_id), reply) in missing.into_iter().zip(replies) {
         let Some(icon) = reply.and_then(|reply| extract_x11_icon(&reply)) else {
             continue;

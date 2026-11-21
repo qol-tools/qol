@@ -1,5 +1,6 @@
+use qol_sync::Mutex;
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 
 use qol_terminal_sessions::cli::{
@@ -192,9 +193,7 @@ fn deliver_one(sink: &dyn ConversationSink, intent: &DeliveryIntent) -> RouteSta
 }
 
 fn finish_delivery(routing: &Mutex<RoutingControl>, revision: u64, status: RouteStatus) {
-    if let Ok(mut routing) = routing.lock() {
-        routing.finish_delivery(revision, status);
-    }
+    routing.lock().finish_delivery(revision, status);
 }
 
 #[cfg(test)]

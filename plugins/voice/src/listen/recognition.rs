@@ -1,6 +1,7 @@
+use qol_sync::Mutex;
 use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
@@ -42,7 +43,7 @@ impl RecognitionController {
     }
 
     pub(super) fn begin_turn(&self) -> Result<TurnId, TranscriptionError> {
-        let mut segments = self.segments()?;
+        let mut segments = self.segments.lock();
         if segments.active.is_some() {
             return Err(TranscriptionError::StreamClosed(
                 "recognition already has an active user turn".to_owned(),
@@ -60,7 +61,7 @@ impl RecognitionController {
         &self,
         frame: AudioFrame,
     ) -> Result<Option<AudioSubmit>, TranscriptionError> {
-        let segments = self.segments()?;
+        let segments = self.segments.lock();
         if segments.active.is_none() {
             return Ok(None);
         }
@@ -71,7 +72,7 @@ impl RecognitionController {
     }
 
     pub(super) fn finalize_turn(&self, turn_id: TurnId) -> Result<(), TranscriptionError> {
-        let mut segments = self.segments()?;
+        let mut segments = self.segments.lock();
         if segments.awaiting_finals.contains(&turn_id) {
             return Ok(());
         }
@@ -89,12 +90,6 @@ impl RecognitionController {
         segments.active = None;
         segments.awaiting_finals.push_back(turn_id);
         Ok(())
-    }
-
-    fn segments(
-        &self,
-    ) -> Result<std::sync::MutexGuard<'_, RecognitionSegments>, TranscriptionError> {
-        lock_segments(&self.segments)
     }
 }
 
@@ -164,7 +159,7 @@ fn correlate_transcription_event(
     segments: &Mutex<RecognitionSegments>,
     event: TranscriptionEvent,
 ) -> Result<(TurnId, TranscriptionEvent), TranscriptionError> {
-    let mut segments = lock_segments(segments)?;
+    let mut segments = segments.lock();
     let turn_id = if event.final_result {
         segments
             .awaiting_finals
@@ -183,14 +178,6 @@ fn correlate_transcription_event(
         ));
     };
     Ok((turn_id, event))
-}
-
-fn lock_segments(
-    segments: &Mutex<RecognitionSegments>,
-) -> Result<std::sync::MutexGuard<'_, RecognitionSegments>, TranscriptionError> {
-    segments.lock().map_err(|_| {
-        TranscriptionError::StreamClosed("recognition segment state is unavailable".to_owned())
-    })
 }
 
 #[cfg(test)]

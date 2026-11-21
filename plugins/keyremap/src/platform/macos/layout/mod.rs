@@ -1,5 +1,6 @@
+use qol_sync::RwLock;
 use std::collections::{BTreeSet, HashMap};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use qol_hotkeys::layout::{self as keyboard, KeyLayout, LayoutError, OPTION_STATE, SHIFT_STATE};
 use qol_hotkeys::macos_keycode::{PhysicalLayout, SPACE};
@@ -161,10 +162,7 @@ impl LayoutStore {
     }
 
     pub(crate) fn get(&self) -> Arc<LayoutSnapshot> {
-        self.current
-            .read()
-            .map(|guard| Arc::clone(&guard))
-            .unwrap_or_else(|poisoned| Arc::clone(&poisoned.into_inner()))
+        Arc::clone(&self.current.read())
     }
 
     pub(crate) fn refresh(&self) {
@@ -181,9 +179,7 @@ impl LayoutStore {
                     snapshot.id,
                     snapshot.physical
                 );
-                if let Ok(mut guard) = self.current.write() {
-                    *guard = Arc::new(snapshot);
-                }
+                *self.current.write() = Arc::new(snapshot);
             }
             Err(error) => log::warn!("keeping the previous keyboard layout: {error}"),
         }

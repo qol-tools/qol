@@ -1,5 +1,6 @@
+use qol_sync::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub(super) struct ProcessIdentity {

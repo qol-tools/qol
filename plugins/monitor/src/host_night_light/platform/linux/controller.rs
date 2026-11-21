@@ -1,6 +1,6 @@
+use qol_sync::Mutex;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use super::super::super::{
     HostNightLight, HostNightLightError, HostNightLightStatus, TakeoverOutcome,
@@ -93,7 +93,7 @@ impl<S: Settings> Controller<S> {
     }
 
     fn set_state(&self, taken_over: bool, status: HostNightLightStatus) {
-        *self.state.lock().unwrap() = State { taken_over, status };
+        *self.state.lock() = State { taken_over, status };
     }
 
     fn snapshot(&self) -> Result<Option<Snapshot>, HostNightLightError> {
@@ -291,11 +291,11 @@ impl<S: Settings> HostNightLight for Controller<S> {
     }
 
     fn is_taken_over(&self) -> bool {
-        self.state.lock().unwrap().taken_over
+        self.state.lock().taken_over
     }
 
     fn status(&self) -> HostNightLightStatus {
-        self.state.lock().unwrap().status
+        self.state.lock().status
     }
 }
 

@@ -2,11 +2,12 @@ use anyhow::Context as _;
 use anyhow::Result;
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::TextStyle;
+use qol_sync::Mutex;
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder as _;
@@ -254,7 +255,8 @@ fn show_with_completion(
         ) {
             cx.activate(true);
         } else {
-            if let Ok(mut slot) = run_completion.lock() {
+            {
+                let mut slot = run_completion.lock();
                 *slot = Some(Err(anyhow::anyhow!(
                     "failed to create screenshot preview window"
                 )));
@@ -263,11 +265,7 @@ fn show_with_completion(
         }
     });
 
-    if let Some(result) = completion
-        .lock()
-        .expect("preview completion mutex poisoned")
-        .take()
-    {
+    if let Some(result) = completion.lock().take() {
         return result;
     }
     Ok(())
@@ -960,7 +958,8 @@ impl PreviewView {
         self.scheduled_reveal_seq = None;
         self.pending_reveal = Some(reveal);
         self.parked_reveal = false;
-        if let Ok(mut slot) = self.completion.lock() {
+        {
+            let mut slot = self.completion.lock();
             *slot = None;
         }
     }
@@ -1093,12 +1092,7 @@ impl PreviewView {
         if self.action_pending {
             return;
         }
-        if self
-            .completion
-            .lock()
-            .expect("preview completion mutex poisoned")
-            .is_some()
-        {
+        if self.completion.lock().is_some() {
             return;
         }
         let Some(handle) = window.window_handle().downcast::<PreviewView>() else {
@@ -1189,7 +1183,8 @@ impl PreviewView {
         }
         match self.mode {
             DismissMode::Quit => {
-                if let Ok(mut slot) = self.completion.lock() {
+                {
+                    let mut slot = self.completion.lock();
                     if slot.is_none() {
                         *slot = Some(Ok(()));
                     }
@@ -1241,12 +1236,7 @@ impl PreviewView {
         if self.action_pending {
             return;
         }
-        if self
-            .completion
-            .lock()
-            .expect("preview completion mutex poisoned")
-            .is_some()
-        {
+        if self.completion.lock().is_some() {
             return;
         }
         let Some(handle) = window.window_handle().downcast::<PreviewView>() else {
@@ -1291,7 +1281,8 @@ impl PreviewView {
                 if view.seq != seq {
                     return;
                 }
-                if let Ok(mut slot) = completion.lock() {
+                {
+                    let mut slot = completion.lock();
                     if slot.is_none() {
                         *slot = Some(result);
                     }

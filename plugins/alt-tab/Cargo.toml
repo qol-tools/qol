@@ -22,6 +22,7 @@ qol-headless.workspace = true
 qol-platform.workspace = true
 qol-plugin-api.workspace = true
 qol-runtime.workspace = true
+qol-sync.workspace = true
 qol-windowing.workspace = true
 workspace-hack.workspace = true
 

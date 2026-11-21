@@ -1,13 +1,14 @@
 pub(crate) mod frame;
 pub(crate) mod request;
 
+use qol_sync::Mutex;
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use frame::{Decoder, Frame};
@@ -73,16 +74,12 @@ impl Connection {
 impl Drop for Connection {
     fn drop(&mut self) {
         self.closed.store(true, Ordering::SeqCst);
-        if let Ok(stream) = self.writer.lock() {
-            let _ = stream.shutdown(Shutdown::Both);
-        }
+        let _ = self.writer.lock().shutdown(Shutdown::Both);
     }
 }
 
 fn write_frame(writer: &Mutex<UnixStream>, frame: &Frame) -> io::Result<()> {
-    let mut stream = writer
-        .lock()
-        .map_err(|_| io::Error::other("pqrs writer lock poisoned"))?;
+    let mut stream = writer.lock();
     let written = stream.write_all(&frame.encode());
     if written.is_err() {
         let _ = stream.shutdown(Shutdown::Both);
