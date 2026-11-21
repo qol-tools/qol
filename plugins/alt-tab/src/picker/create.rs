@@ -1,10 +1,12 @@
 use super::GatheredWindows;
-use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{ActionMode, AltTabConfig, LabelConfig, PreviewIconPosition};
 use crate::discovery::WindowInfo;
 use crate::picker::layout::*;
 use crate::picker::run::SharedPreviewCache;
-use crate::picker::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
+use crate::picker::{
+    AltTabApp, IconMap, PickerWindowState, PreviewMap, SharedIconCache, ACTIVE_PICKER_MONITOR,
+    PICKER_VISIBLE,
+};
 use crate::rendering::RenderingFlow;
 use gpui::*;
 use qol_gpui::window::PopupPlacement;
@@ -207,7 +209,7 @@ fn on_open_failure() {
     log::warn!("failed to open picker window");
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
     super::release_focus_priority();
-    if let Ok(mut lock) = crate::app::ACTIVE_PICKER_MONITOR.lock() {
+    if let Ok(mut lock) = ACTIVE_PICKER_MONITOR.lock() {
         *lock = None;
     }
 }

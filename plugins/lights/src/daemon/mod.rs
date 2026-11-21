@@ -38,7 +38,7 @@ const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
 pub fn run_from_env() -> Result<()> {
     let runtime = runtime_state();
     core_daemon::run_stateful_request_listener(&DAEMON_CONFIG, runtime, handle_request)
-        .context(format!("{} daemon listener failed", store::PLUGIN_ID))
+        .context(format!("{} daemon listener failed", crate::PLUGIN_ID))
 }
 
 pub fn execute_action_once(action: &str) -> Result<()> {
@@ -173,7 +173,7 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str, input: &Value) -> 
     }
 
     if action == crate::runtime::actions::SETTINGS {
-        return match crate::platform::open_settings() {
+        return match crate::runtime::open_settings() {
             Ok(()) => DaemonOutcome::Handled,
             Err(error) => DaemonOutcome::Error(format!("{error:#}")),
         };
@@ -396,7 +396,7 @@ fn map_outcome(action: &str, outcome: DaemonOutcome) -> Result<()> {
     match outcome {
         DaemonOutcome::Handled | DaemonOutcome::HandledWithData(_) => Ok(()),
         DaemonOutcome::Fallback => {
-            anyhow::bail!("{} fell back for action '{}'", store::PLUGIN_ID, action)
+            anyhow::bail!("{} fell back for action '{}'", crate::PLUGIN_ID, action)
         }
         DaemonOutcome::Error(message) => anyhow::bail!(message),
     }

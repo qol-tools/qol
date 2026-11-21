@@ -7,16 +7,6 @@ pub(crate) enum Direction {
 }
 
 impl Direction {
-    pub(crate) fn from_action(action: &str) -> Option<Self> {
-        match action {
-            "glide-left" => Some(Self::Left),
-            "glide-right" => Some(Self::Right),
-            "glide-up" => Some(Self::Up),
-            "glide-down" => Some(Self::Down),
-            _ => None,
-        }
-    }
-
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Left => "left",
@@ -59,16 +49,15 @@ mod tests {
     use super::{Direction, Phase};
 
     #[test]
-    fn parses_glide_actions() {
+    fn direction_names_are_lowercase_words() {
         let cases = [
-            ("glide-left", Some(Direction::Left)),
-            ("glide-right", Some(Direction::Right)),
-            ("glide-up", Some(Direction::Up)),
-            ("glide-down", Some(Direction::Down)),
-            ("snap-left", None),
+            (Direction::Left, "left"),
+            (Direction::Right, "right"),
+            (Direction::Up, "up"),
+            (Direction::Down, "down"),
         ];
-        for (action, expected) in cases {
-            assert_eq!(Direction::from_action(action), expected, "{action}");
+        for (direction, expected) in cases {
+            assert_eq!(direction.as_str(), expected);
         }
     }
 

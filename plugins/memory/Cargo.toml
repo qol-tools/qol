@@ -1,6 +1,6 @@
 [package]
 name = "qol-memory"
-version = "0.53.3"
+version = "0.53.4"
 edition = "2021"
 
 [dependencies]

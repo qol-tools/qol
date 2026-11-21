@@ -215,20 +215,21 @@ fn external_services_result(inventory: Result<usize, String>) -> DoctorCheckResu
 }
 
 fn runtime_dirs_check() -> Result<DoctorCheckResult> {
+    let plugin_id = crate::daemon::plugin_id();
     runtime_dirs_result([
         PathSpec::new(
             "session_state",
-            crate::storage::paths::state_path(),
+            crate::storage::paths::state_path(&plugin_id),
             ExpectedKind::File,
         ),
         PathSpec::new(
             "anomalies",
-            crate::storage::paths::anomalies_dir(),
+            crate::storage::paths::anomalies_dir(&plugin_id),
             ExpectedKind::Directory,
         ),
         PathSpec::new(
             "snapshots",
-            crate::storage::paths::snapshots_dir(),
+            crate::storage::paths::snapshots_dir(&plugin_id),
             ExpectedKind::Directory,
         ),
     ])

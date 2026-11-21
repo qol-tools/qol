@@ -1,13 +1,13 @@
 #[cfg(target_os = "linux")]
-pub(crate) mod linux;
+pub mod linux;
 #[cfg(target_os = "macos")]
-pub(crate) mod macos;
+pub mod macos;
 #[cfg(target_os = "windows")]
-mod windows;
+pub mod windows;
 
 #[cfg(target_os = "linux")]
-pub use linux::Platform;
+pub use linux as native;
 #[cfg(target_os = "macos")]
-pub use macos::Platform;
+pub use macos as native;
 #[cfg(target_os = "windows")]
-pub use windows::Platform;
+pub use windows as native;

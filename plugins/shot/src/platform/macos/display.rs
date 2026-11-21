@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use gpui::{Bounds, Pixels};
 
 use crate::{Monitor, Rect};
 
@@ -124,4 +125,18 @@ fn round_i32(value: f64) -> i32 {
 
 pub(super) fn rect_intersection(left: Rect, right: Monitor) -> Option<Rect> {
     crate::capture::geometry::rect_intersection(left, right)
+}
+
+pub fn monitor_capture_rect(monitor: Bounds<Pixels>) -> Option<Rect> {
+    let rect = rect_from_bounds(monitor);
+    (rect.w > 0 && rect.h > 0).then_some(rect)
+}
+
+pub(crate) fn rect_from_bounds(bounds: Bounds<Pixels>) -> Rect {
+    Rect {
+        x: f32::from(bounds.origin.x).round() as i32,
+        y: f32::from(bounds.origin.y).round() as i32,
+        w: f32::from(bounds.size.width).round() as i32,
+        h: f32::from(bounds.size.height).round() as i32,
+    }
 }

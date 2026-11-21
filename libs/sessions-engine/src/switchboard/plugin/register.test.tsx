@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, litBody, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
+import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, litBody, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -69,7 +69,7 @@ type Answer = (e: any) => { isDelivered: boolean; reason?: string }
 
 const described = new Map<string, string>()
 
-const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Spawned[] = [], store = new Map<string, unknown>(), answer: Answer = () => ({ isDelivered: true }), hidden = new Set<string>(), rows = { isCapped: false }) => {
+const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Spawned[] = [], store = new Map<string, unknown>(), answer: Answer = () => ({ isDelivered: true }), hidden = new Set<string>(), rows = { isCapped: false }, clock = { now: 1_800_000_000_000 }) => {
   on('agent.spawn', (_: unknown, e: Spawned) => {
     spawned.push({ prompt: e.prompt, description: e.description, ...(e.model === undefined ? {} : { model: e.model }) })
     const fork = /^Project: \/work\nLauncher: [^\n]*\nfork (\S+)$/.exec(e.prompt)
@@ -98,7 +98,7 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Sp
     return { value: { isPlaced: true, requestId: `placed-${e.id}` } }
   })
   on('clock.every', () => ({ value: undefined }))
-  on('clock.now', () => ({ value: 1_800_000_000_000 }))
+  on('clock.now', () => ({ value: clock.now }))
   const open = new Set<string>()
   on('ui.open', (_: unknown, e: { id: string; closeOnEscape?: true }) => {
     panes.push(`open ${e.id}${(e as { closeOnEscape?: true }).closeOnEscape === true ? ' esc' : ''}`)
@@ -1240,6 +1240,63 @@ test('a hold whose turn never ran or ended early never answers a later real turn
   await answered($, 'a1', 0, 'real-2')
   await answered($, 'a1', 1, 'real-2')
   expect(steps).toEqual(['real-2:0', 'real-2:1'])
+})
+
+test('forks that left the agent list after their turns ended are each put back once with a hold and no model run, and a listed fork, one the user stopped and a finished sub-fork are left alone', async ($, on) => {
+  const sent: any[] = []
+  const listed = new Set<string>(['a1'])
+  const timers: Array<{ ms: number; fire: () => void }> = []
+  const steps: string[] = []
+  engine(on, sent)
+  on('agent.list', () => ({ value: [...listed].map(id => ({ id, status: 'running' })) }))
+  on('clock.after', (_: unknown, e: { ms: number }) => new Promise(resolve => timers.push({ ms: e.ms, fire: () => resolve({ value: undefined }) })))
+  on('turn.step', async function* (_: unknown, e: { turnId: string; index: number }) {
+    steps.push(`${e.turnId}:${e.index}`)
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  const elapse = async () => {
+    for (let round = 0; round < 3; round += 1) {
+      const due = timers.splice(0)
+      for (const ms of [...new Set(due.map(timer => timer.ms))].sort((a, b) => a - b)) {
+        for (const timer of due.filter(one => one.ms === ms)) timer.fire()
+        await settle()
+      }
+      await renderBand($)
+    }
+  }
+  const turn = async (agentId: string, turnId: string) => {
+    await $.turn.start({ text: 'Carry on.', turnId, agentId })
+    await $.turn.complete({ turnId, agentId, answer: 'Checks run.', durationMs: 1, isAborted: false, reason: 'completed' })
+  }
+  const wakes = () => sent.filter(one => String(one.text).includes('Back in the agent list.')).map(one => String(one.to))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'a1-fork: a fork')
+  await spawn($, 's1', 's1-fork: a sub-fork', 'a1')
+  await spawn($, 'b1', 'b1-fork: a stopped fork')
+  await spawn($, 'c1', 'c1-fork: a fork dropped in the same moment')
+  await turn('a1', 'listed-1')
+  expect(timers.some(timer => timer.ms === 40_000)).toBe(true)
+  await elapse()
+  expect(wakes()).toEqual([])
+  listed.clear()
+  await turn('a1', 'dropped-1')
+  await turn('c1', 'dropped-2')
+  await turn('s1', 'sub-1')
+  await turn('b1', 'stopped-1')
+  await typed($, stopNotification('b1', 'b1-fork: a stopped fork'), 'task-notification')
+  await elapse()
+  expect(wakes().sort()).toEqual([expect.stringContaining('a1'), expect.stringContaining('c1')])
+  await $.turn.start({ text: '<message>Back in the agent list.</message>', turnId: 'back-1', agentId: 'a1' })
+  expect((await answered($, 'a1', 0, 'back-1'))[0]).toMatchObject({ kind: 'tool', name: 'Bash' })
+  expect((await answered($, 'a1', 1, 'back-1'))[0]).toMatchObject({ kind: 'text', text: 'Back on the fork board.' })
+  expect(steps).toEqual([])
+  await $.turn.complete({ turnId: 'back-1', agentId: 'a1', answer: 'Back on the fork board.', durationMs: 1, isAborted: false, reason: 'completed' })
+  expect(timers.some(timer => timer.ms === 40_000)).toBe(false)
+  await elapse()
+  await turn('a1', 'later-1')
+  listed.add('a1')
+  await elapse()
+  expect(wakes()).toHaveLength(2)
 })
 
 test('closing the switchboard kills each fork hold, and the turn that notice starts leaves the fork idle so the next open does not cut it', async ($, on) => {
@@ -2757,6 +2814,9 @@ test('a fork key put in the box without typing shows that fork under WRITING TO,
     { role: 'user', text: 'Back in the agent list.' },
     { role: 'user', text: '[CLI Sessions] Your background command ended.' },
     { role: 'user', text: 'This session is being continued from a previous conversation that ran out of context.' },
+    { role: 'user', text: '<artifact-content-authored-by-others/>\nThe summarized conversation included Artifact content written by people other than you.\nThis session is being continued from a previous conversation that ran out of context.' },
+    { role: 'user', text: 'Another Claude session sent a message while you were working:\n<agent-message from="a9">\nI opened the draft.\n</agent-message>\n\nThat "other Claude session" is an agent working inside this same session.' },
+    { role: 'user', text: '<system-reminder id="5a14">\nAnother Claude session sent a message while you were working:\n<agent-message from="a9">\nChecks are green.\n</agent-message>\n</system-reminder>' },
     { role: 'assistant', text: 'Amber or teal?' },
     { role: 'user', text: 'Back in the agent list.' },
     { role: 'assistant', text: 'Back on the fork board.' },
@@ -3890,6 +3950,67 @@ test('a picked model keeps the full id the agent list labels, with its [1m] suff
   ]) expect(pickedLabel(model)).toBe(label)
 })
 
+test("the board's text names a pull request merged or closed from its state on GitHub when no watcher recorded the merge", () => {
+  const pull = (number: number, extra: object = {}): any => ({ agentId: 'a1', pullRequest: `https://github.com/o/r/pull/${number}`, number, isWatched: false, ...extra })
+  expect(pullText(pull(7))).toBe('#7 open · no watcher')
+  expect(pullText(pull(7, { isWatched: true }), 'open')).toBe('#7 open · CLI Sessions watching')
+  expect(pullText(pull(7), 'draft')).toBe('#7 open · no watcher')
+  expect(pullText(pull(7), 'merged')).toBe('#7 merged')
+  expect(pullText(pull(7), 'closed')).toBe('#7 closed, not merged')
+  expect(pullText(pull(7, { mergeCommit: '1a4ac81fb6080dad6412272ca1e6b05e313608b1' }), 'open')).toBe('#7 merged 1a4ac81')
+  const list: any[] = [{ agentId: 'a1', name: 'audit-fork: audits', kind: 'note', headline: 'Done.', report: 'Done.', at: 1, isWorking: false, isDismissed: false, hasNewReply: false }]
+  const detail = (state: string): any => ({ at: 1, state, passed: 0, failed: 0, running: 0, total: 0 })
+  const details = { 'https://github.com/o/r/pull/7': detail('merged'), 'https://github.com/o/r/pull/8': detail('closed') }
+  const pulls = [pull(7), pull(8), pull(9)]
+  expect(readText(list, undefined, pulls, {}, details)).toContain('[#7 merged; #8 closed, not merged; #9 open · no watcher]')
+  expect(readText(list, 'audit-fork', pulls, {}, details)).toContain('pull requests: #7 merged https://github.com/o/r/pull/7; #8 closed, not merged https://github.com/o/r/pull/8; #9 open · no watcher https://github.com/o/r/pull/9')
+  expect(readText(list, undefined, pulls)).toContain('[#7 open · no watcher; #8 open · no watcher; #9 open · no watcher]')
+})
+
+test('the board tool fetches the state of the pull requests it lists, so a merge no watcher saw reads merged with no board pane drawn, and a reopened one reads open again', async ($, on) => {
+  const clock = { now: 1_800_000_000_000 }
+  const states: Record<string, string> = { '71': 'MERGED', '72': 'CLOSED' }
+  const viewed: string[] = []
+  engine(on, [], [], [], new Map<string, unknown>(), () => ({ isDelivered: true }), new Set<string>(), { isCapped: false }, clock)
+  watchEngine(on, { q1: { cwd: '/work', description: 'q1-fork: a fork' } })
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (isRecord(e.argv) || isAuth(e.argv)) return { value: NO_RECORD }
+    if (e.argv[0] === 'gh') {
+      if (e.argv[1] !== 'pr') return { value: { exitCode: 1, stdout: '', stderr: '' } }
+      const number = String(e.argv[3]).replace(/^.*\//, '')
+      viewed.push(number)
+      return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ state: states[number], isDraft: false }) } }
+    }
+    return {
+      value: {
+        exitCode: 0,
+        stderr: '',
+        stdout: JSON.stringify({
+          results: [],
+          pulls: [
+            { agent_id: 'q1', pull_request: 'https://github.com/o/r/pull/71', number: 71, merge_commit: null, is_watched: false },
+            { agent_id: 'q1', pull_request: 'https://github.com/o/r/pull/72', number: 72, merge_commit: null, is_watched: true },
+            { agent_id: 'q1', pull_request: 'https://github.com/o/r/pull/73', number: 73, merge_commit: '1a4ac81fb6080dad', is_watched: false },
+          ],
+        }),
+      },
+    }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'q1', 'q1-fork: a fork')
+  await settle()
+  const boardText = async () => String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(await boardText()).toContain('[#71 merged; #72 closed, not merged; #73 merged 1a4ac81]')
+  expect([...viewed].sort()).toEqual(['71', '72'])
+  states['72'] = 'OPEN'
+  expect(await boardText()).toContain('#72 closed, not merged')
+  expect(viewed).toHaveLength(2)
+  clock.now += 60_000
+  expect(await boardText()).toContain('[#71 merged; #72 open · CLI Sessions watching; #73 merged 1a4ac81]')
+  expect([...viewed].sort()).toEqual(['71', '72', '72'])
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'q1-fork' })).result)).toContain('#71 merged https://github.com/o/r/pull/71; #72 open · CLI Sessions watching')
+})
+
 test('a pull request reads as its state, its checks without the skipped ones, the claude review and the live test', () => {
   const view = {
     isDraft: true,
@@ -4647,6 +4768,55 @@ test('a restart puts each fork the switchboard started back in the agent list wi
     ['o1', false, 'ask', 'Done for now.', false],
     ['s1', false, 'note', 'Done for now.', false],
   ])
+})
+
+test("a fork's view sums a run of tool calls up as a count line and its last four calls, a file's one a link, and details shows every call; the switchboard's own view keeps its one count line", async ($, on) => {
+  engine(on)
+  on('ui.render', ($: any, e: any) => {
+    const { Box, Text } = $.ui.resolve(e)
+    return e.props.isExpanded ? <Text>every call</Text> : <Box />
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'busy-fork: works')
+  const call = (tool: string, input: object, isErrored = false) => ({ tool_use_id: `${tool}-${JSON.stringify(input)}`, tool, input, isRunning: false, isErrored, isInterrupted: false })
+  const calls = [
+    call('Read', { file_path: '/work/first.c' }),
+    call('Grep', { pattern: 'fire', path: 'native' }),
+    call('Read', { file_path: '/work/native/cadence.h' }),
+    call('Bash', { command: 'make', description: 'Build the pak' }, true),
+    call('Bash', { command: 'ls -la' }),
+    call('Glob', { pattern: '*.lua', path: '/work/scripts' }),
+  ]
+  const group = (isExpanded = false) => ({ plugin: 'qol-switchboard', surface: 'terminal', component: 'ToolGroup', props: { calls, isActive: false, isExpanded } }) as const
+  const texts = async (mounted: any) => (await mounted.findAll({ type: 'Text' })).map((one: any) => one.text)
+  const main = await $.ui.mount(promptBand(false))
+  await settle()
+  const folded = await $.ui.mount(group())
+  expect(await texts(folded)).toEqual([])
+  await folded.unmount()
+  const verbose = await $.ui.mount(group(true))
+  expect(await texts(verbose)).toEqual(['every call'])
+  await verbose.unmount()
+  await main.unmount()
+  const inFork = await $.ui.mount({ ...promptBand(false), props: { ...promptBand(false).props, view: { agentId: 'a8' } } })
+  await settle()
+  const summed = await $.ui.mount(group())
+  expect((await summed.find({ type: 'Text', text: /^Searched/ }))?.text).toBe('Searched for 2 patterns, read 2 files, ran 2 shell commands')
+  expect((await summed.findAll({ type: 'Text', text: /^└/ })).map((one: any) => /[A-Z][a-z]+: [^:]+$/.exec(one.text)?.[0])).toEqual(['Read: cadence.h', 'Bash: Build the pak', 'Bash: ls -la', 'Glob: scripts'])
+  expect((await summed.findAll({ type: 'Link' })).map((one: any) => [one.props.href, one.text.slice(one.props.href.length)])).toEqual([['file:///work/native/cadence.h', 'Read: cadence.h'], ['file:///work/scripts', 'Glob: scripts']])
+  expect(await summed.find({ type: 'Text', text: 'every call' })).toBeUndefined()
+  await summed.press({ key: `unfold-${calls[0].tool_use_id}` })
+  await settle()
+  expect(await texts(summed)).toEqual(['hide details', 'every call'])
+  await summed.press({ key: `fold-${calls[0].tool_use_id}` })
+  await settle()
+  expect(await summed.find({ type: 'Text', text: 'every call' })).toBeUndefined()
+  expect((await summed.find({ type: 'Text', text: /^Searched/ }))?.text).toBe('Searched for 2 patterns, read 2 files, ran 2 shell commands')
+  await summed.unmount()
+  const verboseInFork = await $.ui.mount(group(true))
+  expect(await texts(verboseInFork)).toEqual(['every call'])
+  await verboseInFork.unmount()
+  await inFork.unmount()
 })
 
 test('the forks a restart brings back are each top-level unfinished fork, then the sub-forks under it that ask, were cut or hold one that does', () => {

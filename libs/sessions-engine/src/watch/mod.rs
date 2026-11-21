@@ -171,7 +171,7 @@ impl WatchedRound {
     }
 }
 
-pub(super) fn run(args: &[OsString]) -> Result<()> {
+pub(super) fn run(args: &[OsString], out: &mut dyn Write, err: &mut dyn Write) -> Result<()> {
     let mut owner: Option<String> = None;
     let mut tokens = Vec::new();
     let mut arguments = args.iter();
@@ -201,7 +201,8 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         &SpawnLocks::system()?,
         &tokens,
         owner.as_deref(),
-        &mut crate::cli::stdout(),
+        out,
+        err,
         &trace_dir,
         WatchConfig::default(),
         &mut |duration| std::thread::sleep(duration),
@@ -230,6 +231,7 @@ pub(super) fn watch(
         tokens,
         None,
         out,
+        &mut std::io::sink(),
         trace_dir,
         config,
         &mut |duration| std::thread::sleep(duration),
@@ -246,6 +248,7 @@ pub(super) fn watch_scoped(
     tokens: &[String],
     owner: Option<&str>,
     out: &mut dyn Write,
+    err: &mut dyn Write,
     trace_dir: &std::path::Path,
     config: WatchConfig,
     sleep: &mut dyn FnMut(Duration),
@@ -280,6 +283,7 @@ pub(super) fn watch_scoped(
         tokens,
         owner,
         out,
+        err,
         trace_dir,
         config,
         sleep,
@@ -357,6 +361,7 @@ fn complete_seen_round(
     locks: &SpawnLocks,
     round: &mut WatchedRound,
     out: &mut dyn Write,
+    err: &mut dyn Write,
     trace_dir: &std::path::Path,
     sleep: &mut dyn FnMut(Duration),
     screen: &str,
@@ -461,6 +466,7 @@ fn complete_seen_round(
             markerless,
             &cleaned,
             round.agent_assignment.as_ref(),
+            err,
         );
         WakeDelivery {
             delivered: false,
@@ -574,6 +580,7 @@ fn poll_round(
     locks: &SpawnLocks,
     round: &mut WatchedRound,
     out: &mut dyn Write,
+    err: &mut dyn Write,
     trace_dir: &std::path::Path,
     config: WatchConfig,
     sleep: &mut dyn FnMut(Duration),
@@ -693,6 +700,7 @@ fn poll_round(
                             markerless,
                             &clean_screen(full_screen),
                             round.agent_assignment.as_ref(),
+                            err,
                         );
                         WakeDelivery {
                             delivered: false,
@@ -937,6 +945,7 @@ fn poll_round(
                     locks,
                     round,
                     out,
+                    err,
                     trace_dir,
                     sleep,
                     &report,
@@ -1011,6 +1020,7 @@ fn poll_round(
                         locks,
                         round,
                         out,
+                        err,
                         trace_dir,
                         sleep,
                         &report,
@@ -1113,6 +1123,7 @@ fn poll_round(
             locks,
             round,
             out,
+            err,
             trace_dir,
             sleep,
             &report,
@@ -1773,6 +1784,7 @@ fn watch_loop(
     tokens: &[String],
     owner: Option<&str>,
     out: &mut dyn Write,
+    err: &mut dyn Write,
     trace_dir: &std::path::Path,
     config: WatchConfig,
     sleep: &mut dyn FnMut(Duration),
@@ -1823,6 +1835,7 @@ fn watch_loop(
                 locks,
                 &mut round,
                 out,
+                err,
                 trace_dir,
                 config,
                 sleep,
@@ -2097,6 +2110,7 @@ fn publish_silent_evidence(
     markerless: bool,
     cleaned: &str,
     assignment: Option<&super::agent_policy::AgentAssignment>,
+    err: &mut dyn Write,
 ) {
     if let Err(failure) = evidence::publish(
         trace_dir,
@@ -2109,11 +2123,12 @@ fn publish_silent_evidence(
         assignment,
     ) {
         probe_evidence_failure(session, true, &failure);
-        crate::cli::warn(format_args!(
+        let _ = writeln!(
+            err,
             "qol sessions: silent completion evidence publication failed (session {}, stage {})",
             session,
             failure.stage.as_str()
-        ));
+        );
     }
 }
 
@@ -3338,6 +3353,7 @@ mod tests {
                 locks,
                 round,
                 out,
+                &mut std::io::sink(),
                 trace_dir,
                 fast_config(Duration::from_secs(3600)),
                 &mut |_| {},
@@ -3529,6 +3545,7 @@ mod tests {
                 &locks,
                 &mut round,
                 &mut out,
+                &mut std::io::sink(),
                 root.path(),
                 fast_config(Duration::from_secs(3600)),
                 &mut |_| {},
@@ -4692,6 +4709,7 @@ mod tests {
             &["v1:fake:7:100".to_owned()],
             None,
             &mut out,
+            &mut std::io::sink(),
             root.path(),
             WatchConfig {
                 poll_base: Duration::from_millis(30),
@@ -4777,6 +4795,7 @@ mod tests {
             &[],
             Some(owner),
             &mut out,
+            &mut std::io::sink(),
             root.path(),
             WatchConfig::fast_for_tests(),
             &mut sleep,
@@ -4838,6 +4857,7 @@ mod tests {
             &["v1:fake:7:100".to_owned()],
             None,
             &mut out,
+            &mut std::io::sink(),
             root.path(),
             WatchConfig::default(),
             &mut |duration| requested.push(duration),
@@ -5053,6 +5073,7 @@ mod tests {
             &[binding.token().to_owned()],
             None,
             &mut out,
+            &mut std::io::sink(),
             root.path(),
             fast_config(Duration::from_secs(3600)),
             &mut |duration| sleeps.push(duration),
@@ -5152,6 +5173,7 @@ mod tests {
             &[binding.token().to_owned()],
             None,
             &mut out,
+            &mut std::io::sink(),
             root.path(),
             fast_config(Duration::from_secs(3600)),
             &mut |duration| {
@@ -6192,6 +6214,7 @@ mod tests {
                 &sim.locks,
                 &mut self.round,
                 &mut self.out,
+                &mut std::io::sink(),
                 sim.trace_dir(),
                 fault_config(self.stall_after, self.fault_after),
                 &mut |_| {},
@@ -7674,6 +7697,7 @@ mod tests {
             &sim.locks,
             &mut again,
             &mut out,
+            &mut std::io::sink(),
             sim.trace_dir(),
             fast_config(Duration::from_secs(3600)),
             &mut |_| {},
@@ -8006,6 +8030,7 @@ mod tests {
                 &locks(&root),
                 &mut round,
                 &mut out,
+                &mut std::io::sink(),
                 root.path(),
                 fast_config(Duration::from_secs(3600)),
                 &mut |_| {},
@@ -8075,6 +8100,7 @@ mod tests {
                     &locks,
                     &mut round,
                     &mut out,
+                    &mut std::io::sink(),
                     root.path(),
                     fast_config(Duration::from_secs(3600)),
                     &mut |_| {},
@@ -8146,6 +8172,7 @@ mod tests {
                 &locks,
                 &mut round,
                 &mut out,
+                &mut std::io::sink(),
                 root.path(),
                 fast_config(Duration::from_secs(3600)),
                 &mut |_| {},
@@ -8223,6 +8250,7 @@ mod tests {
                     &locks,
                     &mut round,
                     &mut out,
+                    &mut std::io::sink(),
                     root.path(),
                     fast_config(Duration::from_secs(3600)),
                     &mut |_| {},
@@ -8296,6 +8324,7 @@ mod tests {
                 &locks,
                 &mut round,
                 &mut out,
+                &mut std::io::sink(),
                 root.path(),
                 fast_config(Duration::from_secs(3600)),
                 &mut |_| {},
@@ -8321,6 +8350,7 @@ mod tests {
                 &locks,
                 &mut round,
                 &mut out,
+                &mut std::io::sink(),
                 root.path(),
                 fast_config(Duration::from_secs(3600)),
                 &mut |_| {},
@@ -8339,6 +8369,7 @@ mod tests {
                 &locks,
                 &mut round,
                 &mut out,
+                &mut std::io::sink(),
                 root.path(),
                 fast_config(Duration::from_secs(3600)),
                 &mut |_| {},
@@ -8401,6 +8432,7 @@ mod tests {
                 &locks,
                 &mut round,
                 &mut out,
+                &mut std::io::sink(),
                 root.path(),
                 fast_config(Duration::from_secs(3600)),
                 &mut |_| {},
@@ -8417,6 +8449,7 @@ mod tests {
                 &locks,
                 &mut round,
                 &mut out,
+                &mut std::io::sink(),
                 root.path(),
                 fast_config(Duration::from_secs(3600)),
                 &mut |_| {},
@@ -8487,6 +8520,7 @@ mod tests {
                 &locks,
                 &mut round,
                 &mut out,
+                &mut std::io::sink(),
                 root.path(),
                 fast_config(Duration::from_secs(3600)),
                 &mut |_| {},
@@ -8506,6 +8540,7 @@ mod tests {
                 &locks,
                 &mut round,
                 &mut out,
+                &mut std::io::sink(),
                 root.path(),
                 fast_config(Duration::from_secs(3600)),
                 &mut |_| {},

@@ -10,7 +10,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use wait_timeout::ChildExt;
 
-use crate::cli::PLUGIN_ID;
 use crate::core::guards::{
     ManagedPackage, PackageIndex, PackageManager, PackageScope, PackageStatus,
 };
@@ -19,6 +18,7 @@ use crate::core::{
     delete_path, AppPlatform, Disposal, IdentitySnapshot, InstalledApp, Leftover, LeftoverKind,
     MatchKind, RemovalOutcome, RemovalPlan,
 };
+use crate::PLUGIN_ID;
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);

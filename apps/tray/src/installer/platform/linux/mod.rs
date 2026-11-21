@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 use self::desktop_entry::format_desktop_exec_command;
 use super::InstallerOps;
-use crate::paths::platform::linux::xdg_data_home;
+use crate::paths::xdg_data_home;
+use crate::platform::linux::{APP_DESKTOP_ENTRY, SETTINGS_SURFACE_DESKTOP_ENTRY};
 
 pub(in crate::installer) mod desktop_entry;
 
@@ -19,11 +20,6 @@ const ICONS: [(u32, &[u8]); 9] = [
     (256, include_bytes!("../../../../assets/icons/256.png")),
     (512, include_bytes!("../../../../assets/icons/512.png")),
 ];
-
-const APP_DESKTOP_ENTRY: &str = "qol-tray.desktop";
-const SETTINGS_SURFACE_DESKTOP_ENTRY: &str = "qol-settings-surface.desktop";
-pub(crate) const INSTALLER_DESKTOP_ENTRIES: [&str; 2] =
-    [APP_DESKTOP_ENTRY, SETTINGS_SURFACE_DESKTOP_ENTRY];
 
 pub(super) struct Platform;
 
@@ -94,6 +90,10 @@ impl InstallerOps for Platform {
     }
 
     fn remove_legacy_install(&self) {}
+
+    fn refresh_after_update(&self, _binary_path: &Path, _installer: Option<&Path>) -> Result<()> {
+        Ok(())
+    }
 
     fn uninstall(&self, binary_path: &Path, profile: InstallProfile) -> Result<()> {
         match profile {

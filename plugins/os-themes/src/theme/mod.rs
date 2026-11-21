@@ -1,9 +1,11 @@
-pub mod platform;
+mod platform;
 
 use anyhow::Result;
 
 use crate::session::{RestoreMode, RestoreReport};
-use platform::{Platform, ThemePlatform};
+use platform::ThemePlatform;
+
+pub(crate) use platform::Platform;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorScheme {

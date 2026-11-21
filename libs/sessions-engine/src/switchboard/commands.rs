@@ -21,7 +21,7 @@ struct Tree {
     commands: Vec<CommandNode>,
 }
 
-pub(super) fn run(args: &[OsString]) -> Result<()> {
+pub(super) fn run(args: &[OsString]) -> Result<Vec<String>> {
     if !args.is_empty() {
         bail!("usage: qol sessions switchboard commands");
     }
@@ -30,8 +30,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         status: auth.status,
         commands: vec![auth.command],
     };
-    crate::cli::line(serde_json::to_string(&tree)?);
-    Ok(())
+    Ok(vec![serde_json::to_string(&tree)?])
 }
 
 #[cfg(test)]

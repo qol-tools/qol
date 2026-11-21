@@ -1,3 +1,4 @@
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
@@ -49,16 +50,42 @@ pub fn inspect(
     qol_config::inspect_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
 }
 
+pub fn saved_output() -> anyhow::Result<String> {
+    let inspection = inspect().context("cannot read the saved sound output")?;
+    Ok(inspection.config.output.device)
+}
+
+pub fn saved_input() -> anyhow::Result<String> {
+    let inspection = inspect().context("cannot read the saved microphone")?;
+    Ok(inspection.config.input.device)
+}
+
 pub fn save_output_device(device: &str) -> anyhow::Result<()> {
-    let mut config = current()?;
-    config.output.device = device.to_owned();
-    save(&config, "sound output")
+    save_switched(device, "sound output", |config| {
+        config.output.device = device.to_owned()
+    })
 }
 
 pub fn save_input_device(device: &str) -> anyhow::Result<()> {
-    let mut config = current()?;
-    config.input.device = device.to_owned();
-    save(&config, "microphone")
+    save_switched(device, "microphone", |config| {
+        config.input.device = device.to_owned()
+    })
+}
+
+fn save_switched(
+    device: &str,
+    choice: &str,
+    apply: impl FnOnce(&mut SoundConfig),
+) -> anyhow::Result<()> {
+    let saved = current().and_then(|mut config| {
+        apply(&mut config);
+        save(&config, choice)
+    });
+    saved.map_err(|error| {
+        anyhow::anyhow!(
+            "switched to the {choice} `{device}`, but the choice was not saved: {error:#}"
+        )
+    })
 }
 
 fn current() -> anyhow::Result<SoundConfig> {

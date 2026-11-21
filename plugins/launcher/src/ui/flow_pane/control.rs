@@ -49,9 +49,9 @@ impl LauncherView {
             async move {
                 let asked = id.clone();
                 let outcome = async_cx
-                    .background_spawn(
-                        async move { crate::flow::fetch_detail(&entry, &query, &asked) },
-                    )
+                    .background_spawn(async move {
+                        crate::app::host::fetch_detail(&entry, &query, &asked)
+                    })
                     .await;
                 this.update(&mut async_cx, |view, cx| {
                     let detail = match outcome {
@@ -94,7 +94,7 @@ impl LauncherView {
             return;
         };
         let finished = finishes_flow(action);
-        if let Err(message) = crate::flow::run_row_action(&flow.entry, action, row) {
+        if let Err(message) = crate::app::host::run_row_action(&flow.entry, action, row) {
             self.state.set_launch_error(message);
             cx.notify();
             return;
@@ -133,7 +133,7 @@ impl LauncherView {
                 cx.write_to_clipboard(item);
                 Ok(())
             }
-            (None, Some(action)) => crate::flow::run_row_action(&flow.entry, action, row),
+            (None, Some(action)) => crate::app::host::run_row_action(&flow.entry, action, row),
             (None, None) if row.spec.masked => Err(format!(
                 "{} declares no copy row action for a hidden row",
                 flow.entry.title
@@ -164,7 +164,7 @@ impl LauncherView {
             return;
         };
         let action = enter_action(&flow.entry, id);
-        if let Err(message) = crate::flow::run_row_action(&flow.entry, &action, row) {
+        if let Err(message) = crate::app::host::run_row_action(&flow.entry, &action, row) {
             self.state.set_launch_error(message);
             cx.notify();
             return;

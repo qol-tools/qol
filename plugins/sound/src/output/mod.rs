@@ -16,23 +16,28 @@ pub fn switch(output: &str) -> anyhow::Result<()> {
     device::switch(OUTPUT, output).map(|_| ())
 }
 
-pub fn next() -> anyhow::Result<OutputRow> {
+pub struct NextOutput {
+    pub row: OutputRow,
+    pub switched: bool,
+}
+
+pub fn next() -> anyhow::Result<NextOutput> {
     let rows = list()?;
     let effective = device::effective(OUTPUT)?;
     let index = next_index(&rows, effective.as_ref().map(|identity| identity.as_str()))
         .context("no sound outputs are connected")?;
     let row = rows[index].clone();
     if rows.len() == 1 {
-        return Ok(row);
+        return Ok(NextOutput {
+            row,
+            switched: false,
+        });
     }
     switch(&row.value)?;
-    if let Err(error) = crate::config::save_output_device(&row.value) {
-        anyhow::bail!(
-            "switched to the sound output `{}`, but the choice was not saved: {error:#}",
-            row.value
-        );
-    }
-    Ok(row)
+    Ok(NextOutput {
+        row,
+        switched: true,
+    })
 }
 
 fn next_index(rows: &[OutputRow], effective: Option<&str>) -> Option<usize> {
@@ -47,9 +52,8 @@ fn next_index(rows: &[OutputRow], effective: Option<&str>) -> Option<usize> {
     Some(0)
 }
 
-pub fn status() -> anyhow::Result<OutputStatus> {
-    let inspection = crate::config::inspect().context("cannot read the saved sound output")?;
-    device::status(OUTPUT, inspection.config.output.device)
+pub fn status(saved: String) -> anyhow::Result<OutputStatus> {
+    device::status(OUTPUT, saved)
 }
 
 #[cfg(test)]

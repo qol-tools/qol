@@ -1,5 +1,3 @@
-pub(crate) mod settings;
-
 use serde::{Deserialize, Serialize};
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();

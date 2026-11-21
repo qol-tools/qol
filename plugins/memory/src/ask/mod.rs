@@ -2533,7 +2533,7 @@ mod tests {
         assert_eq!(value["index_caches"]["pool"], "fresh");
         assert_eq!(value["index_caches"]["user"], "fresh");
         assert_eq!(value["index_caches"]["notes"], "fresh");
-        crate::app::warm::reindex(&store).expect("reindex runs");
+        crate::warm::reindex(&store).expect("reindex runs");
         run_ask(
             &store,
             "does the clipboard history ring survive tray restarts",

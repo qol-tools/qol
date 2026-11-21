@@ -851,7 +851,7 @@ pub(super) fn recorded_assignment(
     Ok(recorded_identity(ledger, pending, binding)?.assignment)
 }
 
-pub(super) fn run(args: &[OsString]) -> Result<()> {
+pub(super) fn run(args: &[OsString]) -> Result<String> {
     let mut parsed = parse_args(args)?;
     let dispatch = AgentDispatch::new(config_dispatch_policy()?, parsed.assignment_request());
     let explicit = super::launch::LaunchChoice {
@@ -891,15 +891,13 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     }
     let surface = config_surface()?;
     let locks = SpawnLocks::system()?;
-    let encoded = if parsed.lanes.is_empty() {
+    if parsed.lanes.is_empty() {
         let outcome = run_with(&terminals, &tool, parsed, &dispatch, surface, &locks, cap)?;
-        serde_json::to_string(&outcome).context("failed to serialize spawn outcome")?
+        serde_json::to_string(&outcome).context("failed to serialize spawn outcome")
     } else {
         let outcome = run_lanes_with(&terminals, &tool, parsed, &dispatch, surface, &locks, cap)?;
-        serde_json::to_string(&outcome).context("failed to serialize lane set outcome")?
-    };
-    crate::cli::line(encoded);
-    Ok(())
+        serde_json::to_string(&outcome).context("failed to serialize lane set outcome")
+    }
 }
 
 fn run_lanes_with(
@@ -6886,6 +6884,7 @@ mod tests {
             Some("tab"),
             None,
             &AgentDispatch::unconfigured(),
+            &mut |_| {},
         )
         .unwrap();
         assert_eq!(outcome.tool, "claude");
@@ -6938,6 +6937,7 @@ mod tests {
             Some("tab"),
             None,
             &AgentDispatch::unconfigured(),
+            &mut |_| {},
         )
         .unwrap_err()
         .to_string();
@@ -6966,6 +6966,7 @@ mod tests {
             Some("tab"),
             None,
             &AgentDispatch::unconfigured(),
+            &mut |_| {},
         )
         .unwrap_err()
         .to_string();

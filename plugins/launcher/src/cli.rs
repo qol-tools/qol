@@ -3,8 +3,7 @@ use std::process::ExitCode;
 use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp};
 
 use crate::ui::run::StartupIntent;
-
-const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+use crate::PLUGIN_ID;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Operation {
@@ -45,9 +44,7 @@ impl Operations for ProductionOperations {
     }
 
     fn open_settings(&self) -> CommandResult {
-        match qol_apps::desktop_integration::open_plugin_settings_via_tray(
-            crate::config::plugin_id(),
-        ) {
+        match qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID) {
             Ok(()) => CommandResult::success(""),
             Err(error) => CommandResult::new(
                 "",

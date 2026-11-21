@@ -1,11 +1,11 @@
-use crate::discovery::platform::macos::ffi;
-use crate::discovery::platform::macos::ffi::{
+use crate::discovery::WindowInfo;
+use crate::platform::macos::ffi;
+use crate::platform::macos::ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDataGetBytePtr, CFDataGetLength, CFDictionaryRef,
     CFRelease, CGDataProviderCopyData, CGImageGetBytesPerRow, CGImageGetDataProvider,
     CGImageGetHeight, CGImageGetWidth, CGImageRef, K_CG_NULL_WINDOW_ID,
     K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
 };
-use crate::discovery::WindowInfo;
 use qol_app_icon::RgbaImage;
 use std::collections::HashMap;
 use std::ffi::c_void;

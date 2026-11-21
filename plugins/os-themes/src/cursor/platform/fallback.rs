@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Result};
 
-use crate::config::{Config, PLUGIN_ID};
+use crate::config::Config;
 use crate::cursor::{CursorEffect, RunControl};
+use crate::PLUGIN_ID;
 
 use super::CursorPlatform;
 

@@ -1,3 +1,4 @@
+mod action;
 mod app;
 mod cli;
 mod config;
@@ -8,6 +9,8 @@ mod platform;
 mod restore;
 
 use std::process::ExitCode;
+
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 fn main() -> ExitCode {
     qol_log::init_stderr();

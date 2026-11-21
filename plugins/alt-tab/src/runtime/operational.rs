@@ -1,8 +1,13 @@
 use std::sync::mpsc;
 
+use futures::future::{FutureExt, LocalBoxFuture};
+use gpui::AsyncApp;
+use qol_gpui::monitor::MonitorTracker;
 use qol_headless::CommandResult;
 
-use crate::config::{load_alt_tab_config, PLUGIN_ID};
+use crate::config::{contract, load_alt_tab_config, AltTabConfig};
+use crate::picker::run::PickerHost;
+use crate::PLUGIN_ID;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Operation {
@@ -29,10 +34,29 @@ pub(super) fn execute(operation: Operation) -> CommandResult {
     }
 }
 
-pub(crate) fn open_settings_page() {
+fn open_settings_page() {
     if let Err(error) = qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID) {
         log::warn!("Failed to open settings page: {error}");
     }
+}
+
+fn open_settings_panel(cx: AsyncApp, tracker: MonitorTracker) -> LocalBoxFuture<'static, ()> {
+    async move {
+        let opened = qol_gpui::settings_panel::open_plugin_settings(
+            PLUGIN_ID,
+            "Alt Tab Settings",
+            contract(),
+            tracker,
+            qol_gpui::settings_panel::SettingsRuntime::empty(),
+            &cx,
+        )
+        .await;
+        if let Err(error) = opened {
+            log::warn!("settings panel failed, opening browser: {error:#}");
+            open_settings_page();
+        }
+    }
+    .boxed_local()
 }
 
 #[derive(Clone, Copy)]
@@ -56,12 +80,21 @@ impl InitialRequest {
     }
 }
 
+fn load_config() -> AltTabConfig {
+    let config = load_alt_tab_config();
+    qol_gpui::popup_window::set_ghost_debug(
+        config.display.ghost_opacity,
+        config.display.ghost_debug_color.as_deref(),
+    );
+    config
+}
+
 fn run_picker(initial_request: InitialRequest) -> CommandResult {
     if initial_request.send() {
         return CommandResult::success("");
     }
 
-    let config = load_alt_tab_config();
+    let config = load_config();
     let (tx, rx) = mpsc::channel();
 
     if !super::daemon::start_listener(tx) {
@@ -70,7 +103,11 @@ fn run_picker(initial_request: InitialRequest) -> CommandResult {
     }
 
     crate::preview_plane::prepare();
-    crate::picker::run::run_app(config, rx, initial_request.show_on_start());
+    let host = PickerHost {
+        load_config,
+        open_settings: open_settings_panel,
+    };
+    crate::picker::run::run_app(config, rx, initial_request.show_on_start(), host);
     super::daemon::cleanup();
     CommandResult::success("")
 }

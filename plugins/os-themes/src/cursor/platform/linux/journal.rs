@@ -27,7 +27,7 @@ impl SessionSnapshot for CursorSnapshot {
 }
 
 fn store() -> SessionStore {
-    SessionStore::new(crate::session::platform::store::session_subdir(
+    SessionStore::new(crate::platform::session_store::session_subdir(
         CursorSnapshot::SUBDIR,
     ))
 }

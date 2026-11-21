@@ -13,7 +13,7 @@ mod view;
 
 pub mod components;
 pub use components::{
-    settings_action_busy, settings_action_spinner, settings_busy_message,
+    settings_action_spinner, settings_action_word, settings_busy_message,
     settings_connection_spinner, settings_description, settings_list, settings_query_spinner,
     settings_tag, SettingsGroupHeader, SettingsRow, SettingsValueTone, SETTINGS_LIST_GAP,
 };

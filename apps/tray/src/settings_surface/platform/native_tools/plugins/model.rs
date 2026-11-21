@@ -298,7 +298,7 @@ fn not_installed_row(plugin: &CatalogPlugin) -> Row {
             plugin.available.clone().unwrap_or_default(),
             SettingsValueTone::Normal,
         )
-        .affordance("Install")
+        .affordance("install")
         .enter(Enter::Run(RowAction::Install(plugin.id.clone())), "install")
 }
 
@@ -328,11 +328,11 @@ fn installed_row(plugin: &CatalogPlugin, visit: &Visit<'_>) -> Row {
             plugin.installed.clone().unwrap_or_default(),
             SettingsValueTone::Normal,
         )
-        .affordance("Remove")
+        .affordance("remove")
         .delete(RowAction::Remove(id), "remove"),
         PluginState::Failed => Row::item(&plugin.name, plugin.error.clone())
             .value("Install failed", SettingsValueTone::Danger)
-            .affordance("Retry")
+            .affordance("retry")
             .enter(Enter::Run(RowAction::Install(id)), "retry"),
         PluginState::Installed | PluginState::NotInstalled => {
             let row = Row::item(&plugin.name, description(plugin));
@@ -341,7 +341,7 @@ fn installed_row(plugin: &CatalogPlugin, visit: &Visit<'_>) -> Row {
                 row.value(format!("Installed {version}"), SettingsValueTone::Success)
             } else {
                 row.value(version, SettingsValueTone::Normal)
-                    .affordance("Remove")
+                    .affordance("remove")
                     .delete(RowAction::Remove(id), "remove")
             }
         }
@@ -517,7 +517,7 @@ mod tests {
                 "1.2.0",
                 SettingsValueTone::Normal,
                 false,
-                Some("Install"),
+                Some("install"),
                 Some((Enter::Run(RowAction::Install("voice".into())), "install")),
                 None,
             ),
@@ -562,7 +562,7 @@ mod tests {
                 "Install failed",
                 SettingsValueTone::Danger,
                 false,
-                Some("Retry"),
+                Some("retry"),
                 Some((Enter::Run(RowAction::Install("failed".into())), "retry")),
                 None,
             ),
@@ -571,7 +571,7 @@ mod tests {
                 "1.1.0",
                 SettingsValueTone::Normal,
                 false,
-                Some("Remove"),
+                Some("remove"),
                 None,
                 Some((RowAction::Remove("stuck".into()), "remove")),
             ),
@@ -589,7 +589,7 @@ mod tests {
                 "1.1.0",
                 SettingsValueTone::Normal,
                 false,
-                Some("Remove"),
+                Some("remove"),
                 None,
                 Some((RowAction::Remove("lights".into()), "remove")),
             ),

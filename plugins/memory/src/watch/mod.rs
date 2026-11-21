@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use qol_watch::{Watch, WatchError, WatchRoot};
 
-use crate::app::warm::WarmState;
 use crate::ingest::{self, IngestRoots};
+use crate::warm::WarmState;
 
 const SETTLE_WINDOW: Duration = Duration::from_millis(250);
 

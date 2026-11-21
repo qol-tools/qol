@@ -86,7 +86,7 @@ pub fn destroy_non_target_windows(
 pub fn discard_old_window(
     current: &crate::picker::PickerWindowState,
     target: qol_gpui::window::MonitorKey,
-    handle: gpui::WindowHandle<crate::app::AltTabApp>,
+    handle: gpui::WindowHandle<crate::picker::AltTabApp>,
     cx: &mut gpui::App,
 ) {
     imp::discard_old_window(current, target, handle, cx)

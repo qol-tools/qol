@@ -8,10 +8,11 @@ use qol_plugin_daemon::daemon::ReadResult;
 use qol_runtime::protocol::DaemonRequest;
 use serde_json::{json, Value};
 
-use super::{request, warm::WarmState};
+use super::request;
 use crate::store::Store;
 use crate::verification::service::Verifier;
 use crate::verification::{Fact, Prediction};
+use crate::warm::WarmState;
 
 const QUERY: &str = "how do I fire up KCD2 debug";
 const CALLER: &str = "/fixture/verification-private-a";

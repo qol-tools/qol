@@ -61,13 +61,22 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
         "screenshot" => ReadResult::Command(Command::Screenshot),
         "preview" => ReadResult::Command(Command::Preview),
         "reload" => ReadResult::Command(Command::Reload),
-        "audio_sources" => audio_device_payload(crate::platform::list_audio_sources()),
-        "audio_sinks" => audio_device_payload(crate::platform::list_audio_sinks()),
-        "audio_apps" => audio_device_payload(crate::platform::list_audio_apps()),
         theme if theme == "theme" || theme.starts_with("theme ") => {
             ReadResult::Command(Command::Theme)
         }
-        other => ReadResult::Command(Command::Cli(other.to_string())),
+        other => match audio_devices(other) {
+            Some(devices) => audio_device_payload(devices),
+            None => ReadResult::Command(Command::Cli(other.to_string())),
+        },
+    }
+}
+
+pub(crate) fn audio_devices(query: &str) -> Option<Vec<crate::platform::AudioDevice>> {
+    match query {
+        "audio_sources" => Some(crate::platform::list_audio_sources()),
+        "audio_sinks" => Some(crate::platform::list_audio_sinks()),
+        "audio_apps" => Some(crate::platform::list_audio_apps()),
+        _ => None,
     }
 }
 

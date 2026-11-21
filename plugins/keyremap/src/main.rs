@@ -1,5 +1,10 @@
+mod app;
 mod cli;
+mod config;
+mod control;
 mod platform;
+
+use qol_keyremap::PLUGIN_ID;
 
 fn main() -> std::process::ExitCode {
     qol_log::init_stderr();

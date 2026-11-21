@@ -4,12 +4,14 @@ use std::time::Duration;
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::DaemonRequest;
 
-use crate::cli::PLUGIN_ID;
+use crate::action::WindowAction;
+use crate::cli::parse_action;
 use crate::config::load_config;
 use crate::diagnostics::ActionTimer;
 use crate::glide::{Direction, Phase};
 use crate::platform::GlideController;
 use crate::restore::state_store::FileMinimizedStateStore;
+use crate::PLUGIN_ID;
 
 const CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -20,7 +22,7 @@ const GLIDE_MAINTENANCE_POLL: Duration = Duration::from_millis(50);
 const FOCUS_TRACE_SCHEMA: u8 = 1;
 #[derive(Debug, PartialEq)]
 enum Command {
-    Execute(String),
+    Execute(WindowAction),
     Glide {
         direction: Direction,
         phase: Phase,
@@ -71,7 +73,7 @@ impl Runtime {
             glide_speed: 1200.0,
             store: FileMinimizedStateStore::new(crate::platform::state_file_path()),
             open_settings: || {
-                qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::cli::PLUGIN_ID)
+                qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
             },
         }
     }
@@ -80,11 +82,11 @@ impl Runtime {
         match command {
             Command::Execute(action) => {
                 let config = load_config();
-                let timer = ActionTimer::start(&action);
-                let result = crate::platform::execute_action(&action, &self.store, &config);
+                let timer = ActionTimer::start(action.id());
+                let result = crate::platform::execute_action(action, &self.store, &config);
                 timer.finish(&result);
                 if let Err(error) = result {
-                    log::error!("{action} failed: {error}");
+                    log::error!("{} failed: {error}", action.id());
                 }
                 true
             }
@@ -185,36 +187,18 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
         _ => {}
     }
 
-    if let Some(direction) = Direction::from_action(&request.action) {
-        return match Phase::from_input(&request.input) {
+    match parse_action(&request.action) {
+        Some(WindowAction::Glide(direction)) => match Phase::from_input(&request.input) {
             Ok(phase) => ReadResult::Command(Command::Glide {
                 direction,
                 phase,
                 trace: TraceContext::from_input(&request.input),
             }),
             Err(error) => ReadResult::Error(error),
-        };
+        },
+        Some(WindowAction::PrintWorkAreas) | None => ReadResult::Fallback,
+        Some(action) => ReadResult::Command(Command::Execute(action)),
     }
-
-    if is_regular_action(&request.action) {
-        return ReadResult::Command(Command::Execute(request.action.clone()));
-    }
-    ReadResult::Fallback
-}
-
-fn is_regular_action(action: &str) -> bool {
-    matches!(
-        action,
-        "snap-left"
-            | "snap-right"
-            | "snap-bottom"
-            | "maximize"
-            | "minimize"
-            | "restore"
-            | "center"
-            | "move-monitor-left"
-            | "move-monitor-right"
-    )
 }
 
 fn trace_glide(
@@ -277,6 +261,7 @@ fn trace_glide_watchdog(outcome: &Result<(), String>) {
 #[cfg(test)]
 mod tests {
     use super::{parse_request, should_trace_glide, Command, Runtime, TraceContext};
+    use crate::action::WindowAction;
     use crate::glide::{Direction, Phase};
     use qol_plugin_daemon::daemon::ReadResult;
     use qol_runtime::protocol::DaemonRequest;
@@ -345,7 +330,11 @@ mod tests {
     fn routes_regular_actions_and_falls_back_for_unknown_actions() {
         assert!(matches!(
             parse_request(&request("center", serde_json::Value::Null)),
-            ReadResult::Command(Command::Execute(action)) if action == "center"
+            ReadResult::Command(Command::Execute(WindowAction::Center))
+        ));
+        assert!(matches!(
+            parse_request(&request("print-work-areas", serde_json::Value::Null)),
+            ReadResult::Fallback
         ));
         assert!(matches!(
             parse_request(&request("settings", serde_json::Value::Null)),

@@ -7,8 +7,8 @@ use serde_json::{json, Value};
 
 use crate::ask::{render_text, AskOutput, AskRequest, LogOptions};
 use crate::store::Store;
+use crate::PLUGIN_ID;
 
-const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const DEFAULT_K: usize = 5;
 const DEFAULT_LOG_SOURCE: &str = "ask-cli";
 
@@ -1354,7 +1354,7 @@ fn reindex_layers(invocation: &ReindexInvocation) -> Result<Vec<String>> {
     }
     let store = Store::resolve(invocation.store.as_deref())
         .context("failed to resolve the qol-memory store")?;
-    crate::app::warm::reindex(&store)
+    crate::warm::reindex(&store)
 }
 
 fn run_distill_plain(context: &CommandContext) -> Result<Execution> {

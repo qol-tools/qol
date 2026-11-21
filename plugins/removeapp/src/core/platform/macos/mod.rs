@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use crate::cli::PLUGIN_ID;
 use crate::core::classify::{normalize_entry, owner_of};
 use crate::core::guards::{
     ManagedPackage, PackageIndex, PackageManager, PackageScope, PackageStatus,
@@ -17,6 +16,7 @@ use crate::core::{
     delete_path, AppPlatform, Disposal, IdentitySnapshot, InstalledApp, Leftover, LeftoverKind,
     MatchKind, RemovalOutcome, RemovalPlan,
 };
+use crate::PLUGIN_ID;
 
 use self::cask::{parse_cask_map, CaskIndex, CaskStatus};
 

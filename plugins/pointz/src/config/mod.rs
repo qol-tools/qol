@@ -23,7 +23,7 @@ pub struct PluginConfig {}
 pub(crate) type ConfigInspection = qol_config::PluginConfigInspection<PluginConfig>;
 
 pub(crate) fn inspect() -> Result<ConfigInspection, qol_config::PluginConfigInspectionError> {
-    qol_config::inspect_plugin_config_from_env_with_contract(env!("QOL_PLUGIN_ID"), CONFIG_CONTRACT)
+    qol_config::inspect_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
 }
 
 #[cfg(test)]

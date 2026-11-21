@@ -11,7 +11,7 @@ use crate::capture::frozen_frame::FrozenFrame;
 use crate::capture::space::CaptureKind;
 use crate::{Monitor, Rect};
 
-use super::display::{active_display_bounds, rect_intersection};
+mod selector_target;
 
 type CGEventRef = *const c_void;
 const CG_EVENT_SOURCE_STATE_HID_SYSTEM: i32 = 1;
@@ -36,6 +36,8 @@ extern "C" {
     fn CFRelease(cf: *const c_void);
 }
 
+pub fn pre_create_selector(_cx: &mut gpui::App) {}
+
 pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {
     crate::ui::region_selector::select_region_blocking_with(move |tx, cx| {
         let tracker = MonitorTracker::start(cx);
@@ -49,11 +51,6 @@ pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Re
         );
         open_region_selector_with_sender(tx, true, kind, cursor, monitors, frozen_frame, cx);
     })
-}
-
-pub fn monitor_capture_rect(monitor: Bounds<Pixels>) -> Option<Rect> {
-    let rect = super::selector_target::rect_from_bounds(monitor);
-    (rect.w > 0 && rect.h > 0).then_some(rect)
 }
 
 pub fn select_region_in_app(
@@ -133,7 +130,7 @@ fn selector_windows(
     } else {
         monitors
     };
-    let hover_target = super::selector_target::snapshot(&monitors);
+    let hover_target = selector_target::snapshot(&monitors);
     let pointer = cursor
         .and_then(|(_, pointer)| *pointer)
         .or_else(mac_pointer_position);
@@ -261,7 +258,7 @@ impl Drop for CfGuard {
 }
 
 fn selector_fallback_bounds() -> Bounds<Pixels> {
-    let displays = active_display_bounds()
+    let displays = crate::platform::get_monitors()
         .ok()
         .filter(|displays| !displays.is_empty())
         .and_then(|displays| displays.into_iter().next());
@@ -271,18 +268,18 @@ fn selector_fallback_bounds() -> Bounds<Pixels> {
 }
 
 fn selector_rect_mapper() -> crate::ui::region_selector::RectMapper {
-    let displays = active_display_bounds().unwrap_or_default();
+    let displays = crate::platform::get_monitors().unwrap_or_default();
     std::rc::Rc::new(move |rect| map_selector_rect_to_capture(rect, &displays))
 }
 
-pub(super) fn map_selector_rect_to_capture(rect: Rect, displays: &[Monitor]) -> Option<Rect> {
+fn map_selector_rect_to_capture(rect: Rect, displays: &[Monitor]) -> Option<Rect> {
     if displays.is_empty() {
         return Some(rect);
     }
 
     if displays
         .iter()
-        .any(|display| rect_intersection(rect, *display).is_some())
+        .any(|display| crate::capture::geometry::rect_intersection(rect, *display).is_some())
     {
         return Some(rect);
     }
@@ -321,4 +318,80 @@ fn configure_selector_window_now(title: &str, origin: gpui::Point<Pixels>) {
         origin.x.to_f64(),
         origin.y.to_f64()
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_selector_rect_to_capture;
+    use crate::{Monitor, Rect};
+
+    #[test]
+    fn selector_rect_mapper_preserves_dragged_rect_touching_active_displays() {
+        let rect = Rect {
+            x: 1800,
+            y: 100,
+            w: 500,
+            h: 400,
+        };
+        let displays = [
+            Monitor {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1080,
+            },
+            Monitor {
+                x: 1920,
+                y: 0,
+                w: 1920,
+                h: 1080,
+            },
+        ];
+
+        assert_eq!(map_selector_rect_to_capture(rect, &displays), Some(rect));
+    }
+
+    #[test]
+    fn selector_rect_mapper_preserves_canvas_across_vertically_offset_displays() {
+        let rect = Rect {
+            x: -1200,
+            y: 0,
+            w: 3200,
+            h: 1400,
+        };
+        let displays = [
+            Monitor {
+                x: 0,
+                y: 0,
+                w: 2000,
+                h: 1400,
+            },
+            Monitor {
+                x: -1512,
+                y: 458,
+                w: 1512,
+                h: 982,
+            },
+        ];
+
+        assert_eq!(map_selector_rect_to_capture(rect, &displays), Some(rect));
+    }
+
+    #[test]
+    fn selector_rect_mapper_rejects_off_display_selection() {
+        let rect = Rect {
+            x: 4000,
+            y: 100,
+            w: 100,
+            h: 100,
+        };
+        let displays = [Monitor {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        }];
+
+        assert_eq!(map_selector_rect_to_capture(rect, &displays), None);
+    }
 }

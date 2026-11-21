@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 
 use crate::discovery::search;
 
+mod action;
 mod platform;
+
+pub use action::{action_for_modifiers, action_hint, action_label, LaunchAction};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum LaunchError {

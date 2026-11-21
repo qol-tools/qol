@@ -24,7 +24,7 @@ use super::components::{
 };
 use super::components::{
     one_line, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
-    rail_item_label, settings_accent_dot, settings_action_busy, settings_action_spinner,
+    rail_item_label, settings_accent_dot, settings_action_spinner, settings_action_word,
     settings_block_header, settings_destroy_label_group, settings_error_line,
     settings_finder_empty, settings_page, settings_query_spinner, settings_selected_text,
     settings_swatch, settings_tag, settings_tagged_label_group, settings_value_text, ChoiceArt,
@@ -3647,7 +3647,7 @@ impl SettingsPanelView {
             {
                 return self.render_toggle_value(*active, row);
             }
-            RowControl::Action { .. } => return self.render_action_value(index),
+            RowControl::Action { .. } => return self.render_action_value(index, row),
             RowControl::TextList(_) | RowControl::Status { .. } => return div(),
             RowControl::Unsupported { reason, .. } => {
                 return settings_tag(
@@ -3859,10 +3859,12 @@ impl SettingsPanelView {
         )
     }
 
-    fn render_action_value(&self, index: usize) -> Div {
-        settings_action_busy(
+    fn render_action_value(&self, index: usize, row: RowGround) -> Div {
+        settings_action_word(
             ("settings-action-spinner", index),
+            RUN_VERB,
             self.action_is_busy(index),
+            row,
             self.kit,
         )
     }
@@ -5107,7 +5109,7 @@ impl SettingsPanelView {
             RowControl::Page | RowControl::Subpage { .. } => Some("open"),
             RowControl::Toggle(_) => Some("flip"),
             RowControl::Action { .. } if row.variant.as_deref() == Some("toggle") => Some("flip"),
-            RowControl::Action { .. } => Some("run"),
+            RowControl::Action { .. } => Some(RUN_VERB),
             RowControl::Select { .. } | RowControl::MultiSelect { .. } => Some("choose"),
             RowControl::Color(_) => Some("pick"),
             RowControl::List { items, finder, .. } if !items.is_empty() || finder.is_some() => {
@@ -6185,6 +6187,8 @@ fn header_is_redundant(title: &str, labels: &[&str]) -> bool {
 }
 
 const VALUE_CELL_MAX_FRACTION: f32 = 0.5;
+
+const RUN_VERB: &str = "run";
 
 fn value_cell_width(control: &RowControl) -> f32 {
     match control {

@@ -7,7 +7,7 @@ use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{Surface, SurfaceKind, WindowMemory};
 
 use super::view::{ExplorerView, MIN_HEIGHT, MIN_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
-use crate::ui::PLUGIN_ID;
+use crate::PLUGIN_ID;
 
 const ICON_SIDE: u32 = 64;
 const ICON: &[u8] = include_bytes!("../../assets/icon-64.rgba");

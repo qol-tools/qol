@@ -127,11 +127,16 @@ impl Recorder {
 }
 
 static RECORDER: OnceLock<Option<Recorder>> = OnceLock::new();
+static DEFAULT_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+pub fn set_default_dir(dir: Option<PathBuf>) {
+    let _ = DEFAULT_DIR.set(dir);
+}
 
 fn dir_override() -> Option<PathBuf> {
     match std::env::var("CLI_SESSIONS_ANOMALY_DIR") {
         Ok(d) if !d.is_empty() => Some(PathBuf::from(d)),
-        _ => crate::storage::paths::anomalies_dir(),
+        _ => DEFAULT_DIR.get().cloned().flatten(),
     }
 }
 

@@ -1,10 +1,9 @@
-use super::AltTabApp;
 use crate::capture::LiveFrame;
 use crate::config::{capitalize_first, ActionMode, LabelConfig, PreviewIconPosition};
 use crate::discovery::WindowInfo;
 use crate::picker::layout::{picker_layout, CardMetrics};
 use crate::picker::state::FreshFrame;
-use crate::picker::{IconMap, LiveFrameMap, PreviewMap};
+use crate::picker::{AltTabApp, IconMap, LiveFrameMap, PreviewMap};
 use crate::rendering::RenderingFlow;
 use gpui::prelude::FluentBuilder;
 use gpui::*;

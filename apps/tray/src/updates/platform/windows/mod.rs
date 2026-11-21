@@ -172,10 +172,7 @@ pub(super) async fn download_and_install(
 
     let current_exe = std::env::current_exe()?;
     replace_running_binary(&dest, &current_exe)?;
-    if let Err(error) = crate::installer::platform::windows::refresh_after_update(
-        &current_exe,
-        installer.as_deref(),
-    ) {
+    if let Err(error) = crate::installer::refresh_after_update(&current_exe, installer.as_deref()) {
         log::warn!("Refreshing the installed shortcut and uninstaller failed: {error:#}");
     }
     if let Err(error) = work_dir.close() {

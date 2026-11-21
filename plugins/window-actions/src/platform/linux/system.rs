@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use qol_windowing::{WindowId, WindowOps, WindowRect};
 
-use crate::cli::PLUGIN_ID;
 use crate::restore::WindowSystem;
+use crate::PLUGIN_ID;
 
 const WINDOW_STATE_TIMEOUT: Duration = Duration::from_secs(2);
 const WINDOW_STATE_POLL_INTERVAL: Duration = Duration::from_millis(10);
