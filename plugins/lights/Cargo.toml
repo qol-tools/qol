@@ -1,6 +1,6 @@
 [package]
 name = "qol-lights"
-version = "1.87.3"
+version = "1.87.4"
 edition = "2021"
 
 [dependencies]

@@ -1,6 +1,6 @@
 [package]
 name = "qol-bluetooth"
-version = "0.86.4"
+version = "0.86.5"
 edition = "2021"
 
 [dependencies]
