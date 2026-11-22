@@ -14,7 +14,12 @@ pub const PLUGIN_SOURCES: FeatureFlag = FeatureFlag {
     label: "Add plugin sources",
 };
 
-pub const ALL: &[FeatureFlag] = &[PLUGIN_SOURCES];
+pub const PULL_REQUEST_BUILDS: FeatureFlag = FeatureFlag {
+    id: "updates.pull_request_builds",
+    label: "Try pull request builds",
+};
+
+pub const ALL: &[FeatureFlag] = &[PLUGIN_SOURCES, PULL_REQUEST_BUILDS];
 
 #[derive(Default, Deserialize)]
 struct EnabledFlags {

@@ -3,20 +3,9 @@ use serde::Deserialize;
 
 use super::model::{RowAction, Summary, Trial, UpdatesSnapshot};
 
-pub(super) const SHOWN: bool = cfg!(feature = "dev");
 pub(super) const TITLE: &str = "Pull request build";
 pub(super) const GROUP: &str = "Development";
-pub(super) const GROUP_DETAIL: &str = "Only in dev builds.";
-pub(super) const ENDS_TRY: &str = if SHOWN {
-    "Pull request build is Off"
-} else {
-    "qol pr off"
-};
-pub(super) const CHECKS_RESUME: &str = if SHOWN {
-    "Back when the try ends"
-} else {
-    "Back after qol pr off"
-};
+pub(super) const GROUP_DETAIL: &str = "Behind a feature flag.";
 const OFF: &str = "Off";
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -51,6 +40,22 @@ pub(super) struct CardRow {
     pub(super) running: bool,
     pub(super) action: Option<RowAction>,
     pub(super) verb: Option<&'static str>,
+}
+
+pub(super) fn ends_try(snapshot: &UpdatesSnapshot) -> &'static str {
+    if snapshot.can_try_pull_requests {
+        "Pull request build is Off"
+    } else {
+        "qol pr off"
+    }
+}
+
+pub(super) fn checks_resume(snapshot: &UpdatesSnapshot) -> &'static str {
+    if snapshot.can_try_pull_requests {
+        "Back when the try ends"
+    } else {
+        "Back after qol pr off"
+    }
 }
 
 pub(super) fn list_route() -> String {

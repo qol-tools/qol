@@ -293,7 +293,7 @@ impl UpdatesView {
         ];
         rows.extend(model.plugins.into_iter().map(PageRow::Plugin));
         let fold = model.fold.map(|text| (rows.len() - 1, text));
-        if pull_request_build::SHOWN {
+        if snapshot.can_try_pull_requests {
             rows.push(PageRow::Header {
                 title: pull_request_build::GROUP.to_string(),
                 detail: pull_request_build::GROUP_DETAIL,

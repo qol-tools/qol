@@ -25,6 +25,7 @@ const BUSY: &str = "A pull request build is already loading";
 const NO_NUMBER: &str = "Choose a pull request";
 const NO_CLI: &str = "The qol command isn't installed";
 const LIST_FAILED: &str = "Couldn't list the pull request builds";
+const OFF: &str = "Trying pull request builds is turned off";
 
 static JOB: Mutex<Option<Job>> = Mutex::new(None);
 
@@ -43,11 +44,18 @@ impl Job {
     }
 }
 
+pub(super) fn enabled() -> bool {
+    qol_config::feature_flags::enabled(&qol_config::feature_flags::PULL_REQUEST_BUILDS)
+}
+
 pub(super) fn current() -> Option<Job> {
     JOB.lock().clone()
 }
 
 pub(super) async fn get_list() -> Response {
+    if !enabled() {
+        return (StatusCode::NOT_FOUND, OFF).into_response();
+    }
     http_json::blocking("pull request builds query", || {
         let output = cli()
             .ok_or_else(|| Box::new(unavailable(NO_CLI.to_string())))?
@@ -70,6 +78,9 @@ pub(super) async fn get_list() -> Response {
 }
 
 pub(super) fn post_action(action: &str, request: &CoreActionRequest) -> Option<Response> {
+    if !enabled() {
+        return None;
+    }
     let response = match action {
         TRY => start(Run::Try {
             number: number(request),

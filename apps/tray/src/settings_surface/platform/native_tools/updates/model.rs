@@ -59,6 +59,8 @@ pub(super) struct UpdatesSnapshot {
     #[serde(default)]
     pub(super) trial: Option<Trial>,
     #[serde(default)]
+    pub(super) can_try_pull_requests: bool,
+    #[serde(default)]
     pub(super) pull_request_build: Option<Job>,
     pub(super) host: UpdateTarget,
     #[serde(default)]
@@ -371,7 +373,7 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             description: format!(
                 "Trying pull request #{} until {}.",
                 trial.pull_request,
-                pull_request_build::ENDS_TRY
+                pull_request_build::ends_try(snapshot)
             ),
             action: check_action(snapshot),
             action_label: Some(check_label(snapshot)),
@@ -467,7 +469,7 @@ fn check_row(snapshot: &UpdatesSnapshot) -> TargetRow {
             name: "Checks".to_string(),
             value: "Paused".to_string(),
             tone: ValueTone::Muted,
-            description: Some(pull_request_build::CHECKS_RESUME.to_string()),
+            description: Some(pull_request_build::checks_resume(snapshot).to_string()),
             action: None,
             action_label: Some("Check now"),
             attention: false,
@@ -707,6 +709,7 @@ mod tests {
             connection: Default::default(),
             running: false,
             trial: None,
+            can_try_pull_requests: false,
             pull_request_build: None,
             host,
             plugins,
@@ -736,10 +739,7 @@ mod tests {
         assert_eq!(status.label, "Updates paused");
         assert_eq!(
             status.description,
-            format!(
-                "Trying pull request #435 until {}.",
-                super::pull_request_build::ENDS_TRY
-            )
+            "Trying pull request #435 until qol pr off."
         );
         assert_eq!(status.action, None);
         assert!(status.dimmed());

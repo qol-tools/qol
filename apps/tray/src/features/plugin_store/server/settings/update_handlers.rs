@@ -126,7 +126,8 @@ struct UpdatesPayload {
     running: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     trial: Option<TrialPayload>,
-    #[cfg(feature = "dev")]
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    can_try_pull_requests: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pull_request_build: Option<super::pull_request_builds::Job>,
     host: HostPayload,
@@ -191,7 +192,11 @@ pub(super) async fn get_updates(state: AppState) -> Response {
     crate::features::connection_health::note_interest();
     http_json::blocking("updates query", move || {
         let view = collect_view(&state);
-        let payload = build_updates_payload(&view, SystemTime::now());
+        let mut payload = build_updates_payload(&view, SystemTime::now());
+        if super::pull_request_builds::enabled() {
+            payload.can_try_pull_requests = true;
+            payload.pull_request_build = super::pull_request_builds::current();
+        }
         let json = http_json::encode_json(&payload, "Failed to serialize updates")?;
         Ok(http_json::json_response(json))
     })
@@ -227,20 +232,10 @@ pub(super) async fn post_core_action(
         "update" => start_update_action(&state, request.id.as_deref()),
         "update_all" => start_update_all_action(&state),
         "stop_updates" => stop_updates_action(),
-        _ => dev_action(&action, &request)
+        _ => super::pull_request_builds::post_action(&action, &request)
             .or_else(|| super::plugins_handlers::post_plugins_action(&state, &action, &request))
             .unwrap_or_else(|| action_error(StatusCode::NOT_FOUND, "Unknown action")),
     }
-}
-
-#[cfg(feature = "dev")]
-fn dev_action(action: &str, request: &CoreActionRequest) -> Option<Response> {
-    super::pull_request_builds::post_action(action, request)
-}
-
-#[cfg(not(feature = "dev"))]
-fn dev_action(_action: &str, _request: &CoreActionRequest) -> Option<Response> {
-    None
 }
 
 fn action_request(body: &[u8]) -> Result<CoreActionRequest, (StatusCode, &'static str)> {
@@ -459,8 +454,8 @@ fn build_updates_payload(view: &UpdatesView, now: SystemTime) -> UpdatesPayload 
             pull_request: trial.pull_request,
             head: trial.head.clone(),
         }),
-        #[cfg(feature = "dev")]
-        pull_request_build: super::pull_request_builds::current(),
+        can_try_pull_requests: false,
+        pull_request_build: None,
         host: host_payload(view),
         plugins: plugins.into_iter().map(plugin_payload).collect(),
     }

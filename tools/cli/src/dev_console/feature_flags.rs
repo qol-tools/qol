@@ -12,6 +12,7 @@ use super::Dash;
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(super) enum FeatureFlag {
     PluginSources,
+    PullRequestBuilds,
 }
 
 pub(super) struct FeatureFlagDef {
@@ -20,11 +21,18 @@ pub(super) struct FeatureFlagDef {
     pub(super) label: &'static str,
 }
 
-pub(super) const FEATURE_FLAGS: &[FeatureFlagDef] = &[FeatureFlagDef {
-    flag: FeatureFlag::PluginSources,
-    id: qol_config::feature_flags::PLUGIN_SOURCES.id,
-    label: qol_config::feature_flags::PLUGIN_SOURCES.label,
-}];
+pub(super) const FEATURE_FLAGS: &[FeatureFlagDef] = &[
+    FeatureFlagDef {
+        flag: FeatureFlag::PluginSources,
+        id: qol_config::feature_flags::PLUGIN_SOURCES.id,
+        label: qol_config::feature_flags::PLUGIN_SOURCES.label,
+    },
+    FeatureFlagDef {
+        flag: FeatureFlag::PullRequestBuilds,
+        id: qol_config::feature_flags::PULL_REQUEST_BUILDS.id,
+        label: qol_config::feature_flags::PULL_REQUEST_BUILDS.label,
+    },
+];
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(super) struct FeatureFlags {
