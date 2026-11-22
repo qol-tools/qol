@@ -20,7 +20,7 @@ Storing under a name that already has a secret replaces it.
 | System | Store | Entry | Written by |
 | --- | --- | --- | --- |
 | Linux | Secret Service (GNOME Keyring, KWallet) | label `<name>`, attribute `service=<name>` | `secret-tool store`, from libsecret-tools |
-| macOS | login Keychain | generic password, service `<name>`, account `$USER` | `/usr/bin/security`, given the command on stdin |
+| macOS | login Keychain | generic password, service `<name>`, account `$USER` | `/usr/bin/security -i`, the command on its stdin with the secret as hex (`-X`), the name in escaped double quotes |
 | Windows | Credential Manager | generic credential, target `<name>`, kept for this computer, value in UTF-16 | `CredWriteW` |
 
 On Linux and macOS this is the same entry these commands make by hand, so a secret stored either way is the one qol reads:
