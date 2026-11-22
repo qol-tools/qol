@@ -134,6 +134,14 @@ pub mod api_routes {
         format!("/api/plugins/{plugin_id}/settings")
     }
 
+    pub fn core_query(query: &str) -> String {
+        format!("/api/core/queries/{query}")
+    }
+
+    pub fn core_action(action: &str) -> String {
+        format!("/api/core/actions/{action}")
+    }
+
     pub fn plugin_query(plugin_id: &str, query: &str) -> String {
         format!("/api/plugins/{plugin_id}/queries/{query}")
     }
@@ -444,6 +452,14 @@ mod tests {
                 "/api/notifications/mirror/activate/mb-0000000000000001",
             ),
             (api_routes::shortcut("abc"), "/api/shortcuts/abc"),
+            (
+                api_routes::core_query("updates"),
+                "/api/core/queries/updates",
+            ),
+            (
+                api_routes::core_action("check_updates"),
+                "/api/core/actions/check_updates",
+            ),
             (
                 api_routes::config_route(&api_routes::plugin_base("qol-explorer")),
                 "/api/plugins/qol-explorer/config",

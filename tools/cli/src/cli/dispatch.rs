@@ -47,7 +47,7 @@ pub(crate) fn run(args: Vec<OsString>) -> Result<()> {
         "check" => commands::check::run(rest, args.verbose),
         "clean" => commands::clean::run(rest, args.verbose),
         "install" => commands::install::run(rest, args.verbose),
-        "pr" => commands::pr::run(rest),
+        "pr" => commands::pr::run(rest, args.json),
         "sessions" => commands::sessions::run(
             rest,
             if args.json {

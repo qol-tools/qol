@@ -126,6 +126,9 @@ struct UpdatesPayload {
     running: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     trial: Option<TrialPayload>,
+    #[cfg(feature = "dev")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pull_request_build: Option<super::pull_request_builds::Job>,
     host: HostPayload,
     plugins: Vec<PluginPayload>,
 }
@@ -224,9 +227,20 @@ pub(super) async fn post_core_action(
         "update" => start_update_action(&state, request.id.as_deref()),
         "update_all" => start_update_all_action(&state),
         "stop_updates" => stop_updates_action(),
-        _ => super::plugins_handlers::post_plugins_action(&state, &action, &request)
+        _ => dev_action(&action, &request)
+            .or_else(|| super::plugins_handlers::post_plugins_action(&state, &action, &request))
             .unwrap_or_else(|| action_error(StatusCode::NOT_FOUND, "Unknown action")),
     }
+}
+
+#[cfg(feature = "dev")]
+fn dev_action(action: &str, request: &CoreActionRequest) -> Option<Response> {
+    super::pull_request_builds::post_action(action, request)
+}
+
+#[cfg(not(feature = "dev"))]
+fn dev_action(_action: &str, _request: &CoreActionRequest) -> Option<Response> {
+    None
 }
 
 fn action_request(body: &[u8]) -> Result<CoreActionRequest, (StatusCode, &'static str)> {
@@ -445,6 +459,8 @@ fn build_updates_payload(view: &UpdatesView, now: SystemTime) -> UpdatesPayload 
             pull_request: trial.pull_request,
             head: trial.head.clone(),
         }),
+        #[cfg(feature = "dev")]
+        pull_request_build: super::pull_request_builds::current(),
         host: host_payload(view),
         plugins: plugins.into_iter().map(plugin_payload).collect(),
     }

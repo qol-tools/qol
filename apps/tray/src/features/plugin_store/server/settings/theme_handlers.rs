@@ -28,6 +28,10 @@ pub(in super::super) async fn get_core_query(
     if query == super::plugins_handlers::PLUGINS_QUERY {
         return super::plugins_handlers::get_plugins(state).await;
     }
+    #[cfg(feature = "dev")]
+    if query == super::pull_request_builds::QUERY {
+        return super::pull_request_builds::get_list().await;
+    }
     blocking("core query", move || get_core_query_inner(&query)).await
 }
 

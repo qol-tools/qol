@@ -3,6 +3,12 @@ use std::path::{Path, PathBuf};
 
 pub const ROOT_DIR: &str = "pr-try";
 pub const RECORD_FILE: &str = "state.json";
+pub const KEEP_TRAY_FLAG: &str = "--keep-tray";
+pub const BUILDS_QUERY: &str = "pull_request_builds";
+pub const TRY_ACTION: &str = "try_pull_request";
+pub const TRY_WITH_TRAY_ACTION: &str = "try_pull_request_with_tray";
+pub const END_ACTION: &str = "end_pull_request_try";
+pub const DISMISS_ACTION: &str = "dismiss_pull_request_try";
 
 pub fn record_path(data_dir: &Path) -> PathBuf {
     data_dir.join(ROOT_DIR).join(RECORD_FILE)

@@ -3,6 +3,7 @@ mod contracts;
 mod daemon;
 mod download;
 mod install;
+mod list;
 mod manifest;
 mod platform;
 mod tray;
@@ -10,30 +11,62 @@ mod updates;
 
 use anyhow::{bail, Context, Result};
 use install::RecordFile;
+use qol_conventions::pr_try::KEEP_TRAY_FLAG;
 use std::ffi::OsString;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub(crate) const USAGE: &str = "qol pr try <number> | qol pr off | qol pr approve [number]";
+pub(crate) const USAGE: &str =
+    "qol pr list | qol pr try <number> [--keep-tray] | qol pr off | qol pr approve [number]";
 const REPO: &str = "qol-tools/qol";
+const EXIT_CARRIES_TRAY: i32 = 3;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Request {
-    Try(u64),
+    List,
+    Try { number: u64, keep_tray: bool },
     Off,
     Approve(Option<u64>),
 }
 
-pub(crate) fn run(args: &[OsString]) -> Result<()> {
+#[derive(Debug)]
+struct CarriesTray(u64);
+
+impl fmt::Display for CarriesTray {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "pull request #{} also replaces qol-tray, so nothing was installed; `qol pr try {}` without --keep-tray restarts the tray on its build",
+            self.0, self.0
+        )
+    }
+}
+
+impl std::error::Error for CarriesTray {}
+
+pub(crate) fn exit_code(error: &anyhow::Error) -> i32 {
+    if error.downcast_ref::<CarriesTray>().is_some() {
+        EXIT_CARRIES_TRAY
+    } else {
+        1
+    }
+}
+
+pub(crate) fn run(args: &[OsString], json: bool) -> Result<()> {
     let request = parse(args)?;
     if let Request::Approve(number) = request {
         println!("{}", approve::run(REPO, number)?);
         return Ok(());
     }
     let build = platform::host_build()?;
+    if request == Request::List {
+        println!("{}", list::run(REPO, build, json)?);
+        return Ok(());
+    }
     let places = install::Places::current()?;
     match request {
-        Request::Try(number) => try_build(number, build, &places),
-        Request::Approve(_) => Ok(()),
+        Request::Try { number, keep_tray } => try_build(number, keep_tray, build, &places),
+        Request::Approve(_) | Request::List => Ok(()),
         Request::Off => turn_off(&places).map(|mut put_back| {
             if !put_back.is_empty() && !put_back.iter().any(|id| id == tray::BINARY) {
                 put_back.push(tray::BINARY.to_string());
@@ -49,8 +82,23 @@ fn parse(args: &[OsString]) -> Result<Request> {
         .map(|arg| arg.to_str().context("non-UTF-8 argument for qol pr"))
         .collect::<Result<Vec<_>>>()?;
     match words.as_slice() {
+        ["list"] => Ok(Request::List),
         ["off"] | ["try", "--off"] => Ok(Request::Off),
-        ["try", number] => pull_number(number).map(Request::Try),
+        ["try", number] => pull_number(number).map(|number| Request::Try {
+            number,
+            keep_tray: false,
+        }),
+        ["try", first, second] if *first == KEEP_TRAY_FLAG || *second == KEEP_TRAY_FLAG => {
+            let number = if *first == KEEP_TRAY_FLAG {
+                second
+            } else {
+                first
+            };
+            pull_number(number).map(|number| Request::Try {
+                number,
+                keep_tray: true,
+            })
+        }
         ["approve"] => Ok(Request::Approve(None)),
         ["approve", number] => pull_number(number).map(|number| Request::Approve(Some(number))),
         _ => bail!("usage: {USAGE}"),
@@ -63,7 +111,12 @@ fn pull_number(word: &str) -> Result<u64> {
         .with_context(|| format!("`{word}` is not a pull request number\nusage: {USAGE}"))
 }
 
-fn try_build(number: u64, platform: &platform::Build, places: &install::Places) -> Result<()> {
+fn try_build(
+    number: u64,
+    keep_tray: bool,
+    platform: &platform::Build,
+    places: &install::Places,
+) -> Result<()> {
     let pull = download::pull_request(REPO, number)?;
     let head = pull.head_ref_oid.clone();
     let run = download::live_test_run(REPO, &pull, platform)?;
@@ -71,6 +124,9 @@ fn try_build(number: u64, platform: &platform::Build, places: &install::Places) 
     download::fetch(REPO, &run, platform, &dir)?;
     let build = manifest::read(&dir.join(manifest::FILE))?;
     build.check(number, &head, platform.target)?;
+    if keep_tray && !build.tray.is_empty() {
+        return Err(CarriesTray(number).into());
+    }
     let tray_build = if build.tray.is_empty() {
         None
     } else {
@@ -250,8 +306,18 @@ mod tests {
 
     #[test]
     fn parse_reads_a_number_or_off() {
-        assert_eq!(parse(&words(&["try", "412"])).unwrap(), Request::Try(412));
-        assert_eq!(parse(&words(&["try", "#412"])).unwrap(), Request::Try(412));
+        let tried = |number, keep_tray| Request::Try { number, keep_tray };
+        assert_eq!(parse(&words(&["try", "412"])).unwrap(), tried(412, false));
+        assert_eq!(parse(&words(&["try", "#412"])).unwrap(), tried(412, false));
+        assert_eq!(
+            parse(&words(&["try", "412", "--keep-tray"])).unwrap(),
+            tried(412, true)
+        );
+        assert_eq!(
+            parse(&words(&["try", "--keep-tray", "#412"])).unwrap(),
+            tried(412, true)
+        );
+        assert_eq!(parse(&words(&["list"])).unwrap(), Request::List);
         assert_eq!(parse(&words(&["off"])).unwrap(), Request::Off);
         assert_eq!(parse(&words(&["approve"])).unwrap(), Request::Approve(None));
         assert_eq!(
@@ -259,8 +325,10 @@ mod tests {
             Request::Approve(Some(500))
         );
         assert_eq!(parse(&words(&["try", "--off"])).unwrap(), Request::Off);
-        let refused: [&[&str]; 8] = [
+        let refused: [&[&str]; 10] = [
             &["try"],
+            &["list", "412"],
+            &["try", "--keep-tray"],
             &["off", "412"],
             &["try", "abc"],
             &["approve", "abc"],
@@ -272,6 +340,14 @@ mod tests {
         for bad in refused {
             assert!(parse(&words(bad)).is_err(), "{bad:?} must be refused");
         }
+    }
+
+    #[test]
+    fn only_a_build_that_carries_the_tray_exits_with_its_own_code() {
+        assert_eq!(exit_code(&CarriesTray(412).into()), EXIT_CARRIES_TRAY);
+        assert_eq!(exit_code(&anyhow::anyhow!("gh failed")), 1);
+        let message = CarriesTray(412).to_string();
+        assert!(message.contains("#412 also replaces qol-tray"), "{message}");
     }
 
     #[test]
