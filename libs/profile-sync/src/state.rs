@@ -9,8 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-const DEFAULT_PROFILE_NAME: &str = "default";
-const ACTIVE_PROFILE_FILE: &str = "active";
 const SYNC_STATE_FILE: &str = "state.json";
 const SYNC_TOGGLES_FILE: &str = "toggles.json";
 const SYNC_CONFIG_FILE: &str = "sync.json";
@@ -38,16 +36,11 @@ impl SyncPaths {
     /// Active profile name from the `<profile>/active` marker, with the same
     /// safe-component validation the tray applies everywhere else.
     pub fn active_profile_name(&self) -> String {
-        let marker = self.profile_root.join(ACTIVE_PROFILE_FILE);
-        std::fs::read_to_string(marker)
-            .ok()
-            .map(|raw| raw.trim().to_string())
-            .filter(|name| qol_plugin_api::manifest::is_valid_safe_identifier(name))
-            .unwrap_or_else(|| DEFAULT_PROFILE_NAME.to_string())
+        qol_plugin_api::profile::active_profile_name(&self.profile_root)
     }
 
     pub fn active_dir(&self) -> PathBuf {
-        self.profile_root.join(self.active_profile_name())
+        qol_plugin_api::profile::active_profile_dir(&self.profile_root)
     }
 
     /// Per-device sync state dir: `<profile>/<name>/device/sync`.
@@ -438,7 +431,10 @@ mod tests {
         let paths = paths_in(&tmp);
         std::fs::create_dir_all(paths.profile_root()).unwrap();
         std::fs::write(paths.profile_root.join("active"), "../escape\n").unwrap();
-        assert_eq!(paths.active_profile_name(), DEFAULT_PROFILE_NAME);
+        assert_eq!(
+            paths.active_profile_name(),
+            qol_plugin_api::profile::DEFAULT_PROFILE_NAME
+        );
     }
 
     #[test]

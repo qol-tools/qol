@@ -27,7 +27,7 @@ pub(crate) fn config_dir() -> Result<PathBuf> {
 }
 
 pub(crate) fn profile_dir() -> Result<PathBuf> {
-    Ok(config_dir()?.join("profile"))
+    Ok(config_dir()?.join(qol_plugin_api::profile::PROFILE_DIR))
 }
 
 /// Whether the resolved profile root is the one a running tray owns. An

@@ -93,6 +93,38 @@ pub(crate) fn remove_plain(args: &[String]) -> Result<PlainTextOutput> {
     )))
 }
 
+pub(crate) fn setup_path_plain(args: &[String]) -> Result<PlainTextOutput> {
+    let location = setup_location(args)?;
+    Ok(PlainTextOutput::text(location.path.display().to_string()))
+}
+
+pub(crate) fn setup_path_json(args: &[String]) -> Result<Value> {
+    let location = setup_location(args)?;
+    Ok(serde_json::json!({
+        "path": location.path.display().to_string(),
+        "profile": location.profile,
+        "exists": location.path.is_file(),
+    }))
+}
+
+struct SetupLocation {
+    path: PathBuf,
+    profile: String,
+}
+
+fn setup_location(args: &[String]) -> Result<SetupLocation> {
+    if !filter_delimiter(args).is_empty() {
+        bail!("usage: qol agents setup-path [--json]");
+    }
+    let profile_root = qol_config::config_dir()
+        .map(|dir| dir.join(qol_plugin_api::profile::PROFILE_DIR))
+        .ok_or_else(|| anyhow!("qol config directory not found"))?;
+    Ok(SetupLocation {
+        path: qol_agent_launch::setup::path_in(&profile_root),
+        profile: qol_plugin_api::profile::active_profile_name(&profile_root),
+    })
+}
+
 fn current_home(args: &[String]) -> Result<AgentHome> {
     let args = filter_delimiter(args);
     let [name] = args.as_slice() else {
@@ -335,6 +367,7 @@ Usage:
   qol agents current <claude|codex|kimi|pi> [--json]
   qol agents add <claude|codex|kimi|pi> <path> [--shared] [--default]
   qol agents remove <path>
+  qol agents setup-path [--json]
   qol agents help
 
 Details:
@@ -349,8 +382,13 @@ Details:
   confirmation is followed by the resulting row.
   remove deletes every [[home]] entry whose path matches, regardless of
   harness, and errors when nothing matched.
+  setup-path prints the absolute path of agent-setup.json in the active
+  synced profile's core folder, whether or not the file exists yet; --json
+  prints {"path", "profile", "exists"}. Other programs call it instead of
+  copying qol's profile path rules.
 
-See docs/agent-homes.md for the file format and the implicit defaults.
+See docs/agent-homes.md for the file format and the implicit defaults,
+and docs/agent-setup.md for the synced accounts file.
 "#
 }
 
