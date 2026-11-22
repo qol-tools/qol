@@ -172,6 +172,17 @@ pub(super) fn agent_files(fork: &ForkAgent) -> Vec<(String, String)> {
         .collect()
 }
 
+pub(super) fn stale_agent_files(dir: &Path, fork: &ForkAgent) -> Vec<String> {
+    let agents = dir.join(".claude").join("agents");
+    agent_files(fork)
+        .into_iter()
+        .filter(|(file, contents)| {
+            !std::fs::read_to_string(agents.join(file)).is_ok_and(|current| current == *contents)
+        })
+        .map(|(file, _)| format!(".claude/agents/{file}"))
+        .collect()
+}
+
 pub(super) fn write_agent_files(dir: &Path, fork: &ForkAgent) -> anyhow::Result<()> {
     let agents = dir.join(".claude").join("agents");
     std::fs::create_dir_all(&agents)
