@@ -3961,6 +3961,7 @@ test('a new installed build shows a toast once, and sb update loads it', async (
   expect(panes.filter(pane => pane.startsWith('toast')).join('\n')).toContain('type sb update to load it')
   expect((await typed($, 'sb update')).drop).toContain('The switchboard loaded the installed build.')
   expect(runs.filter(run => run[2] === 'update' && run[3] === undefined)).toHaveLength(1)
+  expect(runs.filter(run => run[2] === 'update' && run[3] === '--check')).toHaveLength(2)
   expect(staleFiles('{"stale":["a",2,"b"]}')).toEqual(['a', 'b'])
   expect(staleFiles('not json')).toEqual([])
 })

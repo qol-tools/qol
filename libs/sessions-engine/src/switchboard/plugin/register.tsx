@@ -756,6 +756,8 @@ let tree: SbTree = { commands: [] }
 let isUpdateReady = false
 let updateCheckedAt = Number.NEGATIVE_INFINITY
 
+const UPDATE = 'update'
+
 const UPDATE_READY = 'New switchboard build · sb update'
 const UPDATE_TOAST = 'A new CLI Sessions build is installed: type sb update to load it into this switchboard without a restart.'
 
@@ -1469,7 +1471,7 @@ const checkUpdate = async ($: EngineInterface): Promise<void> => {
   updateCheckedAt = now
   const program = await recordProgram($)
   if (program === undefined) return
-  const ran = await $.process.run([program, 'sessions', 'switchboard', 'update', '--check'], { cwd: folderOf(program), timeoutMs: SB_TIMEOUT_MS }).catch(() => undefined)
+  const ran = await $.process.run([program, 'sessions', 'switchboard', UPDATE, '--check'], { cwd: folderOf(program), timeoutMs: SB_TIMEOUT_MS }).catch(() => undefined)
   if (ran === undefined || ran.exitCode !== 0) return
   const hasStale = staleFiles(ran.stdout).length > 0
   if (hasStale === isUpdateReady) return
@@ -1493,6 +1495,10 @@ const runSb = async ($: EngineInterface, text: string): Promise<string> => {
   const ran = await $.process.run([program, 'sessions', 'switchboard', ...at.path.map(command => command.name)], { cwd: folderOf(program), timeoutMs: SB_TIMEOUT_MS }).catch(() => undefined)
   if (ran === undefined) return `${typed}: qol is not reachable.`
   if (ran.exitCode !== 0) return `${typed} failed: ${oneLine(ran.stderr.trim() || ran.stdout.trim() || `exit ${ran.exitCode}`)}`
+  if (at.path[0]?.name === UPDATE) {
+    updateCheckedAt = Number.NEGATIVE_INFINITY
+    await checkUpdate($)
+  }
   try {
     const message: unknown = (JSON.parse(ran.stdout) as { message?: unknown }).message
     if (typeof message === 'string' && message !== '') return message

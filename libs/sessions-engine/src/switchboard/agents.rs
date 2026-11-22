@@ -44,16 +44,24 @@ impl ForkAgent {
     }
 
     pub(super) fn system(warn: &mut dyn FnMut(String)) -> Self {
-        let defaults = crate::spawn::config_launch_defaults();
-        let policy = crate::spawn::config_dispatch_policy();
-        match (defaults, policy) {
-            (Ok(defaults), Ok(policy)) => Self::resolve(&defaults, &policy),
-            (defaults, policy) => {
-                for error in [defaults.err(), policy.err()].into_iter().flatten() {
-                    warn(format!("forks use the default model: {error:#}"));
-                }
-                Self::default()
+        Self::configured().unwrap_or_else(|errors| {
+            for error in errors {
+                warn(format!("forks use the default model: {error:#}"));
             }
+            Self::default()
+        })
+    }
+
+    pub(super) fn configured() -> Result<Self, Vec<anyhow::Error>> {
+        match (
+            crate::spawn::config_launch_defaults(),
+            crate::spawn::config_dispatch_policy(),
+        ) {
+            (Ok(defaults), Ok(policy)) => Ok(Self::resolve(&defaults, &policy)),
+            (defaults, policy) => Err([defaults.err(), policy.err()]
+                .into_iter()
+                .flatten()
+                .collect()),
         }
     }
 }
@@ -189,7 +197,10 @@ pub(super) fn write_agent_files(dir: &Path, fork: &ForkAgent) -> anyhow::Result<
         .with_context(|| format!("failed to create {}", agents.display()))?;
     for (file, contents) in agent_files(fork) {
         let path = agents.join(file);
-        std::fs::write(&path, contents)
+        if std::fs::read_to_string(&path).is_ok_and(|current| current == contents) {
+            continue;
+        }
+        qol_fs::atomic_write(&path, contents.as_bytes())
             .with_context(|| format!("failed to write {}", path.display()))?;
     }
     Ok(())

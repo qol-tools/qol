@@ -28,8 +28,14 @@ pub(super) fn run(args: &[OsString], warn: &mut dyn FnMut(String)) -> Result<Vec
     };
     let dir =
         paths::switchboard_dir().ok_or_else(|| anyhow!("the sessions data folder is not known"))?;
-    let fork = ForkAgent::system(warn);
-    let stale = stale(&dir, &fork);
+    let fork = ForkAgent::configured()
+        .map_err(|errors| {
+            for error in errors {
+                warn(format!("the fork agent files stay as they are: {error:#}"));
+            }
+        })
+        .ok();
+    let stale = stale(&dir, fork.as_ref());
     if is_check {
         return Ok(vec![json!({ "stale": stale }).to_string()]);
     }
@@ -37,15 +43,20 @@ pub(super) fn run(args: &[OsString], warn: &mut dyn FnMut(String)) -> Result<Vec
         return Ok(vec![json!({ "stale": stale, "message": "This switchboard already runs the installed build." }).to_string()]);
     }
     plugin::write(&plugin::dir(&dir))?;
-    agents::write_agent_files(&dir, &fork)?;
+    if let Some(fork) = &fork {
+        agents::write_agent_files(&dir, fork)?;
+    }
     Ok(vec![json!({ "stale": stale, "message": "The switchboard loaded the installed build: its plugin reloads now, and forks start with the new instructions." }).to_string()])
 }
 
-fn stale(dir: &Path, fork: &ForkAgent) -> Vec<String> {
+fn stale(dir: &Path, fork: Option<&ForkAgent>) -> Vec<String> {
     plugin::stale(&plugin::dir(dir))
         .into_iter()
         .map(|relative| format!("plugin/{relative}"))
-        .chain(agents::stale_agent_files(dir, fork))
+        .chain(
+            fork.map(|fork| agents::stale_agent_files(dir, fork))
+                .unwrap_or_default(),
+        )
         .collect()
 }
 
@@ -57,7 +68,7 @@ mod tests {
     fn a_fresh_folder_is_stale_until_written_and_then_current() {
         let root = tempfile::TempDir::new().unwrap();
         let fork = ForkAgent::default();
-        let before = stale(root.path(), &fork);
+        let before = stale(root.path(), Some(&fork));
         assert!(
             before.contains(&"plugin/hooks/register.tsx".to_owned()),
             "{before:?}"
@@ -71,7 +82,7 @@ mod tests {
 
         plugin::write(&plugin::dir(root.path())).unwrap();
         agents::write_agent_files(root.path(), &fork).unwrap();
-        assert_eq!(stale(root.path(), &fork), Vec::<String>::new());
+        assert_eq!(stale(root.path(), Some(&fork)), Vec::<String>::new());
 
         let module = plugin::dir(root.path()).join("hooks/register.tsx");
         std::fs::write(&module, "an older build").unwrap();
@@ -81,12 +92,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            stale(root.path(), &fork),
+            stale(root.path(), Some(&fork)),
             vec![
                 "plugin/hooks/register.tsx".to_owned(),
                 "plugin/hooks/register.ts".to_owned()
             ]
         );
+        let agent = root.path().join(".claude/agents/project-fork.md");
+        std::fs::write(&agent, "an older prompt").unwrap();
+        assert!(
+            stale(root.path(), Some(&fork)).contains(&".claude/agents/project-fork.md".to_owned())
+        );
+        assert!(!stale(root.path(), None)
+            .iter()
+            .any(|file| file.starts_with(".claude/agents/")));
     }
 
     #[test]
