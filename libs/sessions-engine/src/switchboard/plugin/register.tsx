@@ -117,7 +117,7 @@ const REOPENED = 'Opened from the fork board.'
 const RESUMED = 'Carry on your work from where you stopped. This answers no question you asked and approves nothing you were waiting on the user for: if you were waiting on the user, keep waiting.'
 const FORK_RESUME = 'Only the switchboard resumes, continues, opens or closes another fork or session. Tell the user in one line which fork or session it is for and that they can select it in the agent list.'
 const FORKS_ONLY = 'The switchboard starts only project-forks. A code review runs inside a fork: start a project-fork for it, and that fork starts the review lanes.'
-const OWN_LANES_ONLY = 'A fork continues only the agents it started itself. Start a fresh agent instead.'
+const FRESH_LANES_ONLY = 'A fork never continues a review lane: start a fresh one with the same prompt.'
 const CROSS_SESSION = /__session_(reopen|fork|spawn|submit|bridge|close|remote_control|loop_close)$/
 const MESSAGING = /__session_(send|inbox|board)$/
 const FORK_TO_FORK =
@@ -1146,12 +1146,6 @@ export const mayMessage = (list: Entry[], from: string, to: unknown): boolean =>
   if (sender === undefined || recipient === undefined || recipient.agentId === from) return false
   const current = (launcher: string | undefined) => (launcher === undefined ? undefined : addressed(list, launcher)?.agentId)
   return current(recipient.launcher) === from || current(sender.launcher) === recipient.agentId
-}
-
-const startedBy = async ($: EngineInterface, agentId: string): Promise<string | undefined> => {
-  const agents: unknown = await $.agent.list().catch(() => [])
-  const agent = (Array.isArray(agents) ? agents : []).find(one => (one as { id?: unknown }).id === agentId) as { parentId?: unknown } | undefined
-  return typeof agent?.parentId === 'string' ? agent.parentId : undefined
 }
 
 export const listedAgents = (agents: unknown): Set<string> =>
@@ -2993,7 +2987,7 @@ export const register: Register = on => {
   on('agent.spawn', async ($, e, next) => {
     if (e.subagentType === FORK) return next(e)
     if (e.parentAgentId === undefined) return { deny: FORKS_ONLY }
-    if (e.resume !== undefined && (await startedBy($, e.resume.agentId)) !== e.parentAgentId) return { deny: OWN_LANES_ONLY }
+    if (e.resume !== undefined) return { deny: FRESH_LANES_ONLY }
     return next(e)
   })
 

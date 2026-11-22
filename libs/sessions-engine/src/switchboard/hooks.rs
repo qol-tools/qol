@@ -37,7 +37,8 @@ const MODEL_PREFIX: &str = "Model:";
 const MODEL_ID_MARKS: &str = "_.[]-";
 const BYTE_ORDER_MARK: char = '\u{FEFF}';
 const NEXT_LINE: char = '\u{85}';
-const FORMAT_HELP: &str = "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`, followed by the user's words.";
+const FORKS_ONLY: &str = "The switchboard starts only project-forks. A code review runs inside a fork: start a project-fork for it, and that fork starts the review lanes.";
+const FORMAT_HELP: &str ="A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`, followed by the user's words.";
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -155,14 +156,18 @@ fn model_verdict(model: &str, admit: &dyn Fn(&str) -> Result<String>) -> String 
 }
 
 fn pre_agent(payload: &Payload, admit: &dyn Fn(&str) -> Result<()>) -> Verdict {
-    if payload.tool_input.subagent_type.as_deref() != Some(FORK_AGENT) {
-        return Verdict::Pass;
+    let is_fork = payload.tool_input.subagent_type.as_deref() == Some(FORK_AGENT);
+    if !is_fork && payload.agent_id.is_none() {
+        return Verdict::Deny(FORKS_ONLY.to_owned());
     }
     let prompt = payload.tool_input.prompt.as_deref().unwrap_or_default();
-    if let Err(reason) = check_project(prompt) {
-        return Verdict::Deny(reason);
+    if is_fork {
+        if let Err(reason) = check_project(prompt) {
+            return Verdict::Deny(reason);
+        }
     }
-    let named = [model_line(prompt), payload.tool_input.model.as_deref()];
+    let line = if is_fork { model_line(prompt) } else { None };
+    let named = [line, payload.tool_input.model.as_deref()];
     for model in named.into_iter().flatten() {
         if let Err(error) = admit(model) {
             return Verdict::Deny(format!("{error:#}"));
@@ -513,13 +518,21 @@ mod tests {
     }
 
     #[test]
-    fn only_project_fork_calls_are_checked() {
-        let other = call("general-purpose", "no project line");
-        assert_eq!(pre_agent(&other, &admit_none), Verdict::Pass);
+    fn the_switchboard_starts_only_forks_and_a_fork_starts_lanes_on_an_admitted_model() {
+        let from_lead = call("qol-code-review:review-finder", "no project line");
+        assert!(denied(pre_agent(&from_lead, &admit_all)).contains("starts only project-forks"));
+        assert!(denied(pre_agent(&Payload::default(), &admit_all))
+            .contains("starts only project-forks"));
+        let mut from_fork = call(
+            "qol-code-review:review-finder",
+            "Model: opus\nno project line",
+        );
+        from_fork.agent_id = Some("p1".to_owned());
+        assert_eq!(pre_agent(&from_fork, &admit_none), Verdict::Pass);
+        from_fork.tool_input.model = Some("opus".to_owned());
+        assert!(denied(pre_agent(&from_fork, &admit_none)).contains("model opus is not allowed"));
         let unscoped = call(FORK_AGENT, "no project line");
         assert!(denied(pre_agent(&unscoped, &admit_all)).contains("not a project line"));
-        let unnamed = Payload::default();
-        assert_eq!(pre_agent(&unnamed, &admit_none), Verdict::Pass);
     }
 
     #[test]
@@ -622,9 +635,12 @@ mod tests {
         ] {
             assert_eq!(pre_agent(&passing, &only_opus), Verdict::Pass);
         }
-        let mut other = call("general-purpose", "Project: /work\nModel: gpt-9-turbo");
-        other.tool_input.model = Some("haiku".to_owned());
-        assert_eq!(pre_agent(&other, &only_opus), Verdict::Pass);
+        let mut lane = call(
+            "qol-code-review:review-finder",
+            "Project: /work\nModel: gpt-9-turbo",
+        );
+        lane.agent_id = Some("p1".to_owned());
+        assert_eq!(pre_agent(&lane, &only_opus), Verdict::Pass);
     }
 
     fn context_line(line: &str) -> String {

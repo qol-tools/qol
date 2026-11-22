@@ -553,6 +553,7 @@ mod tests {
             "followed by the line `Model: <full model id",
             "say in one line which one it is for and that they can select it in the agent list",
             "You may split your own task by starting forks of your own",
+            "The only other agents you start are the review-finder and review-verifier lanes of a qol-code-review board",
             "A fork you started reports to you, not to the user",
             "when only the user can decide, ask it yourself in your own final message",
             "When a fork started you, that fork stands in the user's place for all of this",
