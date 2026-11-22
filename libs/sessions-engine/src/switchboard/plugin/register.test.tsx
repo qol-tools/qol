@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, litBody, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
+import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, litBody, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, laneName, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, underParent, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -803,15 +803,21 @@ const recordReply = (argv: string[], records: any[]) => {
   const verb = argv[3]
   const flag = (name: string) => argv[argv.indexOf(name) + 1] ?? ''
   const ok = (body: unknown) => ({ exitCode: 0, stderr: '', stdout: JSON.stringify(body) })
-  if (verb === 'claim') {
+  if (verb === 'claim' || verb === 'reclaim') {
     const text = flag('--description')
     const isKeyed = text.includes(':')
-    const key = isKeyed ? text.split(':', 1)[0]!.trim() : `gen${records.length + 1}`
+    const asked = isKeyed ? text.split(':', 1)[0]!.trim() : `gen${records.length + 1}`
+    if (asked === 'hotkey-regression') return { exitCode: 4, stderr: '', stdout: JSON.stringify({ error: '`hotkey-regression` is 17 characters, and the word after `repo-structure-` is at most 12.' }) }
+    const key = argv.includes('--parent') ? `${flag('--parent')}-${asked}` : asked
     const friendly = isKeyed ? text.slice(text.indexOf(':') + 1).trim() : text
     records.push({ key, friendly, cwd: flag('--cwd'), created_ms: 1, parts: [] })
     return ok({ key, friendly, description: `${key}: ${friendly}` })
   }
   if (verb === 'list') return ok({ records })
+  if (verb === 'show') {
+    const found = records.find(record => (record.parts as { agent_id: string }[]).some(part => part.agent_id === flag('--agent-id')))
+    return found === undefined ? { exitCode: 3, stderr: '', stdout: JSON.stringify({ error: 'no record' }) } : ok(found)
+  }
   if (verb === 'part') return ok({ key: flag('--key'), part: 1 })
   return ok({ key: flag('--key') })
 }
@@ -2102,6 +2108,52 @@ test('a new fork claims its session record, and the description Claude Code keep
   expect(board).toContain('[fork board] gen1 (working, agent id a1)')
 })
 
+test('a sub-fork and a review lane carry their fork\'s key, and a sub-fork whose word is too long is refused', async ($, on) => {
+  const calls: string[][] = []
+  const spawned: Spawned[] = []
+  engine(on, [], [], spawned)
+  recordEngine(on, calls, [{ key: 'gone-fork', friendly: 'off the board', cwd: '/', created_ms: 1, parts: [{ n: 1, agent_id: 'r1', transcript: '/t', started_ms: 1 }] }])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'p1', 'repo-structure: Restructure the repo')
+  await spawn($, 'k1', 'docs: Move the docs', 'p1')
+  const refused = (await $.agent.spawn({ prompt: 'Project: /work\nfork k2', description: 'hotkey-regression: x', subagentType: 'project-fork', parentAgentId: 'p1' } as any)) as { deny?: string }
+  expect(String(refused.deny)).toContain('at most 12')
+  const orphan = (await $.agent.spawn({ prompt: 'Project: /work\nfork k3', description: 'docs: x', subagentType: 'project-fork', parentAgentId: 'nobody' } as any)) as { deny?: string }
+  expect(String(orphan.deny)).toContain('no key on the fork board yet')
+  await $.agent.spawn({ prompt: 'job 1', description: 'Finder lane 3', subagentType: 'qol-code-review:review-finder', parentAgentId: 'k1' } as any)
+  await $.agent.spawn({ prompt: 'job 2', description: 'repo-structure-docs-verifier', subagentType: 'qol-code-review:review-verifier', parentAgentId: 'k1' } as any)
+  await $.agent.spawn({ prompt: 'job 3', description: 'Ledger', subagentType: 'qol-code-review:review-finder', parentAgentId: 'unknown' } as any)
+  await $.agent.spawn({ prompt: 'job 4', description: 'Ledger', subagentType: 'qol-code-review:review-finder', parentAgentId: 'r1' } as any)
+  expect(verbs(calls, 'claim')).toEqual([
+    ['claim', '--description', 'repo-structure: Restructure the repo', '--cwd', '/work'],
+    ['claim', '--description', 'docs: Move the docs', '--cwd', '/work', '--parent', 'repo-structure'],
+    ['claim', '--description', 'hotkey-regression: x', '--cwd', '/work', '--parent', 'repo-structure'],
+  ])
+  expect(spawned.map(one => one.description)).toEqual([
+    'repo-structure: Restructure the repo',
+    'repo-structure-docs: Move the docs',
+    'repo-structure-docs-finder-lane-3',
+    'repo-structure-docs-verifier',
+    'Ledger',
+    'gone-fork-ledger',
+  ])
+})
+
+test('a lane is named after its parent key, and a row under its parent shows only its own word', () => {
+  expect(laneName('repo-structure', 'Finder lane 3')).toBe('repo-structure-finder-lane-3')
+  expect(laneName('repo-structure', 'repo-structure-dupes')).toBe('repo-structure-dupes')
+  expect(laneName('repo-structure', 'repo-structure')).toBe('repo-structure')
+  expect(laneName('repo-structure', '!!!')).toBe('repo-structure-lane')
+  expect(laneName('repo', 'repository scan')).toBe('repo-repository-scan')
+  expect(laneName('repo-structure', 'one two three four five six seven eight nine ten eleven twelve')).toBe('repo-structure-one-two-three-four-five-six-seven-eight-nine-ten')
+  expect(laneName('k'.repeat(60), 'Finder lane 3')).toBe(`${'k'.repeat(60)}-f`)
+  expect(underParent('repo-structure', 'repo-structure-docs')).toBe('docs')
+  expect(underParent('repo-structure', 'repo-structure')).toBe('repo-structure')
+  expect(underParent('repo-structure', 'repo-structure-')).toBe('repo-structure-')
+  expect(underParent('repo', 'repo-structure-docs')).toBe('structure-docs')
+  expect(underParent('repo-structure', 'explainer-tree')).toBe('explainer-tree')
+})
+
 test('once the agent id is known the fork joins its record as a part with its transcript', async ($, on) => {
   const calls: string[][] = []
   engine(on)
@@ -2547,9 +2599,9 @@ test('opening the switchboard takes done and stopped from the record, keeps a lo
     await settle()
   }
   expect(calls[0]).toEqual(['list'])
-  expect(verbs(calls, 'claim')).toEqual([
-    ['claim', '--description', 'plain words', '--cwd', '/proj'],
-    ['claim', '--description', 'other words', '--cwd', '/'],
+  expect(verbs(calls, 'reclaim')).toEqual([
+    ['reclaim', '--description', 'plain words', '--cwd', '/proj'],
+    ['reclaim', '--description', 'other words', '--cwd', '/'],
   ])
   expect(verbs(calls, 'part')).toEqual([
     ['part', '--key', 'gen4', '--agent-id', 'k1', '--transcript', TRANSCRIPT('k1')],
@@ -2632,13 +2684,13 @@ test('a terminal session brought back as a fork is claimed with the description 
   const resumed = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', transcript: '/p/closed.jsonl', cwd: '/p', description: 'plain words', message: 'go' } as any)
   expect(String(resumed.result)).toContain('Resumed as gen1, agent id a5')
   expect(calls.filter(call => call[0] !== 'list')).toEqual([
-    ['claim', '--description', 'plain words', '--cwd', '/p'],
+    ['reclaim', '--description', 'plain words', '--cwd', '/p'],
     ['part', '--key', 'gen1', '--agent-id', 'a5', '--transcript', TRANSCRIPT('a5')],
   ])
   expect(adopts[0]?.[adopts[0].indexOf('--description') + 1]).toBe('gen1: plain words')
   const again = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', transcript: '/p/closed.jsonl', cwd: '/p', description: 'plain words', message: 'and again' } as any)
   expect(String(again.result)).toContain('Already resumed as gen1, agent id a5')
-  expect(verbs(calls, 'claim')).toHaveLength(1)
+  expect(verbs(calls, 'reclaim')).toHaveLength(1)
   expect(verbs(calls, 'part')).toHaveLength(1)
   expect(adopts).toHaveLength(1)
   await deliver($, stopNotification('a5', 'gen1: plain words'))
@@ -4190,7 +4242,7 @@ test('closing a fork closes the sub-forks it started before it, and a busy sub-f
   await deliver($, notification('o1', 'other-fork: other', 'The build is green.'))
   await settle()
   await write('parent-fork')
-  expect(await close()).toContain("parent-fork's sub-fork helper-fork is still working, so parent-fork stays open. /close-fork again closes it anyway, with its 3 sub-forks.")
+  expect(await close()).toContain("parent-fork's sub-fork parent-fork-helper-fork is still working, so parent-fork stays open. /close-fork again closes it anyway, with its 3 sub-forks.")
   expect(stops).toEqual([])
   expect(closed()).toEqual([])
   expect(await close()).toContain('Closed parent-fork and its 3 sub-forks. The board counts them under closed, and r there lists them')
@@ -4198,7 +4250,7 @@ test('closing a fork closes the sub-forks it started before it, and a busy sub-f
   expect(stops.at(-1)).toBe('TaskStop p1')
   expect(stops.indexOf('TaskStop g1')).toBeLessThan(stops.indexOf('TaskStop k1'))
   expect(closed()).toEqual(['g1', 'k1', 'k2', 'p1'])
-  expect(verbs(calls, 'done').map(call => call[2]).sort()).toEqual(['child-fork', 'grand-fork', 'helper-fork', 'parent-fork'])
+  expect(verbs(calls, 'done').map(call => call[2]).sort()).toEqual(['parent-fork', 'parent-fork-child-fork', 'parent-fork-child-fork-grand-fork', 'parent-fork-helper-fork'])
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(board).toContain('agent id o1')
   for (const gone of ['p1', 'k1', 'k2', 'g1']) expect(board).not.toContain(`agent id ${gone}`)

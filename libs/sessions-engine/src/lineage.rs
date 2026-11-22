@@ -74,6 +74,53 @@ impl LineageStore {
     }
 }
 
+pub(crate) const TOP_LEVEL_MAX: usize = 24;
+pub(crate) const SUFFIX_MAX: usize = 12;
+const KEY_MAX: usize = 64;
+
+pub(crate) fn is_top_level(parent: Option<&str>) -> bool {
+    parent.is_none_or(|parent| parent == super::switchboard::SWITCHBOARD_KEY)
+}
+
+pub(crate) fn child_key(parent: Option<&str>, asked: &str) -> Result<String, String> {
+    let parent = parent.filter(|parent| !is_top_level(Some(parent)));
+    let Some(parent) = parent else {
+        if asked.len() > TOP_LEVEL_MAX {
+            return Err(format!(
+                "`{asked}` is {} characters, and a top-level key is at most {TOP_LEVEL_MAX}, so every session under it has room for its own word. Name the area first, then the topic, such as `alt-tab-ctrl-bug`.",
+                asked.len()
+            ));
+        }
+        return Ok(asked.to_owned());
+    };
+    let suffix = asked
+        .strip_prefix(parent)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(asked);
+    let key = format!("{parent}-{suffix}");
+    let room = KEY_MAX.saturating_sub(parent.len() + 1).min(SUFFIX_MAX);
+    if room == 0 {
+        return Err(format!(
+            "`{parent}` is {} characters, so no key fits under it. Start this session from one with a shorter key.",
+            parent.len()
+        ));
+    }
+    if key.len() > KEY_MAX {
+        return Err(format!(
+            "`{key}` is {} characters, over the {KEY_MAX} a key may have. A key under `{parent}` is `{parent}-<word>`, and `{parent}` leaves room for a word of at most {room}.",
+            key.len()
+        ));
+    }
+    if suffix.len() > SUFFIX_MAX {
+        return Err(format!(
+            "`{suffix}` is {} characters, and the word after `{parent}-` is at most {SUFFIX_MAX}. Pick one short word for the job, such as `fix`, `docs` or `review`.",
+            suffix.len()
+        ));
+    }
+    Ok(key)
+}
+
 pub(super) fn caller_key(terminals: &TerminalSessionService) -> Option<String> {
     let token = super::bridge::driver_token(terminals);
     session_key(
@@ -138,5 +185,40 @@ mod tests {
             assert_eq!(store.parent(key).unwrap(), None, "{key}");
         }
         assert!(store.record("child", Some("../x")).is_err());
+    }
+
+    #[test]
+    fn a_child_key_is_its_parents_full_key_a_dash_and_one_word() {
+        let top = "k".repeat(24);
+        let long = "k".repeat(60);
+        let long_fix = format!("{long}-fix");
+        let full = "k".repeat(63);
+        let cases: &[(Option<&str>, &str, Result<&str, &str>)] = &[
+            (None, "alt-tab-ctrl-bug", Ok("alt-tab-ctrl-bug")),
+            (Some("switchboard"), "repo-structure", Ok("repo-structure")),
+            (None, top.as_str(), Ok(top.as_str())),
+            (None, "another-bug-tmp-clip-c63f", Err("is 25 characters, and a top-level key is at most 24")),
+            (Some("switchboard"), "add-missing-icons-design-a61c", Err("a top-level key is at most 24")),
+            (Some("alt-tab-ctrl-bug"), "fix", Ok("alt-tab-ctrl-bug-fix")),
+            (Some("alt-tab-ctrl-bug"), "alt-tab-ctrl-bug-fix", Ok("alt-tab-ctrl-bug-fix")),
+            (Some("alt-tab-ctrl-bug-fix"), "test", Ok("alt-tab-ctrl-bug-fix-test")),
+            (Some("alt-tab-ctrl-bug"), "alt-tab-ctrl-bug", Err("`alt-tab-ctrl-bug` is 16 characters")),
+            (Some("repo"), "architecture", Ok("repo-architecture")),
+            (Some("alt-tab-ctrl-bug"), "hotkey-regression", Err("`hotkey-regression` is 17 characters, and the word after `alt-tab-ctrl-bug-` is at most 12")),
+            (Some(long.as_str()), "fix", Ok(long_fix.as_str())),
+            (Some(long.as_str()), "docs", Err("is 65 characters, over the 64 a key may have")),
+            (Some(long.as_str()), "docs", Err("leaves room for a word of at most 3")),
+            (Some(full.as_str()), "a", Err("is 63 characters, so no key fits under it")),
+        ];
+        for (parent, asked, expected) in cases {
+            let got = child_key(*parent, asked);
+            match expected {
+                Ok(key) => assert_eq!(got.as_deref(), Ok(*key), "{parent:?} {asked}"),
+                Err(part) => {
+                    let error = got.expect_err(&format!("{parent:?} {asked}"));
+                    assert!(error.contains(part), "{parent:?} {asked}: {error}");
+                }
+            }
+        }
     }
 }

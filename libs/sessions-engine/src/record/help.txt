@@ -1,0 +1,99 @@
+qol-cli-sessions sessions record <verb>
+
+Keep one record per session key, so a session's identity lives in one place
+and its chat is saved under that key to resume or search later. Records live
+in the CLI Sessions data folder, in records/<key>.json, and each part's chat
+is archived in records/<key>/part-<n>.jsonl.
+
+Usage:
+  qol-cli-sessions sessions record claim --description TEXT --cwd DIR [--parent KEY]
+  qol-cli-sessions sessions record reclaim --description TEXT --cwd DIR
+  qol-cli-sessions sessions record part --key KEY --agent-id ID --transcript FILE
+  qol-cli-sessions sessions record archive --key KEY
+  qol-cli-sessions sessions record done --key KEY --reason TEXT
+  qol-cli-sessions sessions record stopped --key KEY
+  qol-cli-sessions sessions record resume --key KEY
+  qol-cli-sessions sessions record show (--key KEY | --agent-id ID)
+  qol-cli-sessions sessions record list
+  qol-cli-sessions sessions record mail
+
+Verbs:
+  claim     Create a new record; never reuse one.
+            `<key>: <friendly>` keeps that key and friendly description. The
+            key is lowercase letters, digits and dashes, starts with a letter
+            or digit, and is at most 64 characters.
+            Any other description becomes the friendly description, and the
+            key is that description in lowercase ASCII, each run of other
+            characters turned into one dash, cut at a dash to 24 characters
+            (12 with --parent), or `session` when nothing is left.
+            --parent KEY is the session that starts this one. The key becomes
+            `<parent>-<word>`, from a word of at most 12 characters or a key
+            that already starts with `<parent>-`. A key over 64 characters
+            is refused.
+            Without --parent, or with the switchboard's key, the key is
+            top-level and at most 24 characters, so every session under it
+            has room for its own word.
+            A taken key gets -2, -3 and so on; one whose -N would pass 64
+            characters is refused.
+            --cwd is the absolute project folder. The output's description is
+            the `<key>: <friendly>` text to give a fork (just the key when
+            the friendly description is empty).
+
+  reclaim   Claim for a session that already ran under its key, such as one
+            a resume brings back. An explicit key up to 64 characters is
+            kept, a slugged one is cut to 24, and nothing is prefixed.
+
+  part      Add the next numbered part for an agent id. --transcript is the
+            absolute path of that agent's chat file. An agent id the record
+            already holds changes nothing and returns its part number.
+
+  archive   Copy each part's transcript that exists to the record's archive
+            folder and list the copies. A part whose transcript is gone keeps
+            the copy made earlier.
+
+  done      Set the done time and reason. A later call replaces them, so the
+            latest done wins.
+
+  stopped   Set the time the session was stopped.
+
+  resume    Clear done and stopped_ms, for a session that was done or stopped
+            and works again. A record with neither set stays as it is.
+
+  show      Print the record for a key, or the one whose parts include the
+            agent id.
+
+  list      Print every record, newest created first.
+
+  mail      Take the knocks that wait for records that are not done. This is
+            how a session_send message or a session_board mention addressed
+            to a switchboard fork's key leaves the mailbox: each knock is
+            taken once, its messages are marked read, and the switchboard
+            hands its text to the agent of the record's newest part.
+            A record without a part keeps its knock, and so does a key no
+            record has or that a live terminal session carries, because CLI
+            Sessions types that one into the terminal.
+
+Output:
+  Every verb prints one JSON object on stdout:
+    claim     {key, friendly, description}
+    part      {key, part}
+    archive   {key, archived}
+    list      {records}
+    mail      {mail: [{key, friendly, cwd, agent_id, text}]}
+    done, stopped, resume, show
+              the record itself
+  A record is {key, friendly, cwd, created_ms,
+  parts: [{n, agent_id, transcript, started_ms}], done: {at_ms, reason},
+  stopped_ms}; done and stopped_ms are absent until set.
+  An error prints {"error": text}. Times are milliseconds since the Unix
+  epoch. The session_records tool searches these records and their archived
+  chats.
+
+Exit:
+  0  success
+  1  the records folder cannot be read or written
+  2  usage error: a missing, repeated or unknown flag, a relative path, or an
+     unknown verb
+  3  the key or agent id has no record
+  4  claim or reclaim refused a key that breaks the length rules; the reason
+     is the error

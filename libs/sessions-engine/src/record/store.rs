@@ -7,6 +7,7 @@ use anyhow::{anyhow, Context};
 use serde::{Deserialize, Serialize};
 
 use super::key;
+use crate::lineage;
 
 const RECORD_SUFFIX: &str = "json";
 const LOCK_SUFFIX: &str = "lock";
@@ -50,16 +51,23 @@ impl Record {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Placement<'a> {
+    Under(Option<&'a str>),
+    Existing,
+}
+
 #[derive(Debug)]
 pub(crate) enum Error {
     Unknown(String),
+    Refused(String),
     Failed(anyhow::Error),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unknown(message) => formatter.write_str(message),
+            Self::Unknown(message) | Self::Refused(message) => formatter.write_str(message),
             Self::Failed(error) => write!(formatter, "{error:#}"),
         }
     }
@@ -130,8 +138,29 @@ impl RecordStore {
         Ok(())
     }
 
-    pub(crate) fn claim(&self, description: &str, cwd: &str, now_ms: u64) -> Result<Record> {
-        let claimed = key::parse(description);
+    pub(crate) fn claim(
+        &self,
+        description: &str,
+        placement: Placement<'_>,
+        cwd: &str,
+        now_ms: u64,
+    ) -> Result<Record> {
+        let claimed = match placement {
+            Placement::Existing => key::parse_within(description, lineage::TOP_LEVEL_MAX),
+            Placement::Under(parent) => {
+                if let Some(parent) = parent.filter(|parent| !key::is_key(parent)) {
+                    return Err(Error::Refused(format!("`{parent}` is not a session key")));
+                }
+                let slug_max = if lineage::is_top_level(parent) {
+                    lineage::TOP_LEVEL_MAX
+                } else {
+                    lineage::SUFFIX_MAX
+                };
+                let mut claimed = key::parse_within(description, slug_max);
+                claimed.key = lineage::child_key(parent, &claimed.key).map_err(Error::Refused)?;
+                claimed
+            }
+        };
         let _lock = self.lock(CLAIM_LOCK)?;
         for attempt in 1_u32.. {
             let candidate = if attempt == 1 {
@@ -139,6 +168,12 @@ impl RecordStore {
             } else {
                 format!("{}-{attempt}", claimed.key)
             };
+            if !key::is_key(&candidate) {
+                return Err(Error::Refused(format!(
+                    "`{}` is taken, and `{candidate}` would be longer than a key may be. Pick another word.",
+                    claimed.key
+                )));
+            }
             if self.path(&candidate)?.exists() {
                 continue;
             }

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use super::cli::{execute, EXIT_UNKNOWN, EXIT_USAGE};
+use super::cli::{execute, EXIT_REFUSED, EXIT_UNKNOWN, EXIT_USAGE};
 use super::store::RecordStore;
 
 fn abs(path: &str) -> String {
@@ -46,10 +46,10 @@ fn claim(store: &RecordStore, now_ms: u64, description: &str) -> Value {
 fn claim_gives_the_key_friendly_and_description_for_each_form_of_description() {
     let cases = [
         (
-            "switchboard-flow-improvements: orchestration revisions",
-            "switchboard-flow-improvements",
+            "flow-improvements: orchestration revisions",
+            "flow-improvements",
             "orchestration revisions",
-            "switchboard-flow-improvements: orchestration revisions",
+            "flow-improvements: orchestration revisions",
         ),
         ("my-key:", "my-key", "", "my-key"),
         (
@@ -113,6 +113,124 @@ fn claim_stores_the_record_and_never_reuses_a_key() {
             "parts": [],
         }),
         "done and stopped_ms stay absent until set"
+    );
+}
+
+#[test]
+fn a_claim_under_a_parent_starts_with_the_parents_key_and_a_long_key_is_refused() {
+    let root = tempfile::TempDir::new().unwrap();
+    let store = store(root.path());
+    let under = |parent: &str, description: &str| {
+        run(
+            &store,
+            1,
+            &[
+                "claim",
+                "--description",
+                description,
+                "--cwd",
+                &abs("/project"),
+                "--parent",
+                parent,
+            ],
+        )
+    };
+    let cases = [
+        (
+            "repo-structure",
+            "docs: Move the docs",
+            "repo-structure-docs",
+        ),
+        (
+            "repo-structure",
+            "repo-structure-mod: Move the mod",
+            "repo-structure-mod",
+        ),
+        (
+            "repo-structure",
+            "Review the dead code",
+            "repo-structure-review-the",
+        ),
+        ("repo-structure", "docs: Again", "repo-structure-docs-2"),
+        (
+            "switchboard",
+            "alt-tab-ctrl-bug: Fix it",
+            "alt-tab-ctrl-bug",
+        ),
+    ];
+    for (parent, description, key) in cases {
+        let (value, code) = under(parent, description);
+        assert_eq!((code, value["key"].as_str()), (0, Some(key)), "{value}");
+    }
+    for (parent, description, reason) in [
+        ("repo-structure", "hotkey-regression: x", "at most 12"),
+        ("switchboard", "another-bug-tmp-clip-c63f: x", "at most 24"),
+        ("../up", "docs: x", "is not a session key"),
+    ] {
+        let (value, code) = under(parent, description);
+        assert_eq!(code, EXIT_REFUSED, "{value}");
+        assert!(value["error"].as_str().unwrap().contains(reason), "{value}");
+    }
+    let (value, code) = run(
+        &store,
+        1,
+        &[
+            "claim",
+            "--description",
+            "add-missing-icons-design-a61c: x",
+            "--cwd",
+            &abs("/project"),
+        ],
+    );
+    assert_eq!(code, EXIT_REFUSED, "{value}");
+    let (value, code) = run(
+        &store,
+        1,
+        &[
+            "reclaim",
+            "--description",
+            "add-missing-icons-design-a61c: x",
+            "--cwd",
+            &abs("/project"),
+        ],
+    );
+    assert_eq!(
+        (code, value["key"].as_str()),
+        (0, Some("add-missing-icons-design-a61c")),
+        "{value}"
+    );
+    let (value, code) = run(
+        &store,
+        1,
+        &[
+            "reclaim",
+            "--description",
+            "x",
+            "--cwd",
+            &abs("/project"),
+            "--parent",
+            "repo",
+        ],
+    );
+    assert_eq!(code, EXIT_USAGE, "{value}");
+
+    let parent = format!("{}-{}", "k".repeat(24), "k".repeat(26));
+    let first = format!("{parent}-twelve-chars");
+    assert_eq!(first.len(), 64);
+    let (value, code) = under(&parent, "twelve-chars: x");
+    assert_eq!(
+        (code, value["key"].as_str()),
+        (0, Some(first.as_str())),
+        "{value}"
+    );
+    let (value, code) = under(&parent, "twelve-chars: x");
+    assert_eq!(code, EXIT_REFUSED, "{value}");
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap()
+            .contains("would be longer than a key may be"),
+        "{value}"
     );
 }
 
