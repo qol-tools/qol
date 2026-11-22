@@ -7,7 +7,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-pub const CORE_SUBDIR: &str = "core";
+pub use qol_plugin_api::profile::CORE_SUBDIR;
 pub const OS_SUBDIR: &str = "os";
 pub const DEVICE_SUBDIR: &str = "device";
 pub const SYNC_SUBDIR: &str = "sync";

@@ -5,6 +5,7 @@ pub mod launcher_marks;
 pub mod manifest;
 pub mod operations;
 pub mod permissions;
+pub mod profile;
 pub mod restore;
 
 pub use manifest::PluginId;

@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use qol_apps::tray_install::InstallProfile;
+use qol_plugin_api::profile::{ACTIVE_PROFILE_FILE, PROFILE_DIR};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,12 +9,11 @@ pub(crate) mod install_marker;
 mod platform;
 
 const ACTIVE_INSTALL_ID_FILE: &str = qol_config::ACTIVE_INSTALL_ID_FILE;
-const ACTIVE_PROFILE_FILE: &str = "active";
-pub const DEFAULT_PROFILE_NAME: &str = "default";
 #[cfg(any(test, debug_assertions))]
 const TEST_PATH_ROOT_ENV: &str = "QOL_TRAY_TEST_PATH_ROOT";
 
 pub use qol_conventions::STATE_SOCKET_PATH;
+pub use qol_plugin_api::profile::DEFAULT_PROFILE_NAME;
 
 #[cfg(test)]
 thread_local! {
@@ -194,7 +194,7 @@ pub fn plugins_dir() -> Result<PathBuf> {
 }
 
 pub fn profile_dir() -> Result<PathBuf> {
-    shared_config_dir().map(|p| p.join("profile"))
+    shared_config_dir().map(|p| p.join(PROFILE_DIR))
 }
 
 pub fn current_os_subdir() -> &'static str {
@@ -206,12 +206,9 @@ pub(crate) fn active_profile_marker_path() -> Result<PathBuf> {
 }
 
 pub fn active_profile_name() -> String {
-    active_profile_marker_path()
-        .ok()
-        .and_then(|path| fs::read_to_string(&path).ok())
-        .map(|raw| raw.trim().to_string())
-        .filter(|name| is_safe_path_component(name))
-        .unwrap_or_else(|| DEFAULT_PROFILE_NAME.to_string())
+    profile_dir()
+        .map(|root| qol_plugin_api::profile::active_profile_name(&root))
+        .unwrap_or_else(|_| DEFAULT_PROFILE_NAME.to_string())
 }
 
 pub fn profile_manifest_path() -> Result<PathBuf> {
