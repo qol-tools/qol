@@ -753,22 +753,9 @@ let loading: Promise<void> | undefined
 let held = { session: '', rows: 0 }
 let viewedFork: string | undefined
 let tree: SbTree = { commands: [] }
-let isUpdateReady = false
 let updateCheckedAt = Number.NEGATIVE_INFINITY
 
 const UPDATE = 'update'
-
-const UPDATE_READY = 'New switchboard build · sb update'
-const UPDATE_TOAST = 'A new CLI Sessions build is installed: type sb update to load it into this switchboard without a restart.'
-
-export const staleFiles = (stdout: string): string[] => {
-  try {
-    const stale: unknown = (JSON.parse(stdout) as { stale?: unknown }).stale
-    return Array.isArray(stale) ? stale.filter((one): one is string => typeof one === 'string') : []
-  } catch {
-    return []
-  }
-}
 
 const savedRows = async ($: EngineInterface): Promise<Entry[]> => {
   const saved = await $.store.get(STORE_PREFIX + (await $.session.id()))
@@ -844,7 +831,7 @@ const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
   const count = needYouCount(list)
   const loading = await read($, starting)
-  const parts = [loading === '' ? undefined : loading, tree.status, isUpdateReady ? UPDATE_READY : undefined, count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`].filter(one => one !== undefined)
+  const parts = [loading === '' ? undefined : loading, tree.status, count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`].filter(one => one !== undefined)
   $.ui.status(parts.length === 0 ? undefined : parts.join(' │ '))
   suggestFork($, list)
   queueMarks($, list)
@@ -1471,13 +1458,7 @@ const checkUpdate = async ($: EngineInterface): Promise<void> => {
   updateCheckedAt = now
   const program = await recordProgram($)
   if (program === undefined) return
-  const ran = await $.process.run([program, 'sessions', 'switchboard', UPDATE, '--check'], { cwd: folderOf(program), timeoutMs: SB_TIMEOUT_MS }).catch(() => undefined)
-  if (ran === undefined || ran.exitCode !== 0) return
-  const hasStale = staleFiles(ran.stdout).length > 0
-  if (hasStale === isUpdateReady) return
-  isUpdateReady = hasStale
-  if (hasStale) $.ui.toast(UPDATE_TOAST)
-  await refreshStatus($)
+  await $.process.run([program, 'sessions', 'switchboard', UPDATE], { cwd: folderOf(program), timeoutMs: SB_TIMEOUT_MS }).catch(() => undefined)
 }
 
 const runSb = async ($: EngineInterface, text: string): Promise<string> => {
@@ -1495,10 +1476,6 @@ const runSb = async ($: EngineInterface, text: string): Promise<string> => {
   const ran = await $.process.run([program, 'sessions', 'switchboard', ...at.path.map(command => command.name)], { cwd: folderOf(program), timeoutMs: SB_TIMEOUT_MS }).catch(() => undefined)
   if (ran === undefined) return `${typed}: qol is not reachable.`
   if (ran.exitCode !== 0) return `${typed} failed: ${oneLine(ran.stderr.trim() || ran.stdout.trim() || `exit ${ran.exitCode}`)}`
-  if (at.path[0]?.name === UPDATE) {
-    updateCheckedAt = Number.NEGATIVE_INFINITY
-    await checkUpdate($)
-  }
   try {
     const message: unknown = (JSON.parse(ran.stdout) as { message?: unknown }).message
     if (typeof message === 'string' && message !== '') return message

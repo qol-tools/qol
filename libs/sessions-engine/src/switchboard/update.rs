@@ -5,27 +5,14 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::json;
 
 use super::agents::{self, ForkAgent};
-use super::commands::CommandNode;
 use super::{paths, plugin};
 
 pub(super) const UPDATE: &str = "update";
-const CHECK: &str = "--check";
-
-pub(super) fn command() -> CommandNode {
-    CommandNode {
-        name: UPDATE.to_owned(),
-        about: "load the installed CLI Sessions build into this switchboard".to_owned(),
-        current: false,
-        children: Vec::new(),
-    }
-}
 
 pub(super) fn run(args: &[OsString], warn: &mut dyn FnMut(String)) -> Result<Vec<String>> {
-    let is_check = match args {
-        [] => false,
-        [flag] if flag == CHECK => true,
-        _ => bail!("usage: qol sessions switchboard update [--check]"),
-    };
+    if !args.is_empty() {
+        bail!("usage: qol sessions switchboard update");
+    }
     let dir =
         paths::switchboard_dir().ok_or_else(|| anyhow!("the sessions data folder is not known"))?;
     let fork = ForkAgent::configured()
@@ -36,17 +23,13 @@ pub(super) fn run(args: &[OsString], warn: &mut dyn FnMut(String)) -> Result<Vec
         })
         .ok();
     let stale = stale(&dir, fork.as_ref());
-    if is_check {
-        return Ok(vec![json!({ "stale": stale }).to_string()]);
+    if !stale.is_empty() {
+        plugin::write(&plugin::dir(&dir))?;
+        if let Some(fork) = &fork {
+            agents::write_agent_files(&dir, fork)?;
+        }
     }
-    if stale.is_empty() {
-        return Ok(vec![json!({ "stale": stale, "message": "This switchboard already runs the installed build." }).to_string()]);
-    }
-    plugin::write(&plugin::dir(&dir))?;
-    if let Some(fork) = &fork {
-        agents::write_agent_files(&dir, fork)?;
-    }
-    Ok(vec![json!({ "stale": stale, "message": "The switchboard loaded the installed build: its plugin reloads now, and forks start with the new instructions." }).to_string()])
+    Ok(vec![json!({ "stale": stale }).to_string()])
 }
 
 fn stale(dir: &Path, fork: Option<&ForkAgent>) -> Vec<String> {
@@ -109,9 +92,8 @@ mod tests {
     }
 
     #[test]
-    fn update_takes_only_the_check_flag() {
+    fn update_takes_no_arguments() {
         let mut warn = |_: String| {};
-        assert!(run(&[OsString::from("--now")], &mut warn).is_err());
-        assert!(run(&[OsString::from(CHECK), OsString::from(CHECK)], &mut warn).is_err());
+        assert!(run(&[OsString::from("--check")], &mut warn).is_err());
     }
 }

@@ -28,7 +28,7 @@ pub(super) fn run(args: &[OsString]) -> Result<Vec<String>> {
     let auth = super::auth::offered();
     let tree = Tree {
         status: auth.status,
-        commands: vec![auth.command, super::update::command()],
+        commands: vec![auth.command],
     };
     Ok(vec![serde_json::to_string(&tree)?])
 }

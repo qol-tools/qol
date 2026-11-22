@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, litBody, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, staleFiles, subForksOf, toFork, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
+import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, litBody, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -3940,30 +3940,21 @@ test('the typeahead offers each command after sb, then the level under the curso
   expect(sbLine([], commands)).toBe('sb · auth (switch the claude login) · board (toggle the fork board)')
 })
 
-test('a new installed build shows a toast once, and sb update loads it', async ($, on) => {
+test('the switchboard loads the installed build when it starts, with no toast and no typed command', async ($, on) => {
   const panes: string[] = []
   const runs: string[][] = []
-  let stale = ['plugin/hooks/register.tsx']
   engine(on, [], panes)
   on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : undefined }))
   on('process.run', (_: unknown, e: { argv: string[] }) => {
     runs.push(e.argv.slice(1))
-    if (e.argv[3] === 'commands') return { value: { exitCode: 0, stdout: JSON.stringify({ commands: [{ name: 'update', about: 'load the installed CLI Sessions build into this switchboard' }] }), stderr: '' } }
-    if (e.argv[3] === 'update' && e.argv[4] === '--check') return { value: { exitCode: 0, stdout: JSON.stringify({ stale }), stderr: '' } }
-    if (e.argv[3] === 'update') {
-      stale = []
-      return { value: { exitCode: 0, stdout: JSON.stringify({ stale: ['plugin/hooks/register.tsx'], message: 'The switchboard loaded the installed build.' }), stderr: '' } }
-    }
+    if (e.argv[3] === 'commands') return { value: { exitCode: 0, stdout: JSON.stringify({ commands: [] }), stderr: '' } }
+    if (e.argv[3] === 'update') return { value: { exitCode: 0, stdout: JSON.stringify({ stale: ['plugin/hooks/register.tsx'] }), stderr: '' } }
     return { value: NO_RECORD }
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await settle()
-  expect(panes.filter(pane => pane.startsWith('toast')).join('\n')).toContain('type sb update to load it')
-  expect((await typed($, 'sb update')).drop).toContain('The switchboard loaded the installed build.')
-  expect(runs.filter(run => run[2] === 'update' && run[3] === undefined)).toHaveLength(1)
-  expect(runs.filter(run => run[2] === 'update' && run[3] === '--check')).toHaveLength(2)
-  expect(staleFiles('{"stale":["a",2,"b"]}')).toEqual(['a', 'b'])
-  expect(staleFiles('not json')).toEqual([])
+  expect(runs.filter(run => run[2] === 'update')).toEqual([['sessions', 'switchboard', 'update']])
+  expect(panes.filter(pane => pane.startsWith('toast'))).toEqual([])
 })
 
 test('sb runs the command the words name, lists a level that needs more, and leaves other sentences to the model', async ($, on) => {
