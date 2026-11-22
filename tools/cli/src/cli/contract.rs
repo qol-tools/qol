@@ -22,10 +22,10 @@ pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
         return Ok(None);
     }
     let mut words = args.values.iter().map(|value| value.to_str());
-    let headless = match (words.next().flatten(), words.next().flatten()) {
-        (Some("doctor" | "sessions"), _) | (Some("pr"), Some("list")) => true,
-        _ => false,
-    };
+    let headless = matches!(
+        (words.next().flatten(), words.next().flatten()),
+        (Some("doctor" | "sessions"), _) | (Some("pr"), Some("list"))
+    );
     if !has_help && args.json && headless {
         return Ok(None);
     }
