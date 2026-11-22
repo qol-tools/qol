@@ -56,3 +56,5 @@ unsafe_code = "forbid"
 dbg_macro = "deny"
 print_stderr = "deny"
 print_stdout = "deny"
+
+# probe for qol-tools/qol#620, never merged
