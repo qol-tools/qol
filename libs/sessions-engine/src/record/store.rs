@@ -51,12 +51,13 @@ impl Record {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub(crate) enum Placement<'a> {
     Under(Option<&'a str>),
     Existing,
 }
 
+#[derive(Debug)]
 pub(crate) enum Error {
     Unknown(String),
     Refused(String),

@@ -2118,6 +2118,8 @@ test('a sub-fork and a review lane carry their fork\'s key, and a sub-fork whose
   await spawn($, 'k1', 'docs: Move the docs', 'p1')
   const refused = (await $.agent.spawn({ prompt: 'Project: /work\nfork k2', description: 'hotkey-regression: x', subagentType: 'project-fork', parentAgentId: 'p1' } as any)) as { deny?: string }
   expect(String(refused.deny)).toContain('at most 12')
+  const orphan = (await $.agent.spawn({ prompt: 'Project: /work\nfork k3', description: 'docs: x', subagentType: 'project-fork', parentAgentId: 'nobody' } as any)) as { deny?: string }
+  expect(String(orphan.deny)).toContain('no key on the fork board yet')
   await $.agent.spawn({ prompt: 'job 1', description: 'Finder lane 3', subagentType: 'qol-code-review:review-finder', parentAgentId: 'k1' } as any)
   await $.agent.spawn({ prompt: 'job 2', description: 'repo-structure-docs-verifier', subagentType: 'qol-code-review:review-verifier', parentAgentId: 'k1' } as any)
   await $.agent.spawn({ prompt: 'job 3', description: 'Ledger', subagentType: 'qol-code-review:review-finder', parentAgentId: 'unknown' } as any)

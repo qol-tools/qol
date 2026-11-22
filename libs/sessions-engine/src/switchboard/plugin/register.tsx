@@ -1664,6 +1664,8 @@ const parentKey = async ($: EngineInterface, agentId: string | undefined): Promi
   return typeof record?.key === 'string' && record.key !== '' ? record.key : undefined
 }
 
+const NO_PARENT_KEY = 'Your fork has no key on the fork board yet, so a sub-fork cannot be named under it. Try again in a moment.'
+
 const LANE_FALLBACK = 'lane'
 const LANE_NAME_MAX = 64
 
@@ -3045,7 +3047,9 @@ export const register: Register = on => {
     const prompt = withLauncher(e.prompt, e.parentAgentId)
     const model = modelLineOf(e.prompt)
     const spawnAs = { ...e, cwd, prompt, ...(model === undefined ? {} : { model }) }
-    const claimed = await recordClaim($, e.description, cwd, await parentKey($, e.parentAgentId).catch(() => undefined))
+    const parent = await parentKey($, e.parentAgentId).catch(() => undefined)
+    if (e.parentAgentId !== undefined && parent === undefined && (await recordProgram($)) !== undefined) return { deny: NO_PARENT_KEY }
+    const claimed = await recordClaim($, e.description, cwd, parent)
     if (claimed !== undefined && 'refused' in claimed) return { deny: claimed.refused }
     if (claimed === undefined) {
       if ((await recordProgram($)) !== undefined) await logEvent($, { fork: keyName(e.description), said: 'The session record could not be claimed for this fork.' }).catch(() => undefined)
