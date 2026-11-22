@@ -14,4 +14,4 @@ case "$AGENT_EMAILS" in
   *) exit 0 ;;
 esac
 
-git interpret-trailers --in-place --if-exists addIfDifferent --trailer "$OWNER_LINE" "$msg_file"
+git interpret-trailers --in-place --no-divider --if-exists addIfDifferent --trailer "$OWNER_LINE" "$msg_file"

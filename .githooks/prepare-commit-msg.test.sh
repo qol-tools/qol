@@ -41,6 +41,8 @@ test_agent_commits_get_the_owner_line() {
   eq "body keeps its text" "fix(tray): x"$'\n\n'"Why it broke."$'\n\n'"$owner" "$out"
   out="$(run_hook "$agent" "fix(tray): x"$'\n\n'"Refs: #12")"
   eq "joins an existing trailer block" "fix(tray): x"$'\n\n'"Refs: #12"$'\n'"$owner" "$out"
+  out="$(run_hook "$agent" "build(deps): x"$'\n\n'"Why."$'\n\n'"---"$'\n'"updated-dependencies:"$'\n\n'"Signed-off-by: Bot <bot@example.invalid>")"
+  eq "below a --- line, at the end" "$owner" "$(printf '%s\n' "$out" | tail -n 1)"
 }
 
 test_the_owner_line_is_added_once() {
