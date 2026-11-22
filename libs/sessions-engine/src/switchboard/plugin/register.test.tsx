@@ -803,7 +803,7 @@ const recordReply = (argv: string[], records: any[]) => {
   const verb = argv[3]
   const flag = (name: string) => argv[argv.indexOf(name) + 1] ?? ''
   const ok = (body: unknown) => ({ exitCode: 0, stderr: '', stdout: JSON.stringify(body) })
-  if (verb === 'claim') {
+  if (verb === 'claim' || verb === 'reclaim') {
     const text = flag('--description')
     const isKeyed = text.includes(':')
     const asked = isKeyed ? text.split(':', 1)[0]!.trim() : `gen${records.length + 1}`
@@ -814,6 +814,10 @@ const recordReply = (argv: string[], records: any[]) => {
     return ok({ key, friendly, description: `${key}: ${friendly}` })
   }
   if (verb === 'list') return ok({ records })
+  if (verb === 'show') {
+    const found = records.find(record => (record.parts as { agent_id: string }[]).some(part => part.agent_id === flag('--agent-id')))
+    return found === undefined ? { exitCode: 3, stderr: '', stdout: JSON.stringify({ error: 'no record' }) } : ok(found)
+  }
   if (verb === 'part') return ok({ key: flag('--key'), part: 1 })
   return ok({ key: flag('--key') })
 }
@@ -2108,7 +2112,7 @@ test('a sub-fork and a review lane carry their fork\'s key, and a sub-fork whose
   const calls: string[][] = []
   const spawned: Spawned[] = []
   engine(on, [], [], spawned)
-  recordEngine(on, calls)
+  recordEngine(on, calls, [{ key: 'gone-fork', friendly: 'off the board', cwd: '/', created_ms: 1, parts: [{ n: 1, agent_id: 'r1', transcript: '/t', started_ms: 1 }] }])
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'p1', 'repo-structure: Restructure the repo')
   await spawn($, 'k1', 'docs: Move the docs', 'p1')
@@ -2117,6 +2121,7 @@ test('a sub-fork and a review lane carry their fork\'s key, and a sub-fork whose
   await $.agent.spawn({ prompt: 'job 1', description: 'Finder lane 3', subagentType: 'qol-code-review:review-finder', parentAgentId: 'k1' } as any)
   await $.agent.spawn({ prompt: 'job 2', description: 'repo-structure-docs-verifier', subagentType: 'qol-code-review:review-verifier', parentAgentId: 'k1' } as any)
   await $.agent.spawn({ prompt: 'job 3', description: 'Ledger', subagentType: 'qol-code-review:review-finder', parentAgentId: 'unknown' } as any)
+  await $.agent.spawn({ prompt: 'job 4', description: 'Ledger', subagentType: 'qol-code-review:review-finder', parentAgentId: 'r1' } as any)
   expect(verbs(calls, 'claim')).toEqual([
     ['claim', '--description', 'repo-structure: Restructure the repo', '--cwd', '/work'],
     ['claim', '--description', 'docs: Move the docs', '--cwd', '/work', '--parent', 'repo-structure'],
@@ -2128,6 +2133,7 @@ test('a sub-fork and a review lane carry their fork\'s key, and a sub-fork whose
     'repo-structure-docs-finder-lane-3',
     'repo-structure-docs-verifier',
     'Ledger',
+    'gone-fork-ledger',
   ])
 })
 
@@ -2137,6 +2143,8 @@ test('a lane is named after its parent key, and a row under its parent shows onl
   expect(laneName('repo-structure', 'repo-structure')).toBe('repo-structure')
   expect(laneName('repo-structure', '!!!')).toBe('repo-structure-lane')
   expect(laneName('repo', 'repository scan')).toBe('repo-repository-scan')
+  expect(laneName('repo-structure', 'one two three four five six seven eight nine ten eleven twelve')).toBe('repo-structure-one-two-three-four-five-six-seven-eight-nine-ten')
+  expect(laneName('k'.repeat(60), 'Finder lane 3')).toBe(`${'k'.repeat(60)}-f`)
   expect(underParent('repo-structure', 'repo-structure-docs')).toBe('docs')
   expect(underParent('repo-structure', 'repo-structure')).toBe('repo-structure')
   expect(underParent('repo-structure', 'repo-structure-')).toBe('repo-structure-')
@@ -2589,9 +2597,9 @@ test('opening the switchboard takes done and stopped from the record, keeps a lo
     await settle()
   }
   expect(calls[0]).toEqual(['list'])
-  expect(verbs(calls, 'claim')).toEqual([
-    ['claim', '--description', 'plain words', '--cwd', '/proj'],
-    ['claim', '--description', 'other words', '--cwd', '/'],
+  expect(verbs(calls, 'reclaim')).toEqual([
+    ['reclaim', '--description', 'plain words', '--cwd', '/proj'],
+    ['reclaim', '--description', 'other words', '--cwd', '/'],
   ])
   expect(verbs(calls, 'part')).toEqual([
     ['part', '--key', 'gen4', '--agent-id', 'k1', '--transcript', TRANSCRIPT('k1')],
@@ -2674,13 +2682,13 @@ test('a terminal session brought back as a fork is claimed with the description 
   const resumed = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', transcript: '/p/closed.jsonl', cwd: '/p', description: 'plain words', message: 'go' } as any)
   expect(String(resumed.result)).toContain('Resumed as gen1, agent id a5')
   expect(calls.filter(call => call[0] !== 'list')).toEqual([
-    ['claim', '--description', 'plain words', '--cwd', '/p'],
+    ['reclaim', '--description', 'plain words', '--cwd', '/p'],
     ['part', '--key', 'gen1', '--agent-id', 'a5', '--transcript', TRANSCRIPT('a5')],
   ])
   expect(adopts[0]?.[adopts[0].indexOf('--description') + 1]).toBe('gen1: plain words')
   const again = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', transcript: '/p/closed.jsonl', cwd: '/p', description: 'plain words', message: 'and again' } as any)
   expect(String(again.result)).toContain('Already resumed as gen1, agent id a5')
-  expect(verbs(calls, 'claim')).toHaveLength(1)
+  expect(verbs(calls, 'reclaim')).toHaveLength(1)
   expect(verbs(calls, 'part')).toHaveLength(1)
   expect(adopts).toHaveLength(1)
   await deliver($, stopNotification('a5', 'gen1: plain words'))

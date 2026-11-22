@@ -51,7 +51,12 @@ impl Record {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Placement<'a> {
+    Under(Option<&'a str>),
+    Existing,
+}
+
 pub(crate) enum Error {
     Unknown(String),
     Refused(String),
@@ -135,20 +140,26 @@ impl RecordStore {
     pub(crate) fn claim(
         &self,
         description: &str,
-        parent: Option<&str>,
+        placement: Placement<'_>,
         cwd: &str,
         now_ms: u64,
     ) -> Result<Record> {
-        if let Some(parent) = parent.filter(|parent| !key::is_key(parent)) {
-            return Err(Error::Refused(format!("`{parent}` is not a session key")));
-        }
-        let slug_max = if lineage::is_top_level(parent) {
-            lineage::TOP_LEVEL_MAX
-        } else {
-            lineage::SUFFIX_MAX
+        let claimed = match placement {
+            Placement::Existing => key::parse_within(description, lineage::TOP_LEVEL_MAX),
+            Placement::Under(parent) => {
+                if let Some(parent) = parent.filter(|parent| !key::is_key(parent)) {
+                    return Err(Error::Refused(format!("`{parent}` is not a session key")));
+                }
+                let slug_max = if lineage::is_top_level(parent) {
+                    lineage::TOP_LEVEL_MAX
+                } else {
+                    lineage::SUFFIX_MAX
+                };
+                let mut claimed = key::parse_within(description, slug_max);
+                claimed.key = lineage::child_key(parent, &claimed.key).map_err(Error::Refused)?;
+                claimed
+            }
         };
-        let mut claimed = key::parse_within(description, slug_max);
-        claimed.key = lineage::child_key(parent, &claimed.key).map_err(Error::Refused)?;
         let _lock = self.lock(CLAIM_LOCK)?;
         for attempt in 1_u32.. {
             let candidate = if attempt == 1 {
@@ -156,6 +167,12 @@ impl RecordStore {
             } else {
                 format!("{}-{attempt}", claimed.key)
             };
+            if !key::is_key(&candidate) {
+                return Err(Error::Refused(format!(
+                    "`{}` is taken, and `{candidate}` would be longer than a key may be. Pick another word.",
+                    claimed.key
+                )));
+            }
             if self.path(&candidate)?.exists() {
                 continue;
             }

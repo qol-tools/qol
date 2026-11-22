@@ -99,8 +99,14 @@ pub(crate) fn child_key(parent: Option<&str>, asked: &str) -> Result<String, Str
         .filter(|rest| !rest.is_empty())
         .unwrap_or(asked);
     let key = format!("{parent}-{suffix}");
+    let room = KEY_MAX.saturating_sub(parent.len() + 1).min(SUFFIX_MAX);
+    if room == 0 {
+        return Err(format!(
+            "`{parent}` is {} characters, so no key fits under it. Start this session from one with a shorter key.",
+            parent.len()
+        ));
+    }
     if key.len() > KEY_MAX {
-        let room = KEY_MAX.saturating_sub(parent.len() + 1).min(SUFFIX_MAX);
         return Err(format!(
             "`{key}` is {} characters, over the {KEY_MAX} a key may have. A key under `{parent}` is `{parent}-<word>`, and `{parent}` leaves room for a word of at most {room}.",
             key.len()
@@ -186,6 +192,7 @@ mod tests {
         let top = "k".repeat(24);
         let long = "k".repeat(60);
         let long_fix = format!("{long}-fix");
+        let full = "k".repeat(63);
         let cases: &[(Option<&str>, &str, Result<&str, &str>)] = &[
             (None, "alt-tab-ctrl-bug", Ok("alt-tab-ctrl-bug")),
             (Some("switchboard"), "repo-structure", Ok("repo-structure")),
@@ -201,6 +208,7 @@ mod tests {
             (Some(long.as_str()), "fix", Ok(long_fix.as_str())),
             (Some(long.as_str()), "docs", Err("is 65 characters, over the 64 a key may have")),
             (Some(long.as_str()), "docs", Err("leaves room for a word of at most 3")),
+            (Some(full.as_str()), "a", Err("is 63 characters, so no key fits under it")),
         ];
         for (parent, asked, expected) in cases {
             let got = child_key(*parent, asked);

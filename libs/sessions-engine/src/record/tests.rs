@@ -183,6 +183,55 @@ fn a_claim_under_a_parent_starts_with_the_parents_key_and_a_long_key_is_refused(
         ],
     );
     assert_eq!(code, EXIT_REFUSED, "{value}");
+    let (value, code) = run(
+        &store,
+        1,
+        &[
+            "reclaim",
+            "--description",
+            "add-missing-icons-design-a61c: x",
+            "--cwd",
+            &abs("/project"),
+        ],
+    );
+    assert_eq!(
+        (code, value["key"].as_str()),
+        (0, Some("add-missing-icons-design-a61c")),
+        "{value}"
+    );
+    let (value, code) = run(
+        &store,
+        1,
+        &[
+            "reclaim",
+            "--description",
+            "x",
+            "--cwd",
+            &abs("/project"),
+            "--parent",
+            "repo",
+        ],
+    );
+    assert_eq!(code, EXIT_USAGE, "{value}");
+
+    let parent = format!("{}-{}", "k".repeat(24), "k".repeat(26));
+    let first = format!("{parent}-twelve-chars");
+    assert_eq!(first.len(), 64);
+    let (value, code) = under(&parent, "twelve-chars: x");
+    assert_eq!(
+        (code, value["key"].as_str()),
+        (0, Some(first.as_str())),
+        "{value}"
+    );
+    let (value, code) = under(&parent, "twelve-chars: x");
+    assert_eq!(code, EXIT_REFUSED, "{value}");
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap()
+            .contains("would be longer than a key may be"),
+        "{value}"
+    );
 }
 
 #[test]

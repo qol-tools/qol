@@ -6799,7 +6799,12 @@ mod tests {
         let claim = |description: &str, now: u64| {
             server
                 .records
-                .claim(description, None, "/work/project", now)
+                .claim(
+                    description,
+                    crate::record::Placement::Under(None),
+                    "/work/project",
+                    now,
+                )
                 .unwrap()
                 .key
         };
@@ -7358,7 +7363,12 @@ mod tests {
         ] {
             let record = server
                 .records
-                .claim(description, None, "/work/project", 1)
+                .claim(
+                    description,
+                    crate::record::Placement::Under(None),
+                    "/work/project",
+                    1,
+                )
                 .unwrap();
             server
                 .records

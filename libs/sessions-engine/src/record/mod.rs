@@ -9,6 +9,8 @@ mod tests;
 use std::ffi::OsString;
 
 pub(crate) use search::rows;
+#[cfg(test)]
+pub(crate) use store::Placement;
 pub(crate) use store::RecordStore;
 
 pub fn execute(args: &[OsString]) -> (String, u8) {

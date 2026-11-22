@@ -1644,8 +1644,11 @@ type Refused = { refused: string }
 
 const CLAIM_REFUSED = 4
 
-const recordClaim = async ($: EngineInterface, description: string, cwd: string, parent?: string): Promise<Claimed | Refused | undefined> => {
-  const ran = await recordExec($, 'claim', ['--description', description, '--cwd', cwd, ...(parent === undefined ? [] : ['--parent', parent])])
+const EXISTING = Symbol('existing')
+
+const recordClaim = async ($: EngineInterface, description: string, cwd: string, parent?: string | typeof EXISTING): Promise<Claimed | Refused | undefined> => {
+  const verb = parent === EXISTING ? 'reclaim' : 'claim'
+  const ran = await recordExec($, verb, ['--description', description, '--cwd', cwd, ...(parent === undefined || parent === EXISTING ? [] : ['--parent', parent])])
   if (ran?.exitCode === CLAIM_REFUSED && typeof ran.value.error === 'string') return { refused: ran.value.error }
   const claimed = ran?.exitCode === 0 ? ran.value : undefined
   return typeof claimed?.key === 'string' && claimed.key !== '' && typeof claimed.description === 'string' && claimed.description !== ''
@@ -1655,16 +1658,23 @@ const recordClaim = async ($: EngineInterface, description: string, cwd: string,
 
 const parentKey = async ($: EngineInterface, agentId: string | undefined): Promise<string | undefined> => {
   if (agentId === undefined) return undefined
-  const parent = (await read($, board)).find(one => one.agentId === agentId)
-  return parent === undefined ? undefined : keyOf(parent)
+  const parent = (await read($, board).catch(() => [] as Entry[])).find(one => one.agentId === agentId)
+  if (parent !== undefined) return keyOf(parent)
+  const record = await recordRun($, 'show', ['--agent-id', agentId])
+  return typeof record?.key === 'string' && record.key !== '' ? record.key : undefined
 }
 
 const LANE_FALLBACK = 'lane'
+const LANE_NAME_MAX = 64
 
 export const laneName = (parent: string, description: string): string => {
   if (description === parent || description.startsWith(`${parent}-`)) return description
   const word = description.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-  return `${parent}-${word === '' ? LANE_FALLBACK : word}`
+  const name = `${parent}-${word === '' ? LANE_FALLBACK : word}`
+  if (name.length <= LANE_NAME_MAX) return name
+  const head = name.slice(0, LANE_NAME_MAX)
+  const cut = name[LANE_NAME_MAX] === '-' ? head : head.slice(0, Math.max(head.lastIndexOf('-'), parent.length + 2))
+  return cut.replace(/-+$/, '')
 }
 
 export const underParent = (parent: string, key: string): string =>
@@ -1673,7 +1683,7 @@ export const underParent = (parent: string, key: string): string =>
 const claims = new Map<string, string>()
 
 const backfill = async ($: EngineInterface, row: Entry): Promise<Entry> => {
-  const claimed = await recordClaim($, row.name, row.project ?? '/')
+  const claimed = await recordClaim($, row.name, row.project ?? '/', EXISTING)
   if (claimed === undefined || 'refused' in claimed) return row
   await recordPart($, claimed.key, row.agentId)
   return { ...row, name: claimed.description, key: claimed.key }
@@ -2636,7 +2646,7 @@ export const resumeSession = async ($: EngineInterface, session: ClosedSession, 
   if (program === undefined || program === '' || conversations === undefined || conversations === '') {
     return { isResumed: false, reason: 'The switchboard was started without CLI Sessions, so it cannot bring a session back as a fork.' }
   }
-  const claim = await recordClaim($, session.description, session.cwd, await parentKey($, caller).catch(() => undefined))
+  const claim = await recordClaim($, session.description, session.cwd, EXISTING)
   if (claim !== undefined && 'refused' in claim) return { isResumed: false, reason: claim.refused }
   const claimed = claim
   const argv = [
