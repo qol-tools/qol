@@ -33,8 +33,10 @@ impl Places {
     }
 
     pub(super) fn download_dir(&self, number: u64, head: &str) -> PathBuf {
-        self.downloads
-            .join(format!("{number}-{}", super::short(head)))
+        self.downloads.join(format!(
+            "{number}-{}",
+            qol_conventions::pr_try::short_sha(head)
+        ))
     }
 
     pub(super) fn downloads(&self) -> &Path {

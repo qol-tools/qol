@@ -5,9 +5,7 @@ use std::time::Duration;
 
 use super::super::data::{request_json, request_text, REQUEST_TIMEOUT};
 use super::model::UpdatesSnapshot;
-use super::pull_request_build::{self, Build};
 
-const UPDATES_QUERY: &str = "updates";
 const NO_ANSWER: &str = "qol-tray did not answer. Try again.";
 const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -18,14 +16,14 @@ struct ActionResponse {
 }
 
 pub(super) fn load() -> anyhow::Result<UpdatesSnapshot> {
-    let route = qol_conventions::api_routes::core_query(UPDATES_QUERY);
+    let route = qol_conventions::api_routes::core_query(qol_conventions::api_routes::UPDATES_QUERY);
     request_json(Method::Get, &route, None, REQUEST_TIMEOUT)
 }
 
-pub(super) fn load_builds() -> anyhow::Result<Vec<Build>> {
+pub(super) fn load_builds() -> anyhow::Result<Vec<qol_conventions::pr_try::ListedBuild>> {
     request_json(
         Method::Get,
-        &pull_request_build::list_route(),
+        &qol_conventions::api_routes::core_query(qol_conventions::pr_try::BUILDS_QUERY),
         None,
         LIST_TIMEOUT,
     )

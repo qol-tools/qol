@@ -113,6 +113,8 @@ pub mod api_routes {
     pub const BUILD_INFO: &str = "/api/build-info";
     pub const AUTH_HEALTH: &str = "/api/auth/health";
     pub const CONFIG: &str = "/api/config";
+    pub const UPDATES_QUERY: &str = "updates";
+    pub const PLUGINS_QUERY: &str = "plugins";
 
     pub fn shortcut(id: &str) -> String {
         format!("{SHORTCUTS}/{id}")
@@ -453,7 +455,7 @@ mod tests {
             ),
             (api_routes::shortcut("abc"), "/api/shortcuts/abc"),
             (
-                api_routes::core_query("updates"),
+                api_routes::core_query(api_routes::UPDATES_QUERY),
                 "/api/core/queries/updates",
             ),
             (

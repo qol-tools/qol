@@ -22,9 +22,7 @@ use super::console_state::ConsoleState;
 use super::disk::DiskPanel;
 use super::doctor::{spawn_doctor, spawn_doctor_probe, DoctorMode, DoctorPanel, DoctorRun};
 use super::emu_panel::{ActiveSandboxRun, EmuDetail, EmuState};
-use super::feature_flags::{
-    feature_flag_brick_layout, FeatureFlagPanel, FeatureFlags, FEATURE_FLAGS,
-};
+use super::feature_flags::{feature_flag_brick_layout, FeatureFlagPanel, FeatureFlags};
 use super::filters::{filter_brick_layout, FilterState, FilterStrategy, LogFilter, ViewFilters};
 use super::log_pane::{DevLogFile, LogPane};
 use super::picker::{default_filter_layout_width, move_picker_selection, PickerMove};
@@ -384,6 +382,8 @@ pub(super) struct Dash {
     pub(super) trace_details: bool,
     pub(super) trace_rate: TraceRate,
     pub(super) features: FeatureFlags,
+    pub(super) flag_changes: Vec<(&'static str, bool)>,
+    pub(super) unmigrated_flags: Vec<String>,
     pub(super) feature_panel: FeatureFlagPanel,
     pub(super) worktree_panel: WorktreePanel,
     pub(super) worktree_selection: WorktreeSelection,
@@ -458,6 +458,8 @@ impl Dash {
             trace_details: false,
             trace_rate: TraceRate::default(),
             features: FeatureFlags::default(),
+            flag_changes: Vec::new(),
+            unmigrated_flags: Vec::new(),
             feature_panel: FeatureFlagPanel {
                 layout_width: default_filter_layout_width(),
                 ..FeatureFlagPanel::default()
@@ -576,6 +578,7 @@ impl Dash {
         self.trace_rate = state.trace_rate;
         self.keys_hidden = state.keys_hidden;
         self.features = FeatureFlags::from_ids(&state.feature_flags);
+        self.unmigrated_flags = state.unmigrated_flags;
         self.state_dirty = false;
     }
 
@@ -586,6 +589,7 @@ impl Dash {
             trace_rate: self.trace_rate,
             keys_hidden: self.keys_hidden,
             feature_flags: self.features.ids(),
+            unmigrated_flags: self.unmigrated_flags.clone(),
         }
     }
 
@@ -698,25 +702,25 @@ impl Dash {
         self.feature_panel.selected = self
             .feature_panel
             .selected
-            .min(FEATURE_FLAGS.len().saturating_sub(1));
+            .min(qol_config::feature_flags::ALL.len().saturating_sub(1));
     }
 
     pub(super) fn move_feature_flag(&mut self, direction: PickerMove) {
         let layout = feature_flag_brick_layout(self.feature_panel.layout_width);
         move_picker_selection(
             &mut self.feature_panel.selected,
-            FEATURE_FLAGS.len(),
+            qol_config::feature_flags::ALL.len(),
             direction,
             &layout,
         );
     }
 
     pub(super) fn toggle_selected_feature_flag(&mut self) {
-        let Some(def) = FEATURE_FLAGS.get(self.feature_panel.selected) else {
+        let Some(flag) = qol_config::feature_flags::ALL.get(self.feature_panel.selected) else {
             return;
         };
-        self.features.toggle(def.flag);
-        self.mark_state_dirty();
+        let on = self.features.toggle(flag);
+        self.flag_changes.push((flag.id, on));
     }
 
     pub(super) fn toggle_worktrees_panel(&mut self) {
@@ -893,6 +897,7 @@ mod tests {
             trace_rate: TraceRate::Realtime,
             keys_hidden: true,
             feature_flags: Vec::new(),
+            unmigrated_flags: Vec::new(),
         };
         dash.apply_state(state);
 

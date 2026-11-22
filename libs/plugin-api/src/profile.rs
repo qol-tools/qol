@@ -13,6 +13,10 @@ pub fn active_profile_dir(profile_root: &Path) -> PathBuf {
     profile_root.join(active_profile_name(profile_root))
 }
 
+pub fn active_core_dir(profile_root: &Path) -> PathBuf {
+    active_profile_dir(profile_root).join(CORE_SUBDIR)
+}
+
 fn profile_name_from_marker(marker: Option<String>) -> String {
     marker
         .map(|raw| raw.trim().to_owned())
@@ -40,5 +44,13 @@ mod tests {
                 "{marker:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_core_dir_sits_in_the_active_profile() {
+        assert_eq!(
+            active_core_dir(Path::new("/nowhere/profile")),
+            PathBuf::from("/nowhere/profile/default/core")
+        );
     }
 }

@@ -334,9 +334,6 @@ fn version_row(host: &UpdateTarget) -> TargetRow {
 }
 
 pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
-    if let Some(summary) = pull_request_build::busy_summary(snapshot) {
-        return summary;
-    }
     if job_running(snapshot) {
         let host_updating = matches!(
             snapshot.host.state,
@@ -364,6 +361,9 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             action: plugins_queued.then_some(RowAction::StopUpdates),
             action_label: Some("Stop"),
         };
+    }
+    if let Some(summary) = pull_request_build::busy_summary(snapshot) {
+        return summary;
     }
     if let Some(trial) = &snapshot.trial {
         return Summary {
@@ -684,6 +684,25 @@ mod tests {
             slow.connection.cause,
             Some(qol_connection_health::Cause::Waiting)
         );
+    }
+
+    #[test]
+    fn the_snapshot_carries_the_pull_request_build_gate() {
+        use super::super::pull_request_build::Job;
+        let host =
+            r#""host":{"id":"qol-tray","name":"qol-tray","current":"1.0.0","state":"up_to_date"}"#;
+        let off: UpdatesSnapshot = serde_json::from_str(&format!(
+            r#"{{"checking":false,"checks_enabled":true,"running":false,{host}}}"#
+        ))
+        .unwrap();
+        assert!(!off.can_try_pull_requests);
+        assert_eq!(off.pull_request_build, None);
+        let on: UpdatesSnapshot = serde_json::from_str(&format!(
+            r#"{{"checking":false,"checks_enabled":true,"running":false,"can_try_pull_requests":true,"pull_request_build":{{"state":"getting","number":621}},{host}}}"#
+        ))
+        .unwrap();
+        assert!(on.can_try_pull_requests);
+        assert_eq!(on.pull_request_build, Some(Job::Getting { number: 621 }));
     }
 
     fn target(id: &str, name: &str, state: TargetState) -> UpdateTarget {
@@ -1375,5 +1394,19 @@ mod tests {
         assert_eq!(failed.value, "#435");
         assert_eq!(failed.description, "gh run failed.");
         assert!(failed.attention && failed.opens);
+    }
+
+    #[test]
+    fn a_running_plugin_update_keeps_its_stop_while_a_pull_request_loads() {
+        use super::pull_request_build::Job;
+        let mut state = snapshot(
+            target("qol-tray", "qol-tray", TargetState::UpToDate),
+            vec![target("launcher", "Launcher", TargetState::Queued)],
+        );
+        state.running = true;
+        state.pull_request_build = Some(Job::Getting { number: 621 });
+        let status = summary(&state);
+        assert_eq!(status.label, "Updating plugins");
+        assert_eq!(status.action, Some(RowAction::StopUpdates));
     }
 }

@@ -100,7 +100,10 @@
       { "text": "state.json", "why": "a file name that profile sync, peers and terminal sessions give their own state" },
       { "text": "127.0.0.1", "why": "the loopback address, which plugin listeners and local servers bind for their own sockets" },
       { "text": "qol-launcher", "why": "the launcher plugin's id, which its plugin.toml owns" },
-      { "text": "1", "why": "the artifact schema version, while other code uses 1 as a count, index or version with its own meaning" }
+      { "text": "1", "why": "the artifact schema version, while other code uses 1 as a count, index or version with its own meaning" },
+      { "text": "3", "why": "the exit code of a pull request try that would restart the tray, while other code uses 3 as a count, width or key code with its own meaning" },
+      { "text": "updates", "why": "the tray's updates query name, a plain word that commands, plugins and labels use with their own meaning" },
+      { "text": "plugins", "why": "the tray's plugins query name, a plain word that folders, log filters and labels use with their own meaning" }
     ],
     "allow": []
   },

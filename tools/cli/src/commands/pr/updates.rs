@@ -3,7 +3,6 @@ use qol_runtime::local_http::{Client, Method};
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 
-const QUERY: &str = "updates";
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 const CHECK_WAIT: Duration = Duration::from_secs(90);
 const UPDATE_WAIT: Duration = Duration::from_secs(300);
@@ -101,7 +100,7 @@ fn query(client: &Client) -> Result<Snapshot> {
     let response = client
         .request(
             Method::Get,
-            &qol_conventions::api_routes::core_query(QUERY),
+            &qol_conventions::api_routes::core_query(qol_conventions::api_routes::UPDATES_QUERY),
             None,
         )
         .context("asking the tray for updates")?;

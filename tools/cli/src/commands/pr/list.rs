@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use qol_conventions::pr_try::{short_sha, ListedBuild};
+use serde::Deserialize;
 
 use super::download::gh;
 use super::platform::Build;
@@ -26,13 +27,6 @@ struct Check {
     conclusion: Option<String>,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize)]
-pub(super) struct Ready {
-    number: u64,
-    title: String,
-    head: String,
-}
-
 pub(super) fn run(repo: &str, build: &Build, json: bool) -> Result<String> {
     let listing = gh(&[
         "pr", "list", "--repo", repo, "--state", "open", "--limit", LIMIT, "--json", FIELDS,
@@ -54,15 +48,15 @@ pub(super) fn run(repo: &str, build: &Build, json: bool) -> Result<String> {
         .join("\n"))
 }
 
-fn ready(listing: &str, job: &str) -> Result<Vec<Ready>> {
+fn ready(listing: &str, job: &str) -> Result<Vec<ListedBuild>> {
     let listed: Vec<Listed> =
         serde_json::from_str(listing).context("gh pr list printed something other than JSON")?;
     Ok(listed
         .into_iter()
         .filter(|pull| !pull.is_cross_repository && built(&pull.status_check_rollup, job))
-        .map(|pull| Ready {
+        .map(|pull| ListedBuild {
             number: pull.number,
-            head: super::short(&pull.head_ref_oid).to_string(),
+            head: short_sha(&pull.head_ref_oid).to_string(),
             title: pull.title,
         })
         .collect())
@@ -115,7 +109,7 @@ mod tests {
         );
         assert_eq!(
             ready(&listing, JOB).unwrap(),
-            vec![Ready {
+            vec![ListedBuild {
                 number: 621,
                 title: "Change 621".into(),
                 head: "d3b28323f".into(),
@@ -128,18 +122,5 @@ mod tests {
         let bare = r#"[{"number":5,"title":"x","headRefOid":"abc","isCrossRepository":false}]"#;
         assert!(ready(bare, JOB).unwrap().is_empty());
         assert!(ready("not json", JOB).is_err());
-    }
-
-    #[test]
-    fn the_json_names_number_title_and_short_head() {
-        let ready = Ready {
-            number: 621,
-            title: "Load a build".into(),
-            head: "d3b28323f".into(),
-        };
-        assert_eq!(
-            serde_json::to_string(&[ready]).unwrap(),
-            r#"[{"number":621,"title":"Load a build","head":"d3b28323f"}]"#
-        );
     }
 }

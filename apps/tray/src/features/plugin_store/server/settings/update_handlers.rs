@@ -17,7 +17,6 @@ use crate::installer::trial::Trial;
 use crate::updates::jobs::{self, JobState, Operation, UpdateJob};
 use crate::version::is_newer_version;
 
-pub(super) const UPDATES_QUERY: &str = "updates";
 pub(super) const ATTENTION_QUERY: &str = "attention";
 pub(super) const HOST_PLUGIN_ID: &str = jobs::HOST_ID;
 const HOST_UPDATE: Operation = Operation::Host {
@@ -193,7 +192,9 @@ pub(super) async fn get_updates(state: AppState) -> Response {
     http_json::blocking("updates query", move || {
         let view = collect_view(&state);
         let mut payload = build_updates_payload(&view, SystemTime::now());
-        if super::pull_request_builds::enabled() {
+        if crate::features::profile::feature_flag_enabled(
+            &qol_config::feature_flags::PULL_REQUEST_BUILDS,
+        ) {
             payload.can_try_pull_requests = true;
             payload.pull_request_build = super::pull_request_builds::current();
         }
@@ -751,7 +752,6 @@ mod tests {
 
     #[test]
     fn wire_query_names_are_stable() {
-        assert_eq!(UPDATES_QUERY, "updates");
         assert_eq!(ATTENTION_QUERY, "attention");
     }
 

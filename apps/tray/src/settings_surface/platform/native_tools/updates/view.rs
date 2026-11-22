@@ -30,7 +30,7 @@ use super::model::{
     can_check, page, RowAction, Summary, SummaryDot, TargetRow, TargetState, UpdatesSnapshot,
     ValueTone,
 };
-use super::pull_request_build::{self, Build, BuildRow, CardRow, Job};
+use super::pull_request_build::{self, BuildRow, CardRow, Job};
 
 const MAX_VISIBLE: usize = 10;
 const CARD_DEPTH: usize = 1;
@@ -60,7 +60,7 @@ enum PageRow {
 type Fold = Option<(usize, String)>;
 
 struct Card {
-    builds: Option<Result<Vec<Build>, String>>,
+    builds: Option<Result<Vec<qol_conventions::pr_try::ListedBuild>, String>>,
     selected: usize,
     list: ScrollList,
     list_height: ListHeight,
@@ -75,10 +75,37 @@ impl Card {
             list_height: ListHeight::default(),
         }
     }
+}
 
-    fn ready(&self) -> bool {
-        self.builds.is_some()
+fn rows_for(snapshot: &UpdatesSnapshot, shown: &BTreeSet<String>) -> (Vec<PageRow>, Fold) {
+    let model = page(snapshot, shown);
+    let mut rows = vec![
+        PageRow::Header {
+            title: "Status".to_string(),
+            detail: "What the last check found.",
+        },
+        PageRow::Summary(model.summary),
+        PageRow::Check(model.check),
+        PageRow::Header {
+            title: qol_conventions::artifact::TRAY_PACKAGE_NAME.to_string(),
+            detail: "The tray itself.",
+        },
+        PageRow::Host(model.host),
+        PageRow::Header {
+            title: "Plugins".to_string(),
+            detail: "Everything you installed.",
+        },
+    ];
+    rows.extend(model.plugins.into_iter().map(PageRow::Plugin));
+    let fold = model.fold.map(|text| (rows.len() - 1, text));
+    if snapshot.can_try_pull_requests {
+        rows.push(PageRow::Header {
+            title: pull_request_build::GROUP.to_string(),
+            detail: pull_request_build::GROUP_DETAIL,
+        });
+        rows.push(PageRow::PullRequestBuild(pull_request_build::row(snapshot)));
     }
+    (rows, fold)
 }
 
 impl PageRow {
@@ -273,34 +300,7 @@ impl UpdatesView {
             return (Vec::new(), None);
         };
         let shown: BTreeSet<String> = self.visited.keys().cloned().collect();
-        let model = page(snapshot, &shown);
-        let mut rows = vec![
-            PageRow::Header {
-                title: "Status".to_string(),
-                detail: "What the last check found.",
-            },
-            PageRow::Summary(model.summary),
-            PageRow::Check(model.check),
-            PageRow::Header {
-                title: "qol-tray".to_string(),
-                detail: "The tray itself.",
-            },
-            PageRow::Host(model.host),
-            PageRow::Header {
-                title: "Plugins".to_string(),
-                detail: "Everything you installed.",
-            },
-        ];
-        rows.extend(model.plugins.into_iter().map(PageRow::Plugin));
-        let fold = model.fold.map(|text| (rows.len() - 1, text));
-        if snapshot.can_try_pull_requests {
-            rows.push(PageRow::Header {
-                title: pull_request_build::GROUP.to_string(),
-                detail: pull_request_build::GROUP_DETAIL,
-            });
-            rows.push(PageRow::PullRequestBuild(pull_request_build::row(snapshot)));
-        }
-        (rows, fold)
+        rows_for(snapshot, &shown)
     }
 
     fn needs_tray(&self) -> Option<u64> {
@@ -389,7 +389,11 @@ impl UpdatesView {
             return;
         };
         let total = self.card_rows(card).len();
-        let Some(card) = self.card.as_mut().filter(|card| card.ready() && total > 0) else {
+        let Some(card) = self
+            .card
+            .as_mut()
+            .filter(|card| card.builds.is_some() && total > 0)
+        else {
             return;
         };
         let indices = (0..total).collect::<Vec<_>>();
@@ -399,7 +403,7 @@ impl UpdatesView {
     }
 
     fn choose(&mut self, cx: &mut Context<Self>) {
-        let Some(card) = self.card.as_ref().filter(|card| card.ready()) else {
+        let Some(card) = self.card.as_ref().filter(|card| card.builds.is_some()) else {
             return;
         };
         let action = self
@@ -994,7 +998,7 @@ impl CustomSettingsBreadcrumbs for UpdatesView {
                 .card_rows(card)
                 .get(card.selected)
                 .and_then(|row| row.verb)
-                .filter(|_| card.ready());
+                .filter(|_| card.builds.is_some());
             if let Some(verb) = verb {
                 left.push(SettingsHint::new(Key::ENTER, verb));
             }
@@ -1096,7 +1100,11 @@ impl Render for UpdatesView {
 fn row_height(row: &PageRow, folded: bool) -> f32 {
     let height = match row {
         PageRow::Header { .. } => SettingsGroupHeader::height_with_detail(),
-        _ => qol_theme::HEIGHT_SETTING_ROW,
+        PageRow::Summary(_)
+        | PageRow::Check(_)
+        | PageRow::Host(_)
+        | PageRow::Plugin(_)
+        | PageRow::PullRequestBuild(_) => qol_theme::HEIGHT_SETTING_ROW,
     };
     match folded {
         true => height + SETTINGS_LIST_GAP + qol_theme::HEIGHT_CONTROL,
@@ -1159,9 +1167,43 @@ fn value_tone(tone: ValueTone) -> SettingsValueTone {
 
 #[cfg(test)]
 mod tests {
-    use super::super::model::{Summary, TargetRow, TargetState, ValueTone};
-    use super::{fade_opacity, finished, navigable, nearest_navigable, PageRow, Selection};
+    use super::super::model::{Summary, TargetRow, TargetState, UpdatesSnapshot, ValueTone};
+    use super::{
+        fade_opacity, finished, navigable, nearest_navigable, rows_for, PageRow, Selection,
+    };
+    use std::collections::BTreeSet;
     use std::time::Duration;
+
+    fn snapshot(can_try_pull_requests: bool) -> UpdatesSnapshot {
+        let target = |id: &str, state: &str| {
+            format!(
+                r#"{{"id":"{id}","name":"{id}","current":"1.0.0","latest":"1.1.0","state":"{state}"}}"#
+            )
+        };
+        serde_json::from_str(&format!(
+            r#"{{"checking":false,"checks_enabled":true,"running":false,"last_checked_secs":60,"can_try_pull_requests":{can_try_pull_requests},"host":{},"plugins":[{},{}]}}"#,
+            target("qol-tray", "up_to_date"),
+            target("launcher", "available"),
+            target("lights", "up_to_date"),
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_development_rows_follow_the_plugins_only_while_the_flag_is_on() {
+        let (off, off_fold) = rows_for(&snapshot(false), &BTreeSet::new());
+        let (on, on_fold) = rows_for(&snapshot(true), &BTreeSet::new());
+        assert_eq!(on.len(), off.len() + 2);
+        assert!(matches!(off.last(), Some(PageRow::Plugin(row)) if row.id == "launcher"));
+        assert!(matches!(
+            &on[off.len()],
+            PageRow::Header { title, .. } if title == "Development"
+        ));
+        assert!(matches!(on.last(), Some(PageRow::PullRequestBuild(_))));
+        let anchor = off.len() - 1;
+        assert_eq!(off_fold.as_ref().map(|fold| fold.0), Some(anchor));
+        assert_eq!(on_fold, off_fold);
+    }
 
     #[test]
     fn only_rows_with_nothing_left_to_do_count_as_finished() {

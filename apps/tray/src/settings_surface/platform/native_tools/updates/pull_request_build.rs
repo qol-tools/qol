@@ -1,11 +1,11 @@
-use qol_conventions::pr_try;
+use qol_conventions::pr_try::{self, ListedBuild};
 use serde::Deserialize;
 
 use super::model::{RowAction, Summary, Trial, UpdatesSnapshot};
 
 pub(super) const TITLE: &str = "Pull request build";
 pub(super) const GROUP: &str = "Development";
-pub(super) const GROUP_DETAIL: &str = "Shown where the qol command is installed.";
+pub(super) const GROUP_DETAIL: &str = "Behind a feature flag.";
 const OFF: &str = "Off";
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -15,13 +15,6 @@ pub(super) enum Job {
     Ending,
     NeedsTray { number: u64 },
     Failed { message: String },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub(super) struct Build {
-    pub(super) number: u64,
-    pub(super) title: String,
-    pub(super) head: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,10 +51,6 @@ pub(super) fn checks_resume(snapshot: &UpdatesSnapshot) -> &'static str {
     }
 }
 
-pub(super) fn list_route() -> String {
-    qol_conventions::api_routes::core_query(pr_try::BUILDS_QUERY)
-}
-
 pub(super) fn row(snapshot: &UpdatesSnapshot) -> BuildRow {
     let trying = snapshot.trial.as_ref().map(|trial| trial.pull_request);
     let current = trying.map_or_else(|| OFF.to_string(), |number| format!("#{number}"));
@@ -89,7 +78,7 @@ pub(super) fn row(snapshot: &UpdatesSnapshot) -> BuildRow {
         },
         Some(Job::NeedsTray { number }) => BuildRow {
             opens: false,
-            ..idle(format!("#{number} also replaces qol-tray."))
+            ..idle(format!("Trying #{number} restarts qol-tray."))
         },
         Some(Job::Failed { message }) => BuildRow {
             attention: true,
@@ -132,13 +121,17 @@ pub(super) fn needs_tray(snapshot: &UpdatesSnapshot) -> Option<u64> {
 }
 
 pub(super) fn tray_question(number: u64) -> String {
-    format!(
-        "#{number} also replaces qol-tray. qol restarts on its build and the switchboard closes."
-    )
+    format!("Trying #{number} restarts qol-tray, and the switchboard closes.")
 }
 
-pub(super) fn card_rows(builds: &[Build], trial: Option<&Trial>) -> Vec<CardRow> {
+pub(super) fn card_rows(builds: &[ListedBuild], trial: Option<&Trial>) -> Vec<CardRow> {
     let trying = trial.map(|trial| trial.pull_request);
+    let runs = |build: &ListedBuild| {
+        trial.is_some_and(|trial| {
+            trial.pull_request == build.number
+                && pr_try::short_sha(&trial.head) == pr_try::short_sha(&build.head)
+        })
+    };
     let mut rows = vec![CardRow {
         label: OFF.to_string(),
         detail: "The installed version runs.".to_string(),
@@ -146,11 +139,7 @@ pub(super) fn card_rows(builds: &[Build], trial: Option<&Trial>) -> Vec<CardRow>
         action: trying.map(|_| RowAction::EndTry),
         verb: trying.map(|_| "choose"),
     }];
-    if let Some(trial) = trial.filter(|trial| {
-        !builds
-            .iter()
-            .any(|build| build.number == trial.pull_request)
-    }) {
+    if let Some(trial) = trial.filter(|_| !builds.iter().any(runs)) {
         rows.push(CardRow {
             label: format!("#{}", trial.pull_request),
             detail: built_from(&trial.head),
@@ -160,7 +149,7 @@ pub(super) fn card_rows(builds: &[Build], trial: Option<&Trial>) -> Vec<CardRow>
         });
     }
     rows.extend(builds.iter().map(|build| {
-        let running = trying == Some(build.number);
+        let running = runs(build);
         CardRow {
             label: format!("#{} {}", build.number, build.title),
             detail: built_from(&build.head),
@@ -207,8 +196,8 @@ fn sentence(message: &str) -> String {
 mod tests {
     use super::*;
 
-    fn build(number: u64) -> Build {
-        Build {
+    fn build(number: u64) -> ListedBuild {
+        ListedBuild {
             number,
             title: format!("Change {number}"),
             head: "d3b2832".to_string(),
@@ -247,6 +236,24 @@ mod tests {
     }
 
     #[test]
+    fn a_newer_build_of_the_running_pull_request_stays_tryable() {
+        let tried = Trial {
+            pull_request: 620,
+            head: "0aa1bb2cc3".to_string(),
+        };
+        let rows = card_rows(&[build(621), build(620)], Some(&tried));
+        let labels: Vec<_> = rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["Off", "#620", "#621 Change 621", "#620 Change 620"]
+        );
+        assert!(rows[1].running);
+        assert_eq!(rows[1].detail, "Built from 0aa1bb2cc3");
+        assert!(!rows[3].running);
+        assert_eq!(rows[3].action, Some(RowAction::TryPullRequest(620)));
+    }
+
+    #[test]
     fn a_running_build_that_left_the_list_still_shows() {
         let tried = trial(600);
         let rows = card_rows(&[build(621)], Some(&tried));
@@ -280,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn jobs_and_builds_parse_from_the_tray() {
+    fn jobs_parse_from_the_tray() {
         let parse = |json: &str| serde_json::from_str::<Job>(json).unwrap();
         assert_eq!(
             parse(r#"{"state":"getting","number":621}"#),
@@ -297,24 +304,13 @@ mod tests {
                 message: "gh failed".to_string()
             }
         );
-        assert_eq!(
-            serde_json::from_str::<Vec<Build>>(
-                r#"[{"number":621,"title":"Load a build","head":"d3b2832"}]"#
-            )
-            .unwrap(),
-            vec![Build {
-                number: 621,
-                title: "Load a build".to_string(),
-                head: "d3b2832".to_string(),
-            }]
-        );
     }
 
     #[test]
     fn the_tray_question_names_the_pull_request() {
         assert_eq!(
             tray_question(621),
-            "#621 also replaces qol-tray. qol restarts on its build and the switchboard closes."
+            "Trying #621 restarts qol-tray, and the switchboard closes."
         );
     }
 

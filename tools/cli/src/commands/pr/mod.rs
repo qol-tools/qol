@@ -11,7 +11,7 @@ mod updates;
 
 use anyhow::{bail, Context, Result};
 use install::RecordFile;
-use qol_conventions::pr_try::KEEP_TRAY_FLAG;
+use qol_conventions::pr_try::{short_sha, CARRIES_TRAY_EXIT_CODE, KEEP_TRAY_FLAG};
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 pub(crate) const USAGE: &str =
     "qol pr list | qol pr try <number> [--keep-tray] | qol pr off | qol pr approve [number]";
 const REPO: &str = "qol-tools/qol";
-const EXIT_CARRIES_TRAY: i32 = 3;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Request {
@@ -29,27 +28,50 @@ enum Request {
     Approve(Option<u64>),
 }
 
-#[derive(Debug)]
-struct CarriesTray(u64);
+#[derive(Debug, PartialEq, Eq)]
+enum RestartsTray {
+    Carries(u64),
+    Running { tried: u64, running: u64 },
+}
 
-impl fmt::Display for CarriesTray {
+impl fmt::Display for RestartsTray {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "pull request #{} also replaces qol-tray, so nothing was installed; `qol pr try {}` without --keep-tray restarts the tray on its build",
-            self.0, self.0
-        )
+        match self {
+            Self::Carries(number) => write!(
+                formatter,
+                "pull request #{number} also replaces qol-tray, so nothing was installed; `qol pr try {number}` without --keep-tray restarts the tray on its build"
+            ),
+            Self::Running { tried, running } => write!(
+                formatter,
+                "the tray runs pull request #{running}'s build, so nothing was installed; `qol pr try {tried}` without --keep-tray restarts the tray"
+            ),
+        }
     }
 }
 
-impl std::error::Error for CarriesTray {}
+impl std::error::Error for RestartsTray {}
 
 pub(crate) fn exit_code(error: &anyhow::Error) -> i32 {
-    if error.downcast_ref::<CarriesTray>().is_some() {
-        EXIT_CARRIES_TRAY
+    if error.downcast_ref::<RestartsTray>().is_some() {
+        CARRIES_TRAY_EXIT_CODE
     } else {
         1
     }
+}
+
+fn running_tray_refusal(
+    number: u64,
+    keep_tray: bool,
+    state: &install::State,
+) -> Option<RestartsTray> {
+    state
+        .tray
+        .as_ref()
+        .filter(|_| keep_tray)
+        .map(|_| RestartsTray::Running {
+            tried: number,
+            running: state.pull_request.unwrap_or(number),
+        })
 }
 
 pub(crate) fn run(args: &[OsString], json: bool) -> Result<()> {
@@ -117,6 +139,11 @@ fn try_build(
     platform: &platform::Build,
     places: &install::Places,
 ) -> Result<()> {
+    if let Some(refusal) =
+        running_tray_refusal(number, keep_tray, &install::State::load(&places.state)?)
+    {
+        return Err(refusal.into());
+    }
     let pull = download::pull_request(REPO, number)?;
     let head = pull.head_ref_oid.clone();
     let run = download::live_test_run(REPO, &pull, platform)?;
@@ -125,7 +152,7 @@ fn try_build(
     let build = manifest::read(&dir.join(manifest::FILE))?;
     build.check(number, &head, platform.target)?;
     if keep_tray && !build.tray.is_empty() {
-        return Err(CarriesTray(number).into());
+        return Err(RestartsTray::Carries(number).into());
     }
     let tray_build = if build.tray.is_empty() {
         None
@@ -146,7 +173,7 @@ fn try_build(
         state = install::State::load(&places.state)?;
     }
 
-    println!("pull request #{number} at {}", short(&head));
+    println!("pull request #{number} at {}", short_sha(&head));
     if tray_build.is_none() {
         if let Some(previous) = state.tray.clone() {
             let put_back = tray::put_back(&previous, &installed_tray(&state)?)?;
@@ -284,10 +311,6 @@ fn folder(path: &Path) -> Result<&Path> {
         .with_context(|| format!("{} has no folder", path.display()))
 }
 
-fn short(sha: &str) -> &str {
-    qol_conventions::pr_try::short_sha(sha)
-}
-
 fn plain_name(value: &str) -> bool {
     !value.is_empty()
         && value != "."
@@ -343,11 +366,46 @@ mod tests {
     }
 
     #[test]
-    fn only_a_build_that_carries_the_tray_exits_with_its_own_code() {
-        assert_eq!(exit_code(&CarriesTray(412).into()), EXIT_CARRIES_TRAY);
+    fn only_a_try_that_restarts_the_tray_exits_with_its_own_code() {
+        let carries = RestartsTray::Carries(412);
+        let running = RestartsTray::Running {
+            tried: 413,
+            running: 412,
+        };
+        assert!(carries.to_string().contains("#412 also replaces qol-tray"));
+        assert!(running
+            .to_string()
+            .contains("runs pull request #412's build"));
+        assert_eq!(exit_code(&carries.into()), CARRIES_TRAY_EXIT_CODE);
+        assert_eq!(exit_code(&running.into()), CARRIES_TRAY_EXIT_CODE);
         assert_eq!(exit_code(&anyhow::anyhow!("gh failed")), 1);
-        let message = CarriesTray(412).to_string();
-        assert!(message.contains("#412 also replaces qol-tray"), "{message}");
+    }
+
+    #[test]
+    fn keep_tray_refuses_while_a_tray_build_runs_whichever_pull_request_it_came_from() {
+        let running = install::State {
+            pull_request: Some(412),
+            tray: Some("/t/qol-tray".into()),
+            ..install::State::default()
+        };
+        let plugins_only = install::State {
+            pull_request: Some(412),
+            ..install::State::default()
+        };
+        let refused = |tried| {
+            Some(RestartsTray::Running {
+                tried,
+                running: 412,
+            })
+        };
+        assert_eq!(running_tray_refusal(413, true, &running), refused(413));
+        assert_eq!(running_tray_refusal(412, true, &running), refused(412));
+        assert_eq!(running_tray_refusal(413, false, &running), None);
+        assert_eq!(running_tray_refusal(413, true, &plugins_only), None);
+        assert_eq!(
+            running_tray_refusal(413, true, &install::State::default()),
+            None
+        );
     }
 
     #[test]

@@ -14,8 +14,6 @@ use crate::features::plugin_store::source::{builtin_sources, default_source_repo
 use crate::features::plugin_store::user_sources;
 use crate::updates::jobs::{self, JobState, Operation, UpdateJob};
 
-pub(super) const PLUGINS_QUERY: &str = "plugins";
-
 type HttpResult<T> = Result<T, Box<Response>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -270,7 +268,7 @@ fn collect_payload(state: &AppState) -> HttpResult<PluginsPayload> {
         .collect();
     Ok(build_payload(
         catalog.revalidating,
-        user_sources::enabled(),
+        crate::features::profile::feature_flag_enabled(&qol_config::feature_flags::PLUGIN_SOURCES),
         sources,
         views,
     ))
@@ -362,11 +360,6 @@ mod tests {
             reason: reason.map(str::to_string),
             order,
         })
-    }
-
-    #[test]
-    fn wire_query_name_is_stable() {
-        assert_eq!(PLUGINS_QUERY, "plugins");
     }
 
     #[test]
