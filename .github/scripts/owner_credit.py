@@ -2,10 +2,11 @@
 """Refuse a commit that GitHub credits to the agent account and not to the owner.
 
 The agent account opens the pull requests, so the squash commit the merge queue
-lands is its commit. The owner is credited only through the Co-authored-by line
-GitHub adds for each author of the pull request's commits. A pull request run
-predicts the credit from those authors; a merge queue run reads the accounts
-GitHub credits on the commit that lands.
+lands is its commit. The owner is credited only through a Co-authored-by line:
+the one .githooks/prepare-commit-msg writes into each commit the agent account
+authors, which GitHub carries into the squash beside every commit author. A pull
+request run predicts the credit from the authors and co-authors of its commits;
+a merge queue run reads the accounts GitHub credits on the commit that lands.
 """
 
 import os
@@ -26,7 +27,7 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
       author { login }
       commits(first: 100, after: $after) {
         pageInfo { hasNextPage endCursor }
-        nodes { commit { author { user { login } } } }
+        nodes { commit { authors(first: 100) { nodes { user { login } } } } }
       }
     }
   }
@@ -62,7 +63,8 @@ def pull_credit(pages: list[dict]) -> list[str]:
     nodes = []
     for page in pages:
         nodes.append({"user": page.get("author")})
-        nodes.extend(node["commit"]["author"] for node in page["commits"]["nodes"])
+        for node in page["commits"]["nodes"]:
+            nodes.extend(node["commit"]["authors"]["nodes"])
     return logins(nodes)
 
 
@@ -79,9 +81,9 @@ def verdict(credited: list[str], landing: bool) -> tuple[bool, str]:
     else:
         lead = f"this pull request would land credited to {shown}, without {OWNER}"
     fix = (
-        f"Push a commit whose author email belongs to the {OWNER} account "
-        "(`git commit --allow-empty` is enough), so the squash commit names "
-        f"{OWNER} as co-author."
+        "Merge main into the branch with `core.hooksPath` set to `.githooks`: its "
+        f"prepare-commit-msg hook adds the Co-authored-by line for {OWNER} to every "
+        f"commit {AGENT} authors, and the squash commit carries it."
     )
     return False, f"{lead}. {fix}"
 

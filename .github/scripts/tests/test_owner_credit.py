@@ -23,11 +23,12 @@ def user(login):
 
 
 def page(author, commit_authors, cursor=None):
+    commits = [names if isinstance(names, list) else [names] for names in commit_authors]
     return {
         "author": {"login": author} if author else None,
         "commits": {
             "pageInfo": {"hasNextPage": cursor is not None, "endCursor": cursor},
-            "nodes": [{"commit": {"author": user(login)}} for login in commit_authors],
+            "nodes": [{"commit": {"authors": {"nodes": [user(login) for login in names]}}} for names in commits],
         },
     }
 
@@ -65,8 +66,11 @@ class RuleTests(unittest.TestCase):
         nodes = [user("kmrh47-agents"), user(None), None, {}, user("KMRH47"), user("kmrh47-agents")]
         self.assertEqual(credit.logins(nodes), ["kmrh47-agents", "KMRH47"])
 
-    def test_a_pull_request_counts_its_author_and_every_commit_author(self):
+    def test_a_pull_request_counts_its_author_and_every_commit_author_and_co_author(self):
         cases = [
+            ("agent commits the hook signed", [page("kmrh47-agents", [["kmrh47-agents", "KMRH47"], ["kmrh47-agents", "KMRH47"]])], ["kmrh47-agents", "KMRH47"]),
+            ("one signed commit among unsigned ones", [page("kmrh47-agents", ["kmrh47-agents", ["kmrh47-agents", "KMRH47"], "kmrh47-agents"])], ["kmrh47-agents", "KMRH47"]),
+            ("a co-author GitHub cannot place", [page("kmrh47-agents", [["kmrh47-agents", None]])], ["kmrh47-agents"]),
             ("agent pull request, owner commits", [page("kmrh47-agents", ["KMRH47", "KMRH47"])], ["kmrh47-agents", "KMRH47"]),
             ("agent pull request, agent commits", [page("kmrh47-agents", ["kmrh47-agents"])], ["kmrh47-agents"]),
             ("bot pull request the agent pushed to", [page("dependabot", ["dependabot[bot]", "kmrh47-agents"])], ["dependabot", "dependabot[bot]", "kmrh47-agents"]),
@@ -100,7 +104,8 @@ class RuleTests(unittest.TestCase):
                 passed, text = credit.verdict(["kmrh47-agents"], landing=landing)
                 self.assertFalse(passed)
                 self.assertTrue(text.startswith(f"{lead} kmrh47-agents, without KMRH47. "))
-                self.assertIn("git commit --allow-empty", text)
+                self.assertIn("Merge main into the branch", text)
+                self.assertIn(".githooks", text)
 
 
 class MainTests(unittest.TestCase):
@@ -130,6 +135,7 @@ class MainTests(unittest.TestCase):
     def test_a_pull_request_run_judges_the_pull_request(self):
         cases = [
             ("owner commits", pull_answer(page("kmrh47-agents", ["KMRH47"])), 0, "credited: kmrh47-agents, KMRH47\n"),
+            ("agent commits the hook signed", pull_answer(page("kmrh47-agents", [["kmrh47-agents", "KMRH47"]])), 0, "credited: kmrh47-agents, KMRH47\n"),
             ("agent commits only", pull_answer(page("kmrh47-agents", ["kmrh47-agents"])), 1, "::error::this pull request would land credited to kmrh47-agents, without KMRH47."),
             ("owner pull request", pull_answer(page("KMRH47", ["KMRH47"])), 0, "credited: KMRH47\n"),
             ("outside pull request", pull_answer(page("someone", ["someone"])), 0, "credited: someone\n"),
