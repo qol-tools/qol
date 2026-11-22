@@ -10,6 +10,8 @@ use std::time::Duration;
 const SERIALS_FILE: &str = "plugin-index-serials.json";
 const KEPT_DIR: &str = "plugin-index-kept";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const INDEX_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const INDEX_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -88,7 +90,12 @@ async fn from_registry(
 }
 
 pub(super) fn http_client() -> reqwest::Client {
-    build_client(reqwest::Client::builder().timeout(REQUEST_TIMEOUT))
+    build_client(
+        reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(INDEX_CONNECT_TIMEOUT)
+            .read_timeout(INDEX_READ_TIMEOUT),
+    )
 }
 
 pub(crate) fn blob_client() -> reqwest::Client {
