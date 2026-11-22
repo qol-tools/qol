@@ -30,6 +30,7 @@ $ qol agents setup-path --json
 
 - It prints the path whether or not the file exists yet, and exits 0.
 - It exits non-zero when it is given an argument or the qol config folder cannot be found.
+- A `qol` too old to know the verb exits 1 with an error on stderr that starts with ``unknown qol agents subcommand `setup-path` ``, or exits 64 for `--json`.
 - A program that finds no `qol`, or a `qol` too old to know the verb, keeps whatever it did before this file existed.
 
 ## Schema, version 1
@@ -73,7 +74,7 @@ Sync rewrites a merged file with its keys sorted, so no reader may depend on the
 | `home` | qol, account-profiles | The account's home folder (`CLAUDE_CONFIG_DIR` for claude). Write `~/` and the rest with forward slashes; an absolute path fits only one system, so writers refuse one. |
 | `key` | qol, account-profiles | Optional. The name of the keyring entry that holds the account's token, never the token. Without it the account uses its own `/login`. |
 | `token_env` | qol, account-profiles | Optional. The variable the key's value is exported as; `CLAUDE_CODE_OAUTH_TOKEN` when absent, `ANTHROPIC_API_KEY` for an API key account. |
-| `purpose` | account-profiles | A line describing the account. |
+| `purpose` | account-profiles | Optional. A line describing the account; account-profiles asks for it when a person adds an account, and every reader accepts an account without one. |
 | `marketplaces` | account-profiles | The marketplace names the account uses; today the kitty marketplace refresh helper reads them. |
 | `launch.<harness>.env`, `.args` | account-profiles | Variables and argument words every launch of that harness gets. Sessions that qol starts do not get them yet. |
 
