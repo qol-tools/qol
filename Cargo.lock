@@ -7666,7 +7666,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.149.2"
+version = "3.149.3"
 dependencies = [
  "anyhow",
  "axum",
