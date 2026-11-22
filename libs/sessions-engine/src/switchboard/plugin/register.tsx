@@ -1471,17 +1471,21 @@ const runSb = async ($: EngineInterface, text: string): Promise<string> => {
   return ran.stdout.trim() === '' ? `${typed}: done.` : oneLine(ran.stdout)
 }
 
-const recordRun = async ($: EngineInterface, verb: string, args: readonly string[]): Promise<Record<string, unknown> | undefined> => {
+const recordExec = async ($: EngineInterface, verb: string, args: readonly string[]): Promise<{ exitCode: number; value: Record<string, unknown> } | undefined> => {
   try {
     const program = await recordProgram($)
     if (program === undefined) return undefined
     const ran = await $.process.run([program, 'sessions', 'record', verb, ...args], { cwd: folderOf(program), timeoutMs: RECORD_TIMEOUT_MS })
-    if (ran.exitCode !== 0) return undefined
     const parsed: unknown = JSON.parse(ran.stdout)
-    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : undefined
+    return typeof parsed === 'object' && parsed !== null ? { exitCode: ran.exitCode, value: parsed as Record<string, unknown> } : undefined
   } catch {
     return undefined
   }
+}
+
+const recordRun = async ($: EngineInterface, verb: string, args: readonly string[]): Promise<Record<string, unknown> | undefined> => {
+  const ran = await recordExec($, verb, args)
+  return ran?.exitCode === 0 ? ran.value : undefined
 }
 
 const subagentPath = async ($: EngineInterface, agentId: string): Promise<string | undefined> => {
@@ -1636,19 +1640,41 @@ const recordPart = async ($: EngineInterface, key: string, agentId: string): Pro
 }
 
 type Claimed = { key: string; description: string }
+type Refused = { refused: string }
 
-const recordClaim = async ($: EngineInterface, description: string, cwd: string): Promise<Claimed | undefined> => {
-  const claimed = await recordRun($, 'claim', ['--description', description, '--cwd', cwd])
+const CLAIM_REFUSED = 4
+
+const recordClaim = async ($: EngineInterface, description: string, cwd: string, parent?: string): Promise<Claimed | Refused | undefined> => {
+  const ran = await recordExec($, 'claim', ['--description', description, '--cwd', cwd, ...(parent === undefined ? [] : ['--parent', parent])])
+  if (ran?.exitCode === CLAIM_REFUSED && typeof ran.value.error === 'string') return { refused: ran.value.error }
+  const claimed = ran?.exitCode === 0 ? ran.value : undefined
   return typeof claimed?.key === 'string' && claimed.key !== '' && typeof claimed.description === 'string' && claimed.description !== ''
     ? { key: claimed.key, description: claimed.description }
     : undefined
 }
 
+const parentKey = async ($: EngineInterface, agentId: string | undefined): Promise<string | undefined> => {
+  if (agentId === undefined) return undefined
+  const parent = (await read($, board)).find(one => one.agentId === agentId)
+  return parent === undefined ? undefined : keyOf(parent)
+}
+
+const LANE_FALLBACK = 'lane'
+
+export const laneName = (parent: string, description: string): string => {
+  if (description === parent || description.startsWith(`${parent}-`)) return description
+  const word = description.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return `${parent}-${word === '' ? LANE_FALLBACK : word}`
+}
+
+export const underParent = (parent: string, key: string): string =>
+  key.length > parent.length + 1 && key.startsWith(`${parent}-`) ? key.slice(parent.length + 1) : key
+
 const claims = new Map<string, string>()
 
 const backfill = async ($: EngineInterface, row: Entry): Promise<Entry> => {
   const claimed = await recordClaim($, row.name, row.project ?? '/')
-  if (claimed === undefined) return row
+  if (claimed === undefined || 'refused' in claimed) return row
   await recordPart($, claimed.key, row.agentId)
   return { ...row, name: claimed.description, key: claimed.key }
 }
@@ -2610,7 +2636,9 @@ export const resumeSession = async ($: EngineInterface, session: ClosedSession, 
   if (program === undefined || program === '' || conversations === undefined || conversations === '') {
     return { isResumed: false, reason: 'The switchboard was started without CLI Sessions, so it cannot bring a session back as a fork.' }
   }
-  const claimed = await recordClaim($, session.description, session.cwd)
+  const claim = await recordClaim($, session.description, session.cwd, await parentKey($, caller).catch(() => undefined))
+  if (claim !== undefined && 'refused' in claim) return { isResumed: false, reason: claim.refused }
+  const claimed = claim
   const argv = [
     program, 'sessions', 'switchboard', 'adopt', '--conversations', conversations, '--conversation', await $.session.id(),
     '--transcript', session.transcript, '--cwd', session.cwd, '--description', claimed?.description ?? session.description,
@@ -2988,7 +3016,8 @@ export const register: Register = on => {
     if (e.subagentType === FORK) return next(e)
     if (e.parentAgentId === undefined) return { deny: FORKS_ONLY }
     if (e.resume !== undefined) return { deny: FRESH_LANES_ONLY }
-    return next(e)
+    const parent = await parentKey($, e.parentAgentId).catch(() => undefined)
+    return next(parent === undefined ? e : { ...e, description: laneName(parent, e.description) })
   })
 
   on('agent.spawn', { subagentType: FORK }, async ($, e, next) => {
@@ -3006,7 +3035,8 @@ export const register: Register = on => {
     const prompt = withLauncher(e.prompt, e.parentAgentId)
     const model = modelLineOf(e.prompt)
     const spawnAs = { ...e, cwd, prompt, ...(model === undefined ? {} : { model }) }
-    const claimed = await recordClaim($, e.description, cwd)
+    const claimed = await recordClaim($, e.description, cwd, await parentKey($, e.parentAgentId).catch(() => undefined))
+    if (claimed !== undefined && 'refused' in claimed) return { deny: claimed.refused }
     if (claimed === undefined) {
       if ((await recordProgram($)) !== undefined) await logEvent($, { fork: keyName(e.description), said: 'The session record could not be claimed for this fork.' }).catch(() => undefined)
       return next(spawnAs)
@@ -4113,7 +4143,8 @@ export const register: Register = on => {
       const subs = subsOf(entry).sort((a, b) => a.at - b.at)
       const resting = subs.filter(isAtRest)
       const shown = isIdleShown ? subs : subs.filter(sub => !resting.includes(sub))
-      const subWidth = Math.min(FORK_NAME_MAX, Math.max(4, ...shown.map(sub => keyName(sub.name).length))) + 2
+      const subName = (sub: Entry) => underParent(keyOf(entry), keyName(sub.name))
+      const subWidth = Math.min(FORK_NAME_MAX, Math.max(4, ...shown.map(sub => subName(sub).length))) + 2
       const stateWidth = Math.min(FORK_STATE_WIDTH, Math.max(4, ...shown.map(sub => labelOf(sub).length)) + 2)
       const newest = ledger.find(pull => resting.some(sub => sub.agentId === pull.agentId) && stateOfPull(pull) === 'merged')
       return [
@@ -4124,7 +4155,7 @@ export const register: Register = on => {
               <Button key={`sub-${sub.agentId}`} plain {...(letter === undefined ? {} : { hotkey: letter })} onPress={open(sub)}>
                 {letter === undefined ? '   ' : ''}
                 {dot(sub)} {mark(sub)}
-                <Text bold={isLoud(sub)}>{cell(keyName(sub.name), subWidth)}</Text>
+                <Text bold={isLoud(sub)}>{cell(subName(sub), subWidth)}</Text>
                 {stateText(sub, cell(labelOf(sub), stateWidth))}
                 <Text dimColor>{cell(age(now - sub.at), SINCE_WIDTH)}</Text>
               </Button>

@@ -993,7 +993,11 @@ impl McpSessionServer {
             return self.tool_spawn_lanes(&arguments, cancel);
         }
         let cwd = string_argument(&arguments, "cwd")?;
-        let key = string_argument(&arguments, "key")?;
+        let key = super::lineage::child_key(
+            self.caller_key().as_deref(),
+            string_argument(&arguments, "key")?,
+        )?;
+        let key = key.as_str();
         if arguments.get("background").is_some() {
             return Err("session_spawn takes no `background`: background is the only mode and every spawn embeds its task in the launch. Drop that argument.".to_owned());
         }
@@ -1095,10 +1099,14 @@ impl McpSessionServer {
         let lanes = arguments
             .get("lanes")
             .expect("the caller checked that lanes is present");
-        let lanes: Vec<super::spawn::LaneSpec> =
-            serde_json::from_value(lanes.clone()).map_err(|error| {
+        let mut lanes: Vec<super::spawn::LaneSpec> = serde_json::from_value(lanes.clone())
+            .map_err(|error| {
                 format!("`lanes` must be an array of {{key, task, title?}} objects: {error}")
             })?;
+        let caller = self.caller_key();
+        for lane in &mut lanes {
+            lane.key = super::lineage::child_key(caller.as_deref(), &lane.key)?;
+        }
         let launch_args = launch_arguments(arguments, "session_spawn")?;
         let group = optional_string(arguments, "group", "session_spawn")?;
         let resume = arguments
@@ -1154,7 +1162,7 @@ impl McpSessionServer {
 
     fn tool_fork(&self, arguments: Value) -> Result<String, String> {
         let cwd = string_argument(&arguments, "cwd")?;
-        let key = string_argument(&arguments, "key")?;
+        let asked = string_argument(&arguments, "key")?;
         let blank = arguments
             .get("blank")
             .map(|value| {
@@ -1210,6 +1218,8 @@ impl McpSessionServer {
         let parent = Some(super::bridge::driver_token(self.terminals.as_ref()))
             .filter(|token| !token.is_empty());
         let parent_key = super::lineage::session_key(self.terminals.as_ref(), parent.as_deref());
+        let key = super::lineage::child_key(parent_key.as_deref(), asked)?;
+        let key = key.as_str();
         let chat = if copy_chat && !blank {
             super::fork::resolve_chat_source(
                 self.terminals.as_ref(),
@@ -6789,7 +6799,7 @@ mod tests {
         let claim = |description: &str, now: u64| {
             server
                 .records
-                .claim(description, "/work/project", now)
+                .claim(description, None, "/work/project", now)
                 .unwrap()
                 .key
         };
@@ -6903,6 +6913,44 @@ mod tests {
 
     fn act_as(backend: &FakeBackend, key: &str) {
         backend.set_current(lane_facts(key, "/work"));
+    }
+
+    #[test]
+    fn a_keyed_session_spawns_nothing_whose_word_is_too_long_and_a_top_level_key_is_capped() {
+        let (server, backend, root) = keyed_server(&["architect"]);
+        let cwd = spawn_cwd(&root);
+        let lanes = |key: &str| json!({ "tool": "codex", "cwd": cwd, "lanes": [{ "key": key, "task": "slice" }] });
+        act_as(&backend, "architect");
+        for (name, arguments) in [
+            (
+                "session_spawn",
+                spawn_arguments("codex", "hotkey-regression", None, &cwd),
+            ),
+            ("session_spawn", lanes("architect-hotkey-regression")),
+            ("session_fork", {
+                let mut arguments = spawn_arguments("claude", "hotkey-regression", None, &cwd);
+                arguments["brief"] = json!("check the PR");
+                arguments
+            }),
+        ] {
+            let response = tool_call(&server, name, arguments);
+            assert_eq!(response["result"]["isError"], true, "{response}");
+            assert!(
+                tool_text(&response).contains("the word after `architect-` is at most 12"),
+                "{response}"
+            );
+        }
+        act_as(&backend, SWITCHBOARD_KEY_FOR_TESTS);
+        let response = tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("codex", "another-bug-tmp-clip-c63f", None, &cwd),
+        );
+        assert!(
+            tool_text(&response).contains("a top-level key is at most 24"),
+            "{response}"
+        );
+        assert!(backend.spawned_sessions().is_empty());
     }
 
     #[test]
@@ -7310,7 +7358,7 @@ mod tests {
         ] {
             let record = server
                 .records
-                .claim(description, "/work/project", 1)
+                .claim(description, None, "/work/project", 1)
                 .unwrap();
             server
                 .records

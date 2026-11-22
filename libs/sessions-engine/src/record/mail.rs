@@ -56,7 +56,7 @@ mod tests {
             "closed: Closed fork",
             "bare: No agent yet",
         ] {
-            records.claim(description, "/work", 1).unwrap();
+            records.claim(description, None, "/work", 1).unwrap();
         }
         records
             .add_part("alpha", "agent-old", "/old.jsonl", 2)
@@ -69,7 +69,7 @@ mod tests {
             .unwrap();
         records.done("closed", "merged", 4).unwrap();
         records
-            .claim("terminal: Open in a terminal too", "/work", 1)
+            .claim("terminal: Open in a terminal too", None, "/work", 1)
             .unwrap();
         records
             .add_part("terminal", "agent-terminal", "/terminal.jsonl", 2)

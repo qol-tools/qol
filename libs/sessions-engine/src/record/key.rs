@@ -1,4 +1,5 @@
 const KEY_MAX: usize = 64;
+#[cfg(test)]
 const SLUG_MAX: usize = 40;
 const FALLBACK_KEY: &str = "session";
 const LOOKUP_KEY_MAX: usize = 80;
@@ -25,7 +26,12 @@ fn shaped(text: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
+#[cfg(test)]
 pub(super) fn parse(description: &str) -> Claimed {
+    parse_within(description, SLUG_MAX)
+}
+
+pub(super) fn parse_within(description: &str, slug_max: usize) -> Claimed {
     let description = description.trim();
     if let Some((key, friendly)) = description.split_once(':') {
         let key = key.trim();
@@ -37,12 +43,17 @@ pub(super) fn parse(description: &str) -> Claimed {
         }
     }
     Claimed {
-        key: slug(description),
+        key: slug_within(description, slug_max),
         friendly: description.to_owned(),
     }
 }
 
+#[cfg(test)]
 pub(super) fn slug(text: &str) -> String {
+    slug_within(text, SLUG_MAX)
+}
+
+fn slug_within(text: &str, max: usize) -> String {
     let mut slug = String::new();
     for character in text.chars() {
         let character = character.to_ascii_lowercase();
@@ -53,12 +64,12 @@ pub(super) fn slug(text: &str) -> String {
         }
     }
     let slug = slug.trim_matches('-');
-    let cut = if slug.len() <= SLUG_MAX {
+    let cut = if slug.len() <= max {
         slug
-    } else if slug.as_bytes()[SLUG_MAX] == b'-' {
-        &slug[..SLUG_MAX]
+    } else if slug.as_bytes()[max] == b'-' {
+        &slug[..max]
     } else {
-        let head = &slug[..SLUG_MAX];
+        let head = &slug[..max];
         head.rfind('-').map_or(head, |boundary| &head[..boundary])
     };
     let cut = cut.trim_matches('-');

@@ -423,7 +423,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "key": {
                         "type": "string",
-                        "description": "Stable spawn key for a single lane; makes retries idempotent. Use `lanes` instead when the work needs more than one",
+                        "description": "Stable spawn key for a single lane; makes retries idempotent. Use `lanes` instead when the work needs more than one. Under a calling session with a key, the key becomes `<caller key>-<word>`, from one word of at most 12 characters or a key that already starts with `<caller key>-`, and over 64 characters is refused; without one, or from the switchboard, it is top-level and at most 24 characters",
                     },
                     "surface": {
                         "type": "string",
@@ -452,7 +452,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                             "properties": {
                                 "key": {
                                     "type": "string",
-                                    "description": "Stable spawn key for this lane; unique within the set",
+                                    "description": "Stable spawn key for this lane; unique within the set. Under a calling session with a key, the key becomes `<caller key>-<word>`, from one word of at most 12 characters or a key that already starts with `<caller key>-`, and over 64 characters is refused; without one, or from the switchboard, it is top-level and at most 24 characters",
                                 },
                                 "task": {
                                     "type": "string",
@@ -537,7 +537,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "key": {
                         "type": "string",
-                        "description": "Stable, unused key naming the new tree; a key already held by a live session is refused because a fork always starts fresh",
+                        "description": "Stable, unused key naming the new tree; a key already held by a live session is refused because a fork always starts fresh. Under a calling session with a key, the key becomes `<caller key>-<word>`, from one word of at most 12 characters or a key that already starts with `<caller key>-`, and over 64 characters is refused; without one, or from the switchboard, it is top-level and at most 24 characters",
                     },
                     "model": {
                         "type": "string",

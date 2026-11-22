@@ -7,6 +7,7 @@ use super::store::{Error, Record, RecordStore};
 
 pub(crate) const EXIT_USAGE: u8 = 2;
 pub(crate) const EXIT_UNKNOWN: u8 = 3;
+pub(crate) const EXIT_REFUSED: u8 = 4;
 const EXIT_FAILED: u8 = 1;
 
 pub(crate) const HELP: &str = "qol-cli-sessions sessions record <verb>
@@ -14,7 +15,7 @@ pub(crate) const HELP: &str = "qol-cli-sessions sessions record <verb>
 Keep one record per session key, so a session's identity lives in one place and its chat is saved under that key to resume or search later. Records live in the CLI Sessions data folder, in records/<key>.json, and each part's chat is archived in records/<key>/part-<n>.jsonl.
 
 Usage:
-  qol-cli-sessions sessions record claim --description TEXT --cwd DIR
+  qol-cli-sessions sessions record claim --description TEXT --cwd DIR [--parent KEY]
   qol-cli-sessions sessions record part --key KEY --agent-id ID --transcript FILE
   qol-cli-sessions sessions record archive --key KEY
   qol-cli-sessions sessions record done --key KEY --reason TEXT
@@ -25,7 +26,7 @@ Usage:
   qol-cli-sessions sessions record mail
 
 Details:
-  claim creates a new record and never reuses one. A description of the form `<key>: <friendly>`, with a key of lowercase letters, digits and dashes that starts with a letter or digit and is at most 64 characters, keeps that key and friendly description. Any other description becomes the friendly description, and its key is the description in lowercase ASCII, each run of other characters turned into one dash, cut to at most 40 characters at a dash (`session` when nothing is left). A key already taken gets -2, -3 and so on. --cwd is the absolute project folder. The output carries key, friendly and description, the `<key>: <friendly>` text to give a fork (just the key when the friendly description is empty).
+  claim creates a new record and never reuses one. A description of the form `<key>: <friendly>`, with a key of lowercase letters, digits and dashes that starts with a letter or digit and is at most 64 characters, keeps that key and friendly description. Any other description becomes the friendly description, and its key is the description in lowercase ASCII, each run of other characters turned into one dash, cut at a dash to at most 24 characters, or 12 with --parent (`session` when nothing is left). --parent is the key of the session that starts this one: the key becomes `<parent>-<word>`, from a word of at most 12 characters or a key that already starts with `<parent>-`, and a key over 64 characters is refused. Without --parent, or with the switchboard's key, the key is top-level and at most 24 characters, so every session under it has room for its own word. A key already taken gets -2, -3 and so on. --cwd is the absolute project folder. The output carries key, friendly and description, the `<key>: <friendly>` text to give a fork (just the key when the friendly description is empty).
   part adds the next numbered part of the record for an agent id, with --transcript the absolute path of that agent's chat file. An agent id the record already holds changes nothing and returns its part number.
   archive copies each part's transcript that exists to the record's archive folder and lists the copies. A part whose transcript is gone keeps the copy made earlier.
   done sets the record's done time and reason; a later call replaces them, so the latest done wins.
@@ -39,7 +40,7 @@ Output:
   Every verb prints one JSON object on stdout: claim {key, friendly, description}, part {key, part}, archive {key, archived}, list {records}, mail {mail: [{key, friendly, cwd, agent_id, text}]}, and the record itself for done, stopped, resume and show. A record is {key, friendly, cwd, created_ms, parts: [{n, agent_id, transcript, started_ms}], done: {at_ms, reason}, stopped_ms}, where done and stopped_ms are absent until set. An error prints {\"error\": text}. Times are milliseconds since the Unix epoch. The session_records tool searches these records and their archived chats.
 
 Exit:
-  0 on success, 1 when the records folder cannot be read or written, 2 for a usage error (a missing, repeated or unknown flag, a relative path, or an unknown verb), 3 when the key or agent id has no record.";
+  0 on success, 1 when the records folder cannot be read or written, 2 for a usage error (a missing, repeated or unknown flag, a relative path, or an unknown verb), 3 when the key or agent id has no record, 4 when claim refuses a key that breaks the length rules, with the reason as the error.";
 
 pub(crate) struct Outcome {
     pub(crate) stdout: String,
@@ -87,6 +88,7 @@ pub(crate) fn execute(args: &[OsString], store: &RecordStore, now_ms: u64) -> Ou
         Ok(outcome) => outcome,
         Err(Failure::Usage(message)) => Outcome::usage(message),
         Err(Failure::Store(Error::Unknown(message))) => Outcome::failed(EXIT_UNKNOWN, message),
+        Err(Failure::Store(Error::Refused(message))) => Outcome::failed(EXIT_REFUSED, message),
         Err(Failure::Store(error)) => Outcome::failed(EXIT_FAILED, error),
     }
 }
@@ -110,12 +112,12 @@ fn run_verb(
 ) -> Result<Outcome, Failure> {
     match verb {
         "claim" => {
-            flags.only(&["description", "cwd"])?;
+            flags.only(&["description", "cwd", "parent"])?;
             let cwd = flags.absolute("cwd")?;
             let description = flags
                 .get("description")
                 .ok_or_else(|| Failure::Usage("--description is required".to_owned()))?;
-            let record = store.claim(description, cwd, now_ms)?;
+            let record = store.claim(description, flags.get("parent"), cwd, now_ms)?;
             Ok(Outcome::ok(json!({
                 "key": record.key,
                 "friendly": record.friendly,
