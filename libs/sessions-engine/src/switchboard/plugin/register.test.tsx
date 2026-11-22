@@ -1822,6 +1822,30 @@ test('every fork is told its launcher on the line under Project, and a launcher 
   expect(spawned[2]?.prompt).toBe('Project: /work\nLauncher: the fork with agent id p1, whose messages reach you as an agent-message from "p1".\nfork k2')
 })
 
+test('the switchboard itself starts only project-forks, while a fork starts the review lanes of a qol-code-review board', async ($, on) => {
+  const spawned: Spawned[] = []
+  engine(on, [], [], spawned)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'p1', 'review-fork: review')
+  const fromLead = await $.agent.spawn({ prompt: 'find', description: 'finder', subagentType: 'qol-code-review:review-finder' } as any)
+  expect(String((fromLead as { deny?: string }).deny)).toContain('The switchboard starts only project-forks')
+  expect(spawned).toHaveLength(1)
+  const fromFork = await $.agent.spawn({ prompt: 'find', description: 'finder', subagentType: 'qol-code-review:review-finder', parentAgentId: 'p1' } as any)
+  expect((fromFork as { deny?: string }).deny).toBeUndefined()
+  expect(spawned.map(one => one.prompt)).toEqual(['Project: /work\nLauncher: the switchboard, whose messages reach you as from the coordinator.\nfork p1', 'find'])
+})
+
+test('a fork starts its review lanes fresh and continues none, and the switchboard continues none', async ($, on) => {
+  const spawned: Spawned[] = []
+  engine(on, [], [], spawned)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const resume = (parentAgentId?: string) =>
+    $.agent.spawn({ prompt: 'again', description: 'finder', subagentType: 'qol-code-review:review-finder', resume: { agentId: 'l1' }, ...(parentAgentId === undefined ? {} : { parentAgentId }) } as any) as Promise<{ deny?: string }>
+  expect(String((await resume('p1')).deny)).toContain('A fork never continues a review lane')
+  expect(String((await resume()).deny)).toContain('The switchboard starts only project-forks')
+  expect(spawned).toHaveLength(0)
+})
+
 test('a Model line under Project, or under a launcher line the caller wrote, picks the model the fork runs on, also after a resume', async ($, on) => {
   const spawned: Spawned[] = []
   const store = new Map<string, unknown>()

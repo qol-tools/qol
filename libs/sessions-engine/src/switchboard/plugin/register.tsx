@@ -116,6 +116,8 @@ const HOLD = { command: 'sleep infinity', description: 'Hold this fork in the ag
 const REOPENED = 'Opened from the fork board.'
 const RESUMED = 'Carry on your work from where you stopped. This answers no question you asked and approves nothing you were waiting on the user for: if you were waiting on the user, keep waiting.'
 const FORK_RESUME = 'Only the switchboard resumes, continues, opens or closes another fork or session. Tell the user in one line which fork or session it is for and that they can select it in the agent list.'
+const FORKS_ONLY = 'The switchboard starts only project-forks. A code review runs inside a fork: start a project-fork for it, and that fork starts the review lanes.'
+const FRESH_LANES_ONLY = 'A fork never continues a review lane: start a fresh one with the same prompt.'
 const CROSS_SESSION = /__session_(reopen|fork|spawn|submit|bridge|close|remote_control|loop_close)$/
 const MESSAGING = /__session_(send|inbox|board)$/
 const FORK_TO_FORK =
@@ -2981,6 +2983,13 @@ export const register: Register = on => {
     if (dropped.length > DROPS_KEPT) dropped.shift()
     return { drop: reason }
   }
+
+  on('agent.spawn', async ($, e, next) => {
+    if (e.subagentType === FORK) return next(e)
+    if (e.parentAgentId === undefined) return { deny: FORKS_ONLY }
+    if (e.resume !== undefined) return { deny: FRESH_LANES_ONLY }
+    return next(e)
+  })
 
   on('agent.spawn', { subagentType: FORK }, async ($, e, next) => {
     if (e.resume !== undefined) {
