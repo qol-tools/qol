@@ -38,7 +38,7 @@ const MODEL_ID_MARKS: &str = "_.[]-";
 const BYTE_ORDER_MARK: char = '\u{FEFF}';
 const NEXT_LINE: char = '\u{85}';
 const FORKS_ONLY: &str = "The switchboard starts only project-forks. A code review runs inside a fork: start a project-fork for it, and that fork starts the review lanes.";
-const FORMAT_HELP: &str ="A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`, followed by the user's words.";
+const FORMAT_HELP: &str = "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`, followed by the user's words.";
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
