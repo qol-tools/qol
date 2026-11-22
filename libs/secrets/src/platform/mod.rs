@@ -10,10 +10,10 @@ mod tool;
 mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub(crate) use fallback::read;
+pub(crate) use fallback::{read, store};
 #[cfg(target_os = "linux")]
-pub(crate) use linux::read;
+pub(crate) use linux::{read, store};
 #[cfg(target_os = "macos")]
-pub(crate) use macos::read;
+pub(crate) use macos::{read, store};
 #[cfg(target_os = "windows")]
-pub(crate) use windows::read;
+pub(crate) use windows::{read, store};
