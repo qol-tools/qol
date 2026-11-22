@@ -66,6 +66,9 @@ jobs:
       - name: Test commit-msg hook
         run: bash .githooks/commit-msg.test.sh
 
+      - name: Test prepare-commit-msg hook
+        run: bash .githooks/prepare-commit-msg.test.sh
+
       # The merge queue squashes a pull request into one commit titled by the
       # pull request, and versioning reads that subject, so the queue refuses a
       # title the commit-msg gate would refuse. A pull request run only warns,
@@ -83,6 +86,20 @@ jobs:
             echo "::${level}::the pull request title becomes the squash commit subject; retitle it as <type>(scope): summary"
             [[ "$level" == warning ]]
           fi
+
+      # Agent sessions commit and open pull requests as kmrh47-agents, so the
+      # squash commit is that account's commit. The owner is credited on it
+      # only through the Co-authored-by line the prepare-commit-msg hook writes
+      # into each of those commits. A pull request run predicts that credit
+      # from its commits, and the queue run reads it from the commit that lands.
+      - name: Squash commit credits the owner
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event_name == 'merge_group' && github.sha || '' }}
+        run: python3 .github/scripts/owner_credit.py
 
       - name: Test release scripts
         run: python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'

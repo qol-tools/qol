@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -u
+
+AGENT_EMAILS=' kmrh47+agents@proton.me 357478593+kmrh47-agents@users.noreply.github.com '
+OWNER_LINE='Co-authored-by: KMRH47 <45654430+KMRH47@users.noreply.github.com>'
+
+msg_file="$1"
+ident="$(git var GIT_AUTHOR_IDENT 2>/dev/null)" || exit 0
+email="${ident#*<}"
+email="$(printf '%s' "${email%%>*}" | tr '[:upper:]' '[:lower:]')"
+
+case "$AGENT_EMAILS" in
+  *" $email "*) ;;
+  *) exit 0 ;;
+esac
+
+has_text() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      '# ------------------------ >8 ------------------------') return 1 ;;
+      '#'*) ;;
+      *[![:space:]]*) return 0 ;;
+    esac
+  done < "$1"
+  return 1
+}
+
+has_text "$msg_file" || exit 0
+
+git interpret-trailers --in-place --no-divider --if-exists addIfDifferent --trailer "$OWNER_LINE" "$msg_file"
