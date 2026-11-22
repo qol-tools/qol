@@ -14,4 +14,18 @@ case "$AGENT_EMAILS" in
   *) exit 0 ;;
 esac
 
+has_text() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      '# ------------------------ >8 ------------------------') return 1 ;;
+      '#'*) ;;
+      *[![:space:]]*) return 0 ;;
+    esac
+  done < "$1"
+  return 1
+}
+
+has_text "$msg_file" || exit 0
+
 git interpret-trailers --in-place --no-divider --if-exists addIfDifferent --trailer "$OWNER_LINE" "$msg_file"

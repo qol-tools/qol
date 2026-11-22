@@ -58,6 +58,18 @@ test_the_owner_line_is_added_once() {
   eq "beside another co-author" "fix(tray): x"$'\n\n'"Co-authored-by: Someone <someone@example.invalid>"$'\n'"$owner" "$out"
 }
 
+test_a_message_with_no_text_is_left_alone() {
+  local out template scissors
+  template="# Please enter the commit message for your changes."$'\n'"# On branch main"
+  scissors="# ------------------------ >8 ------------------------"
+  out="$(run_hook "$agent" "$template")"
+  eq "editor template only" "$template" "$out"
+  out="$(run_hook "$agent" ""$'\n'"$template"$'\n'"$scissors"$'\n'"diff --git a/f b/f"$'\n'"+b")"
+  eq "template and a diff below the cut line" 0 "$(owner_lines "$out")"
+  out="$(run_hook "$agent" "fix(tray): x"$'\n\n'"$template"$'\n'"$scissors"$'\n'"diff --git a/f b/f")"
+  eq "text above the template" "fix(tray): x"$'\n\n'"$owner"$'\n\n'"$template"$'\n'"$scissors"$'\n'"diff --git a/f b/f" "$out"
+}
+
 test_other_authors_are_left_alone() {
   local out email
   for email in "kmrh47@proton.me" "45654430+KMRH47@users.noreply.github.com" "someone@example.invalid" \
@@ -93,6 +105,7 @@ main() {
   printf '[prepare-commit-msg] tests\n'
   test_agent_commits_get_the_owner_line
   test_the_owner_line_is_added_once
+  test_a_message_with_no_text_is_left_alone
   test_other_authors_are_left_alone
   test_git_hands_the_hook_the_author
   printf '\nSummary: %d passed, %d failed\n' "$passed" "$failed"
