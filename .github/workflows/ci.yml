@@ -84,6 +84,20 @@ jobs:
             [[ "$level" == warning ]]
           fi
 
+      # Agent sessions open the pull requests as kmrh47-agents, so the squash
+      # commit is that account's commit. The owner is credited on it only
+      # through the Co-authored-by line GitHub adds for the authors of the pull
+      # request's commits. A pull request run predicts that credit from those
+      # authors, and the queue run reads it from the commit that lands.
+      - name: Squash commit credits the owner
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event_name == 'merge_group' && github.sha || '' }}
+        run: python3 .github/scripts/owner_credit.py
+
       - name: Test release scripts
         run: python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
 
