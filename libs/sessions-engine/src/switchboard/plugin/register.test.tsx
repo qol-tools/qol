@@ -1835,6 +1835,21 @@ test('the switchboard itself starts only project-forks, while a fork starts the 
   expect(spawned.map(one => one.prompt)).toEqual(['Project: /work\nLauncher: the switchboard, whose messages reach you as from the coordinator.\nfork p1', 'find'])
 })
 
+test('a fork continues only the review lanes it started, and the switchboard continues none', async ($, on) => {
+  const spawned: Spawned[] = []
+  engine(on, [], [], spawned)
+  on('agent.list', () => ({ value: [{ id: 'l1', parentId: 'p1', status: 'completed' }, { id: 'l2', parentId: 'p2', status: 'completed' }, { id: 'l3', status: 'completed' }] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const resume = (agentId: string, parentAgentId?: string) =>
+    $.agent.spawn({ prompt: 'again', description: 'finder', subagentType: 'qol-code-review:review-finder', resume: { agentId }, ...(parentAgentId === undefined ? {} : { parentAgentId }) } as any) as Promise<{ deny?: string }>
+  expect((await resume('l1', 'p1')).deny).toBeUndefined()
+  for (const [agentId, parentAgentId] of [['l2', 'p1'], ['l1', 'p2'], ['l3', 'p1'], ['gone', 'p1']]) {
+    expect(String((await resume(agentId as string, parentAgentId)).deny)).toContain('A fork continues only the agents it started itself')
+  }
+  expect(String((await resume('l3')).deny)).toContain('The switchboard starts only project-forks')
+  expect(spawned).toHaveLength(1)
+})
+
 test('a Model line under Project, or under a launcher line the caller wrote, picks the model the fork runs on, also after a resume', async ($, on) => {
   const spawned: Spawned[] = []
   const store = new Map<string, unknown>()
