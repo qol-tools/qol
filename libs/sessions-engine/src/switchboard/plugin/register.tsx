@@ -753,6 +753,9 @@ let loading: Promise<void> | undefined
 let held = { session: '', rows: 0 }
 let viewedFork: string | undefined
 let tree: SbTree = { commands: [] }
+let updateCheckedAt = Number.NEGATIVE_INFINITY
+
+const UPDATE = 'update'
 
 const savedRows = async ($: EngineInterface): Promise<Entry[]> => {
   const saved = await $.store.get(STORE_PREFIX + (await $.session.id()))
@@ -1447,6 +1450,15 @@ const loadTree = async ($: EngineInterface): Promise<void> => {
   if (ran === undefined || ran.exitCode !== 0) return
   tree = sbTree(ran.stdout)
   await refreshStatus($)
+}
+
+const checkUpdate = async ($: EngineInterface): Promise<void> => {
+  const now = await $.clock.now()
+  if (now - updateCheckedAt < MINUTE) return
+  updateCheckedAt = now
+  const program = await recordProgram($)
+  if (program === undefined) return
+  await $.process.run([program, 'sessions', 'switchboard', UPDATE], { cwd: folderOf(program), timeoutMs: SB_TIMEOUT_MS }).catch(() => undefined)
 }
 
 const runSb = async ($: EngineInterface, text: string): Promise<string> => {
@@ -3176,6 +3188,8 @@ export const register: Register = on => {
       void loadTree($)
       isAutoOpenPending = e.isInteractive
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
+      void checkUpdate($)
+      $.clock.every(MINUTE, () => void checkUpdate($))
       $.clock.every(DELIVER_MS, () => void deliver($).then(() => refreshWriting($)).catch(() => undefined).then(() => refreshStates($)))
       $.clock.every(DELIVER_MS, () => void deliverMail($))
       if (pending.length > 0) {

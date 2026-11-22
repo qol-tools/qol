@@ -17,6 +17,7 @@ dirs = "6.0"
 log.workspace = true
 qol-config.workspace = true
 qol-agent-homes.workspace = true
+qol-agent-launch.workspace = true
 qol-apps.workspace = true
 qol-artifact.workspace = true
 qol-build-identity.workspace = true

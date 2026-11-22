@@ -2,7 +2,7 @@ use super::CliArgs;
 use anyhow::{anyhow, Result};
 use qol_headless::{Command, Execution, HeadlessApp};
 
-use crate::commands::{agents, peers, sessions};
+use crate::commands::{agents, peers, secrets, sessions};
 
 pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
     let has_help = args
@@ -16,7 +16,9 @@ pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
         });
     let is_agents = args.values.first().and_then(|value| value.to_str()) == Some("agents");
     let is_peers = args.values.first().and_then(|value| value.to_str()) == Some("peers");
-    if !is_agents && !is_peers && !args.values.is_empty() && !has_help && !args.json {
+    let is_secrets = args.values.first().and_then(|value| value.to_str()) == Some("secrets");
+    if !is_agents && !is_peers && !is_secrets && !args.values.is_empty() && !has_help && !args.json
+    {
         return Ok(None);
     }
     if !has_help
@@ -386,7 +388,7 @@ fn app() -> HeadlessApp {
                 "lane-exec",
                 "Start a lane under the Claude account its architect runs under.",
                 "qol sessions lane-exec (--secret NAME --env VAR | --login-file PATH) -- PROGRAM [ARGS...]",
-                "Spawn, fork, reopen and park put this in front of a claude lane so it runs under the caller's account, and it replaces itself with PROGRAM, so the token never passes through the terminal. Every spawn, fork and park records the caller's login variables (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN) in a private file per CLAUDE_CONFIG_DIR under the qol-tray data folder, lane-logins/, and removes it when the caller has none; --login-file clears those variables and sets the recorded ones. claude_accounts in sessions.toml overrides that for a config dir: --secret reads the named secret from the OS credential store (the login Keychain on macOS, the Secret Service via secret-tool on Linux, the Credential Manager on Windows) and exports it as VAR. Each entry is `[claude_accounts.\"<config dir>\"]` with `secret = \"<name>\"` and an optional `token_env` that defaults to CLAUDE_CODE_OAUTH_TOKEN.",
+                "Spawn, fork, reopen and park put this in front of a claude lane so it runs under the caller's account, and it replaces itself with PROGRAM, so the token never passes through the terminal. Every spawn, fork and park records the caller's login variables (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN) in a private file per CLAUDE_CONFIG_DIR under the qol-tray data folder, lane-logins/, and removes it when the caller has none; --login-file clears those variables and sets the recorded ones. An account with a key overrides that for a config dir: --secret reads the named secret from the OS credential store (the login Keychain on macOS, the Secret Service via secret-tool on Linux, the Credential Manager on Windows) and exports it as VAR; `qol secrets store <name>` stores it there, and a key this PC does not hold refuses the launch. The account comes from claude_accounts in sessions.toml, this PC's override, where each entry is `[claude_accounts.\"<config dir>\"]` with `secret = \"<name>\"` and an optional `token_env` that defaults to CLAUDE_CODE_OAUTH_TOKEN; else from the synced agent-setup.json (docs/agent-setup.md); else, only while that file is missing or unusable, from ~/.config/account-profiles/profiles.json, whose unreadable keys are skipped.",
                 "The lane's own output; diagnostics on stderr.",
                 "Exits non-zero when the secret or login file cannot be read or PROGRAM cannot start.",
             ))
@@ -423,8 +425,8 @@ fn app() -> HeadlessApp {
             command(
                 "agents",
                 "Inspect and manage the agent home registry.",
-                "qol agents <list|current|add|remove>",
-                "One registry file (agents.toml in the qol config directory) declares the agent homes this machine knows; see docs/agent-homes.md.",
+                "qol agents <list|current|add|remove|setup-path>",
+                "One registry file (agents.toml in the qol config directory) declares the agent homes this machine knows; see docs/agent-homes.md. The synced agent-setup.json declares the accounts; see docs/agent-setup.md.",
                 "Home rows, home ids, or confirmation lines on stdout; diagnostics on stderr.",
                 "Exits non-zero when a harness name or path is invalid or the registry file cannot be read or written.",
             )
@@ -474,8 +476,21 @@ fn app() -> HeadlessApp {
                     "Exits non-zero when the entry is absent or the registry file cannot be written.",
                 )
                 .run_plain_text(|context| agents::remove_plain(context.args())),
+            )
+            .subcommand(
+                command(
+                    "setup-path",
+                    "Print where the synced agent setup file lives.",
+                    "qol agents setup-path [--json]",
+                    "The absolute path of agent-setup.json in the core folder of the active synced profile, printed whether or not the file exists yet, so another program finds it without copying qol's profile path rules; see docs/agent-setup.md.",
+                    "The path on stdout, or {\"path\", \"profile\", \"exists\"} with --json.",
+                    "Exits non-zero when an argument is given or the qol config directory cannot be found.",
+                )
+                .run_plain_text(|context| agents::setup_path_plain(context.args()))
+                .run_json(|context| agents::setup_path_json(context.args())),
             ),
         )
+        .command(secrets::command())
         .command(
             command(
                 "mcp",

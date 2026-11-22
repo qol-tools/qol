@@ -6,6 +6,9 @@ codex, kimi, or pi installation keeps its config and transcripts.
 host file declares which homes this machine has.
 Everything that needs an agent home reads the registry instead of copying env
 var rules into each consumer.
+Which accounts exist and which keyring entry each one reads is a separate
+fact, kept in the synced profile; see `docs/agent-setup.md`.
+An account there does not become a home in this registry.
 
 ## Registry file
 

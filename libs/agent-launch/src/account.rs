@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use qol_terminal_sessions::cli::{CliLaunchProgram, CliToolId};
 
+use crate::setup::{ClaudeAccount, Setup};
+
 pub const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 const DEFAULT_TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 const PROFILE_REGISTRY: [&str; 3] = [".config", "account-profiles", "profiles.json"];
@@ -13,6 +15,12 @@ const PROFILE_REGISTRY: [&str; 3] = [".config", "account-profiles", "profiles.js
 pub struct ClaudeAccountSpec {
     secret: String,
     token_env: Option<String>,
+}
+
+impl ClaudeAccountSpec {
+    pub(crate) fn new(secret: String, token_env: Option<String>) -> Self {
+        Self { secret, token_env }
+    }
 }
 
 pub struct LaneExecCommand {
@@ -110,22 +118,13 @@ pub fn apply(
         };
     };
     let home = dirs::home_dir();
-    let mut accounts: Vec<_> = config_claude_accounts()?.into_iter().collect();
-    // The registry belongs to another tool, so a profile whose secret cannot be read is skipped.
-    accounts.extend(
-        registered_accounts(home.as_deref())
-            .into_iter()
-            .filter(|(dir, account)| match qol_secrets::read(&account.secret) {
-                Ok(_) => true,
-                Err(error) => {
-                    log::warn!(
-                        "ignoring the registered account for {dir}: secret `{}` cannot be read: {error:#}",
-                        account.secret
-                    );
-                    false
-                }
-            }),
-    );
+    let accounts = accounts_for(
+        config_dir,
+        home.as_deref(),
+        config_claude_accounts()?.into_iter().collect(),
+        || crate::setup::path().map_or(Setup::Missing, |path| crate::setup::read(&path)),
+        || readable_registered_accounts(home.as_deref()),
+    )?;
     apply_with(
         launch,
         config_dir,
@@ -135,6 +134,87 @@ pub fn apply(
         login_file.as_deref(),
         |secret| qol_secrets::read(secret).map(drop),
     )
+}
+
+fn readable_registered_accounts(home: Option<&Path>) -> Vec<(String, ClaudeAccountSpec)> {
+    registered_accounts(home)
+        .into_iter()
+        .filter(|(dir, account)| match qol_secrets::read(&account.secret) {
+            Ok(_) => true,
+            Err(error) => {
+                log::warn!(
+                    "ignoring the registered account for {dir}: secret `{}` cannot be read: {error:#}",
+                    account.secret
+                );
+                false
+            }
+        })
+        .collect()
+}
+
+fn accounts_for(
+    config_dir: &Path,
+    home: Option<&Path>,
+    configured: Vec<(String, ClaudeAccountSpec)>,
+    setup: impl FnOnce() -> Setup,
+    registered: impl FnOnce() -> Vec<(String, ClaudeAccountSpec)>,
+) -> Result<Vec<(String, ClaudeAccountSpec)>> {
+    if configured
+        .iter()
+        .any(|(dir, _)| expand_home(dir, home) == config_dir)
+    {
+        return Ok(configured);
+    }
+    let mut accounts = configured;
+    accounts.extend(synced_or_registered(setup(), config_dir, home, registered)?);
+    Ok(accounts)
+}
+
+fn synced_or_registered(
+    setup: Setup,
+    config_dir: &Path,
+    home: Option<&Path>,
+    registered: impl FnOnce() -> Vec<(String, ClaudeAccountSpec)>,
+) -> Result<Vec<(String, ClaudeAccountSpec)>> {
+    match setup {
+        Setup::Accounts(accounts) => synced_account_for(&accounts, config_dir, home),
+        Setup::Missing => Ok(registered()),
+        Setup::Unusable(reason) => {
+            log::warn!("the synced agent setup is not used: {reason}");
+            Ok(registered())
+        }
+    }
+}
+
+fn synced_account_for(
+    accounts: &[ClaudeAccount],
+    config_dir: &Path,
+    home: Option<&Path>,
+) -> Result<Vec<(String, ClaudeAccountSpec)>> {
+    let matching: Vec<&ClaudeAccount> = accounts
+        .iter()
+        .filter(|account| expand_home(&account.home, home) == config_dir)
+        .collect();
+    match matching.as_slice() {
+        [] => Ok(Vec::new()),
+        [account] => Ok(account
+            .spec
+            .clone()
+            .map(|spec| (account.home.clone(), spec))
+            .into_iter()
+            .collect()),
+        several => {
+            let names: Vec<&str> = several
+                .iter()
+                .map(|account| account.name.as_str())
+                .collect();
+            bail!(
+                "the synced agent setup gives {} the same home {}; keep one of them",
+                names.join(" and "),
+                config_dir.display()
+            )
+        }
+    }
 }
 
 fn apply_with(
@@ -168,7 +248,7 @@ fn apply_with(
     }
     check_secret(&account.secret).with_context(|| {
         format!(
-            "the Claude account for {config_dir_text} names secret `{}`, which cannot be read",
+            "the Claude account for {config_dir_text} names key `{}`, which this PC's keyring does not give; store the key under that name, then launch again",
             account.secret
         )
     })?;
@@ -473,6 +553,135 @@ mod tests {
         .unwrap();
 
         assert_eq!(launch.args[3], "claude-personal");
+    }
+
+    fn synced(name: &str, home: &str, key: Option<&str>) -> ClaudeAccount {
+        ClaudeAccount {
+            name: name.to_owned(),
+            home: home.to_owned(),
+            spec: key.map(|key| account(key, None)),
+        }
+    }
+
+    fn no_registry() -> Vec<(String, ClaudeAccountSpec)> {
+        panic!("the legacy registry is not read while the synced setup is usable")
+    }
+
+    fn registry() -> Vec<(String, ClaudeAccountSpec)> {
+        vec![(
+            "~/.claude-deepmind".to_owned(),
+            account("from-registry", None),
+        )]
+    }
+
+    fn resolve(
+        configured: Vec<(String, ClaudeAccountSpec)>,
+        setup: Setup,
+        registered: fn() -> Vec<(String, ClaudeAccountSpec)>,
+    ) -> Result<Vec<(String, ClaudeAccountSpec)>> {
+        accounts_for(
+            Path::new("/Users/me/.claude-deepmind"),
+            Some(Path::new("/Users/me")),
+            configured,
+            || setup,
+            registered,
+        )
+    }
+
+    #[test]
+    fn the_synced_setup_replaces_the_legacy_registry() {
+        let setup = Setup::Accounts(vec![
+            synced("clauded", "~/.claude", None),
+            synced(
+                "claudedd",
+                "~/.claude-deepmind",
+                Some("claude-code-deepmind"),
+            ),
+        ]);
+
+        let accounts = resolve(Vec::new(), setup, no_registry).unwrap();
+
+        assert_eq!(
+            accounts,
+            [(
+                "~/.claude-deepmind".to_owned(),
+                account("claude-code-deepmind", None)
+            )]
+        );
+    }
+
+    #[test]
+    fn a_synced_account_without_a_key_or_no_synced_account_maps_nothing() {
+        for setup in [
+            Setup::Accounts(vec![synced("claudedd", "~/.claude-deepmind", None)]),
+            Setup::Accounts(vec![synced("clauded", "~/.claude", Some("k"))]),
+            Setup::Accounts(Vec::new()),
+        ] {
+            assert!(resolve(Vec::new(), setup, no_registry).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_missing_or_unusable_synced_setup_keeps_the_legacy_registry() {
+        for setup in [Setup::Missing, Setup::Unusable("version 2".to_owned())] {
+            assert_eq!(resolve(Vec::new(), setup, registry).unwrap(), registry());
+        }
+    }
+
+    #[test]
+    fn the_sessions_config_wins_over_the_synced_setup_for_its_home() {
+        let configured = vec![(
+            "~/.claude-deepmind".to_owned(),
+            account("from-config", None),
+        )];
+        let setup = Setup::Accounts(vec![
+            synced("a", "~/.claude-deepmind", Some("one")),
+            synced("b", "~/.claude-deepmind", Some("two")),
+        ]);
+
+        let accounts = resolve(configured.clone(), setup, no_registry).unwrap();
+
+        assert_eq!(accounts, configured);
+    }
+
+    #[test]
+    fn two_synced_accounts_on_one_home_refuse_the_launch_and_name_both() {
+        let setup = Setup::Accounts(vec![
+            synced("claudedd", "~/.claude-deepmind", Some("one")),
+            synced("deepmind", "/Users/me/.claude-deepmind/", None),
+        ]);
+
+        let error = resolve(Vec::new(), setup, no_registry).unwrap_err();
+
+        let message = format!("{error:#}");
+        assert!(message.contains("claudedd and deepmind"), "{message}");
+    }
+
+    #[test]
+    fn a_synced_account_reads_its_key_inside_the_lane() {
+        let setup = Setup::Accounts(vec![synced(
+            "claudedd",
+            "~/.claude-deepmind",
+            Some("claude-code-deepmind"),
+        )]);
+        let accounts = resolve(Vec::new(), setup, no_registry).unwrap();
+        let mut launch = claude_launch();
+
+        apply_with(
+            &mut launch,
+            Path::new("/Users/me/.claude-deepmind"),
+            &accounts,
+            Some(Path::new("/Users/me")),
+            &qol(),
+            None,
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            launch.args[2..5],
+            ["--secret", "claude-code-deepmind", "--env"]
+        );
     }
 
     #[test]

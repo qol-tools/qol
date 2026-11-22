@@ -93,6 +93,27 @@ runs:
         lookup-only: ${{ inputs.lookup-only }}
         save-if: ${{ github.ref == 'refs/heads/main' && inputs.save-cache == 'true' && inputs.lookup-only != 'true' }}
 
+    # sherpa-onnx-sys's build script downloads its static libraries into
+    # target/sherpa-onnx-prebuilt and skips the download when the archive's
+    # lib folder already exists. A restored cache can bring that folder back
+    # without the libraries, so a run that reruns the script (any change to
+    # its build dependencies, such as url under ureq) fails to link its
+    # tests. The crate bundles the libraries into its rlib, so a run that
+    # reuses the compiled crate never reads the folder, and one that reruns
+    # the script downloads a whole copy again.
+    - name: Drop the restored sherpa-onnx download folder
+      if: inputs.lookup-only != 'true'
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: |
+        folder=target/sherpa-onnx-prebuilt
+        if [ -d "$folder" ]; then
+          ls -lR "$folder"
+          rm -rf "$folder"
+        else
+          echo "no restored $folder"
+        fi
+
     # Every Linux job restores the newest saved set of package files and hands
     # it to apt, which checks each file against Ubuntu's signed lists before it
     # uses one, so a stale or altered file is downloaded again. The key never
