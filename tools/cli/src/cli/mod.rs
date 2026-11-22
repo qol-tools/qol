@@ -180,6 +180,70 @@ mod tests {
     }
 
     #[test]
+    fn secrets_help_is_equivalent_in_every_position_and_listed_in_general_help() {
+        let mut outputs = Vec::new();
+        for values in [
+            vec!["help", "secrets", "store"],
+            vec!["secrets", "store", "help"],
+            vec!["secrets", "store", "--help"],
+            vec!["secrets", "store", "-h"],
+        ] {
+            let args = parse_cli(values.iter().copied().map(OsString::from).collect());
+            let execution = contract_execution(&args).unwrap().unwrap();
+            assert_eq!(
+                execution.exit_code,
+                qol_headless::EXIT_SUCCESS,
+                "{values:?}"
+            );
+            assert!(
+                execution.stdout.contains("qol secrets store <name>"),
+                "{values:?}"
+            );
+            assert!(
+                execution.stdout.contains("without echoing it"),
+                "{values:?}"
+            );
+            assert!(execution.stdout.contains("service=<name>"), "{values:?}");
+            assert!(execution.stdout.contains("account $USER"), "{values:?}");
+            assert!(execution.stdout.contains("target <name>"), "{values:?}");
+            outputs.push(execution.stdout);
+        }
+        assert!(outputs.windows(2).all(|pair| pair[0] == pair[1]));
+        let group = contract_execution(&parse_cli(vec!["secrets".into(), "help".into()]))
+            .unwrap()
+            .unwrap();
+        assert!(group.stdout.contains("Subcommands:"));
+        assert!(group.stdout.contains("store"));
+        let general = contract_execution(&parse_cli(vec!["help".into()]))
+            .unwrap()
+            .unwrap();
+        assert!(general.stdout.contains("secrets"));
+    }
+
+    #[test]
+    fn secrets_argument_errors_are_nonzero_without_echoing_a_secret() {
+        for values in [
+            vec!["secrets"],
+            vec!["secrets", "store"],
+            vec!["secrets", "store", "claude-work", "secret-canary"],
+            vec!["secrets", "secret-canary"],
+            vec!["--json", "secrets", "store", "secret-canary"],
+        ] {
+            let args = parse_cli(values.iter().copied().map(OsString::from).collect());
+            let execution = contract_execution(&args).unwrap().unwrap();
+            assert_ne!(
+                execution.exit_code,
+                qol_headless::EXIT_SUCCESS,
+                "{values:?}"
+            );
+            assert!(execution.stdout.is_empty(), "{values:?}");
+            if values.len() > 3 {
+                assert!(!execution.stderr.contains("secret-canary"), "{values:?}");
+            }
+        }
+    }
+
+    #[test]
     fn parses_verbose_flag_before_command() {
         let args = parse_cli(vec!["--verbose".into(), "install".into()]);
         assert!(args.verbose);

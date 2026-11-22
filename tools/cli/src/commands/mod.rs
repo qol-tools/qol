@@ -14,6 +14,7 @@ pub(crate) mod install;
 pub(crate) mod mcp;
 pub(crate) mod peers;
 pub(crate) mod pr;
+pub(crate) mod secrets;
 pub(crate) mod sessions;
 pub(crate) mod sync;
 pub(crate) mod trace;
