@@ -38,6 +38,21 @@ fn files() -> [(&'static str, &'static str); 5] {
     ]
 }
 
+pub(super) fn stale(dir: &Path) -> Vec<&'static str> {
+    files()
+        .into_iter()
+        .filter(|(relative, contents)| {
+            !fs::read_to_string(dir.join(relative)).is_ok_and(|current| current == *contents)
+        })
+        .map(|(relative, _)| relative)
+        .chain(
+            RETIRED
+                .into_iter()
+                .filter(|relative| dir.join(relative).exists()),
+        )
+        .collect()
+}
+
 pub(super) fn write(dir: &Path) -> Result<()> {
     for (relative, contents) in files() {
         let path = dir.join(relative);

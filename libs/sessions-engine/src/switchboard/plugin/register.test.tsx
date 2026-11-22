@@ -795,7 +795,7 @@ test('a board the user closed opens again at the next start', async ($, on) => {
 
 const isRecord = (argv: string[]) => argv[2] === 'record'
 
-const isAuth = (argv: string[]) => argv[2] === 'switchboard' && (argv[3] === 'auth' || argv[3] === 'commands')
+const isAuth = (argv: string[]) => argv[2] === 'switchboard' && (argv[3] === 'auth' || argv[3] === 'commands' || argv[3] === 'update')
 
 const NO_RECORD = { exitCode: 1, stdout: '', stderr: 'no session record here' }
 
@@ -3940,6 +3940,23 @@ test('the typeahead offers each command after sb, then the level under the curso
   expect(sbLine([], commands)).toBe('sb · auth (switch the claude login) · board (toggle the fork board)')
 })
 
+test('the switchboard loads the installed build when it starts, with no toast and no typed command', async ($, on) => {
+  const panes: string[] = []
+  const runs: string[][] = []
+  engine(on, [], panes)
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : undefined }))
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    runs.push(e.argv.slice(1))
+    if (e.argv[3] === 'commands') return { value: { exitCode: 0, stdout: JSON.stringify({ commands: [] }), stderr: '' } }
+    if (e.argv[3] === 'update') return { value: { exitCode: 0, stdout: JSON.stringify({ stale: ['plugin/hooks/register.tsx'] }), stderr: '' } }
+    return { value: NO_RECORD }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(runs.filter(run => run[2] === 'update')).toEqual([['sessions', 'switchboard', 'update']])
+  expect(panes.filter(pane => pane.startsWith('toast'))).toEqual([])
+})
+
 test('sb runs the command the words name, lists a level that needs more, and leaves other sentences to the model', async ($, on) => {
   const runs: string[][] = []
   engine(on)
@@ -3959,7 +3976,7 @@ test('sb runs the command the words name, lists a level that needs more, and lea
   expect((await typed($, 'sb auth nobody')).drop).toContain('sb auth has no nobody.')
   expect((await typed($, 'sb auth --reopen')).drop).toContain('sb auth has no --reopen.')
   expect((await typed($, 'sb is a word')).text).toBe('sb is a word')
-  expect(runs.filter(run => run[1] === 'switchboard' && run[2] !== 'commands')).toEqual([
+  expect(runs.filter(run => run[1] === 'switchboard' && run[2] !== 'commands' && run[2] !== 'update')).toEqual([
     ['sessions', 'switchboard', 'auth', 'clauded'],
     ['sessions', 'switchboard', 'auth', 'default'],
   ])
