@@ -21,13 +21,12 @@ pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
     {
         return Ok(None);
     }
-    if !has_help
-        && args.json
-        && matches!(
-            args.values.first().and_then(|value| value.to_str()),
-            Some("doctor" | "sessions" | "pr")
-        )
-    {
+    let mut words = args.values.iter().map(|value| value.to_str());
+    let headless = match (words.next().flatten(), words.next().flatten()) {
+        (Some("doctor" | "sessions"), _) | (Some("pr"), Some("list")) => true,
+        _ => false,
+    };
+    if !has_help && args.json && headless {
         return Ok(None);
     }
 

@@ -414,6 +414,14 @@ mod tests {
             assert!(args.json);
             assert!(contract_execution(&args).unwrap().is_none());
         }
+        for values in [
+            vec!["pr", "try", "621", "--json"],
+            vec!["pr", "off", "--json"],
+        ] {
+            let args = parse_cli(values.into_iter().map(OsString::from).collect());
+            assert!(args.json);
+            assert!(contract_execution(&args).unwrap().is_some());
+        }
     }
 
     #[test]
