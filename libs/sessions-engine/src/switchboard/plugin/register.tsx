@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, Register, UiOpenResult } from 'claude-code'
+import type { AgentInfo, EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, Register, UiOpenResult } from 'claude-code'
 
 import type { ActionKind, CheckResult, Doing, Entry, Kind, Lit, ModelChoice, ModelSeen, Pull, PullDetail, PullState, RunState } from '../types'
 
@@ -19,7 +19,6 @@ const RESUME_NAME = 'mcp__qol-switchboard__resume_session'
 const TASK = 'fork_task'
 const TASK_NAME = 'mcp__qol-switchboard__fork_task'
 const TASK_TEXT = 200
-const TASK_INDENT = 7
 const NOT_STATED = 'not stated yet'
 const TASK_OWN = 'Only a fork states its own task: fork_task takes no fork to speak for.'
 const TASK_NO_ROW = 'The fork board has no row for this fork yet, so nothing was noted: call fork_task again after your next tool call.'
@@ -56,17 +55,15 @@ const IDLE_KEY = 'i'
 const CLOSED_KEY = 'r'
 const SUB_FORK_KEYS = 'abcdefghjklmopqstuvwz'
 const NEW_REPLY = '◉'
-const NO_MARK = '  '
-const SINCE_WIDTH = 6
 const MERGED_EXIT = 0
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const CHOICES_KEY = 'model-choices'
 const SEEN_KEY = 'models-seen'
 const DETAIL_MS = 60_000
 const GH_TIMEOUT_MS = 20_000
-const FORK_STATE_WIDTH = 18
-const LABEL_WIDTH = 15
-const FORK_NAME_MAX = 34
+const LABEL_WIDTH = 11
+const TASK_CELLS = 6
+const NEEDS_YOU_WORD = 'needs you'
 const TARGET_BAND = '#1a1b20'
 const PULL_NUMBER = /\/pull\/([0-9]{1,10})$/
 const SAFE_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/
@@ -729,9 +726,55 @@ export const doneSoFar = (done: Doing): string => {
   return said === '' ? '' : `${said.charAt(0).toUpperCase()}${said.slice(1)}`
 }
 
+export type AgentNow = { label?: unknown; description?: unknown }
+
+export const nowOf = (agent: AgentNow | undefined, done: Doing | undefined): string | undefined => {
+  const summary = typeof agent?.label === 'string' && agent.label !== agent.description ? agent.label.split('\n').map(oneLine).find(line => line !== '') : undefined
+  return summary ?? done?.recent.at(-1)
+}
+
+export type TaskList = Record<string, 'pending' | 'in_progress' | 'completed'>
+
+const TASK_STATUSES: readonly string[] = ['pending', 'in_progress', 'completed']
+const isTaskStatus = (value: unknown): value is TaskList[string] => typeof value === 'string' && TASK_STATUSES.includes(value)
+
+export const withTaskCall = (held: TaskList, tool: string, input: Record<string, unknown>, result: unknown): TaskList => {
+  if (tool === 'TodoWrite' && Array.isArray(input.todos)) {
+    return Object.fromEntries(input.todos.flatMap((todo: { status?: unknown } | null, index) => (isTaskStatus(todo?.status) ? [[`todo-${index}`, todo.status] as const] : [])))
+  }
+  if (tool === 'TaskCreate') {
+    const id = (result as { task?: { id?: unknown } } | null)?.task?.id
+    return typeof id === 'string' && id !== '' ? { ...held, [id]: 'pending' } : held
+  }
+  if (tool === 'TaskUpdate' && typeof input.taskId === 'string' && input.taskId in held) {
+    if (input.status === 'deleted') return Object.fromEntries(Object.entries(held).filter(([id]) => id !== input.taskId))
+    return isTaskStatus(input.status) ? { ...held, [input.taskId]: input.status } : held
+  }
+  return held
+}
+
+export const tasksDone = (held: TaskList | undefined): { done: number; total: number } | undefined => {
+  const all = Object.values(held ?? {})
+  return all.length === 0 ? undefined : { done: all.filter(status => status === 'completed').length, total: all.length }
+}
+
+const TASK_TOOLS: readonly string[] = ['TodoWrite', 'TaskCreate', 'TaskUpdate']
+const taskLists = new Map<string, TaskList>()
+let detailFork: string | undefined
+
+const noteTasks = ($: EngineInterface, agentId: string, tool: string, input: Record<string, unknown>, result: unknown): void => {
+  if (!TASK_TOOLS.includes(tool)) return
+  const held = taskLists.get(agentId) ?? {}
+  const next = withTaskCall(held, tool, input, result)
+  if (next === held) return
+  taskLists.set(agentId, next)
+  if (agentId === detailFork) $.ui.invalidate('ui.render')
+}
+
 const noteActivity = async ($: EngineInterface, agentId: string, tool: string, label: string): Promise<void> => {
   const done = withAction(doing.get(agentId) ?? NOTHING_DONE, tool, label)
   doing.set(agentId, done)
+  if (agentId === detailFork) $.ui.invalidate('ui.render')
   if ((await read($, writingTo)) === agentId) await update($, focusDoing, () => done)
 }
 
@@ -1975,6 +2018,30 @@ const listedAs = (models: string[], model: string | undefined): string | undefin
   if (model === undefined) return undefined
   const word = wordOf(model)
   return models.find(id => model === id || model.startsWith(`${id}[`) || model.startsWith(`${id}-`)) ?? models.find(id => wordOf(id) === word && (id === word || model === word))
+}
+
+const FAMILY_COLORS: Record<string, string> = { opus: 'claude', sonnet: 'suggestion', haiku: 'cyan' }
+
+export const familyColor = (model: string | undefined): string | undefined => (model === undefined ? undefined : FAMILY_COLORS[wordOf(model)])
+
+export const effortMeter = (effort: string | undefined): string | undefined => {
+  const level = EFFORTS.findIndex(one => one === effort)
+  return level === -1 ? undefined : `${'▰'.repeat(level + 1)}${'▱'.repeat(EFFORTS.length - level - 1)}`
+}
+
+export const folderParts = (path: string | undefined): { parent: string; last: string } | undefined => {
+  const parts = printable(path ?? '').split(/[\\/]+/).filter(part => part !== '')
+  const last = parts.at(-1)
+  if (last === undefined) return undefined
+  const parent = parts.at(-2)
+  return { parent: parent === undefined ? '' : `${parent}/`, last }
+}
+
+export const tokensText = (count: number): string => (count >= 1_000_000 ? `${(count / 1_000_000).toFixed(1)}M` : count >= 1_000 ? `${(count / 1_000).toFixed(1)}k` : String(count))
+
+export const taskBar = (done: number, total: number, cells = TASK_CELLS): { done: string; rest: string } => {
+  const filled = total <= 0 ? 0 : Math.min(cells, Math.max(0, Math.round((done / total) * cells)))
+  return { done: '▰'.repeat(filled), rest: '▱'.repeat(cells - filled) }
 }
 
 const checkResult = (row: Record<string, unknown>): CheckResult | 'skipped' => {
@@ -3678,7 +3745,14 @@ export const register: Register = on => {
     const { cut, drop } = cutOf(agentId)
     const ran = next(MESSAGING.test(e.tool) ? asFork(e) : e)
     const first = await Promise.race([ran, cut]).finally(drop)
-    if (first !== CUT) return first
+    if (first !== CUT) {
+      if (first.deny === undefined) {
+        try {
+          noteTasks($, agentId, e.tool, e as unknown as Record<string, unknown>, first.result)
+        } catch {}
+      }
+      return first
+    }
     void ran.catch(() => undefined)
     return { deny: CUT_NOTE }
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { deny: FORK_RESUME }))
@@ -3816,7 +3890,7 @@ export const register: Register = on => {
     const ledger = await read($, pulls)
     const details = await read($, pullDetails)
     const states = await read($, forkStates)
-    const isIdleShown = await read($, idleShown)
+    const isRestingShown = await read($, idleShown)
     const isClosedShown = await read($, closedShown)
     const choices = await read($, modelChoices)
     const seen = await read($, modelsSeen)
@@ -3827,53 +3901,61 @@ export const register: Register = on => {
     const target = list.find(entry => entry.agentId === (viewed ?? writing))
     const stateOfPull = (pull: Pull) => (pull.mergeCommit !== undefined ? 'merged' : (details[pull.pullRequest]?.state ?? 'open'))
     const isOpen = (pull: Pull) => ['open', 'draft'].includes(stateOfPull(pull))
-    refreshDetails($, ledger.filter(pull => isOpen(pull) || pull.agentId === target?.agentId), details, now)
-    const mainModel = target === undefined ? undefined : await $.session.model().catch(() => undefined)
     const isFocused = e.props.isFocused
     const top = list.filter(entry => parentOf(list, entry) === undefined)
-    const subsOf = (entry: Entry) => subForksOf(list, entry)
+    const subsOf = (entry: Entry) => subForksOf(list, entry).sort((a, b) => a.at - b.at)
     const familyIn = (entry: Entry) => forksUnder(list, entry)
     const needs = top.filter(entry => needsYou(list, entry)).sort((a, b) => a.at - b.at)
     const cut = stoppedFamilies(list).sort((a, b) => a.at - b.at)
     const working = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && (entry.isWorking || familyIn(entry).some(sub => isBusy(sub, states)))).sort((a, b) => a.at - b.at)
     const waiting = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && !working.includes(entry) && isWaiting(entry, states)).sort((a, b) => a.at - b.at)
     const idle = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && !working.includes(entry) && !waiting.includes(entry) && !isEnded(entry)).sort((a, b) => a.at - b.at)
-    const badgeOf = (entry: Entry): string => {
-      const count = familyIn(entry).filter(one => !isEnded(one)).length
-      return count === 0 ? '' : ` +${count}`
-    }
     const hasOpenPull = (entry: Entry) => [entry, ...familyIn(entry)].some(one => pullsOf(ledger, one.agentId).some(isOpen))
     const isAtRest = (entry: Entry) => ![entry, ...familyIn(entry)].some(one => isLive(list, one, states) || isCut(one)) && !hasOpenPull(entry)
-    const foldable = idle.filter(entry => entry.agentId !== target?.agentId && !hasOpenPull(entry))
-    const folded = isIdleShown ? [] : foldable
     const closedFoldable = recent.filter(entry => !hasOpenPull(entry)).length
     const closedRows = isClosedShown ? recent : recent.filter(hasOpenPull)
-    const foldedUnread = folded.filter(entry => hasUnread(list, entry)).length
     const firstAsk = needs.find(entry => entry.recommend !== undefined)
-    const labelOf = (entry: Entry): string => shownState(entry, list, states).label
+    const shown = target ?? needs[0] ?? cut[0]
+    detailFork = shown?.agentId
+    refreshDetails($, ledger.filter(pull => isOpen(pull) || pull.agentId === shown?.agentId), details, now)
+    const agents: unknown = shown === undefined ? [] : await $.agent.list().catch(() => [])
+    const agent = Array.isArray(agents) ? (agents as AgentInfo[]).find(one => one?.id === shown?.agentId) : undefined
     const looks = await looksOf($)
     const models = await modelsOf($)
+    const blue = looks.get(WAITING_STATE)?.color ?? 'blue'
+    const green = looks.get(WORKING_STATE)?.color ?? 'green'
     const lookOf = (entry: Entry): StateLook | undefined => {
       const state = sessionState(entry, list, states)
       return state === undefined ? undefined : looks.get(state)
     }
+    const wordOfState = (entry: Entry): string => {
+      const label = shownState(entry, list, states).label
+      return label === 'ask' ? NEEDS_YOU_WORD : label
+    }
     const dot = (entry: Entry) => <Text color={lookOf(entry)?.color ?? (entry.isWorking ? 'claude' : isCut(entry) ? 'warning' : COLOR[entry.kind ?? 'note'])}>●</Text>
-    const mark = (entry: Entry) =>
+    const unread = (entry: Entry) =>
       hasUnread(list, entry) && entry.agentId !== target?.agentId ? (
         <Text bold color="suggestion">
-          {NEW_REPLY}{' '}
+          {` ${NEW_REPLY}`}
         </Text>
       ) : (
-        <Text>{NO_MARK}</Text>
+        ''
       )
-    const stateText = (entry: Entry, label: string) => {
+    const stateText = (entry: Entry) => {
       const look = lookOf(entry)
-      return look === undefined ? <Text dimColor>{label}</Text> : <Text color={look.color} bold={look.isBold}>{label}</Text>
+      const word = wordOfState(entry)
+      return look === undefined ? <Text dimColor>{word}</Text> : <Text color={look.color} bold={look.isBold}>{word}</Text>
     }
-    let n = 0
+    let digits = 0
     const hotkey = () => {
-      n += 1
-      return n <= 9 ? { hotkey: String(n) } : {}
+      digits += 1
+      return digits <= 9 ? { hotkey: String(digits) } : {}
+    }
+    let letters = 0
+    const letter = () => {
+      const one = SUB_FORK_KEYS[letters]
+      letters += 1
+      return one === undefined ? {} : { hotkey: one }
     }
     const open = (entry: Entry) => async () => {
       try {
@@ -3913,130 +3995,33 @@ export const register: Register = on => {
       const sent = await sendTo($, entry, text)
       $.ui.toast(sent.isDelivered ? `Sent to ${keyName(entry.name)}: ${text}` : `Not sent to ${keyName(entry.name)}: ${sent.reason}`)
     }
-    const taskLine = (entry: Entry, isCompact: boolean) =>
-      taskOf(entry) === '' ? undefined : (
-        <Box paddingLeft={TASK_INDENT}>
-          <Text dimColor={isCompact} wrap={isCompact ? 'truncate' : 'wrap'}>
-            {taskOf(entry)}
-          </Text>
-        </Box>
-      )
-    const title = (entry: Entry, label: string, isCompact = false) => (
-      <Box key={`title-${entry.agentId}`} flexDirection="column">
-        <Box flexDirection="row" gap={2}>
-          <Button key={`open-${entry.agentId}`} plain {...hotkey()} onPress={open(entry)}>
-            {dot(entry)} {mark(entry)}
-            <Text bold={entry.agentId === viewed || entry.agentId === target?.agentId}>{keyName(entry.name)}</Text>
-            <Text dimColor>{badgeOf(entry)}</Text>{' '}
-            {stateText(entry, label)}
-            <Text dimColor> · {age(now - entry.at)}</Text>
+    const toggleResting = () => void update($, idleShown, was => !was)
+    const isPicked = (entry: Entry) => entry.agentId === shown?.agentId
+    const liveSubs = (entry: Entry) => subsOf(entry).filter(sub => !isAtRest(sub))
+    const subName = (parent: Entry, sub: Entry) => underParent(keyOf(parent), keyName(sub.name))
+    const forkRow = (entry: Entry, parent?: Entry) => {
+      const key: { hotkey?: string } = parent === undefined ? hotkey() : letter()
+      return (
+        <Box key={`row-${entry.agentId}`} flexDirection="row" {...(isPicked(entry) ? { backgroundColor: TARGET_BAND } : {})}>
+          {parent !== undefined && <Text dimColor>{'   └ '}</Text>}
+          <Button key={`open-${entry.agentId}`} plain {...key} onPress={open(entry)}>
+            {key.hotkey === undefined ? '   ' : ''}
+            {dot(entry)} <Text bold={isPicked(entry)}>{parent === undefined ? keyName(entry.name) : subName(parent, entry)}</Text>
+            {unread(entry)}
           </Button>
-          {pullCell(entry.agentId)}
-        </Box>
-        {taskLine(entry, isCompact)}
-      </Box>
-    )
-    const heading = (text: string) => (
-      <Box marginTop={1}>
-        <Text inverse> </Text>
-        <Text inverse bold>
-          {text}
-        </Text>
-        <Text inverse> </Text>
-      </Box>
-    )
-
-    const toggleIdle = () => void update($, idleShown, was => !was)
-    const restingSubs = target === undefined ? [] : subsOf(target).filter(isAtRest)
-    const keys = `digit opens a fork${target !== undefined && subsOf(target).length > 0 ? ' · letter opens a sub-fork' : ''}${foldable.length + restingSubs.length > 0 ? ` · ${IDLE_KEY} ${isIdleShown ? 'hides' : 'shows'} the idle forks` : ''}${closedFoldable > 0 ? ` · ${CLOSED_KEY} ${isClosedShown ? 'hides' : 'shows'} the closed forks` : ''} · tab walks${target === undefined ? '' : ' · tab to model or effort, arrows and enter pick'} · x closes · esc back to the prompt`
-    const frame = (key: string, title: JSX.Children, right: JSX.Children | undefined, body: JSX.Children) => (
-      <Box key={key} flexDirection="column" borderStyle="single" borderDimColor paddingX={1} marginTop={1}>
-        <Box flexDirection="row">
-          <Text>{title}</Text>
           <Box flexGrow={1} />
-          {right}
+          {stateText(entry)}
         </Box>
-        {body}
-      </Box>
-    )
-    const cell = (text: string, width: number) => (text.length > width - 1 ? `${text.slice(0, Math.max(1, width - 2))}… ` : text.padEnd(width))
-    const forkRows = [...needs, ...cut, ...working, ...waiting, ...idle.filter(entry => !folded.includes(entry))]
-    const unreadMark = (count: number) =>
-      count > 0 && (
-        <Text bold color="suggestion">
-          {` · ${count} ${NEW_REPLY}`}
-        </Text>
       )
-    const idleFold =
-      foldable.length === 0 ? undefined : (
-        <Button key="idle-fold" plain dimColor {...(isFocused ? { hotkey: IDLE_KEY } : {})} onPress={toggleIdle}>
-          {isIdleShown ? <Text>hide idle</Text> : <Text>{`${folded.length} idle`}</Text>}
-          {unreadMark(foldedUnread)}
-        </Button>
-      )
+    }
+    const forkRows = [...needs, ...cut, ...working, ...waiting, ...idle]
     const closedFold =
       closedFoldable === 0 ? undefined : (
-        <Button key="closed-fold" plain dimColor {...(isFocused ? { hotkey: CLOSED_KEY } : {})} onPress={() => void update($, closedShown, was => !was)}>
-          {isClosedShown ? <Text>hide closed</Text> : <Text>{`${closedFoldable} closed`}</Text>}
-        </Button>
-      )
-    const folds =
-      idleFold === undefined && closedFold === undefined ? undefined : (
-        <Box flexDirection="row" gap={3}>
-          {idleFold}
-          {closedFold}
+        <Box paddingLeft={2}>
+          <Button key="closed-fold" plain dimColor {...(isFocused ? { hotkey: CLOSED_KEY } : {})} onPress={() => void update($, closedShown, was => !was)}>
+            {isClosedShown ? <Text>hide closed</Text> : <Text>{`${closedFoldable} closed`}</Text>}
+          </Button>
         </Box>
-      )
-    const pullCell = (agentId: string) => {
-      const own = pullsOf(ledger, agentId)
-      const live = own.filter(isOpen)
-      const newest = own.find(pull => stateOfPull(pull) === 'merged')
-      if (live.length === 0)
-        return newest === undefined ? undefined : <Text color="success" dimColor><Link href={newest.pullRequest}>#{newest.number ?? '?'}</Link> merged</Text>
-      return (
-        <Text>
-          {live.map((pull, index) => {
-            const merge = details[pull.pullRequest]?.merge
-            const state = merge === 'queued' ? 'in queue' : merge === 'auto' ? 'auto-merge' : stateOfPull(pull)
-            return (
-              <Text key={`cell-${pull.pullRequest}`} color={merge === undefined ? (state === 'draft' ? 'warning' : undefined) : 'suggestion'}>
-                {index === 0 ? '' : ' '}<Link href={pull.pullRequest}>#{pull.number ?? '?'}</Link> {state}
-              </Text>
-            )
-          })}
-        </Text>
-      )
-    }
-    const isLoud = (entry: Entry) => entry.agentId === target?.agentId || (!isEnded(entry) && !isAtRest(entry))
-    const nameWidth = Math.min(FORK_NAME_MAX, Math.max(4, ...[...forkRows, ...closedRows].map(entry => keyName(entry.name).length + badgeOf(entry).length))) + 2
-    const forkRow = (entry: Entry) => {
-      const key: { hotkey?: string } = hotkey()
-      return (
-        <Box key={`row-${entry.agentId}`} flexDirection="column" {...(entry.agentId === target?.agentId ? { backgroundColor: TARGET_BAND } : {})}>
-          <Box flexDirection="row">
-            <Button key={`open-${entry.agentId}`} plain {...key} onPress={open(entry)}>
-              {key.hotkey === undefined ? '   ' : ''}
-              {dot(entry)} {mark(entry)}
-              <Text bold={isLoud(entry)}>{cell(`${keyName(entry.name)}${badgeOf(entry)}`, nameWidth)}</Text>
-              {stateText(entry, cell(labelOf(entry), FORK_STATE_WIDTH))}
-              <Text dimColor>{cell(age(now - entry.at), SINCE_WIDTH)}</Text>
-            </Button>
-            {pullCell(entry.agentId)}
-          </Box>
-          {taskLine(entry, true)}
-        </Box>
-      )
-    }
-    const forksFrame = () =>
-      frame(
-        'forks',
-        <Text bold>FORKS</Text>,
-        undefined,
-        <Box flexDirection="column">
-          {forkRows.map(forkRow)}
-          {folds !== undefined && <Box paddingLeft={5}>{folds}</Box>}
-          {closedRows.map(forkRow)}
-        </Box>,
       )
     const modelOf = (key: string, fallback: string | undefined, isFork: boolean) => {
       const was = seen[key]
@@ -4044,318 +4029,272 @@ export const register: Register = on => {
       const isNewer = choice !== undefined && (was === undefined || was.at < choice.at)
       const pickedModel = isNewer ? choice?.model : undefined
       const pickedEffort = isNewer ? choice?.effort : undefined
-      const shownModel = fallback ?? was?.model
+      const shownModel = was?.model ?? fallback
       const takesNone = was !== undefined && was.effort === undefined && pickedModel === undefined && pickedEffort === undefined
       return { was, pickedModel, pickedEffort, shownModel, model: pickedModel ?? shownModel, effort: pickedEffort ?? was?.effort, takesNone, isPending: pickedModel !== undefined || pickedEffort !== undefined }
     }
-    const forkModel = (key: string) => {
-      const one = modelOf(key, undefined, true)
+    const effortOf = (one: ReturnType<typeof modelOf>, color: string | undefined) => {
+      const meter = effortMeter(one.effort)
+      return meter === undefined ? '' : <Text {...(color === undefined ? {} : { color })}>{`${meter} `}</Text>
+    }
+    const modelText = (one: ReturnType<typeof modelOf>) => {
+      if (one.model === undefined) return undefined
+      const color = familyColor(one.model)
+      return (
+        <Text>
+          <Text {...(color === undefined ? {} : { color })}>{modelName(one.model)}</Text>
+          {'  '}
+          {one.takesNone ? <Text dimColor>no effort</Text> : effortOf(one, color)}
+          {!one.takesNone && one.effort !== undefined && <Text dimColor>{one.effort}</Text>}
+        </Text>
+      )
+    }
+    const modelPickers = (key: string, one: ReturnType<typeof modelOf>) => {
       const listed = listedAs(models, one.model)
-      const level = EFFORTS.findIndex(choice => choice === one.effort)
+      const color = familyColor(one.model)
       return (
         <Box flexDirection="row">
-          {models.length > 0 && (
+          {models.length > 0 ? (
             <Select
               key={`model-${key}`}
               options={[...models.map(id => ({ value: id, label: modelName(id === listed && one.model !== undefined ? one.model : id) })), ...(listed === undefined && one.model !== undefined ? [{ value: one.model, label: modelName(one.model) }] : [])]}
               {...(one.model === undefined ? {} : { value: listed ?? one.model })}
               onSelect={value => void pickSetting($, 'model', key, value)}
             />
+          ) : (
+            one.model !== undefined && <Text {...(color === undefined ? {} : { color })}>{modelName(one.model)}</Text>
           )}
-          <Text>{'   '}</Text>
+          <Text>{'  '}</Text>
           {one.takesNone ? (
             <Text dimColor>no effort on {modelName(one.was?.model ?? '')}</Text>
           ) : (
             <Box flexDirection="row">
-              {level !== -1 && (
-                <Text>
-                  <Text color="warning">{'■'.repeat(level + 1)}</Text>
-                  <Text dimColor>{'□'.repeat(EFFORTS.length - level - 1)} </Text>
-                </Text>
-              )}
+              {effortOf(one, color)}
               <Select key={`effort-${key}`} options={EFFORTS.map(choice => ({ value: choice }))} {...(one.effort === undefined ? {} : { value: one.effort })} onSelect={value => void pickSetting($, 'effort', key, value)} />
             </Box>
           )}
         </Box>
       )
     }
-    const footer = () => {
-      const one = modelOf(SWITCHBOARD, mainModel, false)
-      return (
-        <Box key="switchboard" marginTop={1} paddingLeft={2}>
-          <Text dimColor>
-            switchboard ·{' '}
-            {one.shownModel === undefined ? 'model shows at its next model call' : <Text dimColor={false}>{modelName(one.shownModel)}</Text>}
-            {one.effort !== undefined && ' · '}
-            {one.effort !== undefined && <Text dimColor={false}>{one.effort}</Text>}
-          </Text>
-        </Box>
-      )
-    }
-    const nameOf = (agentId: string) => {
-      const owner = everyRow.find(one => one.agentId === agentId)
-      return owner === undefined ? agentId : keyName(owner.name)
-    }
-    const pullParts = (pull: Pull, isStopped: boolean): PullPart[] => {
+    const pullLine = (pull: Pull, isStopped: boolean) => {
       const detail = details[pull.pullRequest]
       const state = stateOfPull(pull)
-      return [
-        detail?.merge === 'queued' ? { text: 'in queue', color: 'suggestion' } : detail?.merge === 'auto' ? { text: 'auto-merge', color: 'suggestion' } : { text: state, ...(state === 'draft' ? { color: 'warning' } : {}) },
-        ...(detail === undefined
-          ? [{ text: '…', isDim: true }]
-          : detail.total === 0
-            ? []
-            : [detail.failed > 0 ? { text: `${detail.passed}/${detail.total} ✗`, color: 'error' } : detail.running > 0 ? { text: `${detail.passed}/${detail.total} ◐`, color: 'warning' } : { text: `${detail.passed}/${detail.total} ✓`, color: 'success' }]),
-        ...(detail?.review === 'pass' ? [{ text: 'review pass', color: 'success' }] : detail?.review === 'fail' ? [{ text: 'review fail', color: 'error' }] : detail?.review === 'running' ? [{ text: 'review running', color: 'warning' }] : []),
-        ...(detail?.liveTest === 'needed' ? [{ text: 'live test needed', color: 'warning' }] : detail?.liveTest === 'not needed' ? [{ text: 'live test not needed', isDim: true }] : []),
-        ...(pull.isWatched ? [] : [{ text: isStopped ? 'watcher off · the fork stopped' : 'watcher off', color: 'error' }]),
-      ]
-    }
-    const pullLines = (shown: Pull[], withFork: boolean, isStopped: boolean) => {
-      const merged = shown.filter(pull => stateOfPull(pull) === 'merged')
-      const newest = merged[0]
-      return [
-        ...shown.filter(isOpen).flatMap(pull => [
-          <Text key={`pull-${pull.pullRequest}`} wrap="wrap">
+      const word = detail?.merge === 'queued' ? 'in queue' : detail?.merge === 'auto' ? 'auto-merge' : state
+      const wordColor = detail?.merge !== undefined ? 'suggestion' : state === 'draft' ? 'warning' : state === 'merged' ? 'success' : undefined
+      const isLive = isOpen(pull)
+      return (
+        <Text key={`pull-${pull.pullRequest}`} wrap="wrap">
+          <Text color={blue}>
             <Link href={pull.pullRequest}>#{pull.number ?? '?'}</Link>
-            {pullParts(pull, !withFork && isStopped).map((part, index) => (
-              <Text key={`part-${index}`}>
-                {index === 0 ? ' ' : <Text dimColor> · </Text>}
-                <Text {...(part.color === undefined ? {} : { color: part.color })} dimColor={part.isDim === true}>
-                  {part.text}
-                </Text>
-              </Text>
-            ))}
-            {withFork && <Text dimColor> · {nameOf(pull.agentId)}</Text>}
-          </Text>,
-          ...(details[pull.pullRequest]?.title === undefined
-            ? []
-            : [
-                <Text key={`title-${pull.pullRequest}`} dimColor wrap="truncate">
-                  {details[pull.pullRequest]?.title}
-                </Text>,
-              ]),
-        ]),
-        ...(withFork
-          ? []
-          : shown
-              .filter(pull => stateOfPull(pull) === 'closed')
-              .map(pull => (
-                <Text key={`closed-${pull.pullRequest}`} dimColor>
-                  <Link href={pull.pullRequest}>#{pull.number ?? '?'}</Link> closed, not merged
-                </Text>
-              ))),
-        ...(newest === undefined
-          ? []
-          : [
-              <Text key="merged" color="success">
-                ✓ {merged.length} merged · newest <Link href={newest.pullRequest}>#{newest.number ?? '?'}</Link>
-                {newest.mergeCommit === undefined ? '' : ` ${newest.mergeCommit.slice(0, 7)}`}
-                {withFork ? ` by ${nameOf(newest.agentId)}` : ''}
-              </Text>,
-            ]),
-      ]
+          </Text>{' '}
+          <Text {...(wordColor === undefined ? {} : { color: wordColor })}>{word}</Text>
+          {isLive && detail === undefined && <Text dimColor>{'  …'}</Text>}
+          {isLive && detail !== undefined && detail.total > 0 && <Text dimColor>{`  ${detail.passed}/${detail.total} checks`}</Text>}
+          {isLive && detail !== undefined && detail.failed > 0 && <Text color="error">{`  ${detail.failed} failed`}</Text>}
+          {isLive && detail?.review === 'fail' && <Text color="error">{'  review fail'}</Text>}
+          {isLive && detail?.liveTest === 'needed' && <Text color="warning">{'  live test needed'}</Text>}
+          {isLive && !pull.isWatched && <Text color="error">{isStopped ? '  watcher off · the fork stopped' : '  watcher off'}</Text>}
+        </Text>
+      )
     }
     const labelled = (label: string, rows: JSX.Children[]) =>
       rows.map((row, index) => (
         <Box key={`${label}-${index}`} flexDirection="row">
-          <Box width={LABEL_WIDTH}>{index === 0 && <Text dimColor>{label}</Text>}</Box>
+          <Box width={LABEL_WIDTH} flexShrink={0}>
+            {index === 0 && <Text dimColor>{label}</Text>}
+          </Box>
           {row}
         </Box>
       ))
-    const subRows = (entry: Entry) => {
-      const subs = subsOf(entry).sort((a, b) => a.at - b.at)
-      const resting = subs.filter(isAtRest)
-      const shown = isIdleShown ? subs : subs.filter(sub => !resting.includes(sub))
-      const subName = (sub: Entry) => underParent(keyOf(entry), keyName(sub.name))
-      const subWidth = Math.min(FORK_NAME_MAX, Math.max(4, ...shown.map(sub => subName(sub).length))) + 2
-      const stateWidth = Math.min(FORK_STATE_WIDTH, Math.max(4, ...shown.map(sub => labelOf(sub).length)) + 2)
-      const newest = ledger.find(pull => resting.some(sub => sub.agentId === pull.agentId) && stateOfPull(pull) === 'merged')
+    const actions = (key: string, buttons: JSX.Children[]) => (
+      <Box key={key} flexDirection="row" gap={2} paddingLeft={LABEL_WIDTH}>
+        {buttons}
+      </Box>
+    )
+    const askLines = (entry: Entry) => [
+      ...labelled(entry.kind === 'ask' ? 'asks' : 'report', [<Text wrap="wrap">{entry.headline}</Text>]),
+      ...(entry.recommend === undefined ? [] : labelled('answer', [<Text wrap="wrap">{entry.recommend}</Text>])),
+      ...(entry.recommend !== undefined && asking === entry.agentId
+        ? [
+            <Box key={`sure-${entry.agentId}`} paddingLeft={LABEL_WIDTH}>
+              <Text wrap="wrap">
+                Send "{entry.recommend}" to {keyName(entry.name)}?
+              </Text>
+            </Box>,
+          ]
+        : []),
+      actions(`ask-${entry.agentId}`, [
+        entry.recommend !== undefined && asking === entry.agentId && (
+          <Button key={`confirm-${entry.agentId}`} plain hotkey="y" onPress={send(entry)}>
+            send
+          </Button>
+        ),
+        entry.recommend !== undefined && asking === entry.agentId && (
+          <Button key={`cancel-${entry.agentId}`} plain hotkey="n" onPress={confirm('')}>
+            cancel
+          </Button>
+        ),
+        entry.recommend !== undefined && asking !== entry.agentId && (
+          <Button key={`send-${entry.agentId}`} plain {...(entry === firstAsk && asking === '' ? { hotkey: 'y' } : {})} onPress={confirm(entry.agentId)}>
+            send the answer
+          </Button>
+        ),
+        <Button key={`dismiss-${entry.agentId}`} plain dimColor onPress={dismiss([entry.agentId])}>
+          dismiss
+        </Button>,
+      ]),
+    ]
+    const cutLines = (entry: Entry) => {
+      const stopped = cutIn(list, entry)
       return [
-        ...shown.map((sub, index) => {
-          const letter = SUB_FORK_KEYS[index]
-          return (
-            <Box key={`subrow-${sub.agentId}`} flexDirection="row">
-              <Button key={`sub-${sub.agentId}`} plain {...(letter === undefined ? {} : { hotkey: letter })} onPress={open(sub)}>
-                {letter === undefined ? '   ' : ''}
-                {dot(sub)} {mark(sub)}
-                <Text bold={isLoud(sub)}>{cell(subName(sub), subWidth)}</Text>
-                {stateText(sub, cell(labelOf(sub), stateWidth))}
-                <Text dimColor>{cell(age(now - sub.at), SINCE_WIDTH)}</Text>
-              </Button>
-              {pullCell(sub.agentId)}
-            </Box>
-          )
-        }),
-        ...(resting.length === 0
-          ? []
-          : [
-              <Button key="finished-fold" plain dimColor {...(isFocused && idleFold === undefined ? { hotkey: IDLE_KEY } : {})} onPress={toggleIdle}>
-                {isIdleShown ? <Text>hide finished</Text> : <Text>{`${resting.length} finished`}</Text>}
-                {!isIdleShown && unreadMark(resting.filter(sub => hasUnread(list, sub)).length)}
-                {!isIdleShown && newest !== undefined && (
-                  <Text color="success" dimColor>
-                    {' '}
-                    · #{newest.number ?? '?'} merged
-                  </Text>
-                )}
-              </Button>,
-            ]),
+        ...labelled('stopped', [<Text wrap="wrap">{isCut(entry) ? 'mid-turn by a restart' : `${stopped.length} sub-fork${stopped.length === 1 ? '' : 's'} mid-turn by a restart`}</Text>]),
+        actions(`cut-${entry.agentId}`, [
+          <Button key={`continue-${entry.agentId}`} plain onPress={carryOnAll(stopped)}>
+            continue
+          </Button>,
+          <Button key={`dismiss-${entry.agentId}`} plain dimColor onPress={dismiss(stopped.map(one => one.agentId))}>
+            dismiss
+          </Button>,
+        ]),
       ]
     }
-    const writingFrame = (entry: Entry) =>
-      frame(
-        `to-${entry.agentId}`,
-        <Text bold>
-          WRITING TO{' '}
-          {fresh === entry.agentId && (
-            <Text bold color="suggestion">
-              {NEW_REPLY}{' '}
+    const subForkLine = (entry: Entry) => {
+      const subs = subsOf(entry)
+      if (subs.length === 0) return []
+      const live = subs.filter(sub => !isAtRest(sub))
+      const resting = subs.filter(isAtRest)
+      return labelled('sub-forks', [
+        <Box flexDirection="row" flexWrap="wrap">
+          {live.map(sub => (
+            <Text key={`live-${sub.agentId}`}>
+              {`${subName(entry, sub)} `}
+              {stateText(sub)}
+              {'  '}
             </Text>
-          )}
-          {keyName(entry.name)}
-        </Text>,
-        forkModel(keyOf(entry)),
-        <Box flexDirection="column">
-          {modelOf(keyOf(entry), undefined, true).isPending && <Text color="suggestion">applies at its next model call</Text>}
-          {labelled('working on', [taskOf(entry) === '' ? <Text dimColor>{NOT_STATED}</Text> : <Text wrap="wrap">{taskOf(entry)}</Text>])}
-          {labelled('done when', [entry.doneWhen === undefined ? <Text dimColor>{NOT_STATED}</Text> : <Text wrap="wrap">{entry.doneWhen}</Text>])}
-          {labelled('sub-forks', subRows(entry))}
-          {labelled('pull requests', pullLines(pullsOf(ledger, entry.agentId), false, isCut(entry) || entry.isStoppedByUser === true))}
-        </Box>,
-      )
-    const asks = needs.length + cut.length
-    const openPulls = ledger.filter(isOpen)
-    const mergedCount = ledger.filter(pull => stateOfPull(pull) === 'merged').length
-    const summary = asks === 0 ? 'Nothing needs you.' : `${asks} need${asks === 1 ? 's' : ''} you.`
-    const head = (line: JSX.Children) => (
-      <Box flexDirection="column">
-        <Box flexDirection="row">
-          {line}
-          <Box flexGrow={1} />
-          {!isFocused && <Text dimColor>ctrl+x tab to use the board</Text>}
-        </Box>
-        {isFocused && (
-          <Box flexDirection="row" gap={2}>
-            <Text dimColor wrap="wrap">
-              {keys}
-            </Text>
-            <Button key="close" plain dimColor hotkey="x" onPress={async () => {
-                await $.ui.close({ id: PANE })
-              }}>
-              close
+          ))}
+          {resting.length > 0 && (
+            <Button key="resting-fold" plain dimColor {...(isFocused ? { hotkey: IDLE_KEY } : {})} onPress={toggleResting}>
+              {isRestingShown ? <Text>hide closed</Text> : <Text>{`${resting.length} closed`}</Text>}
             </Button>
+          )}
+        </Box>,
+        ...(isRestingShown
+          ? resting.map(sub => {
+              const key: { hotkey?: string } = letter()
+              return (
+                <Button key={`sub-${sub.agentId}`} plain {...key} onPress={open(sub)}>
+                  {key.hotkey === undefined ? '   ' : ''}
+                  {dot(sub)} <Text>{subName(entry, sub)}</Text>
+                  {unread(sub)}
+                </Button>
+              )
+            })
+          : []),
+      ])
+    }
+    const detailOf = (entry: Entry) => {
+      const isWriting = entry.agentId === target?.agentId
+      const key = keyOf(entry)
+      const one = modelOf(key, agent?.model, true)
+      const fallbackEffort = one.effort === undefined && typeof agent?.effort === 'string' ? agent.effort : undefined
+      const shownModel = fallbackEffort === undefined ? one : { ...one, effort: fallbackEffort }
+      const doingNow = entry.isWorking ? nowOf(agent, doing.get(entry.agentId)) : undefined
+      const tasks = tasksDone(taskLists.get(entry.agentId))
+      const own = pullsOf(ledger, entry.agentId)
+      const livePulls = own.filter(isOpen)
+      const shownPulls = livePulls.length > 0 ? livePulls : own.filter(pull => stateOfPull(pull) === 'merged').slice(0, 1)
+      const folder = folderParts(entry.project ?? agent?.cwd)
+      const tokens = typeof agent?.tokenCount === 'number' && agent.tokenCount > 0 ? agent.tokenCount : undefined
+      const active = agent?.lastRequest?.at ?? entry.at
+      const model = isWriting ? modelPickers(key, shownModel) : modelText(shownModel)
+      return (
+        <Box key={`detail-${entry.agentId}`} flexDirection="column">
+          <Box flexDirection="row">
+            {isWriting && <Text dimColor>{'writing to  '}</Text>}
+            {dot(entry)}
+            <Text> </Text>
+            <Text bold>{keyName(entry.name)}</Text>
+            {fresh === entry.agentId && (
+              <Text bold color="suggestion">
+                {` ${NEW_REPLY}`}
+              </Text>
+            )}
+            <Box flexGrow={1} />
+            {stateText(entry)}
           </Box>
-        )}
+          <Box flexDirection="column" marginTop={1}>
+            {!isWriting && needsYou(list, entry) && askLines(entry)}
+            {!isWriting && cut.includes(entry) && cutLines(entry)}
+            {doingNow !== undefined && labelled('now', [<Text color="claude" wrap="truncate">{doingNow}</Text>])}
+            {taskOf(entry) !== '' && labelled('goal', [<Text wrap="wrap">{taskOf(entry)}</Text>])}
+            {entry.doneWhen !== undefined && labelled('done when', [<Text wrap="wrap">{entry.doneWhen}</Text>])}
+            {tasks !== undefined &&
+              labelled('tasks', [
+                <Text>
+                  <Text color={green}>{taskBar(tasks.done, tasks.total).done}</Text>
+                  <Text dimColor>{`${taskBar(tasks.done, tasks.total).rest}  `}</Text>
+                  {`${tasks.done} of ${tasks.total}`}
+                </Text>,
+              ])}
+            {shownPulls.length > 0 && labelled('pull', shownPulls.map(pull => pullLine(pull, isCut(entry) || entry.isStoppedByUser === true)))}
+            {model !== undefined && labelled('model', [model])}
+            {isWriting && shownModel.isPending && labelled('', [<Text color="suggestion">applies at its next model call</Text>])}
+            {folder !== undefined &&
+              labelled('folder', [
+                <Text>
+                  <Text dimColor>{folder.parent}</Text>
+                  <Text color="cyan">{folder.last}</Text>
+                </Text>,
+              ])}
+            {tokens !== undefined &&
+              labelled('used', [
+                <Text>
+                  {tokensText(tokens)}
+                  <Text dimColor>{` tokens, active ${age(now - active)} ago`}</Text>
+                </Text>,
+              ])}
+            {subForkLine(entry)}
+          </Box>
+        </Box>
+      )
+    }
+    const hasSubs = list.some(entry => parentOf(list, entry) !== undefined)
+    const keys = `digit opens a fork${hasSubs ? ' · letter opens a sub-fork' : ''}${closedFoldable > 0 ? ` · ${CLOSED_KEY} ${isClosedShown ? 'hides' : 'shows'} the closed forks` : ''} · tab walks${target === undefined ? '' : ' · tab to model or effort, arrows and enter pick'} · x closes · esc back to the prompt`
+    const help = isFocused && (
+      <Box key="help" flexDirection="row" gap={2}>
+        <Text dimColor wrap="wrap">
+          {keys}
+        </Text>
+        <Button key="close" plain dimColor hotkey="x" onPress={async () => {
+            await $.ui.close({ id: PANE })
+          }}>
+          close
+        </Button>
       </Box>
     )
 
-    if (list.length === 0 && recent.length === 0) return head(<Text dimColor>No forks yet. Each fork's report lands here as one line.</Text>)
+    if (list.length === 0 && recent.length === 0)
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>No forks yet. Each fork's report lands here as one line.</Text>
+          {help}
+        </Box>
+      )
+    const rows = forkRows.flatMap(entry => [forkRow(entry), ...liveSubs(entry).map(sub => forkRow(sub, entry))])
+    const detail = shown === undefined ? undefined : detailOf(shown)
     return (
       <Box flexDirection="column">
         {loading !== '' && <Text color="claude">◐ {loading}</Text>}
-        {head(<Text>{summary}</Text>)}
-        {target !== undefined && forksFrame()}
-        {target !== undefined && writingFrame(target)}
-        {target !== undefined && footer()}
-        {target === undefined && needs.length > 0 && heading('NEEDS YOU')}
-        {target === undefined && needs.map(entry => (
-          <Box key={`need-${entry.agentId}`} flexDirection="column">
-            {title(entry, labelOf(entry), true)}
-            <Box key={`ask-${entry.agentId}`} paddingLeft={7} flexDirection="column">
-              <Text wrap="wrap">{entry.headline}</Text>
-              {entry.recommend !== undefined && <Text dimColor wrap="wrap">Recommend: {entry.recommend}</Text>}
-              {entry.recommend !== undefined && asking === entry.agentId && (
-                <Text wrap="wrap">
-                  Send "{entry.recommend}" to {keyName(entry.name)}?
-                </Text>
-              )}
-              <Box flexDirection="row" gap={2}>
-                {entry.recommend !== undefined && asking === entry.agentId && (
-                  <Button key={`confirm-${entry.agentId}`} plain hotkey="y" onPress={send(entry)}>
-                    send
-                  </Button>
-                )}
-                {entry.recommend !== undefined && asking === entry.agentId && (
-                  <Button key={`cancel-${entry.agentId}`} plain hotkey="n" onPress={confirm('')}>
-                    cancel
-                  </Button>
-                )}
-                {entry.recommend !== undefined && asking !== entry.agentId && (
-                  <Button key={`send-${entry.agentId}`} plain {...(entry === firstAsk && asking === '' ? { hotkey: 'y' } : {})} onPress={confirm(entry.agentId)}>
-                    send recommended
-                  </Button>
-                )}
-                <Button key={`dismiss-${entry.agentId}`} plain dimColor onPress={dismiss([entry.agentId])}>
-                  dismiss
-                </Button>
-              </Box>
-            </Box>
+        {help}
+        {rows}
+        {closedFold}
+        {closedRows.map(entry => forkRow(entry))}
+        {detail !== undefined && (
+          <Box marginTop={1}>
+            <Text dimColor>{'─'.repeat(Math.max(1, e.props.bodyColumns ?? 1))}</Text>
           </Box>
-        ))}
-        {target === undefined && cut.length > 0 && heading('STOPPED BY A RESTART')}
-        {target === undefined && cut.map(entry => (
-          <Box key={`cut-${entry.agentId}`} flexDirection="column">
-            {title(entry, isCut(entry) ? 'stopped mid-turn' : `${cutIn(list, entry).length} sub-fork${cutIn(list, entry).length === 1 ? '' : 's'} stopped mid-turn`)}
-            <Box paddingLeft={7} flexDirection="column">
-              {entry.headline !== '' && (
-                <Text dimColor wrap="wrap">
-                  {entry.headline}
-                </Text>
-              )}
-              <Box flexDirection="row" gap={2}>
-                <Button key={`continue-${entry.agentId}`} plain onPress={carryOnAll(cutIn(list, entry))}>
-                  continue
-                </Button>
-                <Button key={`dismiss-${entry.agentId}`} plain dimColor onPress={dismiss(cutIn(list, entry).map(one => one.agentId))}>
-                  dismiss
-                </Button>
-              </Box>
-            </Box>
-          </Box>
-        ))}
-        {target === undefined && working.length > 0 && heading('WORKING')}
-        {target === undefined && working.map(entry => (
-          <Box key={`work-${entry.agentId}`} flexDirection="column">
-            {title(entry, labelOf(entry))}
-          </Box>
-        ))}
-        {target === undefined && waiting.length > 0 && heading('WAITING')}
-        {target === undefined && waiting.map(entry => (
-          <Box key={`wait-${entry.agentId}`} flexDirection="column">
-            {title(entry, labelOf(entry))}
-            <Box paddingLeft={7} flexDirection="column">
-              <Text dimColor wrap="wrap">
-                {entry.headline}
-              </Text>
-            </Box>
-          </Box>
-        ))}
-        {target === undefined && idle.length > folded.length && heading('IDLE')}
-        {target === undefined && idle.filter(entry => !folded.includes(entry)).map(entry => (
-          <Box key={`idle-${entry.agentId}`} flexDirection="column">
-            {title(entry, entry.isStoppedByUser === true ? 'stopped' : 'idle')}
-            <Box paddingLeft={7} flexDirection="column">
-              <Text dimColor wrap="wrap">
-                {entry.headline}
-              </Text>
-            </Box>
-          </Box>
-        ))}
-        {target === undefined && folds !== undefined && <Box marginTop={1}>{folds}</Box>}
-        {target === undefined && closedRows.length > 0 && heading('CLOSED')}
-        {target === undefined && closedRows.map(entry => (
-          <Box key={`recent-${entry.agentId}`} flexDirection="column">
-            {title(entry, 'closed', true)}
-            <Box paddingLeft={7} flexDirection="column">
-              <Text dimColor wrap="wrap">
-                {entry.headline}
-              </Text>
-            </Box>
-          </Box>
-        ))}
-        {target === undefined && openPulls.length + mergedCount > 0 && heading('PULL REQUESTS')}
-        {target === undefined && openPulls.length + mergedCount > 0 && <Box flexDirection="column">{pullLines(ledger.filter(pull => isOpen(pull) || stateOfPull(pull) === 'merged'), true, false)}</Box>}
+        )}
+        {detail}
       </Box>
     )
   })

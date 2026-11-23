@@ -193,7 +193,7 @@ mod tests {
             "await fillLaunchers($).catch(() => undefined)",
             "await messagesOf($, target)",
             "...missingForks(rows, [...records.values()], await $.clock.now())",
-            "WRITING TO",
+            "<Text dimColor>{'writing to  '}</Text>",
             "on('prompt.change', async ($, e, next) => {",
             "const typed = e.props.origin.kind === 'composer' ? undefined : typedByUser(e.props.text)",
             "const owners = recordOwners([...records.values()])",
