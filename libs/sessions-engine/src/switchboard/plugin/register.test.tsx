@@ -5044,11 +5044,11 @@ const testPage = (owner: string) => ({
   ],
 })
 
-const pagesBoard = (on: any, sent: any[], page: any, isClearRefused = false) => {
+const pagesBoard = (on: any, sent: any[], page: any, isClearRefused = false, answer: Answer = () => ({ isDelivered: true })) => {
   const runs: string[][] = []
   const live = { page, set_ms: 1, updated_ms: 1, answers: [] as any[] }
   let listing = [{ name: `${page.id}.json`, kind: 'file', size: 1, mtimeMs: 1, isLink: false }]
-  engine(on, sent)
+  engine(on, sent, [], [], new Map(), answer)
   on('env.get', (_: unknown, e: { name: string }) => ({
     value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : e.name === 'QOL_SWITCHBOARD_PAGES' ? '/data/pages' : undefined,
   }))
@@ -5067,7 +5067,12 @@ const pagesBoard = (on: any, sent: any[], page: any, isClearRefused = false) => 
     listing = [{ ...listing[0]!, size: listing[0]!.size + 1 }]
     return ok(live)
   })
-  return runs
+  const refile = () => {
+    live.set_ms += 1
+    live.answers = []
+    listing = [{ ...listing[0]!, size: listing[0]!.size + 1 }]
+  }
+  return Object.assign(runs, { refile })
 }
 
 test("a fork's page is the board's front page: p records a pass and moves on, f sends the note to the fork as the user's words, and t shows the forks with the page's count on the fork's row", async ($, on) => {
@@ -5132,10 +5137,12 @@ test('a page counts its checks, and the words a fail and an action send name the
   const open = { agentId: 'a', name: 't1-fork: a fork', key: 't1-fork' } as any
   expect(livePagesOf([open], [live])).toHaveLength(1)
   expect(livePagesOf([{ ...open, isClosed: true }], [live])).toHaveLength(0)
-  expect(isOrphan([open], live)).toBe(false)
-  expect(isOrphan([{ ...open, isDone: true }], live)).toBe(true)
-  expect(isOrphan([{ ...open, key: 'other-fork' }], live)).toBe(true)
-  expect(isOrphan([], live)).toBe(false)
+  expect(isOrphan([open], live, undefined)).toBe(false)
+  expect(isOrphan([{ ...open, isDone: true }], live, new Set(['t1-fork']))).toBe(true)
+  expect(isOrphan([{ ...open, key: 'other-fork' }], live, new Set())).toBe(true)
+  expect(isOrphan([{ ...open, key: 'other-fork' }], live, new Set(['t1-fork']))).toBe(false)
+  expect(isOrphan([{ ...open, key: 'other-fork' }], live, undefined)).toBe(false)
+  expect(isOrphan([], live, new Set())).toBe(false)
 })
 
 test("a page whose owner has no row or has ended is taken down, so dead pages never fill the host's page cap, and a refused take-down is tried again", async ($, on) => {
@@ -5166,6 +5173,44 @@ test('a page with the id forks is its own tab and the forks tab stays the forks'
   await ui.press({ key: 'tab-forks' })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
   await ui.press({ key: 'tab-page-forks' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a fail note that does not reach its fork reads not sent on its check', async ($, on) => {
+  const sent: any[] = []
+  pagesBoard(on, sent, testPage('t6-fork'), false, () => ({ isDelivered: false, reason: "The user doesn't want to take this action right now." }))
+  const timers: (() => void)[] = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't6', 't6-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'verdict-fail' })
+  await ui.input({ key: 'note', text: 'the light is off', kind: 'submit' })
+  await settle()
+  expect(await ui.find({ type: 'Text', text: 'fail · sent' })).toBeDefined()
+  for (const fire of timers.splice(0)) fire()
+  await settle()
+  expect(await ui.find({ type: 'Text', text: 'fail · not sent' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'fail · sent' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a page cleared and filed again under the same id is the front page again', async ($, on) => {
+  const sent: any[] = []
+  const runs = pagesBoard(on, sent, testPage('t7-fork'))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't7', 't7-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'tab-forks' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
+  runs.refile()
+  await refreshPages($)
+  await settle()
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
   await ui.unmount()
 })

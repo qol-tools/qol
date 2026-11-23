@@ -1563,6 +1563,8 @@ export const VERDICT_LOOK: Record<Verdict | 'untested', { icon: string; label: s
   skip: { icon: '–', label: 'skipped' },
 }
 
+const FAIL_NOT_SENT = 'fail · not sent'
+
 export const checksOf = (page: Page): Check[] => page.blocks.flatMap(block => (block.kind === 'checklist' ? block.items : []))
 
 export const answerOf = (live: LivePage, item: string): PageAnswer | undefined => live.answers.find(answer => answer.item === item)
@@ -1587,9 +1589,20 @@ const isLivePage = (value: unknown): value is LivePage => {
 
 const ownerRow = (rows: readonly Entry[], live: LivePage): Entry | undefined => rows.find(entry => keyOf(entry) === live.page.owner)
 
-export const isOrphan = (rows: readonly Entry[], live: LivePage): boolean => {
+export const isOrphan = (rows: readonly Entry[], live: LivePage, unfinished: ReadonlySet<string> | undefined): boolean => {
   const owner = ownerRow(rows, live)
-  return owner === undefined ? rows.length > 0 : isEnded(owner)
+  if (owner !== undefined) return isEnded(owner)
+  return rows.length > 0 && unfinished !== undefined && !unfinished.has(live.page.owner)
+}
+
+const unfinishedKeys = async ($: EngineInterface): Promise<Set<string> | undefined> => {
+  const listed = await recordRun($, 'list', [])
+  if (!Array.isArray(listed?.records)) return undefined
+  const keys = (listed.records as unknown[]).flatMap(one => {
+    const record = one as Partial<SessionRecord> | null
+    return typeof record?.key === 'string' && record.done === undefined && typeof record.stopped_ms !== 'number' ? [record.key] : []
+  })
+  return new Set(keys)
 }
 
 export const livePagesOf = (rows: readonly Entry[], all: readonly LivePage[]): LivePage[] =>
@@ -1605,6 +1618,9 @@ export const actionSaid = (page: Page, label: string): string => fromUser(`${pag
 let pagesListed: string | undefined
 let isPaging = false
 const pagesSeen = new Set<string>()
+const seenKey = (live: LivePage): string => `${live.page.id}@${live.set_ms}`
+const unsentFails = new Set<string>()
+const failKey = (pageId: string, item: string): string => `${pageId}\n${item}`
 
 export const refreshPages = async ($: EngineInterface): Promise<void> => {
   if (isPaging) return
@@ -1620,13 +1636,16 @@ export const refreshPages = async ($: EngineInterface): Promise<void> => {
     const ran = await verbExec($, 'page', 'read', [])
     if (ran?.exitCode !== 0) return
     const listed = (Array.isArray(ran.value.pages) ? ran.value.pages : []).filter(isLivePage)
-    const orphans = new Set(listed.filter(live => isOrphan(rows, live)).map(live => live.page.owner))
+    const unfinished = listed.some(live => ownerRow(rows, live) === undefined) ? await unfinishedKeys($) : undefined
+    const orphans = new Set(listed.filter(live => isOrphan(rows, live, unfinished)).map(live => live.page.owner))
     let isCleared = true
     for (const owner of orphans) if ((await verbExec($, 'page', 'clear', ['--owner', owner]))?.exitCode !== 0) isCleared = false
     const all = listed.filter(live => !orphans.has(live.page.owner))
     if (isCleared) pagesListed = listing
-    const fresh = all.filter(live => !pagesSeen.has(live.page.id))
-    for (const live of fresh) pagesSeen.add(live.page.id)
+    const fresh = all.filter(live => !pagesSeen.has(seenKey(live)))
+    const kept = new Set(all.map(seenKey))
+    for (const key of pagesSeen) if (!kept.has(key)) pagesSeen.delete(key)
+    for (const live of fresh) pagesSeen.add(seenKey(live))
     await update($, pages, () => all)
     const newest = fresh[fresh.length - 1]
     if (newest !== undefined) await update($, pageShown, () => newest.page.id)
@@ -1645,10 +1664,10 @@ const answerItem = async ($: EngineInterface, live: LivePage, item: string, verd
   return stored
 }
 
-const tellOwner = async ($: EngineInterface, live: LivePage, said: string): Promise<string | undefined> => {
+const tellOwner = async ($: EngineInterface, live: LivePage, said: string, onLost?: () => void): Promise<string | undefined> => {
   const owner = ownerRow(await read($, board), live)
   if (owner === undefined || isEnded(owner)) return `${live.page.owner} is closed, so nothing was sent.`
-  await sayAsUser($, owner, said)
+  await sayAsUser($, owner, said, onLost)
   return undefined
 }
 
@@ -1675,14 +1694,24 @@ export const judge = async ($: EngineInterface, live: LivePage, check: Check, ve
 
 export const sendFail = async ($: EngineInterface, live: LivePage, check: Check, typed: string): Promise<void> => {
   const note = typed.trim()
-  await update($, pageNoting, () => '')
   const stored = await answerItem($, live, check.id, 'fail', note)
   if (stored === undefined) {
     $.ui.toast(`${check.text}: the fail was not recorded.`)
     return
   }
-  const refused = await tellOwner($, stored, failSaid(stored.page, check, note))
-  if (refused !== undefined) $.ui.toast(refused)
+  await update($, pageNoting, () => '')
+  const key = failKey(stored.page.id, check.id)
+  unsentFails.delete(key)
+  const lost = () => {
+    unsentFails.add(key)
+    $.ui.toast(`${check.text}: the note did not reach ${stored.page.owner}.`)
+    $.ui.invalidate('ui.render')
+  }
+  const refused = await tellOwner($, stored, failSaid(stored.page, check, note), lost)
+  if (refused !== undefined) {
+    unsentFails.add(key)
+    $.ui.toast(refused)
+  }
   $.ui.invalidate('ui.render')
 }
 
@@ -4558,7 +4587,8 @@ export const register: Register = on => {
       let digit = 0
       const checkRow = (check: Check) => {
         digit += 1
-        const look = VERDICT_LOOK[answerOf(live, check.id)?.verdict ?? 'untested']
+        const verdict = answerOf(live, check.id)?.verdict ?? 'untested'
+        const look = verdict === 'fail' && unsentFails.has(failKey(page.id, check.id)) ? { ...VERDICT_LOOK.fail, label: FAIL_NOT_SENT } : VERDICT_LOOK[verdict]
         const isPicked = check.id === picked?.id
         const tone = look.color === undefined ? { dimColor: true } : { color: look.color }
         return (

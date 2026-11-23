@@ -329,7 +329,7 @@ mod tests {
             "const ran = await verbExec($, 'page', 'read', [])".to_owned(),
             "await verbExec($, 'page', 'clear', ['--owner', owner])".to_owned(),
             "const ran = await verbExec($, 'page', 'answer', ['--id', live.page.id, '--item', item, '--verdict', verdict".to_owned(),
-            "await sayAsUser($, owner, said)".to_owned(),
+            "await sayAsUser($, owner, said, onLost)".to_owned(),
             "await verbExec($, 'page', 'clear', ['--owner', row.key])".to_owned(),
             "const MESSAGING = /__session_(send|inbox|board|page)$/".to_owned(),
         ] {
