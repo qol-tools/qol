@@ -53,14 +53,11 @@ pub(super) fn current() -> Option<Job> {
 }
 
 pub(super) fn shown() -> bool {
-    pull_request_builds::enabled() || crate::installer::trial::current().is_some()
+    pull_request_builds::enabled()
 }
 
 pub(super) async fn get_list() -> Response {
-    if !pull_request_builds::enabled() {
-        if crate::installer::trial::current().is_some() {
-            return http_json::json_response(b"[]".to_vec());
-        }
+    if !shown() {
         return (StatusCode::NOT_FOUND, OFF).into_response();
     }
     let runtime = tokio::runtime::Handle::current();
@@ -402,12 +399,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_active_try_keeps_the_builds_shown_with_the_switch_off() {
+    async fn an_active_try_leaves_the_builds_hidden_while_the_switch_is_off() {
         let root = tempfile::tempdir().unwrap();
         let _root = crate::paths::push_test_path_root(root.path());
-        let off = get_list().await;
-        assert_eq!(off.status(), StatusCode::NOT_FOUND);
-
         let record = qol_conventions::pr_try::record_path(&crate::paths::base_data_dir().unwrap());
         std::fs::create_dir_all(record.parent().unwrap()).unwrap();
         let tried = qol_conventions::pr_try::TryRecord {
@@ -421,11 +415,9 @@ mod tests {
             ..Default::default()
         };
         std::fs::write(&record, serde_json::to_vec(&tried).unwrap()).unwrap();
-        assert!(shown());
-        let listed = get_list().await;
-        assert_eq!(listed.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(listed.into_body(), 64).await.unwrap();
-        assert_eq!(&body[..], b"[]");
+        assert!(crate::installer::trial::current().is_some());
+        assert!(!shown());
+        assert_eq!(get_list().await.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
