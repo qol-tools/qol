@@ -1,3 +1,4 @@
+mod actions;
 mod cache;
 mod catalog;
 mod manifests;
@@ -5,6 +6,7 @@ mod releases;
 mod token;
 mod tree;
 
+pub(crate) use actions::Actions;
 pub(crate) use cache::{
     current_timestamp, read_cache, update_cached_version, write_cache, PluginCache,
 };

@@ -2,32 +2,32 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 
-pub(super) const FILE: &str = "manifest.json";
-pub(super) const CONTRACT_FILES: [&str; 2] = ["qol-config.toml", "qol-runtime.toml"];
+pub(crate) const FILE: &str = "manifest.json";
+pub(crate) const CONTRACT_FILES: [&str; 2] = ["qol-config.toml", "qol-runtime.toml"];
 const SCHEMA: u32 = 1;
 
 #[derive(Debug, Deserialize)]
-pub(super) struct Manifest {
+pub(crate) struct Manifest {
     schema: u32,
     pull_request: u64,
     head_sha: String,
     target: String,
-    pub(super) plugins: Vec<PluginBuild>,
-    pub(super) tray: String,
+    pub(crate) plugins: Vec<PluginBuild>,
+    pub(crate) tray: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct PluginBuild {
-    pub(super) id: String,
-    pub(super) version: String,
-    pub(super) tag: String,
-    pub(super) file: String,
-    pub(super) bin_name: String,
+pub(crate) struct PluginBuild {
+    pub(crate) id: String,
+    pub(crate) version: String,
+    pub(crate) tag: String,
+    pub(crate) file: String,
+    pub(crate) bin_name: String,
     #[serde(default)]
-    pub(super) contract_files: Option<Vec<String>>,
+    pub(crate) contract_files: Option<Vec<String>>,
 }
 
-pub(super) fn read(path: &Path) -> Result<Manifest> {
+pub(crate) fn read(path: &Path) -> Result<Manifest> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("the build has no {}", path.display()))?;
     serde_json::from_str(&text)
@@ -35,7 +35,7 @@ pub(super) fn read(path: &Path) -> Result<Manifest> {
 }
 
 impl Manifest {
-    pub(super) fn check(&self, number: u64, head: &str, target: &str) -> Result<()> {
+    pub(crate) fn check(&self, number: u64, head: &str, target: &str) -> Result<()> {
         if self.schema != SCHEMA {
             bail!(
                 "build manifest schema {} is not {SCHEMA}; update qol",
@@ -59,7 +59,7 @@ impl Manifest {
         }
         for plugin in &self.plugins {
             for value in [&plugin.id, &plugin.tag, &plugin.file, &plugin.bin_name] {
-                if !super::plain_name(value) {
+                if !crate::plain_name(value) {
                     bail!("the build manifest names `{value}`, which is not a plain file name");
                 }
             }
@@ -72,7 +72,7 @@ impl Manifest {
         Ok(())
     }
 
-    pub(super) fn replaces(&self, id: &str) -> bool {
+    pub(crate) fn replaces(&self, id: &str) -> bool {
         self.plugins.iter().any(|plugin| plugin.id == id)
     }
 }

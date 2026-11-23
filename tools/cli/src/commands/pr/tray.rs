@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-pub(super) const BINARY: &str = qol_conventions::artifact::TRAY_HOST_BINARY_NAME;
+const BINARY: &str = qol_pr_try::TRAY_BINARY;
 const STOP_WAIT: Duration = Duration::from_secs(15);
 const KILL_WAIT: Duration = Duration::from_secs(3);
 const START_WAIT: Duration = Duration::from_secs(30);
@@ -58,7 +58,7 @@ pub(super) fn run_in_place(binary: &Path) -> Result<Started> {
 pub(super) fn put_back(try_binary: &Path, installed: &Path) -> Result<PutBack> {
     let trying = tray_processes()?
         .into_iter()
-        .filter(|pid| super::daemon::runs_binary(*pid, try_binary))
+        .filter(|pid| qol_pr_try::runs_binary(*pid, try_binary))
         .collect::<Vec<_>>();
     stop(&trying)?;
     if !main_trays()?.is_empty() {

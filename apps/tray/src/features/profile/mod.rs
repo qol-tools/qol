@@ -1,5 +1,6 @@
 pub mod core;
 pub(crate) mod http;
+pub(crate) mod pull_request_builds;
 pub mod registry;
 pub mod scope_store;
 mod startup;

@@ -1,23 +1,27 @@
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod fallback;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 
-#[cfg(not(target_os = "macos"))]
-pub(super) use fallback::{prepare_plugin, prepare_tray, tray_binary};
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) use fallback::{prepare_plugin, prepare_tray, tray_binary};
+#[cfg(target_os = "linux")]
+pub(crate) use linux::{prepare_plugin, prepare_tray, tray_binary};
 #[cfg(target_os = "macos")]
-pub(super) use macos::{prepare_plugin, prepare_tray, tray_binary};
+pub(crate) use macos::{prepare_plugin, prepare_tray, tray_binary};
 
 use anyhow::{bail, Result};
 use qol_platform::Os;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct Build {
+pub struct Build {
     os: Os,
     arch: &'static str,
-    pub(super) target: &'static str,
-    pub(super) artifact: &'static str,
-    pub(super) job: &'static str,
+    pub target: &'static str,
+    pub artifact: &'static str,
+    pub job: &'static str,
 }
 
 const BUILDS: [Build; 2] = [
@@ -38,12 +42,12 @@ const BUILDS: [Build; 2] = [
 ];
 
 impl Build {
-    pub(super) fn label(&self) -> String {
+    pub fn label(&self) -> String {
         format!("{} {}", self.os.label(), self.arch)
     }
 }
 
-pub(super) fn host_build() -> Result<&'static Build> {
+pub fn host_build() -> Result<&'static Build> {
     build_for(Os::current(), std::env::consts::ARCH)
 }
 

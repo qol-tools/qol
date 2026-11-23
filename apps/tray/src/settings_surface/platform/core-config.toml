@@ -77,3 +77,16 @@ label = "Keep settings in place"
 description = "Your qol settings stay applied after qol stops."
 section = "host"
 default = false
+
+[section.testing]
+label = "Testing"
+description = "Builds of changes that are not released yet."
+platforms = ["linux", "macos"]
+
+[field.try_pull_request_builds]
+type = "boolean"
+label = "Try pull request builds"
+description = "Lists the builds of open qol pull requests on the Updates page, to install one before it is released. They are test builds, not signed releases. Needs a GitHub sign-in on Profiles."
+section = "testing"
+platforms = ["linux", "macos"]
+default = false

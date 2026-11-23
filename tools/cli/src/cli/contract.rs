@@ -200,7 +200,7 @@ fn app() -> HeadlessApp {
                 "list",
                 "List the open pull requests that have a build for this machine to try.",
                 crate::commands::pr::USAGE,
-                "list asks GitHub for the open pull requests of qol-tools/qol and keeps the branches of qol-tools/qol (never a fork) whose head commit's `Build for the live test` job for this machine (linux on Linux x86_64, macos on Apple Silicon macOS) succeeded, which is what try needs. --json prints them as a JSON array of {number, title, head}, where head is the short commit id; the tray reads it for the Pull request build card on its Updates page while the updates.pull_request_builds feature flag is on.",
+                "list asks GitHub for the open pull requests of qol-tools/qol and keeps the branches of qol-tools/qol (never a fork) whose head commit's `Build for the live test` job for this machine (linux on Linux x86_64, macos on Apple Silicon macOS) succeeded, which is what try needs. --json prints them as a JSON array of {number, title, head}, where head is the short commit id; the tray's Pull request build card on its Updates page lists and tries the same builds itself through the GitHub API with the GitHub sign-in from its Profiles page, without gh or this command, while Try pull request builds is on under Testing in qol settings (Linux and macOS only, off by default, set per computer).",
                 "One line per pull request on stdout (#number, short head, title), or the JSON array with --json; diagnostics on stderr.",
                 "Exits 0 with an empty list when no pull request is ready; non-zero when gh fails or pull request builds are not made for this platform.",
             ))

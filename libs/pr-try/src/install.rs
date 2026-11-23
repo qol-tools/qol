@@ -4,25 +4,25 @@ use qol_conventions::pr_try::{record_path, ROOT_DIR};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub(super) use qol_conventions::pr_try::{SwappedPlugin as Swapped, TryRecord as State};
+pub use qol_conventions::pr_try::{SwappedPlugin as Swapped, TryRecord as State};
 
-pub(super) struct Places {
-    pub(super) plugins: PathBuf,
-    pub(super) pids: PathBuf,
-    pub(super) state: PathBuf,
+pub struct Places {
+    pub(crate) plugins: PathBuf,
+    pub(crate) pids: PathBuf,
+    pub(crate) state: PathBuf,
     backups: PathBuf,
     downloads: PathBuf,
 }
 
 impl Places {
-    pub(super) fn current() -> Result<Self> {
+    pub fn current() -> Result<Self> {
         let config = qol_config::config_dir().context("could not find the qol config directory")?;
         let data = qol_config::data_dir().context("could not find the qol data directory")?;
         let cache = qol_config::cache_dir().context("could not find the qol cache directory")?;
         Ok(Self::under(&config, &data, &cache))
     }
 
-    fn under(config: &Path, data: &Path, cache: &Path) -> Self {
+    pub fn under(config: &Path, data: &Path, cache: &Path) -> Self {
         Self {
             plugins: config.join("plugins"),
             pids: data.join("runtime").join("pids"),
@@ -32,23 +32,23 @@ impl Places {
         }
     }
 
-    pub(super) fn download_dir(&self, number: u64, head: &str) -> PathBuf {
+    pub(crate) fn download_dir(&self, number: u64, head: &str) -> PathBuf {
         self.downloads.join(format!(
             "{number}-{}",
             qol_conventions::pr_try::short_sha(head)
         ))
     }
 
-    pub(super) fn downloads(&self) -> &Path {
+    pub(crate) fn downloads(&self) -> &Path {
         &self.downloads
     }
 
-    pub(super) fn backup_for(&self, id: &str, binary: &str) -> PathBuf {
+    pub(crate) fn backup_for(&self, id: &str, binary: &str) -> PathBuf {
         self.backups.join(id).join(binary)
     }
 }
 
-pub(super) trait RecordFile: Sized {
+pub trait RecordFile: Sized {
     fn load(path: &Path) -> Result<Self>;
     fn save(&self, path: &Path) -> Result<()>;
     fn clear(path: &Path) -> Result<()>;
@@ -82,7 +82,7 @@ impl RecordFile for State {
     }
 }
 
-pub(super) fn verify_binary(path: &Path, binary: &str) -> Result<()> {
+pub(crate) fn verify_binary(path: &Path, binary: &str) -> Result<()> {
     let artifact = match qol_artifact::inspect_path(path) {
         Ok(artifact) => artifact,
         Err(qol_artifact::InspectionError::MissingIdentity) => return Ok(()),
@@ -97,14 +97,14 @@ pub(super) fn verify_binary(path: &Path, binary: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) struct Swap<'a> {
-    pub(super) id: &'a str,
-    pub(super) source: &'a Path,
-    pub(super) target: &'a Path,
-    pub(super) backup: &'a Path,
+pub(crate) struct Swap<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) source: &'a Path,
+    pub(crate) target: &'a Path,
+    pub(crate) backup: &'a Path,
 }
 
-pub(super) fn replace(swap: &Swap<'_>, state: &mut State, state_path: &Path) -> Result<()> {
+pub(crate) fn replace(swap: &Swap<'_>, state: &mut State, state_path: &Path) -> Result<()> {
     if !state.plugins.iter().any(|swapped| swapped.id == swap.id) {
         if !swap.backup.is_file() {
             back_up(swap.target, swap.backup)?;
@@ -119,7 +119,7 @@ pub(super) fn replace(swap: &Swap<'_>, state: &mut State, state_path: &Path) -> 
     swap_in(swap.source, swap.target)
 }
 
-pub(super) fn back_up(target: &Path, backup: &Path) -> Result<()> {
+pub(crate) fn back_up(target: &Path, backup: &Path) -> Result<()> {
     let parent = backup
         .parent()
         .with_context(|| format!("{} has no folder", backup.display()))?;
@@ -134,14 +134,14 @@ pub(super) fn back_up(target: &Path, backup: &Path) -> Result<()> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum Restored {
+pub(crate) enum Restored {
     PutBack,
     BackupGone,
     PluginGone,
 }
 
 impl Restored {
-    pub(super) fn describe(&self) -> &'static str {
+    pub(crate) fn describe(&self) -> &'static str {
         match self {
             Self::PutBack => "put back",
             Self::BackupGone => "its backup is gone, so the pull request build stays",
@@ -150,7 +150,7 @@ impl Restored {
     }
 }
 
-pub(super) fn restore(swapped: &Swapped) -> Result<Restored> {
+pub(crate) fn restore(swapped: &Swapped) -> Result<Restored> {
     if !swapped.backup.is_file() {
         return Ok(Restored::BackupGone);
     }
@@ -167,7 +167,7 @@ pub(super) fn restore(swapped: &Swapped) -> Result<Restored> {
     })
 }
 
-pub(super) fn swap_in(source: &Path, target: &Path) -> Result<()> {
+pub(crate) fn swap_in(source: &Path, target: &Path) -> Result<()> {
     let parent = target
         .parent()
         .with_context(|| format!("{} has no folder", target.display()))?;
