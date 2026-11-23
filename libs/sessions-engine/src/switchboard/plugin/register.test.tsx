@@ -5010,6 +5010,9 @@ test("a fork's page is the board's front page: p records a pass and moves on, f 
   expect(await ui.find({ type: 'Text', text: '0 pass · 0 fail · 2 left' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '1.4.2' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Hold the rifle at rest' })).toBeDefined()
+  expect((await ui.find({ key: 'verdict-pass' }))?.text).toBe('pass')
+  expect((await ui.find({ key: 'verdict-fail' }))?.text).toBe('fail with a note')
+  expect((await ui.find({ key: 'verdict-skip' }))?.text).toBe('skip')
 
   await ui.press({ key: 'verdict-pass' })
   expect(runs).toContainEqual(['answer', '--id', 'retail-test', '--item', 'hip', '--verdict', 'pass'])
@@ -5091,5 +5094,19 @@ test('a page with the id forks is its own tab and the forks tab stays the forks'
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
   await ui.press({ key: 'tab-page-forks' })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a long check keeps its whole text when the pane has room for it', async ($, on) => {
+  const sent: any[] = []
+  const long = 'Trade with a merchant, close the trade: no crash and no lost gold'
+  const page = { ...testPage('t5-fork'), blocks: [{ kind: 'checklist', items: [{ id: 'trade', text: long }] }] }
+  pagesBoard(on, sent, page)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't5', 't5-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 100 } })
+  expect(await ui.find({ type: 'Text', text: new RegExp(`^${long} +$`) })).toBeDefined()
   await ui.unmount()
 })

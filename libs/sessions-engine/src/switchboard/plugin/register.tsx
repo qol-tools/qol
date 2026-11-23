@@ -61,7 +61,7 @@ const FORKS_LABEL = 'forks'
 const ITEM_PREFIX = 'item-'
 const NOTE_KEY = 'note'
 const PAGE_INDENT = 5
-const PAGE_TEXT_MAX = 48
+const PAGE_ROW_SPARE = 22
 const NEW_REPLY = '◉'
 const NO_MARK = '  '
 const SINCE_WIDTH = 6
@@ -4484,7 +4484,7 @@ export const register: Register = on => {
       const counted = pageCount(live)
       const checks = checksOf(page)
       const picked = checks.find(check => check.id === cursor) ?? checks.find(check => answerOf(live, check.id) === undefined) ?? checks[0]
-      const textWidth = Math.min(PAGE_TEXT_MAX, Math.max(12, ...checks.map(check => check.text.length + 2)))
+      const textWidth = Math.max(12, Math.min(e.props.bodyColumns - PAGE_ROW_SPARE, Math.max(...checks.map(check => check.text.length + 2))))
       let digit = 0
       const checkRow = (check: Check) => {
         digit += 1
@@ -4567,18 +4567,18 @@ export const register: Register = on => {
               {noting === '' ? (
                 <Box flexDirection="row" gap={2}>
                   <Button key="verdict-pass" plain dimColor hotkey="p" onPress={() => void judge($, live, picked, 'pass')}>
-                    p pass
+                    pass
                   </Button>
                   <Button key="verdict-fail" plain dimColor hotkey="f" onPress={() => void judge($, live, picked, 'fail')}>
-                    f fail with a note
+                    fail with a note
                   </Button>
                   <Button key="verdict-skip" plain dimColor hotkey="s" onPress={() => void judge($, live, picked, 'skip')}>
-                    s skip
+                    skip
                   </Button>
                 </Box>
               ) : (
                 <Button key="note-drop" plain dimColor hotkey="d" onPress={dropNote}>
-                  d drops the note
+                  drop the note
                 </Button>
               )}
             </Box>
