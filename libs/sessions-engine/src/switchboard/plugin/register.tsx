@@ -757,7 +757,7 @@ export const withTaskCall = (held: TaskList, tool: string, input: Record<string,
     const id = (result as { task?: { id?: unknown } } | null)?.task?.id
     return typeof id === 'string' && id !== '' ? { ...held, [id]: 'pending' } : held
   }
-  if (tool === 'TaskUpdate' && typeof input.taskId === 'string' && input.taskId in held) {
+  if (tool === 'TaskUpdate' && typeof input.taskId === 'string' && Object.hasOwn(held, input.taskId)) {
     if (input.status === 'deleted') return Object.fromEntries(Object.entries(held).filter(([id]) => id !== input.taskId))
     return isTaskStatus(input.status) ? { ...held, [input.taskId]: input.status } : held
   }
@@ -2394,6 +2394,7 @@ const endFork = async ($: EngineInterface, entry: Entry): Promise<string | undef
       if (failed !== undefined) return `${keyName(entry.name)} could not be closed: ${printable(failed)}`
     }
     await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isWorking: false, isDismissed: true, isClosed: true, isDone: true } : one)))
+    taskLists.delete(agentId)
   } finally {
     closing.delete(agentId)
   }
@@ -4328,7 +4329,7 @@ export const register: Register = on => {
     }
     const labelled = (label: string, rows: JSX.Children[], prefix = label) =>
       rows.map((row, index) => (
-        <Box key={`${label}-${index}`} flexDirection="row">
+        <Box key={`${prefix}-${index}`} flexDirection="row">
           <Box width={LABEL_WIDTH} flexShrink={0}>
             {index === 0 && <Text dimColor>{label}</Text>}
           </Box>

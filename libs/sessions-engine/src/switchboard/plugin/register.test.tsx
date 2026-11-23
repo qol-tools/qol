@@ -5023,6 +5023,7 @@ test('the board detail reads its values from the agent and the calls the fork ma
   expect(withTaskCall(made, 'TaskUpdate', { taskId: '7', status: 'deleted' }, undefined)).toEqual({})
   expect(withTaskCall(made, 'TaskUpdate', { taskId: '8', status: 'completed' }, undefined)).toBe(made)
   expect(withTaskCall(made, 'Read', {}, undefined)).toBe(made)
+  expect(withTaskCall(made, 'TaskUpdate', { taskId: 'constructor', status: 'completed' }, undefined)).toBe(made)
   expect(tasksDone(undefined)).toBeUndefined()
   expect([familyColor('claude-opus-5-5'), familyColor('sonnet'), familyColor('haiku'), familyColor('fable'), familyColor(undefined)]).toEqual(['claude', 'suggestion', 'cyan', undefined, undefined])
   expect([effortMeter('low'), effortMeter('high'), effortMeter('max'), effortMeter(undefined)]).toEqual(['▰▱▱▱▱', '▰▰▰▱▱', '▰▰▰▰▰', undefined])
