@@ -88,7 +88,7 @@ fn every_profile_gets_the_look_and_the_notification_choices_in_their_scopes() {
 }
 
 #[test]
-fn a_choice_the_profile_already_holds_wins_over_the_legacy_file() {
+fn a_choice_the_profile_already_holds_wins_and_only_missing_choices_are_added() {
     let config = tempfile::tempdir().unwrap();
     let profile = profile_dir(config.path(), "default");
     write(&config.path().join(THEME_SETTINGS_FILE), legacy_theme());
@@ -97,19 +97,48 @@ fn a_choice_the_profile_already_holds_wins_over_the_legacy_file() {
         legacy_notifications(),
     );
     let synced = THEME.path_in(&profile, Scope::Core);
-    write(&synced, json!({ "accent": "green" }));
+    write(&synced, json!({ "accent": "green", "corner_radius": 4 }));
 
     run(config.path());
 
-    assert_eq!(read(&synced), json!({ "accent": "green" }));
+    let seeded = json!({
+        "accent": "green",
+        "corner_radius": 4,
+        "native_theme": "slate",
+        "animations": "off",
+    });
+    assert_eq!(read(&synced), seeded);
     assert_eq!(
         read(&NOTIFICATIONS.path_in(&profile, Scope::Device)),
         json!({ "enabled": false })
     );
 
-    write(&synced, json!({ "accent": "violet" }));
     assert!(run(config.path()).archived.is_empty());
-    assert_eq!(read(&synced), json!({ "accent": "violet" }));
+    assert_eq!(read(&synced), seeded);
+}
+
+#[test]
+fn an_unreadable_scope_file_is_left_for_repair_while_the_others_are_seeded() {
+    let config = tempfile::tempdir().unwrap();
+    let profile = profile_dir(config.path(), "default");
+    write(&config.path().join(THEME_SETTINGS_FILE), legacy_theme());
+    write(
+        &config.path().join(NOTIFICATIONS_SETTINGS_FILE),
+        legacy_notifications(),
+    );
+    let broken = THEME.path_in(&profile, Scope::Core);
+    std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+    std::fs::write(&broken, "{ not json").unwrap();
+
+    let report = run(config.path());
+
+    assert_eq!(std::fs::read_to_string(&broken).unwrap(), "{ not json");
+    assert!(!report.archived.contains(&broken));
+    assert_eq!(report.archived.len(), 3);
+    assert_eq!(
+        read(&NOTIFICATIONS.path_in(&profile, Scope::Device)),
+        json!({ "enabled": false })
+    );
 }
 
 #[test]
@@ -128,6 +157,7 @@ fn settings_never_chosen_are_left_out_so_another_computers_choice_can_sync_in() 
             "handler": "qol",
             "other_apps": "qol",
             "placement": null,
+            "message_seconds": 3,
         }),
     );
 
@@ -149,14 +179,14 @@ fn a_legacy_system_notifications_switch_becomes_the_handler() {
     let profile = profile_dir(config.path(), "default");
     write(
         &config.path().join(NOTIFICATIONS_SETTINGS_FILE),
-        json!({ "use_system_notifications": true }),
+        json!({ "use_system_notifications": true, "message_seconds": 5 }),
     );
 
     run(config.path());
 
     assert_eq!(
         read(&NOTIFICATIONS.path_in(&profile, Scope::Core)),
-        json!({ "handler": "both" })
+        json!({ "handler": "both", "message_seconds": 5 })
     );
 }
 

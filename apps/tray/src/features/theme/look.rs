@@ -23,32 +23,39 @@ pub fn remember_shown_look() {
 }
 
 pub fn show_current_look(plugin_manager: &SharedPluginManager) {
-    let Some(look) = newly_shown(&SHOWN, Look::current()) else {
-        return;
-    };
-    if !crate::settings_surface::apply_theme(&look.native, &look.accent) {
-        crate::settings_surface::stop();
-        crate::settings_surface::prewarm();
+    let pushed = push_new_look(&SHOWN, Look::current, |look| {
+        if !crate::settings_surface::apply_theme(&look.native, &look.accent) {
+            crate::settings_surface::stop();
+            crate::settings_surface::prewarm();
+        }
+        let reached = plugin_manager
+            .lock()
+            .broadcast_theme_to_running_gpui_daemons(&look.native, &look.accent);
+        if !reached.is_empty() {
+            log::info!(
+                "Broadcast theme to {} GPUI daemon(s) after theme change",
+                reached.len()
+            );
+        }
+    });
+    if pushed {
+        crate::features::launcher_apps::trigger_full_sync_with_manager(plugin_manager);
     }
-    let reached = plugin_manager
-        .lock()
-        .broadcast_theme_to_running_gpui_daemons(&look.native, &look.accent);
-    if !reached.is_empty() {
-        log::info!(
-            "Broadcast theme to {} GPUI daemon(s) after theme change",
-            reached.len()
-        );
-    }
-    crate::features::launcher_apps::trigger_full_sync_with_manager(plugin_manager);
 }
 
-fn newly_shown(shown: &Mutex<Option<Look>>, look: Look) -> Option<Look> {
+fn push_new_look(
+    shown: &Mutex<Option<Look>>,
+    current: impl FnOnce() -> Look,
+    push: impl FnOnce(&Look),
+) -> bool {
     let mut shown = shown.lock();
+    let look = current();
     if shown.as_ref() == Some(&look) {
-        return None;
+        return false;
     }
-    *shown = Some(look.clone());
-    Some(look)
+    push(&look);
+    *shown = Some(look);
+    true
 }
 
 #[cfg(test)]
@@ -65,20 +72,31 @@ mod tests {
     #[test]
     fn only_a_look_the_surfaces_do_not_show_yet_is_pushed() {
         let shown = Mutex::new(None);
+        let mut pushed = Vec::new();
+        let cases = [
+            ("bone", "amber", true),
+            ("bone", "amber", false),
+            ("bone", "blue", true),
+            ("slate", "blue", true),
+            ("slate", "blue", false),
+        ];
+
+        for (native, accent, expected) in cases {
+            let was_pushed = push_new_look(
+                &shown,
+                || look(native, accent),
+                |new_look| pushed.push(new_look.clone()),
+            );
+            assert_eq!(was_pushed, expected, "{native} {accent}");
+        }
 
         assert_eq!(
-            newly_shown(&shown, look("bone", "amber")),
-            Some(look("bone", "amber"))
+            pushed,
+            [
+                look("bone", "amber"),
+                look("bone", "blue"),
+                look("slate", "blue")
+            ]
         );
-        assert_eq!(newly_shown(&shown, look("bone", "amber")), None);
-        assert_eq!(
-            newly_shown(&shown, look("bone", "blue")),
-            Some(look("bone", "blue"))
-        );
-        assert_eq!(
-            newly_shown(&shown, look("slate", "blue")),
-            Some(look("slate", "blue"))
-        );
-        assert_eq!(newly_shown(&shown, look("slate", "blue")), None);
     }
 }

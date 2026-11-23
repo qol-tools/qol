@@ -1372,6 +1372,8 @@ default = 0
             platforms: None,
         }],
         plugin_configs: Some(configs),
+        theme: json!({ "accent": "blue" }).as_object().cloned(),
+        notifications: json!({ "handler": "os" }).as_object().cloned(),
         ..ProfileImportBundle::default()
     };
 
@@ -1384,6 +1386,8 @@ default = 0
         error.contains("Invalid config for qol-lights"),
         "expected late contract rejection, got: {error}"
     );
+    assert!(crate::features::theme::exported_settings().is_empty());
+    assert!(crate::features::notifications::exported_settings().is_empty());
     assert!(
         error.contains("value does not match field type number"),
         "expected type-mismatch detail, got: {error}"

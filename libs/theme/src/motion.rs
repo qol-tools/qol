@@ -80,10 +80,11 @@ pub const STAY_LONG: Duration = Duration::from_secs(8);
 pub const STAY_MESSAGE: Duration = Duration::from_millis(1200);
 pub const STAY_MESSAGE_LEAST: Duration = Duration::from_millis(500);
 pub const STAY_MESSAGE_MOST: Duration = Duration::from_secs(15);
-const LEGACY_PINNED_STAY_MESSAGE_SECONDS: f64 = 3.0;
 
 pub fn stored_message_stay(stored: Option<f64>, legacy: Option<f64>) -> Option<f64> {
-    stored.or(legacy.filter(|seconds| *seconds != LEGACY_PINNED_STAY_MESSAGE_SECONDS))
+    stored
+        .or(legacy
+            .filter(|seconds| *seconds != qol_conventions::LEGACY_PINNED_STAY_MESSAGE_SECONDS))
 }
 
 pub fn message_stay(stored: Option<f64>) -> Duration {

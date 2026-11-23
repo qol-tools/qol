@@ -1,6 +1,7 @@
 mod look;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
+use qol_config::profile::THEME;
 use serde_json::{Map, Value};
 use std::process::Command;
 
@@ -9,31 +10,23 @@ pub use look::{remember_shown_look, show_current_look};
 const ACCENT_KEY: &str = "accent";
 const THEME_KEY: &str = "theme";
 const NATIVE_THEME_KEY: &str = "native_theme";
-
-fn stored_settings() -> Result<Map<String, Value>> {
-    Ok(qol_config::profile::THEME.read(&crate::paths::shared_config_dir()?))
-}
+const CHOICE_KEYS: [&str; 4] = [
+    ACCENT_KEY,
+    THEME_KEY,
+    NATIVE_THEME_KEY,
+    qol_conventions::ANIMATIONS_KEY,
+];
 
 fn stored_key(key: &str) -> Result<Option<String>> {
-    match stored_settings()?.remove(key) {
+    match THEME.read(&crate::paths::shared_config_dir()?).remove(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => Ok(Some(value)),
         Some(other) => Err(anyhow!("theme setting {key} is not a string: {other}")),
     }
 }
 
-fn update_settings(update: impl FnOnce(&mut Map<String, Value>)) -> Result<()> {
-    let config_dir = crate::paths::shared_config_dir()?;
-    let _guard = crate::plugins::config::profile_config_write_guard_unmarked();
-    let mut settings = qol_config::profile::THEME.read(&config_dir);
-    update(&mut settings);
-    qol_config::profile::THEME
-        .write(&config_dir, &settings)
-        .context("failed to save theme settings")
-}
-
 fn save_key(key: &str, value: Option<String>) -> Result<()> {
-    update_settings(|settings| {
+    crate::features::profile::update_settings_file(&THEME, |settings| {
         match value {
             Some(value) => settings.insert(key.to_string(), Value::String(value)),
             None => settings.remove(key),
@@ -42,7 +35,12 @@ fn save_key(key: &str, value: Option<String>) -> Result<()> {
 }
 
 pub(crate) fn exported_settings() -> Map<String, Value> {
-    stored_settings().unwrap_or_default()
+    let Ok(config_dir) = crate::paths::shared_config_dir() else {
+        return Map::new();
+    };
+    let mut settings = THEME.read(&config_dir);
+    settings.retain(|key, value| check_imported(key, value).is_ok());
+    settings
 }
 
 pub(crate) fn validate_import(imported: &Map<String, Value>) -> Result<()> {
@@ -54,43 +52,26 @@ pub(crate) fn validate_import(imported: &Map<String, Value>) -> Result<()> {
 pub(crate) fn import_settings(imported: &Map<String, Value>) -> Result<()> {
     validate_import(imported)?;
     let imported = imported.clone();
-    update_settings(|settings| *settings = imported)
+    crate::features::profile::update_settings_file(&THEME, |settings| *settings = imported)
 }
 
 fn check_imported(key: &str, value: &Value) -> Result<()> {
-    if value.is_null() {
+    if !CHOICE_KEYS.contains(&key) || value.is_string() || value.is_null() {
         return Ok(());
     }
-    let text = value.as_str();
-    let valid = match key {
-        ACCENT_KEY => text.is_some_and(|text| validated_accent_key(text).is_ok()),
-        THEME_KEY => text.is_some_and(|text| validated_theme_key(text).is_ok()),
-        NATIVE_THEME_KEY => text.is_some_and(|text| validated_native_theme_key(text).is_ok()),
-        qol_conventions::ANIMATIONS_KEY => text.and_then(qol_theme::Animations::parse).is_some(),
-        _ => true,
-    };
-    if valid {
-        return Ok(());
-    }
-    Err(anyhow!("unknown {key} in the imported profile: {value}"))
+    Err(anyhow!(
+        "the imported theme setting {key} is not a string: {value}"
+    ))
 }
 
-pub fn save_selected_accent_key(key: &str) -> Result<()> {
-    let key = validated_accent_key(key)?.to_string();
-    save_key(ACCENT_KEY, Some(key))
+pub fn save_selected_accent_key(key: Option<&str>) -> Result<()> {
+    let key = key.map(validated_accent_key).transpose()?;
+    save_key(ACCENT_KEY, key.map(str::to_string))
 }
 
-pub fn clear_selected_accent_key() -> Result<()> {
-    save_key(ACCENT_KEY, None)
-}
-
-pub fn save_selected_theme_key(key: &str) -> Result<()> {
-    let key = validated_theme_key(key)?.to_string();
-    save_key(THEME_KEY, Some(key))
-}
-
-pub fn clear_selected_theme_key() -> Result<()> {
-    save_key(THEME_KEY, None)
+pub fn save_selected_theme_key(key: Option<&str>) -> Result<()> {
+    let key = key.map(validated_theme_key).transpose()?;
+    save_key(THEME_KEY, key.map(str::to_string))
 }
 
 pub fn selected_theme_key() -> Result<Option<String>> {
@@ -107,13 +88,9 @@ pub fn current_theme_key() -> String {
         .unwrap_or_else(|| qol_theme::DEFAULT_TRAY_THEME_KEY.to_string())
 }
 
-pub fn save_selected_native_theme_key(key: &str) -> Result<()> {
-    let key = validated_native_theme_key(key)?.to_string();
-    save_key(NATIVE_THEME_KEY, Some(key))
-}
-
-pub fn clear_selected_native_theme_key() -> Result<()> {
-    save_key(NATIVE_THEME_KEY, None)
+pub fn save_selected_native_theme_key(key: Option<&str>) -> Result<()> {
+    let key = key.map(validated_native_theme_key).transpose()?;
+    save_key(NATIVE_THEME_KEY, key.map(str::to_string))
 }
 
 pub fn selected_native_theme_key() -> Result<Option<String>> {
@@ -227,7 +204,7 @@ mod tests {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
-        save_selected_accent_key("blue").unwrap();
+        save_selected_accent_key(Some("blue")).unwrap();
 
         assert_eq!(selected_accent_key().unwrap().as_deref(), Some("blue"));
         assert_eq!(resolved_accent_key(), "blue");
@@ -238,7 +215,7 @@ mod tests {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
-        assert!(save_selected_accent_key("not-a-preset").is_err());
+        assert!(save_selected_accent_key(Some("not-a-preset")).is_err());
     }
 
     #[test]
@@ -246,8 +223,8 @@ mod tests {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
-        save_selected_accent_key("blue").unwrap();
-        clear_selected_accent_key().unwrap();
+        save_selected_accent_key(Some("blue")).unwrap();
+        save_selected_accent_key(None).unwrap();
 
         assert_eq!(selected_accent_key().unwrap(), None);
         assert_eq!(resolved_accent_key(), "amber");
@@ -259,9 +236,9 @@ mod tests {
         let _guard = crate::paths::push_test_path_root(root.path());
 
         assert_eq!(resolved_accent_key(), "amber");
-        save_selected_theme_key("midnight").unwrap();
+        save_selected_theme_key(Some("midnight")).unwrap();
         assert_eq!(resolved_accent_key(), "violet");
-        save_selected_accent_key("blue").unwrap();
+        save_selected_accent_key(Some("blue")).unwrap();
         assert_eq!(resolved_accent_key(), "blue");
     }
 
@@ -270,8 +247,8 @@ mod tests {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
-        assert!(save_selected_theme_key("not-a-theme").is_err());
-        save_selected_theme_key("midnight").unwrap();
+        assert!(save_selected_theme_key(Some("not-a-theme")).is_err());
+        save_selected_theme_key(Some("midnight")).unwrap();
         assert_eq!(selected_theme_key().unwrap().as_deref(), Some("midnight"));
         assert_eq!(current_theme_key(), "midnight");
     }
@@ -283,14 +260,14 @@ mod tests {
 
         assert_eq!(current_native_theme_key(), "bone");
 
-        save_selected_native_theme_key("slate").unwrap();
+        save_selected_native_theme_key(Some("slate")).unwrap();
 
         assert_eq!(
             selected_native_theme_key().unwrap().as_deref(),
             Some("slate")
         );
         assert_eq!(current_native_theme_key(), "slate");
-        assert!(save_selected_native_theme_key("not-a-native-theme").is_err());
+        assert!(save_selected_native_theme_key(Some("not-a-native-theme")).is_err());
     }
 
     #[test]
@@ -298,9 +275,9 @@ mod tests {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
-        save_selected_accent_key("blue").unwrap();
-        save_selected_theme_key("midnight").unwrap();
-        clear_selected_theme_key().unwrap();
+        save_selected_accent_key(Some("blue")).unwrap();
+        save_selected_theme_key(Some("midnight")).unwrap();
+        save_selected_theme_key(None).unwrap();
 
         assert_eq!(selected_theme_key().unwrap(), None);
         assert_eq!(current_theme_key(), qol_theme::DEFAULT_TRAY_THEME_KEY);
@@ -314,7 +291,7 @@ mod tests {
 
         assert_eq!(native_accent_wire(), current_accent_key());
 
-        save_selected_accent_key("blue").unwrap();
+        save_selected_accent_key(Some("blue")).unwrap();
 
         assert_eq!(native_accent_wire(), "blue");
     }
@@ -324,7 +301,7 @@ mod tests {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
-        save_selected_accent_key("blue").unwrap();
+        save_selected_accent_key(Some("blue")).unwrap();
         save_animations("off").unwrap();
 
         assert_eq!(
@@ -342,7 +319,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(selected_accent_key().unwrap(), None);
-        save_selected_accent_key("green").unwrap();
+        save_selected_accent_key(Some("green")).unwrap();
         assert_eq!(
             stored_json(&profile_core_file("work")),
             json!({ "accent": "green" })
@@ -361,7 +338,7 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, r#"{"accent": "blue", "corner_radius": 4}"#).unwrap();
 
-        save_selected_theme_key("midnight").unwrap();
+        save_selected_theme_key(Some("midnight")).unwrap();
 
         assert_eq!(
             stored_json(&path),
@@ -370,19 +347,64 @@ mod tests {
     }
 
     #[test]
-    fn an_import_replaces_the_look_and_refuses_unknown_choices() {
+    fn an_import_replaces_the_look_and_keeps_a_choice_from_a_newer_version() {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
-        save_selected_theme_key("midnight").unwrap();
+        save_selected_theme_key(Some("midnight")).unwrap();
 
-        let refused = json!({ "accent": "not-a-preset" });
+        let refused = json!({ "accent": 5 });
         assert!(import_settings(refused.as_object().unwrap()).is_err());
         assert_eq!(current_theme_key(), "midnight");
 
-        let imported = json!({ "accent": "blue", "native_theme": "slate" });
+        let imported = json!({ "accent": "a-newer-preset", "native_theme": "slate" });
         import_settings(imported.as_object().unwrap()).unwrap();
 
         assert_eq!(exported_settings(), *imported.as_object().unwrap());
         assert_eq!(current_theme_key(), qol_theme::DEFAULT_TRAY_THEME_KEY);
+        assert_eq!(resolved_accent_key(), "amber");
+        assert_eq!(current_native_theme_key(), "slate");
+    }
+
+    #[test]
+    fn an_imported_choice_must_be_text() {
+        let cases = [
+            (ACCENT_KEY, json!("blue"), true),
+            (ACCENT_KEY, json!("a-newer-preset"), true),
+            (ACCENT_KEY, json!(null), true),
+            (ACCENT_KEY, json!(5), false),
+            (THEME_KEY, json!(["midnight"]), false),
+            (NATIVE_THEME_KEY, json!(true), false),
+            (
+                qol_conventions::ANIMATIONS_KEY,
+                json!({ "off": true }),
+                false,
+            ),
+            ("corner_radius", json!(4), true),
+        ];
+        for (key, value, accepted) in cases {
+            assert_eq!(
+                check_imported(key, &value).is_ok(),
+                accepted,
+                "{key} {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_export_leaves_out_a_choice_an_import_would_refuse() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let path = profile_core_file("default");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"accent": 5, "theme": "midnight", "corner_radius": 4}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            Value::Object(exported_settings()),
+            json!({ "theme": "midnight", "corner_radius": 4 })
+        );
     }
 }

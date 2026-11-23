@@ -161,6 +161,21 @@ pub(crate) fn archive_original(
     Ok(archived_path)
 }
 
+pub(crate) fn read_object(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(serde_json::Value::Object(map)) => Some(map),
+        Ok(_) => None,
+        Err(error) => {
+            log::warn!(
+                "[migrations] skipping unparseable {}: {error}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
 pub(crate) fn write_json_atomic(path: &Path, value: &serde_json::Value) -> Result<()> {
     let serialized = serde_json::to_string_pretty(value).context("serializing migrated json")?;
     qol_fs::atomic_write(path, serialized.as_bytes())

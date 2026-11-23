@@ -1,4 +1,5 @@
 use serde_json::{Map, Value};
+use std::io;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +42,10 @@ pub const NOTIFICATIONS: SettingsFile = SettingsFile {
 };
 
 impl SettingsFile {
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
     pub fn scope_of(&self, key: &str) -> Scope {
         if self.device_keys.contains(&key) {
             Scope::Device
@@ -60,34 +65,42 @@ impl SettingsFile {
     }
 
     pub fn read_in(&self, profile_dir: &Path) -> Map<String, Value> {
-        let mut settings = Map::new();
-        for scope in Scope::ALL {
-            let Some(stored) = read_object(&self.path_in(profile_dir, scope)) else {
-                continue;
-            };
-            settings.extend(
-                stored
-                    .into_iter()
-                    .filter(|(key, _)| self.scope_of(key) == scope),
-            );
-        }
-        settings
+        let stored = Scope::ALL.map(|scope| {
+            let object = load_object(&self.path_in(profile_dir, scope)).unwrap_or_default();
+            (scope, object)
+        });
+        self.owned(&stored)
     }
 
-    pub fn write(&self, config_dir: &Path, settings: &Map<String, Value>) -> std::io::Result<()> {
-        self.write_in(&active_profile_dir_in(config_dir), settings)
+    pub fn update(
+        &self,
+        config_dir: &Path,
+        update: impl FnOnce(&mut Map<String, Value>),
+    ) -> io::Result<()> {
+        self.update_in(&active_profile_dir_in(config_dir), update)
     }
 
-    pub fn write_in(
+    pub fn update_in(
         &self,
         profile_dir: &Path,
-        settings: &Map<String, Value>,
-    ) -> std::io::Result<()> {
+        update: impl FnOnce(&mut Map<String, Value>),
+    ) -> io::Result<()> {
+        let mut stored = Vec::with_capacity(Scope::ALL.len());
         for scope in Scope::ALL {
-            write_part(
-                &self.path_in(profile_dir, scope),
-                &self.part(settings, scope),
-            )?;
+            stored.push((scope, load_object(&self.path_in(profile_dir, scope))?));
+        }
+        let mut settings = self.owned(&stored);
+        update(&mut settings);
+        for (scope, object) in stored {
+            let mut part = self.part(&settings, scope);
+            if scope != Scope::Core {
+                part.extend(
+                    object
+                        .into_iter()
+                        .filter(|(key, _)| self.scope_of(key) == Scope::Core),
+                );
+            }
+            write_part(&self.path_in(profile_dir, scope), &part)?;
         }
         Ok(())
     }
@@ -99,31 +112,49 @@ impl SettingsFile {
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect()
     }
+
+    fn owned(&self, stored: &[(Scope, Map<String, Value>)]) -> Map<String, Value> {
+        stored
+            .iter()
+            .flat_map(|(scope, object)| {
+                object
+                    .iter()
+                    .filter(move |(key, _)| self.scope_of(key) == *scope)
+            })
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
 }
 
 fn active_profile_dir_in(config_dir: &Path) -> PathBuf {
     super::active_profile_dir(&config_dir.join(super::PROFILE_DIR))
 }
 
-fn read_object(path: &Path) -> Option<Map<String, Value>> {
-    let text = std::fs::read_to_string(path).ok()?;
+fn load_object(path: &Path) -> io::Result<Map<String, Value>> {
+    let text = match std::fs::read_to_string(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Map::new()),
+        read => read?,
+    };
     match serde_json::from_str::<Value>(&text) {
-        Ok(Value::Object(object)) => Some(object),
-        _ => None,
+        Ok(Value::Object(object)) => Ok(object),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} does not hold a JSON object", path.display()),
+        )),
     }
 }
 
-fn write_part(path: &Path, part: &Map<String, Value>) -> std::io::Result<()> {
+fn write_part(path: &Path, part: &Map<String, Value>) -> io::Result<()> {
     if part.is_empty() {
         return match std::fs::remove_file(path) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
             _ => Ok(()),
         };
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut text = serde_json::to_string_pretty(part).map_err(std::io::Error::other)?;
+    let mut text = serde_json::to_string_pretty(part).map_err(io::Error::other)?;
     text.push('\n');
     qol_fs::atomic_write(path, text.as_bytes())
 }
@@ -173,7 +204,9 @@ mod tests {
             "enabled": false,
         }));
 
-        NOTIFICATIONS.write_in(dir.path(), &settings).unwrap();
+        NOTIFICATIONS
+            .update_in(dir.path(), |stored| *stored = settings.clone())
+            .unwrap();
 
         assert_eq!(
             stored(&NOTIFICATIONS.path_in(dir.path(), Scope::Core)),
@@ -197,35 +230,112 @@ mod tests {
         std::fs::create_dir_all(core.parent().unwrap()).unwrap();
         std::fs::write(&core, r#"{"enabled": false, "handler": "os"}"#).unwrap();
 
-        let read = NOTIFICATIONS.read_in(dir.path());
-        assert_eq!(read, object(json!({ "handler": "os" })));
+        assert_eq!(
+            NOTIFICATIONS.read_in(dir.path()),
+            object(json!({ "handler": "os" }))
+        );
 
-        NOTIFICATIONS.write_in(dir.path(), &read).unwrap();
+        NOTIFICATIONS.update_in(dir.path(), |_| {}).unwrap();
         assert_eq!(stored(&core), Some(json!({ "handler": "os" })));
         assert!(!NOTIFICATIONS.path_in(dir.path(), Scope::Device).exists());
     }
 
     #[test]
-    fn unreadable_files_read_as_empty_and_an_empty_scope_keeps_no_file() {
+    fn a_key_a_newer_version_keeps_on_this_computer_survives_a_save() {
         let dir = tempfile::tempdir().unwrap();
-        let core = THEME.path_in(dir.path(), Scope::Core);
-        assert!(THEME.read_in(dir.path()).is_empty());
-        std::fs::create_dir_all(core.parent().unwrap()).unwrap();
-        for text in ["not json", "[1, 2]", "\"slate\"", ""] {
-            std::fs::write(&core, text).unwrap();
-            assert!(THEME.read_in(dir.path()).is_empty(), "{text:?}");
+        let files = [
+            (
+                &NOTIFICATIONS,
+                Scope::Os,
+                json!({ "other_apps": "os", "sound": "chime" }),
+            ),
+            (
+                &NOTIFICATIONS,
+                Scope::Device,
+                json!({ "enabled": false, "focus": true }),
+            ),
+            (&THEME, Scope::Os, json!({ "font_scale": 1.25 })),
+            (&THEME, Scope::Device, json!({ "corner_radius": 4 })),
+        ];
+        for (file, scope, contents) in &files {
+            let path = file.path_in(dir.path(), *scope);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, contents.to_string()).unwrap();
         }
 
+        assert_eq!(
+            NOTIFICATIONS.read_in(dir.path()),
+            object(json!({ "other_apps": "os", "enabled": false }))
+        );
+        assert!(THEME.read_in(dir.path()).is_empty());
+
+        NOTIFICATIONS
+            .update_in(dir.path(), |settings| {
+                settings.insert("handler".to_string(), json!("both"));
+            })
+            .unwrap();
         THEME
-            .write_in(
-                dir.path(),
-                &object(json!({ "accent": "blue", "theme": null })),
-            )
+            .update_in(dir.path(), |settings| {
+                settings.insert("accent".to_string(), json!("blue"));
+            })
+            .unwrap();
+
+        for (file, scope, contents) in &files {
+            assert_eq!(
+                stored(&file.path_in(dir.path(), *scope)).as_ref(),
+                Some(contents),
+                "{scope:?}"
+            );
+        }
+
+        NOTIFICATIONS
+            .update_in(dir.path(), |settings| {
+                settings.remove("other_apps");
+            })
+            .unwrap();
+        assert_eq!(
+            stored(&NOTIFICATIONS.path_in(dir.path(), Scope::Os)),
+            Some(json!({ "sound": "chime" }))
+        );
+    }
+
+    #[test]
+    fn unreadable_files_read_as_empty_and_a_save_leaves_them_for_repair() {
+        let dir = tempfile::tempdir().unwrap();
+        for scope in Scope::ALL {
+            let path = NOTIFICATIONS.path_in(dir.path(), scope);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            for text in ["not json", "[1, 2]", "\"slate\"", ""] {
+                std::fs::write(&path, text).unwrap();
+                assert!(NOTIFICATIONS.read_in(dir.path()).is_empty(), "{text:?}");
+
+                let saved = NOTIFICATIONS.update_in(dir.path(), |settings| {
+                    settings.insert("handler".to_string(), json!("os"));
+                });
+
+                assert!(saved.is_err(), "{scope:?} {text:?}");
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+            }
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_cleared_choice_keeps_no_file_for_an_empty_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = THEME.path_in(dir.path(), Scope::Core);
+
+        THEME
+            .update_in(dir.path(), |settings| {
+                *settings = object(json!({ "accent": "blue", "theme": null }));
+            })
             .unwrap();
         assert_eq!(stored(&core), Some(json!({ "accent": "blue" })));
 
         THEME
-            .write_in(dir.path(), &object(json!({ "accent": null })))
+            .update_in(dir.path(), |settings| {
+                settings.insert("accent".to_string(), Value::Null);
+            })
             .unwrap();
         assert!(!core.exists());
     }
@@ -238,7 +348,9 @@ mod tests {
         std::fs::write(root.join(super::super::ACTIVE_PROFILE_FILE), "work\n").unwrap();
 
         THEME
-            .write(config.path(), &object(json!({ "accent": "green" })))
+            .update(config.path(), |settings| {
+                settings.insert("accent".to_string(), json!("green"));
+            })
             .unwrap();
 
         assert_eq!(

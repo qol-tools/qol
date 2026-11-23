@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::Path;
 
 use qol_config::config_dir;
 use qol_config::profile::NOTIFICATIONS;
@@ -12,117 +13,54 @@ pub enum NativeHandler {
     Both,
 }
 
-pub fn stored_handler() -> NativeHandler {
-    stored_config().map_or(NativeHandler::Qol, |settings| parse_config(&settings))
-}
-
-fn stored_config() -> Option<Value> {
-    config_dir().map(|dir| Value::Object(NOTIFICATIONS.read(&dir)))
-}
-
 pub fn enabled_now() -> bool {
-    stored_config().is_none_or(|settings| parse_enabled(&settings))
+    config_dir().is_none_or(|dir| enabled_in(&dir))
 }
 
-fn parse_enabled(settings: &Value) -> bool {
-    settings
+fn enabled_in(config_dir: &Path) -> bool {
+    NOTIFICATIONS
+        .read(config_dir)
         .get(qol_conventions::NOTIFICATION_ENABLED_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }
 
-fn parse_config(settings: &Value) -> NativeHandler {
-    if let Some(handler) = settings.get("handler").and_then(Value::as_str) {
-        return match handler {
-            "qol" => NativeHandler::Qol,
-            "os" => NativeHandler::Os,
-            "both" => NativeHandler::Both,
-            _ => NativeHandler::Qol,
-        };
-    }
-    match settings
-        .get("use_system_notifications")
-        .and_then(Value::as_bool)
-    {
-        Some(true) => NativeHandler::Both,
-        _ => NativeHandler::Qol,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn parse(contents: &str) -> NativeHandler {
-        parse_config(&serde_json::from_str(contents).unwrap())
-    }
+    use qol_config::profile::{Scope, ACTIVE_PROFILE_FILE, PROFILE_DIR};
 
     #[test]
-    fn parses_handler_key() {
-        assert_eq!(parse(r#"{"handler": "os"}"#), NativeHandler::Os);
-        assert_eq!(parse(r#"{"handler": "both"}"#), NativeHandler::Both);
-        assert_eq!(parse(r#"{"handler": "qol"}"#), NativeHandler::Qol);
-    }
-
-    #[test]
-    fn handler_key_wins_over_legacy_key() {
-        assert_eq!(
-            parse(r#"{"handler": "qol", "use_system_notifications": true}"#),
-            NativeHandler::Qol
-        );
-    }
-
-    #[test]
-    fn parses_legacy_key() {
-        assert_eq!(
-            parse(r#"{"use_system_notifications": true}"#),
-            NativeHandler::Both
-        );
-        assert_eq!(
-            parse(r#"{"use_system_notifications": false}"#),
-            NativeHandler::Qol
-        );
-    }
-
-    #[test]
-    fn defaults_to_qol_when_unset() {
-        assert_eq!(parse(r#"{}"#), NativeHandler::Qol);
-    }
-
-    #[test]
-    fn notifications_stay_on_unless_turned_off() {
+    fn the_gate_reads_this_computers_mute_in_the_active_profile() {
+        let muted = Some(r#"{"enabled": false}"#);
         let cases = [
-            (r#"{}"#, true),
-            (r#"{"handler": "os"}"#, true),
-            (r#"{"enabled": true}"#, true),
-            (r#"{"enabled": false}"#, false),
-            (r#"{"handler": "both", "enabled": false}"#, false),
-            (r#"{"enabled": "no"}"#, true),
+            ("work", None, None, true),
+            ("work", muted, None, false),
+            ("work", None, muted, true),
+            ("work", Some(r#"{"enabled": true}"#), muted, true),
+            ("work", Some(r#"{"enabled": "no"}"#), None, true),
+            ("work", Some("not json"), None, true),
+            ("default", muted, None, true),
         ];
-        for (contents, expected) in cases {
+        for (profile, device, core, expected) in cases {
+            let config = tempfile::tempdir().unwrap();
+            let root = config.path().join(PROFILE_DIR);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join(ACTIVE_PROFILE_FILE), "work\n").unwrap();
+            for (scope, contents) in [(Scope::Device, device), (Scope::Core, core)] {
+                let Some(contents) = contents else {
+                    continue;
+                };
+                let path = NOTIFICATIONS.path_in(&root.join(profile), scope);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, contents).unwrap();
+            }
+
             assert_eq!(
-                parse_enabled(&serde_json::from_str(contents).unwrap()),
+                enabled_in(config.path()),
                 expected,
-                "{contents}"
+                "{profile} {device:?} {core:?}"
             );
         }
-    }
-
-    #[test]
-    fn unknown_handler_defaults_to_qol() {
-        assert_eq!(parse(r#"{"handler": "native"}"#), NativeHandler::Qol);
-    }
-
-    #[test]
-    fn the_gate_reads_the_mute_of_this_computer_and_the_synced_handler() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings = serde_json::json!({ "handler": "both", "enabled": false });
-        NOTIFICATIONS
-            .write_in(dir.path(), settings.as_object().unwrap())
-            .unwrap();
-
-        let stored = Value::Object(NOTIFICATIONS.read_in(dir.path()));
-        assert_eq!(parse_config(&stored), NativeHandler::Both);
-        assert!(!parse_enabled(&stored));
     }
 }

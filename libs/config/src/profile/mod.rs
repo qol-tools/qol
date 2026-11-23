@@ -23,14 +23,10 @@ pub fn active_core_dir(profile_root: &Path) -> PathBuf {
     active_profile_dir(profile_root).join(CORE_SUBDIR)
 }
 
-pub fn is_profile_name(name: &str) -> bool {
-    crate::valid_install_id(name) && !name.starts_with('-')
-}
-
 fn profile_name_from_marker(marker: Option<String>) -> String {
     marker
         .map(|raw| raw.trim().to_owned())
-        .filter(|name| is_profile_name(name))
+        .filter(|name| crate::validate_safe_identifier(name).is_ok())
         .unwrap_or_else(|| DEFAULT_PROFILE_NAME.to_owned())
 }
 
@@ -47,6 +43,7 @@ mod tests {
             ("../escape", DEFAULT_PROFILE_NAME),
             ("a/b", DEFAULT_PROFILE_NAME),
             ("-work", DEFAULT_PROFILE_NAME),
+            ("work profile", DEFAULT_PROFILE_NAME),
             ("", DEFAULT_PROFILE_NAME),
         ] {
             assert_eq!(

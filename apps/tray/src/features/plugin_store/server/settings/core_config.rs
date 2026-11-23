@@ -63,13 +63,17 @@ fn set_core_config_inner(state: &AppState, body: axum::body::Bytes) -> HttpResul
 
 fn dispatch_field(state: &AppState, field: &str, value: &serde_json::Value) -> HttpResult<()> {
     let result = match field {
-        "theme" => crate::features::theme::save_selected_theme_key(&as_str(field, value)?),
-        "accent" => crate::features::theme::save_selected_accent_key(&as_str(field, value)?)
-            .inspect(|_| crate::features::theme::show_current_look(&state.plugin_manager)),
-        "native_theme" => {
-            crate::features::theme::save_selected_native_theme_key(&as_str(field, value)?)
+        "theme" => {
+            crate::features::theme::save_selected_theme_key(Some(as_str(field, value)?.as_str()))
+        }
+        "accent" => {
+            crate::features::theme::save_selected_accent_key(Some(as_str(field, value)?.as_str()))
                 .inspect(|_| crate::features::theme::show_current_look(&state.plugin_manager))
         }
+        "native_theme" => crate::features::theme::save_selected_native_theme_key(Some(
+            as_str(field, value)?.as_str(),
+        ))
+        .inspect(|_| crate::features::theme::show_current_look(&state.plugin_manager)),
         "animations" => crate::features::theme::save_animations(&as_str(field, value)?),
         "profile" => crate::features::profile::registry::switch_active_profile(
             &state.daemon,

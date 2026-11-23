@@ -52,6 +52,12 @@ pub async fn apply_import_bundle(
         super::replace_plugin_configs(plugin_configs)?;
     }
     project_plugin_configs_to_dir(plugins_dir, plugin_configs.as_ref(), &synced_index)?;
+    if let Some(theme) = &bundle.theme {
+        crate::features::theme::import_settings(theme)?;
+    }
+    if let Some(notifications) = &bundle.notifications {
+        crate::features::notifications::import_settings(notifications)?;
+    }
     let success = plugin_results
         .iter()
         .all(|result| result.status != "failed");

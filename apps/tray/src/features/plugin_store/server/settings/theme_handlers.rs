@@ -123,32 +123,23 @@ fn get_theme_accent_inner() -> HttpResult<Response> {
 
 fn set_theme_accent_inner(state: AppState, body: axum::body::Bytes) -> HttpResult<Response> {
     let request: ThemeAccentRequest = http_json::parse_json_body(body, MAX_CONFIG_SIZE)?;
-    match request.key.as_deref() {
-        Some(key) => crate::features::theme::save_selected_accent_key(key),
-        None => crate::features::theme::clear_selected_accent_key(),
-    }
-    .map_err(|error| Box::new(bad_request(&error.to_string())))?;
+    crate::features::theme::save_selected_accent_key(request.key.as_deref())
+        .map_err(|error| Box::new(bad_request(&error.to_string())))?;
     crate::features::theme::show_current_look(&state.plugin_manager);
     theme_accent_response()
 }
 
 fn set_theme_inner(body: axum::body::Bytes) -> HttpResult<Response> {
     let request: ThemeRequest = http_json::parse_json_body(body, MAX_CONFIG_SIZE)?;
-    match request.key.as_deref() {
-        Some(key) => crate::features::theme::save_selected_theme_key(key),
-        None => crate::features::theme::clear_selected_theme_key(),
-    }
-    .map_err(|error| Box::new(bad_request(&error.to_string())))?;
+    crate::features::theme::save_selected_theme_key(request.key.as_deref())
+        .map_err(|error| Box::new(bad_request(&error.to_string())))?;
     theme_response()
 }
 
 fn set_native_theme_inner(state: AppState, body: axum::body::Bytes) -> HttpResult<Response> {
     let request: NativeThemeRequest = http_json::parse_json_body(body, MAX_CONFIG_SIZE)?;
-    match request.key.as_deref() {
-        Some(key) => crate::features::theme::save_selected_native_theme_key(key),
-        None => crate::features::theme::clear_selected_native_theme_key(),
-    }
-    .map_err(|error| Box::new(bad_request(&error.to_string())))?;
+    crate::features::theme::save_selected_native_theme_key(request.key.as_deref())
+        .map_err(|error| Box::new(bad_request(&error.to_string())))?;
     crate::features::theme::show_current_look(&state.plugin_manager);
     native_theme_response()
 }
@@ -226,11 +217,11 @@ mod tests {
         assert_eq!(initial.selected_key, None);
         assert_eq!(initial.keys, qol_theme::NATIVE_THEME_KEYS.to_vec());
 
-        crate::features::theme::save_selected_native_theme_key("slate").unwrap();
+        crate::features::theme::save_selected_native_theme_key(Some("slate")).unwrap();
         let saved = read_body(native_theme_response().unwrap()).await;
         assert_eq!(saved.key, "slate");
         assert_eq!(saved.selected_key.as_deref(), Some("slate"));
 
-        assert!(crate::features::theme::save_selected_native_theme_key("violet").is_err());
+        assert!(crate::features::theme::save_selected_native_theme_key(Some("violet")).is_err());
     }
 }

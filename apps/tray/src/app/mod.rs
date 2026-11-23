@@ -551,6 +551,9 @@ async fn reconcile_after_launch_pull(
         if let Err(error) = plugin_manager.lock().reconcile_profile_generation() {
             log::error!("Failed to reconcile daemons after profile pull: {error:#}");
         }
+        if cancellation_for_reconcile.is_cancelled() {
+            return;
+        }
         show_profile_host_settings(&plugin_manager);
     });
     tokio::pin!(reconcile);

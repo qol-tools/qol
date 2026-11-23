@@ -171,7 +171,7 @@ async fn profile_export_import_round_trip_preserves_effective_state() {
         write_live_plugin_config(&source, "plugin-live", &json!({ "source": "live" }));
         write_live_plugin_config(&source, "plugin-shared", &json!({ "source": "live" }));
         write_profile_plugin_config("plugin-shared", &json!({ "source": "profile" }));
-        theme::save_selected_accent_key("blue").unwrap();
+        theme::save_selected_accent_key(Some("blue")).unwrap();
         notifications::set_use_system_notifications(true).unwrap();
         notifications::set_enabled(false).unwrap();
     }
@@ -245,4 +245,55 @@ async fn profile_export_import_round_trip_preserves_effective_state() {
     assert_eq!(target_bundle.plugin_configs, source_bundle.plugin_configs);
     assert_eq!(target_bundle.theme, source_bundle.theme);
     assert_eq!(target_bundle.notifications, source_bundle.notifications);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_wrong_typed_look_or_notification_choice_refuses_the_import_before_any_write() {
+    let _guard = env_lock().lock().await;
+    let env = TestEnv::new();
+    let _ctx = env.enter();
+    profile::ensure_profile_dirs().unwrap();
+    write_hotkeys(json!([{ "id": "hk-old" }]));
+    write_shortcuts(json!([{ "id": "sc-old" }]));
+    theme::save_selected_accent_key(Some("blue")).unwrap();
+    notifications::set_use_system_notifications(true).unwrap();
+    let cases = [
+        (json!({ "accent": 5 }), Value::Null),
+        (json!({ "theme": true }), Value::Null),
+        (json!({ "native_theme": ["slate"] }), Value::Null),
+        (json!({ "animations": { "off": true } }), Value::Null),
+        (json!({ "accent": "green" }), json!({ "handler": 5 })),
+        (Value::Null, json!({ "placement": 7 })),
+    ];
+
+    for (theme_map, notification_map) in cases {
+        let bundle: ProfileImportBundle = serde_json::from_value(json!({
+            "hotkeys": [{ "id": "hk-new" }],
+            "shortcuts": [{ "id": "sc-new" }],
+            "theme": theme_map,
+            "notifications": notification_map,
+        }))
+        .unwrap();
+
+        let imported = profile::apply_import_bundle(&env.plugins_dir, &bundle).await;
+
+        let case = format!("{theme_map} {notification_map}");
+        assert!(imported.is_err(), "{case}");
+        assert_eq!(
+            profile::read_hotkeys_list(),
+            vec![json!({ "id": "hk-old" })],
+            "{case}"
+        );
+        assert_eq!(
+            profile::read_shortcuts_list(),
+            vec![json!({ "id": "sc-old" })],
+            "{case}"
+        );
+        assert_eq!(
+            theme::selected_accent_key().unwrap().as_deref(),
+            Some("blue"),
+            "{case}"
+        );
+        assert!(notifications::use_system_notifications(), "{case}");
+    }
 }
