@@ -194,7 +194,7 @@ mod tests {
             "await fillLaunchers($).catch(() => undefined)",
             "await messagesOf($, target)",
             "...missingForks(rows, [...records.values()], await $.clock.now())",
-            "WRITING TO",
+            "<Text dimColor>{'writing to  '}</Text>",
             "on('prompt.change', async ($, e, next) => {",
             "const typed = e.props.origin.kind === 'composer' ? undefined : typedByUser(e.props.text)",
             "const owners = recordOwners([...records.values()])",
@@ -329,7 +329,7 @@ mod tests {
             "const ran = await verbExec($, 'page', 'read', [])".to_owned(),
             "await verbExec($, 'page', 'clear', ['--owner', owner])".to_owned(),
             "const ran = await verbExec($, 'page', 'answer', ['--id', live.page.id, '--item', item, '--verdict', verdict".to_owned(),
-            "await sayAsUser($, owner, said)".to_owned(),
+            "await sayAsUser($, owner, said, onLost)".to_owned(),
             "await verbExec($, 'page', 'clear', ['--owner', row.key])".to_owned(),
             "const MESSAGING = /__session_(send|inbox|board|page)$/".to_owned(),
         ] {
