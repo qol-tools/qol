@@ -3,6 +3,20 @@ use std::path::{Path, PathBuf};
 
 pub const ROOT_DIR: &str = "pr-try";
 pub const RECORD_FILE: &str = "state.json";
+pub const KEEP_TRAY_FLAG: &str = "--keep-tray";
+pub const BUILDS_QUERY: &str = "pull_request_builds";
+pub const TRY_ACTION: &str = "try_pull_request";
+pub const TRY_WITH_TRAY_ACTION: &str = "try_pull_request_with_tray";
+pub const END_ACTION: &str = "end_pull_request_try";
+pub const DISMISS_ACTION: &str = "dismiss_pull_request_try";
+pub const CARRIES_TRAY_EXIT_CODE: i32 = 3;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListedBuild {
+    pub number: u64,
+    pub title: String,
+    pub head: String,
+}
 
 pub fn record_path(data_dir: &Path) -> PathBuf {
     data_dir.join(ROOT_DIR).join(RECORD_FILE)
@@ -38,8 +52,23 @@ impl TryRecord {
 
 #[cfg(test)]
 mod tests {
-    use super::{record_path, short_sha, SwappedPlugin, TryRecord};
+    use super::{record_path, short_sha, ListedBuild, SwappedPlugin, TryRecord};
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_listed_build_names_number_title_and_head() {
+        let build = ListedBuild {
+            number: 621,
+            title: "Load a build".into(),
+            head: "d3b28323f".into(),
+        };
+        let text = r#"[{"number":621,"title":"Load a build","head":"d3b28323f"}]"#;
+        assert_eq!(serde_json::to_string(&[&build]).unwrap(), text);
+        assert_eq!(
+            serde_json::from_str::<Vec<ListedBuild>>(text).unwrap(),
+            vec![build]
+        );
+    }
 
     #[test]
     fn the_record_lives_under_the_data_dir() {

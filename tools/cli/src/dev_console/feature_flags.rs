@@ -8,55 +8,40 @@ use super::picker::{
 };
 use super::render_util::{accent, panel_width, render_bottom_panel};
 use super::Dash;
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(super) enum FeatureFlag {
-    PluginSources,
-}
-
-pub(super) struct FeatureFlagDef {
-    pub(super) flag: FeatureFlag,
-    pub(super) id: &'static str,
-    pub(super) label: &'static str,
-}
-
-pub(super) const FEATURE_FLAGS: &[FeatureFlagDef] = &[FeatureFlagDef {
-    flag: FeatureFlag::PluginSources,
-    id: qol_config::feature_flags::PLUGIN_SOURCES.id,
-    label: qol_config::feature_flags::PLUGIN_SOURCES.label,
-}];
+use qol_config::feature_flags::{FeatureFlag, ALL};
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(super) struct FeatureFlags {
-    enabled: Vec<FeatureFlag>,
+    enabled: Vec<&'static str>,
 }
 
 impl FeatureFlags {
-    pub(super) fn enabled(&self, flag: FeatureFlag) -> bool {
-        self.enabled.contains(&flag)
+    pub(super) fn enabled(&self, flag: &FeatureFlag) -> bool {
+        self.enabled.contains(&flag.id)
     }
 
-    pub(super) fn toggle(&mut self, flag: FeatureFlag) {
-        if let Some(index) = self.enabled.iter().position(|known| *known == flag) {
+    pub(super) fn toggle(&mut self, flag: &'static FeatureFlag) -> bool {
+        if let Some(index) = self.enabled.iter().position(|id| *id == flag.id) {
             self.enabled.remove(index);
+            false
         } else {
-            self.enabled.push(flag);
+            self.enabled.push(flag.id);
+            true
         }
     }
 
     pub(super) fn ids(&self) -> Vec<String> {
-        FEATURE_FLAGS
-            .iter()
-            .filter(|def| self.enabled(def.flag))
-            .map(|def| def.id.to_string())
+        ALL.iter()
+            .filter(|flag| self.enabled(flag))
+            .map(|flag| flag.id.to_string())
             .collect()
     }
 
     pub(super) fn from_ids(ids: &[String]) -> Self {
-        let enabled = FEATURE_FLAGS
+        let enabled = ALL
             .iter()
-            .filter(|def| ids.iter().any(|id| id == def.id))
-            .map(|def| def.flag)
+            .filter(|flag| ids.iter().any(|id| id == flag.id))
+            .map(|flag| flag.id)
             .collect();
         Self { enabled }
     }
@@ -90,12 +75,12 @@ pub(super) fn draw_feature_flags_panel(
 }
 
 fn feature_flag_panel_rows(dash: &Dash) -> Vec<Line<'static>> {
-    if FEATURE_FLAGS.is_empty() {
+    if ALL.is_empty() {
         return vec![Line::from(" no feature flags".fg(Color::DarkGray))];
     }
     let mut rows = feature_flag_brick_rows(dash);
-    if let Some(def) = FEATURE_FLAGS.get(dash.feature_panel.selected) {
-        let state = if dash.features.enabled(def.flag) {
+    if let Some(def) = ALL.get(dash.feature_panel.selected) {
+        let state = if dash.features.enabled(def) {
             "on"
         } else {
             "off"
@@ -128,7 +113,7 @@ fn feature_flag_brick_row(dash: &Dash, layout: &[PickerBrick], row: usize) -> Li
         if brick.x > x {
             spans.push(Span::raw(" ".repeat(brick.x - x)));
         }
-        let def = &FEATURE_FLAGS[brick.index];
+        let def = &ALL[brick.index];
         spans.extend(feature_flag_brick_spans(
             dash,
             def,
@@ -141,22 +126,22 @@ fn feature_flag_brick_row(dash: &Dash, layout: &[PickerBrick], row: usize) -> Li
 }
 
 pub(super) fn feature_flag_brick_layout(width: usize) -> Vec<PickerBrick> {
-    picker_brick_layout(FEATURE_FLAGS, width, feature_flag_brick_width)
+    picker_brick_layout(ALL, width, feature_flag_brick_width)
 }
 
-fn feature_flag_brick_width(flag: &FeatureFlagDef, row_width: usize) -> usize {
+fn feature_flag_brick_width(flag: &FeatureFlag, row_width: usize) -> usize {
     let max_text_width = filter_text_width(row_width);
     FILTER_BRICK_CHROME + filter_text(flag.id, max_text_width).chars().count()
 }
 
 fn feature_flag_brick_spans(
     dash: &Dash,
-    flag: &FeatureFlagDef,
+    flag: &FeatureFlag,
     selected: bool,
     width: usize,
 ) -> Vec<Span<'static>> {
     let text = filter_text(flag.id, filter_text_width(width));
-    let enabled = dash.features.enabled(flag.flag);
+    let enabled = dash.features.enabled(flag);
     let text_style = if selected {
         Style::new().fg(Color::White).bg(Color::Rgb(38, 44, 74))
     } else if enabled {
@@ -183,8 +168,8 @@ fn feature_flag_brick_spans(
     ]
 }
 
-fn feature_flag_color(dash: &Dash, flag: &FeatureFlagDef) -> Color {
-    if dash.features.enabled(flag.flag) {
+fn feature_flag_color(dash: &Dash, flag: &FeatureFlag) -> Color {
+    if dash.features.enabled(flag) {
         accent()
     } else {
         Color::DarkGray

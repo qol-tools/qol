@@ -3,7 +3,6 @@ use qol_runtime::local_http::{Client, Method};
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 
-const QUERY: &str = "/api/core/queries/updates";
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 const CHECK_WAIT: Duration = Duration::from_secs(90);
 const UPDATE_WAIT: Duration = Duration::from_secs(300);
@@ -99,14 +98,18 @@ fn wait(client: &Client, limit: Duration, done: impl Fn(&Snapshot) -> bool) -> R
 
 fn query(client: &Client) -> Result<Snapshot> {
     let response = client
-        .request(Method::Get, QUERY, None)
+        .request(
+            Method::Get,
+            &qol_conventions::api_routes::core_query(qol_conventions::core_queries::UPDATES),
+            None,
+        )
         .context("asking the tray for updates")?;
     serde_json::from_str(&response.body).context("the tray's updates answer is unreadable")
 }
 
 fn action(client: &Client, name: &str, id: Option<&str>) -> Result<()> {
     let body = id.map(|id| serde_json::json!({ "id": id }).to_string());
-    let route = format!("/api/core/actions/{name}");
+    let route = qol_conventions::api_routes::core_action(name);
     let response = client
         .request(Method::Post, &route, body.as_deref())
         .with_context(|| format!("asking the tray to {name}"))?;

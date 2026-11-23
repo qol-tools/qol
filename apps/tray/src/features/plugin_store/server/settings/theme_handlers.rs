@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use qol_conventions::core_queries;
 use serde::{Deserialize, Serialize};
 
 use super::super::types::{AppState, MAX_CONFIG_SIZE};
@@ -19,14 +20,17 @@ pub(in super::super) async fn get_core_query(
     Path(query): Path<String>,
     State(state): State<AppState>,
 ) -> Response {
-    if query == super::update_handlers::UPDATES_QUERY {
+    if query == core_queries::UPDATES {
         return super::update_handlers::get_updates(state).await;
     }
     if query == super::update_handlers::ATTENTION_QUERY {
         return super::update_handlers::get_attention(state).await;
     }
-    if query == super::plugins_handlers::PLUGINS_QUERY {
+    if query == core_queries::PLUGINS {
         return super::plugins_handlers::get_plugins(state).await;
+    }
+    if query == qol_conventions::pr_try::BUILDS_QUERY {
+        return super::pull_request_builds::get_list().await;
     }
     blocking("core query", move || get_core_query_inner(&query)).await
 }
@@ -226,7 +230,7 @@ mod tests {
 
     #[test]
     fn delegated_queries_stay_out_of_the_legacy_inner_table() {
-        assert!(get_core_query_inner(super::super::update_handlers::UPDATES_QUERY).is_err());
+        assert!(get_core_query_inner(qol_conventions::core_queries::UPDATES).is_err());
         assert!(get_core_query_inner(super::super::update_handlers::ATTENTION_QUERY).is_err());
     }
 

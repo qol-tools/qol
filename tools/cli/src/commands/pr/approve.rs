@@ -27,7 +27,7 @@ pub(super) fn run(repo: &str, number: Option<u64>) -> Result<String> {
     Ok(format!(
         "copied the approval of pull request #{} at {}: paste it as a new comment on the page your browser opened",
         head.number,
-        super::short(&head.head_ref_oid)
+        qol_conventions::pr_try::short_sha(&head.head_ref_oid)
     ))
 }
 

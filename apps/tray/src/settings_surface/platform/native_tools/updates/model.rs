@@ -4,6 +4,8 @@ use qol_config::text::plural;
 use qol_connection_health::ConnectionHealth;
 use serde::Deserialize;
 
+use super::pull_request_build::{self, Job};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum TargetState {
@@ -56,6 +58,10 @@ pub(super) struct UpdatesSnapshot {
     pub(super) running: bool,
     #[serde(default)]
     pub(super) trial: Option<Trial>,
+    #[serde(default)]
+    pub(super) can_try_pull_requests: bool,
+    #[serde(default)]
+    pub(super) pull_request_build: Option<Job>,
     pub(super) host: UpdateTarget,
     #[serde(default)]
     pub(super) plugins: Vec<UpdateTarget>,
@@ -76,6 +82,10 @@ pub(super) enum RowAction {
     Update(String),
     UpdateAll,
     StopUpdates,
+    TryPullRequest(u64),
+    TryWithTray(u64),
+    EndTry,
+    KeepTray,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -352,14 +362,18 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             action_label: Some("Stop"),
         };
     }
+    if let Some(summary) = pull_request_build::busy_summary(snapshot) {
+        return summary;
+    }
     if let Some(trial) = &snapshot.trial {
         return Summary {
             dot: None,
             busy: false,
             label: "Updates paused".to_string(),
             description: format!(
-                "Trying pull request #{} until qol pr off.",
-                trial.pull_request
+                "Trying pull request #{} until {}.",
+                trial.pull_request,
+                pull_request_build::ends_try(snapshot)
             ),
             action: check_action(snapshot),
             action_label: Some(check_label(snapshot)),
@@ -455,7 +469,7 @@ fn check_row(snapshot: &UpdatesSnapshot) -> TargetRow {
             name: "Checks".to_string(),
             value: "Paused".to_string(),
             tone: ValueTone::Muted,
-            description: Some("Back after qol pr off".to_string()),
+            description: Some(pull_request_build::checks_resume(snapshot).to_string()),
             action: None,
             action_label: Some("Check now"),
             attention: false,
@@ -672,6 +686,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_snapshot_carries_the_pull_request_build_gate() {
+        use super::super::pull_request_build::Job;
+        let host =
+            r#""host":{"id":"qol-tray","name":"qol-tray","current":"1.0.0","state":"up_to_date"}"#;
+        let off: UpdatesSnapshot = serde_json::from_str(&format!(
+            r#"{{"checking":false,"checks_enabled":true,"running":false,{host}}}"#
+        ))
+        .unwrap();
+        assert!(!off.can_try_pull_requests);
+        assert_eq!(off.pull_request_build, None);
+        let on: UpdatesSnapshot = serde_json::from_str(&format!(
+            r#"{{"checking":false,"checks_enabled":true,"running":false,"can_try_pull_requests":true,"pull_request_build":{{"state":"getting","number":621}},{host}}}"#
+        ))
+        .unwrap();
+        assert!(on.can_try_pull_requests);
+        assert_eq!(on.pull_request_build, Some(Job::Getting { number: 621 }));
+    }
+
     fn target(id: &str, name: &str, state: TargetState) -> UpdateTarget {
         UpdateTarget {
             id: id.to_string(),
@@ -695,6 +728,8 @@ mod tests {
             connection: Default::default(),
             running: false,
             trial: None,
+            can_try_pull_requests: false,
+            pull_request_build: None,
             host,
             plugins,
         }
@@ -1315,5 +1350,63 @@ mod tests {
         assert_eq!(model.fold, Some("The other 1 is up to date.".to_string()));
         assert_eq!(model.host.value, "1.0.0 \u{2192} 1.1.0");
         assert_eq!(model.summary.label, "2 updates waiting");
+    }
+
+    #[test]
+    fn a_pull_request_job_shows_on_the_status_and_its_row() {
+        use super::pull_request_build::{busy_summary, needs_tray, row, Job};
+        let mut state = snapshot(
+            target("qol-tray", "qol-tray", TargetState::UpToDate),
+            vec![],
+        );
+        let off = row(&state);
+        assert_eq!(
+            (off.value.as_str(), off.opens, off.spinner),
+            ("Off", true, false)
+        );
+        assert_eq!(busy_summary(&state), None);
+
+        state.pull_request_build = Some(Job::Getting { number: 621 });
+        let getting = row(&state);
+        assert_eq!(
+            (getting.value.as_str(), getting.opens, getting.spinner),
+            ("#621", false, true)
+        );
+        let status = summary(&state);
+        assert!(status.busy);
+        assert_eq!(status.label, "Getting pull request #621");
+
+        state.pull_request_build = Some(Job::NeedsTray { number: 621 });
+        assert_eq!(needs_tray(&state), Some(621));
+        assert!(!row(&state).opens);
+        assert!(!summary(&state).busy);
+
+        state.trial = Some(trying());
+        state.pull_request_build = Some(Job::Ending);
+        let ending = row(&state);
+        assert_eq!((ending.value.as_str(), ending.spinner), ("Off", true));
+        assert_eq!(summary(&state).label, "Ending the try");
+
+        state.pull_request_build = Some(Job::Failed {
+            message: "gh run failed".to_string(),
+        });
+        let failed = row(&state);
+        assert_eq!(failed.value, "#435");
+        assert_eq!(failed.description, "gh run failed.");
+        assert!(failed.attention && failed.opens);
+    }
+
+    #[test]
+    fn a_running_plugin_update_keeps_its_stop_while_a_pull_request_loads() {
+        use super::pull_request_build::Job;
+        let mut state = snapshot(
+            target("qol-tray", "qol-tray", TargetState::UpToDate),
+            vec![target("launcher", "Launcher", TargetState::Queued)],
+        );
+        state.running = true;
+        state.pull_request_build = Some(Job::Getting { number: 621 });
+        let status = summary(&state);
+        assert_eq!(status.label, "Updating plugins");
+        assert_eq!(status.action, Some(RowAction::StopUpdates));
     }
 }

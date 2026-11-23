@@ -408,6 +408,23 @@ mod tests {
     }
 
     #[test]
+    fn pull_request_list_json_is_left_for_the_pr_dispatch() {
+        for values in [["pr", "list", "--json"], ["--json", "pr", "list"]] {
+            let args = parse_cli(values.into_iter().map(OsString::from).collect());
+            assert!(args.json);
+            assert!(contract_execution(&args).unwrap().is_none());
+        }
+        for values in [
+            vec!["pr", "try", "621", "--json"],
+            vec!["pr", "off", "--json"],
+        ] {
+            let args = parse_cli(values.into_iter().map(OsString::from).collect());
+            assert!(args.json);
+            assert!(contract_execution(&args).unwrap().is_some());
+        }
+    }
+
+    #[test]
     fn sessions_help_lists_every_subcommand() {
         let args = parse_cli(vec!["help".into(), "sessions".into()]);
         let execution = contract_execution(&args).unwrap().unwrap();

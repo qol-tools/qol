@@ -21,6 +21,6 @@ fn main() {
     qol_log::init_stderr();
     if let Err(error) = cli::run(env::args_os().skip(1).collect()) {
         eprintln!("{error:#}");
-        std::process::exit(1);
+        std::process::exit(commands::pr::exit_code(&error));
     }
 }

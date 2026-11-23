@@ -1,5 +1,6 @@
 pub(super) mod data;
 pub(super) mod model;
+mod pull_request_build;
 mod view;
 
 use std::rc::Rc;

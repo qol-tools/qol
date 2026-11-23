@@ -1,12 +1,13 @@
 use anyhow::bail;
 use qol_runtime::local_http::Method;
 use serde::Deserialize;
+use std::time::Duration;
 
 use super::super::data::{request_json, request_text, REQUEST_TIMEOUT};
 use super::model::UpdatesSnapshot;
 
-const UPDATES_QUERY: &str = "/api/core/queries/updates";
 const NO_ANSWER: &str = "qol-tray did not answer. Try again.";
+const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Deserialize)]
 struct ActionResponse {
@@ -15,11 +16,21 @@ struct ActionResponse {
 }
 
 pub(super) fn load() -> anyhow::Result<UpdatesSnapshot> {
-    request_json(Method::Get, UPDATES_QUERY, None, REQUEST_TIMEOUT)
+    let route = qol_conventions::api_routes::core_query(qol_conventions::core_queries::UPDATES);
+    request_json(Method::Get, &route, None, REQUEST_TIMEOUT)
+}
+
+pub(super) fn load_builds() -> anyhow::Result<Vec<qol_conventions::pr_try::ListedBuild>> {
+    request_json(
+        Method::Get,
+        &qol_conventions::api_routes::core_query(qol_conventions::pr_try::BUILDS_QUERY),
+        None,
+        LIST_TIMEOUT,
+    )
 }
 
 pub(in super::super) fn action(name: &str, body: Option<&str>) -> anyhow::Result<()> {
-    let route = format!("/api/core/actions/{name}");
+    let route = qol_conventions::api_routes::core_action(name);
     match request_text(Method::Post, &route, body, REQUEST_TIMEOUT) {
         Ok(body) => outcome(&body),
         Err(error) => bail!("{}", refusal(&format!("{error:#}"))),

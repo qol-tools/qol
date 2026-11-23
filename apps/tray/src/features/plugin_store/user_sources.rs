@@ -2,6 +2,9 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::features::profile::feature_flag_enabled;
+use qol_config::feature_flags::PLUGIN_SOURCES;
+
 const USER_SOURCES_FILE: &str = "plugin-sources.json";
 const INVALID_REPO: &str = "Type a GitHub repository as owner/repo";
 const DUPLICATE_REPO: &str = "That source is already added";
@@ -10,12 +13,6 @@ const UNKNOWN_REPO: &str = "Unknown source";
 const SAVE_FAILED: &str = "The sources could not be saved";
 const NOT_AVAILABLE: &str = "Adding sources is not available yet";
 
-/// Adding sources stays behind a feature flag until a source can be something
-/// other than a GitHub repository laid out like qol-tools/qol.
-pub(crate) fn enabled() -> bool {
-    qol_config::feature_flags::enabled(&qol_config::feature_flags::PLUGIN_SOURCES)
-}
-
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct UserSourcesFile {
     #[serde(default)]
@@ -23,21 +20,21 @@ struct UserSourcesFile {
 }
 
 pub(crate) fn load() -> Vec<String> {
-    if !enabled() {
+    if !feature_flag_enabled(&PLUGIN_SOURCES) {
         return Vec::new();
     }
     stored()
 }
 
 pub(crate) fn add(repo: &str, builtin: &[String]) -> Result<String, String> {
-    if !enabled() {
+    if !feature_flag_enabled(&PLUGIN_SOURCES) {
         return Err(NOT_AVAILABLE.to_string());
     }
     store_added(repo, builtin)
 }
 
 pub(crate) fn remove(repo: &str, builtin: &[String]) -> Result<(), String> {
-    if !enabled() {
+    if !feature_flag_enabled(&PLUGIN_SOURCES) {
         return Err(NOT_AVAILABLE.to_string());
     }
     store_removed(repo, builtin)

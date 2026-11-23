@@ -19,7 +19,7 @@ use crate::host_facade;
 use crate::installed_tray::InstalledTray;
 use crate::poller::Poller;
 
-use super::console_state::{load_console_state, save_console_state};
+use super::console_state::{load_console_state, save_console_state, save_feature_flag_changes};
 use super::dash::{
     flush_pokes, Dash, Health, HealthSnapshot, LinksState, Probes, ReloadOutcome, Row, View,
     WorktreeSelection, ROWS,
@@ -38,6 +38,7 @@ use super::emu_panel::{
     open_emu_detail, open_emu_dir, repair_sandbox_cleanup, run_selected_flow, stop_emu_runs,
     verify_selected_image, EmuState,
 };
+use super::feature_flags::FeatureFlags;
 use super::filters::{line_matches_filters, FilterState};
 use super::key_bindings::{
     action_for, is_feature_flags_shortcut, is_quit_shortcut, is_worktrees_shortcut, preserves_arm,
@@ -522,6 +523,24 @@ pub(super) fn draw_restart_splash<B: Backend>(
 }
 
 pub(super) fn persist_if_dirty(dash: &mut Dash) {
+    if !dash.flag_changes.is_empty() {
+        let changes = std::mem::take(&mut dash.flag_changes);
+        match save_feature_flag_changes(&dash.unmigrated_flags, &changes) {
+            Ok(ids) => {
+                dash.features = FeatureFlags::from_ids(&ids);
+                if !dash.unmigrated_flags.is_empty() {
+                    dash.unmigrated_flags.clear();
+                    dash.mark_state_dirty();
+                }
+            }
+            Err(error) => {
+                let mut pending = changes;
+                pending.append(&mut dash.flag_changes);
+                dash.flag_changes = pending;
+                dash.notice = Some((Instant::now(), format!("feature flags not saved: {error}")));
+            }
+        }
+    }
     if dash.state_dirty {
         save_console_state(&dash.to_state());
         dash.state_dirty = false;
@@ -1465,7 +1484,8 @@ mod tests {
 
         edit_feature_flags(&mut dash, KeyCode::Enter);
         assert_eq!(dash.features.ids(), ["plugin.sources"]);
-        assert!(dash.state_dirty, "a toggled flag is saved");
+        assert_eq!(dash.flag_changes, [("plugin.sources", true)]);
+        assert!(!dash.state_dirty, "a flag change saves only the flag file");
         assert_eq!(dash.trace_renderer(), TraceRenderer::Rust);
         assert!(
             !dash.trace_details_enabled(),
@@ -1473,6 +1493,10 @@ mod tests {
         );
         edit_feature_flags(&mut dash, KeyCode::Char(' '));
         assert!(dash.features.ids().is_empty());
+        assert_eq!(
+            dash.flag_changes,
+            [("plugin.sources", true), ("plugin.sources", false)]
+        );
         assert_eq!(dash.trace_renderer(), TraceRenderer::Rust);
         edit_feature_flags(&mut dash, KeyCode::Esc);
         assert!(!dash.feature_panel.is_active(), "esc closes feature panel");

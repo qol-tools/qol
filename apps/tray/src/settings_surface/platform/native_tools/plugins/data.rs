@@ -4,10 +4,9 @@ use super::super::data::{request_json, REQUEST_TIMEOUT};
 use super::super::updates::data::action;
 use super::model::{RowAction, Snapshot};
 
-const PLUGINS_QUERY: &str = "/api/core/queries/plugins";
-
 pub(super) fn load() -> anyhow::Result<Snapshot> {
-    request_json(Method::Get, PLUGINS_QUERY, None, REQUEST_TIMEOUT)
+    let route = qol_conventions::api_routes::core_query(qol_conventions::core_queries::PLUGINS);
+    request_json(Method::Get, &route, None, REQUEST_TIMEOUT)
 }
 
 pub(super) fn run(row_action: &RowAction) -> anyhow::Result<()> {
