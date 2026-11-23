@@ -1063,7 +1063,7 @@ mod tests {
         assert!(servers["sessions"].get("env").is_none(), "{config}");
         assert_eq!(
             args.last().unwrap(),
-            "--allowedTools=mcp__sessions__sessions_list,mcp__sessions__sessions_closed,mcp__sessions__session_records,mcp__sessions__session_fork,mcp__sessions__session_reopen,mcp__sessions__session_close,mcp__sessions__session_remote_control,mcp__sessions__session_send,mcp__sessions__session_inbox,mcp__sessions__session_board,mcp__qol-switchboard__fork_board,mcp__qol-switchboard__resume_session"
+            "--allowedTools=mcp__sessions__sessions_list,mcp__sessions__sessions_closed,mcp__sessions__session_records,mcp__sessions__session_fork,mcp__sessions__session_reopen,mcp__sessions__session_close,mcp__sessions__session_remote_control,mcp__sessions__session_send,mcp__sessions__session_inbox,mcp__sessions__session_board,mcp__sessions__session_page,mcp__qol-switchboard__fork_board,mcp__qol-switchboard__resume_session"
         );
     }
 
