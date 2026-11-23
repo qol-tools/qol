@@ -4,7 +4,7 @@ description = "Core qol settings."
 
 [section.appearance]
 label = "Appearance"
-description = "How qol looks on this computer."
+description = "How qol looks on every computer you sync."
 
 [field.native_theme]
 type = "select"

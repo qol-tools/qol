@@ -7,9 +7,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-pub use qol_plugin_api::profile::CORE_SUBDIR;
-pub const OS_SUBDIR: &str = "os";
-pub const DEVICE_SUBDIR: &str = "device";
+pub use qol_plugin_api::profile::{CORE_SUBDIR, DEVICE_SUBDIR, OS_SUBDIR};
 pub const SYNC_SUBDIR: &str = "sync";
 pub const BACKUPS_SUBDIR: &str = "backups";
 pub const PLUGIN_CONFIGS_SUBDIR: &str = "plugin-configs";

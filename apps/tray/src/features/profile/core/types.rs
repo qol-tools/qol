@@ -1,6 +1,6 @@
 use crate::plugins::PluginUid;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 
 pub const CURRENT_PROFILE_VERSION: u32 = 1;
@@ -69,6 +69,10 @@ pub struct ProfileExportBundle {
     pub plugin_configs: HashMap<String, Value>,
     #[serde(default)]
     pub plugins: Vec<PluginLockEntry>,
+    #[serde(default)]
+    pub theme: Map<String, Value>,
+    #[serde(default)]
+    pub notifications: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -85,6 +89,10 @@ pub struct ProfileImportBundle {
     pub plugins: Vec<PluginLockEntry>,
     #[serde(default)]
     pub installed_plugins: Vec<String>,
+    #[serde(default)]
+    pub theme: Option<Map<String, Value>>,
+    #[serde(default)]
+    pub notifications: Option<Map<String, Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

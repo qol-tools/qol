@@ -122,41 +122,25 @@ fn get_theme_accent_inner() -> HttpResult<Response> {
 }
 
 fn set_theme_accent_inner(state: AppState, body: axum::body::Bytes) -> HttpResult<Response> {
-    let previous_key = crate::features::theme::current_accent_key();
     let request: ThemeAccentRequest = http_json::parse_json_body(body, MAX_CONFIG_SIZE)?;
-    match request.key.as_deref() {
-        Some(key) => crate::features::theme::save_selected_accent_key(key),
-        None => crate::features::theme::clear_selected_accent_key(),
-    }
-    .map_err(|error| Box::new(bad_request(&error.to_string())))?;
-    let current_key = crate::features::theme::current_accent_key();
-    if current_key != previous_key {
-        apply_theme_to_running_surfaces(&state);
-    }
+    crate::features::theme::save_selected_accent_key(request.key.as_deref())
+        .map_err(|error| Box::new(bad_request(&error.to_string())))?;
+    crate::features::theme::show_current_look(&state.plugin_manager);
     theme_accent_response()
 }
 
 fn set_theme_inner(body: axum::body::Bytes) -> HttpResult<Response> {
     let request: ThemeRequest = http_json::parse_json_body(body, MAX_CONFIG_SIZE)?;
-    match request.key.as_deref() {
-        Some(key) => crate::features::theme::save_selected_theme_key(key),
-        None => crate::features::theme::clear_selected_theme_key(),
-    }
-    .map_err(|error| Box::new(bad_request(&error.to_string())))?;
+    crate::features::theme::save_selected_theme_key(request.key.as_deref())
+        .map_err(|error| Box::new(bad_request(&error.to_string())))?;
     theme_response()
 }
 
 fn set_native_theme_inner(state: AppState, body: axum::body::Bytes) -> HttpResult<Response> {
-    let previous_key = crate::features::theme::current_native_theme_key();
     let request: NativeThemeRequest = http_json::parse_json_body(body, MAX_CONFIG_SIZE)?;
-    match request.key.as_deref() {
-        Some(key) => crate::features::theme::save_selected_native_theme_key(key),
-        None => crate::features::theme::clear_selected_native_theme_key(),
-    }
-    .map_err(|error| Box::new(bad_request(&error.to_string())))?;
-    if crate::features::theme::current_native_theme_key() != previous_key {
-        apply_theme_to_running_surfaces(&state);
-    }
+    crate::features::theme::save_selected_native_theme_key(request.key.as_deref())
+        .map_err(|error| Box::new(bad_request(&error.to_string())))?;
+    crate::features::theme::show_current_look(&state.plugin_manager);
     native_theme_response()
 }
 
@@ -197,25 +181,6 @@ fn bad_request(message: &str) -> Response {
     (StatusCode::BAD_REQUEST, message.to_string()).into_response()
 }
 
-pub(super) fn apply_theme_to_running_surfaces(state: &AppState) {
-    let native = crate::features::theme::current_native_theme_key();
-    let accent = crate::features::theme::native_accent_wire();
-    if !crate::settings_surface::apply_theme(&native, &accent) {
-        crate::settings_surface::stop();
-        crate::settings_surface::prewarm();
-    }
-    let mut manager = state.plugin_manager.lock();
-    let reached = manager.broadcast_theme_to_running_gpui_daemons(&native, &accent);
-    if !reached.is_empty() {
-        log::info!(
-            "Broadcast theme to {} GPUI daemon(s) after theme change",
-            reached.len()
-        );
-    }
-    drop(manager);
-    crate::features::launcher_apps::trigger_full_sync_with_manager(&state.plugin_manager);
-}
-
 #[cfg(test)]
 mod tests {
     use super::{get_core_query_inner, native_theme_response, NativeThemeResponse};
@@ -252,11 +217,11 @@ mod tests {
         assert_eq!(initial.selected_key, None);
         assert_eq!(initial.keys, qol_theme::NATIVE_THEME_KEYS.to_vec());
 
-        crate::features::theme::save_selected_native_theme_key("slate").unwrap();
+        crate::features::theme::save_selected_native_theme_key(Some("slate")).unwrap();
         let saved = read_body(native_theme_response().unwrap()).await;
         assert_eq!(saved.key, "slate");
         assert_eq!(saved.selected_key.as_deref(), Some("slate"));
 
-        assert!(crate::features::theme::save_selected_native_theme_key("violet").is_err());
+        assert!(crate::features::theme::save_selected_native_theme_key(Some("violet")).is_err());
     }
 }

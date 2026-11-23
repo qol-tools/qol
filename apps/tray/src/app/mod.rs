@@ -325,6 +325,7 @@ async fn async_init_inner(
             qol_tray::dev_generation::state_socket_path().display()
         );
     }
+    qol_tray::features::theme::remember_shown_look();
     qol_tray::settings_surface::prewarm();
     qol_tray::features::gpu_driver_sync::spawn_watch();
     qol_tray::features::connection_health::spawn();
@@ -550,6 +551,10 @@ async fn reconcile_after_launch_pull(
         if let Err(error) = plugin_manager.lock().reconcile_profile_generation() {
             log::error!("Failed to reconcile daemons after profile pull: {error:#}");
         }
+        if cancellation_for_reconcile.is_cancelled() {
+            return;
+        }
+        show_profile_host_settings(&plugin_manager);
     });
     tokio::pin!(reconcile);
     tokio::select! {
@@ -689,6 +694,18 @@ fn spawn_config_reconcilers(
             }
         },
     );
+
+    let pm_for_host_settings = plugin_manager.clone();
+    spawn_reconciler(
+        config,
+        &[ConfigKind::Plugins, ConfigKind::Profile],
+        move || show_profile_host_settings(&pm_for_host_settings),
+    );
+}
+
+fn show_profile_host_settings(plugin_manager: &SharedPluginManager) {
+    features::theme::show_current_look(plugin_manager);
+    features::notifications::takeover::poke();
 }
 
 fn build_startup_info(pm: &SharedPluginManager) -> String {

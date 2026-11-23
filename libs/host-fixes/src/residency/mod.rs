@@ -7,9 +7,6 @@ use std::path::{Path, PathBuf};
 
 pub const RESIDENCY_FILE: &str = "residency.json";
 pub const RESIDENCY_NAMESPACE: &str = "residency";
-pub const PROFILE_FILE: &str = "active";
-pub const DEFAULT_PROFILE: &str = "default";
-pub const CORE_SUBDIR: &str = "core";
 pub const DEVICE_ID_REMAP: &str = "QOL_RESIDENCY_DEVICE_ID";
 pub const CONFIG_DIR_REMAP: &str = "QOL_RESIDENCY_CONFIG_DIR";
 
@@ -86,9 +83,7 @@ pub fn set_current_device_residency(value: HostResidency) -> Result<String> {
 }
 
 pub fn residency_path(config_root: &Path) -> PathBuf {
-    profile_root(config_root)
-        .join(active_profile(config_root))
-        .join(CORE_SUBDIR)
+    qol_config::profile::active_core_dir(&config_root.join(qol_config::profile::PROFILE_DIR))
         .join(RESIDENCY_NAMESPACE)
         .join(RESIDENCY_FILE)
 }
@@ -115,28 +110,6 @@ pub fn write_map(config_root: &Path, map: &BTreeMap<String, HostResidency>) -> R
     let body = serde_json::to_vec_pretty(map)?;
     qol_fs::atomic_write_durable(&path, &body)
         .with_context(|| format!("failed to write {}", path.display()))
-}
-
-pub fn profile_root(config_root: &Path) -> PathBuf {
-    config_root.join("profile")
-}
-
-pub fn active_profile(config_root: &Path) -> String {
-    let marker = profile_root(config_root).join(PROFILE_FILE);
-    std::fs::read_to_string(marker)
-        .ok()
-        .map(|raw| raw.trim().to_string())
-        .filter(|name| is_safe_profile_name(name))
-        .unwrap_or_else(|| DEFAULT_PROFILE.to_string())
-}
-
-fn is_safe_profile_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 128
-        && name != "."
-        && name != ".."
-        && !name.contains('/')
-        && !name.contains('\\')
 }
 
 fn config_root() -> Option<PathBuf> {
@@ -198,9 +171,9 @@ mod tests {
     }
 
     fn with_active_profile(config_root: &Path, name: &str) {
-        let profile = profile_root(config_root);
+        let profile = config_root.join(qol_config::profile::PROFILE_DIR);
         std::fs::create_dir_all(&profile).unwrap();
-        std::fs::write(profile.join(PROFILE_FILE), name).unwrap();
+        std::fs::write(profile.join(qol_config::profile::ACTIVE_PROFILE_FILE), name).unwrap();
     }
 
     fn with_device(config_root: &Path) {
@@ -306,7 +279,6 @@ mod tests {
         let root = config_root_from(dir.path());
         with_active_profile(&root, "../escape");
 
-        assert_eq!(active_profile(&root), "default");
         assert!(residency_path(&root).starts_with(root.join("profile").join("default")));
     }
 

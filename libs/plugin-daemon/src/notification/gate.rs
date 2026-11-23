@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::path::Path;
 
 use qol_config::config_dir;
+use qol_config::profile::NOTIFICATIONS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -10,127 +13,54 @@ pub enum NativeHandler {
     Both,
 }
 
-pub fn stored_handler() -> NativeHandler {
-    stored_config().map_or(NativeHandler::Qol, |contents| parse_config(&contents))
-}
-
-fn stored_config() -> Option<String> {
-    let path = config_dir()?.join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE);
-    std::fs::read_to_string(path).ok()
-}
-
 pub fn enabled_now() -> bool {
-    stored_config().is_none_or(|contents| parse_enabled(&contents))
+    config_dir().is_none_or(|dir| enabled_in(&dir))
 }
 
-fn parse_enabled(contents: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(contents)
-        .ok()
-        .and_then(|value| value.get("enabled")?.as_bool())
+fn enabled_in(config_dir: &Path) -> bool {
+    NOTIFICATIONS
+        .read(config_dir)
+        .get(qol_conventions::NOTIFICATION_ENABLED_KEY)
+        .and_then(Value::as_bool)
         .unwrap_or(true)
-}
-
-fn parse_config(contents: &str) -> NativeHandler {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(contents) else {
-        return NativeHandler::Qol;
-    };
-    if let Some(handler) = value.get("handler").and_then(serde_json::Value::as_str) {
-        return match handler {
-            "qol" => NativeHandler::Qol,
-            "os" => NativeHandler::Os,
-            "both" => NativeHandler::Both,
-            _ => NativeHandler::Qol,
-        };
-    }
-    match value
-        .get("use_system_notifications")
-        .and_then(serde_json::Value::as_bool)
-    {
-        Some(true) => NativeHandler::Both,
-        _ => NativeHandler::Qol,
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
-
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-
-    fn write_temp_config(contents: &str) -> PathBuf {
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("qol-notification-gate-{}-{id}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("notifications.json");
-        fs::write(&path, contents).unwrap();
-        path
-    }
-
-    fn parse_file(path: &PathBuf) -> NativeHandler {
-        parse_config(&fs::read_to_string(path).unwrap())
-    }
+    use qol_config::profile::{Scope, ACTIVE_PROFILE_FILE, PROFILE_DIR};
 
     #[test]
-    fn parses_handler_key() {
-        let path = write_temp_config(r#"{"handler": "os"}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Os);
-        let path = write_temp_config(r#"{"handler": "both"}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Both);
-        let path = write_temp_config(r#"{"handler": "qol"}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Qol);
-    }
-
-    #[test]
-    fn handler_key_wins_over_legacy_key() {
-        let path = write_temp_config(r#"{"handler": "qol", "use_system_notifications": true}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Qol);
-    }
-
-    #[test]
-    fn parses_legacy_key() {
-        let path = write_temp_config(r#"{"use_system_notifications": true}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Both);
-        let path = write_temp_config(r#"{"use_system_notifications": false}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Qol);
-    }
-
-    #[test]
-    fn defaults_to_qol_when_unset() {
-        let path = write_temp_config(r#"{}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Qol);
-    }
-
-    #[test]
-    fn notifications_stay_on_unless_turned_off() {
+    fn the_gate_reads_this_computers_mute_in_the_active_profile() {
+        let muted = Some(r#"{"enabled": false}"#);
         let cases = [
-            (r#"{}"#, true),
-            (r#"{"handler": "os"}"#, true),
-            (r#"{"enabled": true}"#, true),
-            (r#"{"enabled": false}"#, false),
-            (r#"{"handler": "both", "enabled": false}"#, false),
-            (r#"{"enabled": "no"}"#, true),
-            (r#"{not json"#, true),
-            ("", true),
+            ("work", None, None, true),
+            ("work", muted, None, false),
+            ("work", None, muted, true),
+            ("work", Some(r#"{"enabled": true}"#), muted, true),
+            ("work", Some(r#"{"enabled": "no"}"#), None, true),
+            ("work", Some("not json"), None, true),
+            ("default", muted, None, true),
         ];
-        for (contents, expected) in cases {
-            assert_eq!(parse_enabled(contents), expected, "{contents}");
+        for (profile, device, core, expected) in cases {
+            let config = tempfile::tempdir().unwrap();
+            let root = config.path().join(PROFILE_DIR);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join(ACTIVE_PROFILE_FILE), "work\n").unwrap();
+            for (scope, contents) in [(Scope::Device, device), (Scope::Core, core)] {
+                let Some(contents) = contents else {
+                    continue;
+                };
+                let path = NOTIFICATIONS.path_in(&root.join(profile), scope);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, contents).unwrap();
+            }
+
+            assert_eq!(
+                enabled_in(config.path()),
+                expected,
+                "{profile} {device:?} {core:?}"
+            );
         }
-    }
-
-    #[test]
-    fn corrupt_json_defaults_to_qol() {
-        let path = write_temp_config(r#"{not json"#);
-        assert_eq!(parse_file(&path), NativeHandler::Qol);
-    }
-
-    #[test]
-    fn unknown_handler_defaults_to_qol() {
-        let path = write_temp_config(r#"{"handler": "native"}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Qol);
     }
 }

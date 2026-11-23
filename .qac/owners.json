@@ -92,6 +92,7 @@
       { "text": "check", "why": "a plain word that other commands and step labels use with their own meaning" },
       { "text": "fix", "why": "a plain word that other commands and step labels use with their own meaning" },
       { "text": "placement", "why": "a plain word that the config contract's field kinds and emu step labels use with their own meaning" },
+      { "text": "enabled", "why": "a plain word that plugin configs, settings fields and payloads use as their own on or off switch" },
       { "text": "probe", "why": "a plain word that the host-defaults topic and the voice CLI's command use with their own meaning" },
       { "text": "shadow", "why": "a plain word that emu step labels use with their own meaning" },
       { "text": "--json", "why": "a flag that other qol commands and gh take with their own meaning" },

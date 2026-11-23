@@ -340,7 +340,7 @@ mod tests {
     fn runtime_command_injects_saved_theme_accent() {
         let root = tempfile::TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
-        crate::features::theme::save_selected_accent_key("blue").unwrap();
+        crate::features::theme::save_selected_accent_key(Some("blue")).unwrap();
 
         let command = runtime_command(&resolved(), Path::new("/bin/true"));
         let (_, value) = command

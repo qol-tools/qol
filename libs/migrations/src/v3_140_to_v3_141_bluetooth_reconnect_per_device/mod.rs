@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
 use crate::device_fields::{self, PluginFields};
-use crate::fs_util::{archive_original, list_profile_dirs, write_json_atomic};
+use crate::fs_util::{archive_original, list_profile_dirs, read_object, write_json_atomic};
 use crate::{FileMigration, MigrationReport};
 
 pub(crate) struct V3_140ToV3_141BluetoothReconnectPerDevice;
@@ -73,7 +73,7 @@ fn stored_slices(profile_dir: &Path, uid: &str) -> Vec<(PathBuf, Map<String, Val
     ]
     .into_iter()
     .filter_map(|path| {
-        let slice = device_fields::read_object(&path)?;
+        let slice = read_object(&path)?;
         Some((path, slice))
     })
     .collect()

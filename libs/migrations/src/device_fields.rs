@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::fs_util::{
-    archive_original, current_os_subdir, is_safe_path_component, list_profile_dirs,
+    archive_original, current_os_subdir, is_safe_path_component, list_profile_dirs, read_object,
     write_json_atomic,
 };
 use crate::MigrationReport;
@@ -133,21 +133,6 @@ pub(crate) fn synced_slices(profile_dir: &Path, uid: &str) -> [PathBuf; 2] {
 
 pub(crate) fn slice_path(scope_dir: PathBuf, uid: &str) -> PathBuf {
     scope_dir.join("plugin-configs").join(format!("{uid}.json"))
-}
-
-pub(crate) fn read_object(path: &Path) -> Option<Map<String, Value>> {
-    let raw = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str::<Value>(&raw) {
-        Ok(Value::Object(map)) => Some(map),
-        Ok(_) => None,
-        Err(error) => {
-            log::warn!(
-                "[device-fields] skipping unparseable {}: {error}",
-                path.display()
-            );
-            None
-        }
-    }
 }
 
 fn get_path<'a>(map: &'a Map<String, Value>, field: &str) -> Option<&'a Value> {

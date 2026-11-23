@@ -58,10 +58,7 @@ pub fn moving() -> bool {
 
 fn chosen() -> Animations {
     qol_config::config_dir()
-        .and_then(|dir| {
-            std::fs::read_to_string(dir.join(qol_conventions::THEME_SETTINGS_FILE)).ok()
-        })
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .map(|dir| qol_config::profile::THEME.read(&dir))
         .and_then(|settings| {
             settings
                 .get(qol_conventions::ANIMATIONS_KEY)?

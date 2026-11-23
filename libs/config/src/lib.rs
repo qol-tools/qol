@@ -7,6 +7,7 @@ pub mod object_array;
 pub mod pages;
 pub mod placement;
 pub mod platform;
+pub mod profile;
 pub mod text;
 pub mod validation;
 
@@ -371,6 +372,41 @@ pub fn valid_install_id(value: &str) -> bool {
         && value
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafeIdentifierError {
+    Empty,
+    LeadingOrTrailingWhitespace,
+    NullByte,
+    TooLong,
+    LeadingDash,
+    InvalidCharacters,
+}
+
+pub fn validate_safe_identifier(value: &str) -> Result<(), SafeIdentifierError> {
+    if value.trim().is_empty() {
+        return Err(SafeIdentifierError::Empty);
+    }
+    if value.trim() != value {
+        return Err(SafeIdentifierError::LeadingOrTrailingWhitespace);
+    }
+    if value.contains('\0') {
+        return Err(SafeIdentifierError::NullByte);
+    }
+    if value.len() > 64 {
+        return Err(SafeIdentifierError::TooLong);
+    }
+    if value.starts_with('-') {
+        return Err(SafeIdentifierError::LeadingDash);
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err(SafeIdentifierError::InvalidCharacters);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
