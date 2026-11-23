@@ -34,6 +34,7 @@ mod lineage;
 mod mailbox;
 use qol_terminal_sessions::cli::launch_flags;
 mod mcp;
+mod page;
 mod park;
 mod prs;
 mod record;
@@ -43,6 +44,7 @@ mod spawn;
 mod status;
 pub mod switchboard;
 mod typing;
+mod verb;
 mod watch;
 mod watch_owner;
 
@@ -78,7 +80,7 @@ pub struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub const SUBCOMMANDS: [SessionSubcommand; 27] = [
+pub const SUBCOMMANDS: [SessionSubcommand; 28] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -176,6 +178,10 @@ pub const SUBCOMMANDS: [SessionSubcommand; 27] = [
         run: |rest, _format| cli::record(rest),
     },
     SessionSubcommand {
+        name: "page",
+        run: |rest, _format| cli::page(rest),
+    },
+    SessionSubcommand {
         name: "mcp",
         run: |rest, _format| cli::mcp(rest),
     },
@@ -250,6 +256,7 @@ Diagnostics:
   qol sessions focus <session>
   qol sessions watch [TOKEN...]
   qol sessions record <claim|part|archive|done|stopped|resume|show|list|mail> [flags]
+  qol sessions page <set|read|answers|answer|clear> [flags]
   qol sessions mcp
   qol sessions export [pi]
   qol sessions help
@@ -406,6 +413,14 @@ Details:
   error and 3 for an unknown key or agent id. qol sessions record help
   lists the verbs. The session_records tool searches the records by key,
   friendly description or folder and the archived chats by words.
+  page keeps the workflow pages a fork puts on the switchboard board, one
+  JSON file per page in the sessions data folder, pages/<id>.json: a title
+  and blocks (kv, checklist, steps, links, callout, actions), with the
+  user's pass, fail or skip answer to each checklist item. set reads the
+  page JSON from stdin or --file, read lists every page with its answers,
+  and the exit code is 2 for a usage error, 3 for an unknown page or item
+  and 4 for a refused page. qol sessions page help lists the verbs and the
+  page JSON; forks set pages with the session_page tool.
   sessions_closed returns the newest 20 by default (`limit` takes 1 to 100),
   filters them with `query` (title, cwd, key, tool, id or a linked pull
   request URL) and `text` (up to 8 words the conversation's own prompts,

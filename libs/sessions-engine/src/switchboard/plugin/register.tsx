@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { AgentInfo, EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, Register, UiOpenResult } from 'claude-code'
 
-import type { ActionKind, CheckResult, Doing, Entry, Kind, Lit, ModelChoice, ModelSeen, Pull, PullDetail, PullState, RunState } from '../types'
+import type { ActionKind, Check, CheckResult, Doing, Entry, Kind, Lit, LivePage, ModelChoice, ModelSeen, Page, PageAnswer, PageBlock, Pull, PullDetail, PullState, RunState, Tone, Verdict } from '../types'
 
 const PROJECT = /^\s*Project:\s*(.+?)\s*$/
 const MODEL_LINE = /^\s*Model:\s*([A-Za-z0-9][\w.[\]-]*)\s*$/
@@ -54,6 +54,13 @@ const HOOK_NOTE = '\n\n<system-reminder>\nUserPromptSubmit hook additional conte
 const IDLE_KEY = 'i'
 const CLOSED_KEY = 'r'
 const SUB_FORK_KEYS = 'abcdefghjklmopqstuvwz'
+const PAGE_KEY = 't'
+const FORKS_TAB = '#forks'
+const FORKS_LABEL = 'forks'
+const ITEM_PREFIX = 'item-'
+const NOTE_KEY = 'note'
+const PAGE_INDENT = 5
+const PAGE_ROW_SPARE = 22
 const NEW_REPLY = '◉'
 const MERGED_EXIT = 0
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
@@ -116,7 +123,7 @@ const FORK_RESUME = 'Only the switchboard resumes, continues, opens or closes an
 const FORKS_ONLY = 'The switchboard starts only project-forks. A code review runs inside a fork: start a project-fork for it, and that fork starts the review lanes.'
 const FRESH_LANES_ONLY = 'A fork never continues a review lane: start a fresh one with the same prompt.'
 const CROSS_SESSION = /__session_(reopen|fork|spawn|submit|bridge|close|remote_control|loop_close)$/
-const MESSAGING = /__session_(send|inbox|board)$/
+const MESSAGING = /__session_(send|inbox|board|page)$/
 const FORK_TO_FORK =
   'Not sent: with SendMessage a fork messages only the forks it started and the fork that started it. Your own words reach any other fork or session with session_send to its key from sessions_list. Something the user typed for another fork is for that fork: tell the user in one line to select it in the agent list.'
 const COLOR: Record<Kind, string> = {
@@ -152,6 +159,10 @@ const modelsSeen = atom({ plugin: 'qol-switchboard', key: 'modelsSeen' } as cons
 const forkStates = atom({ plugin: 'qol-switchboard', key: 'forkStates' } as const, {} as Record<string, RunState>)
 const idleShown = atom({ plugin: 'qol-switchboard', key: 'idleShown' } as const, false)
 const closedShown = atom({ plugin: 'qol-switchboard', key: 'closedShown' } as const, false)
+const pages = atom({ plugin: 'qol-switchboard', key: 'pages' } as const, [] as LivePage[])
+const pageShown = atom({ plugin: 'qol-switchboard', key: 'pageShown' } as const, '')
+const pageCursor = atom({ plugin: 'qol-switchboard', key: 'pageCursor' } as const, '')
+const pageNoting = atom({ plugin: 'qol-switchboard', key: 'pageNoting' } as const, '')
 
 type Filing = { kind: Kind; headline: string; recommend?: string }
 type Sorting = { kind: Kind; recommend?: string }
@@ -1522,11 +1533,13 @@ const runSb = async ($: EngineInterface, text: string): Promise<string> => {
   return ran.stdout.trim() === '' ? `${typed}: done.` : oneLine(ran.stdout)
 }
 
-const recordExec = async ($: EngineInterface, verb: string, args: readonly string[]): Promise<{ exitCode: number; value: Record<string, unknown> } | undefined> => {
+type Noun = 'record' | 'page'
+
+const verbExec = async ($: EngineInterface, noun: Noun, verb: string, args: readonly string[]): Promise<{ exitCode: number; value: Record<string, unknown> } | undefined> => {
   try {
     const program = await recordProgram($)
     if (program === undefined) return undefined
-    const ran = await $.process.run([program, 'sessions', 'record', verb, ...args], { cwd: folderOf(program), timeoutMs: RECORD_TIMEOUT_MS })
+    const ran = await $.process.run([program, 'sessions', noun, verb, ...args], { cwd: folderOf(program), timeoutMs: RECORD_TIMEOUT_MS })
     const parsed: unknown = JSON.parse(ran.stdout)
     return typeof parsed === 'object' && parsed !== null ? { exitCode: ran.exitCode, value: parsed as Record<string, unknown> } : undefined
   } catch {
@@ -1534,9 +1547,148 @@ const recordExec = async ($: EngineInterface, verb: string, args: readonly strin
   }
 }
 
+const recordExec = ($: EngineInterface, verb: string, args: readonly string[]) => verbExec($, 'record', verb, args)
+
 const recordRun = async ($: EngineInterface, verb: string, args: readonly string[]): Promise<Record<string, unknown> | undefined> => {
   const ran = await recordExec($, verb, args)
   return ran?.exitCode === 0 ? ran.value : undefined
+}
+
+export const TONE_COLOR: Record<Tone, string> = { info: 'suggestion', good: 'success', warn: 'warning', bad: 'error' }
+
+export const VERDICT_LOOK: Record<Verdict | 'untested', { icon: string; label: string; color?: string }> = {
+  untested: { icon: '○', label: 'untested' },
+  pass: { icon: '✓', label: 'pass', color: 'success' },
+  fail: { icon: '✗', label: 'fail · sent', color: 'error' },
+  skip: { icon: '–', label: 'skipped' },
+}
+
+export const checksOf = (page: Page): Check[] => page.blocks.flatMap(block => (block.kind === 'checklist' ? block.items : []))
+
+export const answerOf = (live: LivePage, item: string): PageAnswer | undefined => live.answers.find(answer => answer.item === item)
+
+export const pageCount = (live: LivePage): { total: number; pass: number; fail: number; left: number } => {
+  const verdicts = checksOf(live.page).map(check => answerOf(live, check.id)?.verdict)
+  return {
+    total: verdicts.length,
+    pass: verdicts.filter(verdict => verdict === 'pass').length,
+    fail: verdicts.filter(verdict => verdict === 'fail').length,
+    left: verdicts.filter(verdict => verdict === undefined).length,
+  }
+}
+
+const isLivePage = (value: unknown): value is LivePage => {
+  if (typeof value !== 'object' || value === null) return false
+  const { page, answers } = value as { page?: unknown; answers?: unknown }
+  if (typeof page !== 'object' || page === null || !Array.isArray(answers)) return false
+  const { id, owner, title, blocks } = page as Record<string, unknown>
+  return typeof id === 'string' && typeof owner === 'string' && typeof title === 'string' && Array.isArray(blocks)
+}
+
+const ownerRow = (rows: readonly Entry[], live: LivePage): Entry | undefined => rows.find(entry => keyOf(entry) === live.page.owner)
+
+export const isOrphan = (rows: readonly Entry[], live: LivePage): boolean => {
+  const owner = ownerRow(rows, live)
+  return owner === undefined ? rows.length > 0 : isEnded(owner)
+}
+
+export const livePagesOf = (rows: readonly Entry[], all: readonly LivePage[]): LivePage[] =>
+  all.filter(live => {
+    const owner = ownerRow(rows, live)
+    return owner !== undefined && !isEnded(owner)
+  })
+
+export const failSaid = (page: Page, check: Check, note: string): string => fromUser(`${page.title}: check ${check.id} failed (${check.text})${note === '' ? '.' : `: ${note}`}`)
+
+export const actionSaid = (page: Page, label: string): string => fromUser(`${page.title}: ${label}`)
+
+let pagesListed: string | undefined
+let isPaging = false
+const pagesSeen = new Set<string>()
+
+export const refreshPages = async ($: EngineInterface): Promise<void> => {
+  if (isPaging) return
+  isPaging = true
+  try {
+    const folder = await $.env.get('QOL_SWITCHBOARD_PAGES')
+    if (folder === undefined || folder === '') return
+    await ensureLoaded($)
+    const rows = await read($, board)
+    const open = rows.filter(entry => !isEnded(entry)).map(keyOf).sort()
+    const listing = `${(await $.fs.exists(folder)) ? await listingOf($, folder) : ''}\n${open.join(' ')}`
+    if (listing === pagesListed) return
+    const ran = await verbExec($, 'page', 'read', [])
+    if (ran?.exitCode !== 0) return
+    const listed = (Array.isArray(ran.value.pages) ? ran.value.pages : []).filter(isLivePage)
+    const orphans = new Set(listed.filter(live => isOrphan(rows, live)).map(live => live.page.owner))
+    let isCleared = true
+    for (const owner of orphans) if ((await verbExec($, 'page', 'clear', ['--owner', owner]))?.exitCode !== 0) isCleared = false
+    const all = listed.filter(live => !orphans.has(live.page.owner))
+    if (isCleared) pagesListed = listing
+    const fresh = all.filter(live => !pagesSeen.has(live.page.id))
+    for (const live of fresh) pagesSeen.add(live.page.id)
+    await update($, pages, () => all)
+    const newest = fresh[fresh.length - 1]
+    if (newest !== undefined) await update($, pageShown, () => newest.page.id)
+    $.ui.invalidate('ui.render')
+  } catch {
+  } finally {
+    isPaging = false
+  }
+}
+
+const answerItem = async ($: EngineInterface, live: LivePage, item: string, verdict: Verdict, note = ''): Promise<LivePage | undefined> => {
+  const ran = await verbExec($, 'page', 'answer', ['--id', live.page.id, '--item', item, '--verdict', verdict, ...(note === '' ? [] : ['--note', note])])
+  if (ran?.exitCode !== 0 || !isLivePage(ran.value)) return undefined
+  const stored = ran.value
+  await update($, pages, all => all.map(one => (one.page.id === stored.page.id ? stored : one)))
+  return stored
+}
+
+const tellOwner = async ($: EngineInterface, live: LivePage, said: string): Promise<string | undefined> => {
+  const owner = ownerRow(await read($, board), live)
+  if (owner === undefined || isEnded(owner)) return `${live.page.owner} is closed, so nothing was sent.`
+  await sayAsUser($, owner, said)
+  return undefined
+}
+
+export const judge = async ($: EngineInterface, live: LivePage, check: Check, verdict: Verdict): Promise<void> => {
+  if (verdict === 'fail') {
+    await update($, pageNoting, () => check.id)
+    $.ui.invalidate('ui.render')
+    void $.ui.focus({ requestId: PANE, key: NOTE_KEY }).catch(() => undefined)
+    return
+  }
+  const stored = await answerItem($, live, check.id, verdict)
+  if (stored === undefined) {
+    $.ui.toast(`${check.text}: the ${verdict} was not recorded.`)
+    return
+  }
+  const checks = checksOf(stored.page)
+  const next = checks[checks.findIndex(one => one.id === check.id) + 1]
+  if (next !== undefined) {
+    await update($, pageCursor, () => next.id)
+    void $.ui.focus({ requestId: PANE, key: `${ITEM_PREFIX}${next.id}` }).catch(() => undefined)
+  }
+  $.ui.invalidate('ui.render')
+}
+
+export const sendFail = async ($: EngineInterface, live: LivePage, check: Check, typed: string): Promise<void> => {
+  const note = typed.trim()
+  await update($, pageNoting, () => '')
+  const stored = await answerItem($, live, check.id, 'fail', note)
+  if (stored === undefined) {
+    $.ui.toast(`${check.text}: the fail was not recorded.`)
+    return
+  }
+  const refused = await tellOwner($, stored, failSaid(stored.page, check, note))
+  if (refused !== undefined) $.ui.toast(refused)
+  $.ui.invalidate('ui.render')
+}
+
+export const pressAction = async ($: EngineInterface, live: LivePage, label: string): Promise<void> => {
+  const refused = await tellOwner($, live, actionSaid(live.page, label))
+  $.ui.toast(refused ?? `Sent to ${live.page.owner}: ${label}`)
 }
 
 const subagentPath = async ($: EngineInterface, agentId: string): Promise<string | undefined> => {
@@ -1759,12 +1911,48 @@ const withRecords = async ($: EngineInterface, rows: Entry[]): Promise<Entry[]> 
   const keyless = owned.filter(row => row.key === undefined).slice(-BACKFILL_MAX)
   const filled = new Map<Entry, Entry>()
   for (const row of keyless) filled.set(row, await backfill($, row))
-  return owned.map(one => {
+  const named = owned.map(one => {
     const row = filled.get(one) ?? one
     const record = row.key === undefined ? undefined : records.get(row.key)
     if (record === undefined) return row
     return { ...row, name: recordName(record), ...(record.done === undefined ? {} : { isDone: true }), ...(typeof record.stopped_ms === 'number' ? { isStoppedByUser: true } : {}) }
   })
+  return Promise.all(
+    named.map(async row => {
+      const record = row.key === undefined ? undefined : records.get(row.key)
+      if (row.launcher !== undefined || row.isDismissed || row.isDone === true || record === undefined) return row
+      const launcher = await recordedLauncher($, record, row.agentId).catch(() => undefined)
+      if (launcher === undefined) return row
+      const isAncestorClosed = await closedAbove($, launcher, owners, records)
+      return { ...row, launcher, ...(isAncestorClosed ? { isDone: true } : {}) }
+    }),
+  )
+}
+
+const ANCESTOR_DEPTH_MAX = 8
+
+const closedAbove = async ($: EngineInterface, launcher: string, owners: ReadonlyMap<string, string>, records: ReadonlyMap<string, SessionRecord>): Promise<boolean> => {
+  const seen = new Set<string>()
+  let agentId: string | undefined = launcher
+  while (agentId !== undefined && !seen.has(agentId) && seen.size < ANCESTOR_DEPTH_MAX) {
+    seen.add(agentId)
+    const key = owners.get(agentId)
+    const record = key === undefined ? undefined : records.get(key)
+    if (record === undefined) return false
+    if (record.done !== undefined) return true
+    agentId = await recordedLauncher($, record, agentId).catch(() => undefined)
+  }
+  return false
+}
+
+const transcriptOf = (record: SessionRecord, agentId: string): string | undefined => {
+  const part = (record.parts ?? []).find(one => typeof one === 'object' && one !== null && (one as { agent_id?: unknown }).agent_id === agentId) as { transcript?: unknown } | undefined
+  return typeof part?.transcript === 'string' && part.transcript.endsWith('.jsonl') ? part.transcript : undefined
+}
+
+const recordedLauncher = async ($: EngineInterface, record: SessionRecord, agentId: string): Promise<string | undefined> => {
+  const transcript = transcriptOf(record, agentId)
+  return transcript === undefined ? undefined : parentIn(String(await $.fs.read(transcript.replace(/\.jsonl$/, '.meta.json'))))
 }
 
 const subagentFile = async ($: EngineInterface, agentId: string, suffix: string): Promise<string | undefined> => {
@@ -2211,6 +2399,7 @@ const endFork = async ($: EngineInterface, entry: Entry): Promise<string | undef
   }
   const row = entry.key === undefined ? await backfill($, entry) : entry
   if (row.key !== undefined) await recordRun($, 'done', ['--key', row.key, '--reason', CLOSED_REASON])
+  if (row.key !== undefined) await verbExec($, 'page', 'clear', ['--owner', row.key]).catch(() => undefined)
   return undefined
 }
 
@@ -2668,6 +2857,22 @@ const tell = async ($: EngineInterface, target: Entry, message: string): Promise
   return sent.isDelivered
 }
 
+const sayAsUser = async ($: EngineInterface, entry: Entry, said: string, onLost: () => void = () => {}): Promise<boolean> => {
+  holdTyped(said)
+  const sent = await sendTo($, entry, said, direct($)).catch(() => undefined)
+  if (sent?.isDelivered === true) {
+    dropTyped(said)
+    return true
+  }
+  void tell($, entry, said)
+    .then(isDelivered => {
+      if (!isDelivered) onLost()
+    })
+    .catch(onLost)
+    .finally(() => dropTyped(said))
+  return false
+}
+
 const textField = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? value : undefined)
 
 export const closedSession = (input: Record<string, unknown>): ClosedSession | undefined => {
@@ -2983,7 +3188,11 @@ const pullNote = (all: readonly Pull[], agentId: string, details: Record<string,
 const metaLauncher = async ($: EngineInterface, agentId: string): Promise<string | undefined> => {
   const path = await subagentFile($, agentId, '.meta.json')
   if (path === undefined) return undefined
-  const meta = JSON.parse(String(await $.fs.read(path))) as { parentAgentId?: unknown }
+  return parentIn(String(await $.fs.read(path)))
+}
+
+const parentIn = (metaText: string): string | undefined => {
+  const meta = JSON.parse(metaText) as { parentAgentId?: unknown }
   return typeof meta.parentAgentId === 'string' && ID.test(meta.parentAgentId) ? meta.parentAgentId : undefined
 }
 
@@ -3255,6 +3464,8 @@ export const register: Register = on => {
       $.clock.every(MINUTE, () => void checkUpdate($))
       $.clock.every(DELIVER_MS, () => void deliver($).then(() => refreshWriting($)).catch(() => undefined).then(() => refreshStates($)))
       $.clock.every(DELIVER_MS, () => void deliverMail($))
+      $.clock.every(DELIVER_MS, () => void refreshPages($))
+      void refreshPages($)
       if (pending.length > 0) {
         isReady = false
         await update($, starting, () => bringingBack(pending.length))
@@ -3546,18 +3757,7 @@ export const register: Register = on => {
         void forgetSentLog($, key, note).catch(() => {})
       }
       const said = withHookContext(fromUser(at.message), hooked.context)
-      holdTyped(said)
-      const sent = await sendTo($, at.entry, said, direct($)).catch(() => undefined)
-      if (sent?.isDelivered !== true) {
-        void tell($, at.entry, said)
-          .then(isDelivered => {
-            if (!isDelivered) forget()
-          })
-          .catch(forget)
-          .finally(() => dropTyped(said))
-      } else {
-        dropTyped(said)
-      }
+      await sayAsUser($, at.entry, said, forget)
       if (viewing === undefined) await refreshWriting($, at.entry.agentId)
       clearBox($, typedSince(e.text))
       return dropAs(`→ ${keyOf(at.entry)}`)
@@ -3877,8 +4077,18 @@ export const register: Register = on => {
     return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: filed.text }] } })
   }).catch(($, e, next) => next(e))
 
+  on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const element = e.element ?? ''
+    if (element.startsWith(ITEM_PREFIX)) {
+      const id = element.slice(ITEM_PREFIX.length)
+      await update($, pageCursor, () => id)
+      if (![id, ''].includes(await read($, pageNoting))) await update($, pageNoting, () => '')
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Select, Link } = $.ui.resolve(e)
+    const { Box, Text, Button, Select, Link, Input } = $.ui.resolve(e)
     await ensureLoaded($)
     const everyRow = await read($, board)
     const list = everyRow.filter(entry => !entry.isDismissed)
@@ -3902,6 +4112,23 @@ export const register: Register = on => {
     const stateOfPull = (pull: Pull) => (pull.mergeCommit !== undefined ? 'merged' : (details[pull.pullRequest]?.state ?? 'open'))
     const isOpen = (pull: Pull) => ['open', 'draft'].includes(stateOfPull(pull))
     const isFocused = e.props.isFocused
+    const livePages = livePagesOf(everyRow, await read($, pages))
+    const shownTab = await read($, pageShown)
+    const shownPage = shownTab === FORKS_TAB ? undefined : (livePages.find(live => live.page.id === shownTab) ?? livePages[livePages.length - 1])
+    const cursor = await read($, pageCursor)
+    const noting = await read($, pageNoting)
+    const tabs = livePages.length === 0 ? [] : [...livePages.map(live => ({ id: live.page.id, label: live.page.tab ?? live.page.id })), { id: FORKS_TAB, label: FORKS_LABEL }]
+    const currentTab = shownPage?.page.id ?? FORKS_TAB
+    const nextTab = tabs[(tabs.findIndex(tab => tab.id === currentTab) + 1) % Math.max(1, tabs.length)]
+    const subKeys = livePages.length === 0 ? SUB_FORK_KEYS : SUB_FORK_KEYS.replace(PAGE_KEY, '')
+    const pageTail = (entry: Entry) => {
+      const counted = livePages.filter(live => live.page.owner === keyOf(entry)).map(pageCount)
+      const total = counted.reduce((sum, one) => sum + one.total, 0)
+      const left = counted.reduce((sum, one) => sum + one.left, 0)
+      const failed = counted.reduce((sum, one) => sum + one.fail, 0)
+      if (total === 0) return undefined
+      return <Text color="warning">{failed > 0 ? `${left} left · ${failed} failed` : `${left} of ${total} left`}</Text>
+    }
     const top = list.filter(entry => parentOf(list, entry) === undefined)
     const subsOf = (entry: Entry) => subForksOf(list, entry).sort((a, b) => a.at - b.at)
     const familyIn = (entry: Entry) => forksUnder(list, entry)
@@ -3953,7 +4180,7 @@ export const register: Register = on => {
     }
     let letters = 0
     const letter = () => {
-      const one = SUB_FORK_KEYS[letters]
+      const one = subKeys[letters]
       letters += 1
       return one === undefined ? {} : { hotkey: one }
     }
@@ -4009,6 +4236,8 @@ export const register: Register = on => {
             {dot(entry)} <Text bold={isPicked(entry)}>{parent === undefined ? keyName(entry.name) : subName(parent, entry)}</Text>
             {unread(entry)}
           </Button>
+          {pageTail(entry) !== undefined && <Text>{'  '}</Text>}
+          {pageTail(entry)}
           <Box flexGrow={1} />
           {stateText(entry)}
         </Box>
@@ -4097,7 +4326,7 @@ export const register: Register = on => {
         </Text>
       )
     }
-    const labelled = (label: string, rows: JSX.Children[]) =>
+    const labelled = (label: string, rows: JSX.Children[], prefix = label) =>
       rows.map((row, index) => (
         <Box key={`${label}-${index}`} flexDirection="row">
           <Box width={LABEL_WIDTH} flexShrink={0}>
@@ -4260,10 +4489,14 @@ export const register: Register = on => {
     }
     const hasSubs = list.some(entry => parentOf(list, entry) !== undefined)
     const keys = `digit opens a fork${hasSubs ? ' · letter opens a sub-fork' : ''}${closedFoldable > 0 ? ` · ${CLOSED_KEY} ${isClosedShown ? 'hides' : 'shows'} the closed forks` : ''} · tab walks${target === undefined ? '' : ' · tab to model or effort, arrows and enter pick'} · x closes · esc back to the prompt`
+    const nextKey = nextTab === undefined ? '' : ` · ${PAGE_KEY} ${nextTab.label}`
+    const shownChecks = shownPage === undefined ? [] : checksOf(shownPage.page)
+    const pageKeys = noting !== '' ? '↵ send to the fork · esc then d drops the note · x closes' : `${shownChecks.length > 0 ? 'digit or tab picks a check · ' : ''}${nextKey.slice(3)} · x closes · esc back to the prompt`
+    const boardKeys = shownPage !== undefined ? pageKeys : `${keys}${nextKey}`
     const help = isFocused && (
       <Box key="help" flexDirection="row" gap={2}>
         <Text dimColor wrap="wrap">
-          {keys}
+          {boardKeys}
         </Text>
         <Button key="close" plain dimColor hotkey="x" onPress={async () => {
             await $.ui.close({ id: PANE })
@@ -4273,6 +4506,156 @@ export const register: Register = on => {
       </Box>
     )
 
+    const showTab = (id: string) => async () => {
+      await update($, pageShown, () => id)
+      $.ui.invalidate('ui.render')
+    }
+    const tabKey = (id: string) => (id === FORKS_TAB ? 'tab-forks' : `tab-page-${id}`)
+    const tabRow =
+      tabs.length === 0 ? undefined : (
+        <Box key="tabs" flexDirection="row">
+          {tabs.flatMap((tab, index) => [
+            ...(index === 0 ? [] : [<Text key={`tab-gap-${tab.id}`} dimColor>{' · '}</Text>]),
+            tab.id === currentTab ? (
+              <Text key={tabKey(tab.id)} bold>
+                {tab.label}
+              </Text>
+            ) : (
+              <Button key={tabKey(tab.id)} plain dimColor {...(isFocused && tab.id === nextTab?.id ? { hotkey: PAGE_KEY } : {})} onPress={showTab(tab.id)}>
+                {tab.label}
+              </Button>
+            ),
+          ])}
+        </Box>
+      )
+    const pick = (check: Check) => async () => {
+      await update($, pageCursor, () => check.id)
+      if (![check.id, ''].includes(noting)) await update($, pageNoting, () => '')
+      $.ui.invalidate('ui.render')
+    }
+    const dropNote = async () => {
+      await update($, pageNoting, () => '')
+      $.ui.invalidate('ui.render')
+    }
+    const cell = (text: string, width: number) => (text.length > width - 1 ? `${text.slice(0, Math.max(1, width - 2))}… ` : text.padEnd(width))
+    const frame = (key: string, title: JSX.Children, right: JSX.Children | undefined, body: JSX.Children) => (
+      <Box key={key} flexDirection="column" borderStyle="single" borderDimColor paddingX={1} marginTop={1}>
+        <Box flexDirection="row">
+          <Text>{title}</Text>
+          <Box flexGrow={1} />
+          {right}
+        </Box>
+        {body}
+      </Box>
+    )
+    const pageFrame = (live: LivePage) => {
+      const { page } = live
+      const counted = pageCount(live)
+      const checks = checksOf(page)
+      const picked = checks.find(check => check.id === cursor) ?? checks.find(check => answerOf(live, check.id) === undefined) ?? checks[0]
+      const textWidth = Math.max(12, Math.min(e.props.bodyColumns - PAGE_ROW_SPARE, Math.max(...checks.map(check => check.text.length + 2))))
+      let digit = 0
+      const checkRow = (check: Check) => {
+        digit += 1
+        const look = VERDICT_LOOK[answerOf(live, check.id)?.verdict ?? 'untested']
+        const isPicked = check.id === picked?.id
+        const tone = look.color === undefined ? { dimColor: true } : { color: look.color }
+        return (
+          <Box key={`check-${check.id}`} flexDirection="column" {...(isPicked ? { backgroundColor: TARGET_BAND } : {})}>
+            <Button key={`${ITEM_PREFIX}${check.id}`} plain {...(digit <= 9 ? { hotkey: String(digit) } : {})} onPress={pick(check)}>
+              {digit <= 9 ? '' : '   '}
+              <Text {...tone}>{look.icon}</Text> <Text bold={isPicked}>{cell(check.text, textWidth)}</Text>
+              <Text {...tone}>{look.label}</Text>
+            </Button>
+            {check.detail !== undefined && (
+              <Box paddingLeft={PAGE_INDENT}>
+                <Text dimColor wrap="wrap">
+                  {check.detail}
+                </Text>
+              </Box>
+            )}
+            {noting === check.id && (
+              <Box paddingLeft={PAGE_INDENT}>
+                <Input key={NOTE_KEY} label="note ›" placeholder="what went wrong" submitLabel="send" autoFocus onSubmit={value => void sendFail($, live, check, value)} />
+              </Box>
+            )}
+          </Box>
+        )
+      }
+      const blockRows = (block: PageBlock, index: number): JSX.Children => {
+        switch (block.kind) {
+          case 'kv':
+            return block.rows.flatMap((row, at) => labelled(row.label, [<Text wrap="wrap" {...(row.tone === undefined ? {} : { color: TONE_COLOR[row.tone] })}>{row.value}</Text>], `kv-${index}-${at}`))
+          case 'checklist':
+            return block.items.map(checkRow)
+          case 'steps':
+            return block.items.map((step, at) => (
+              <Text key={`step-${index}-${at}`} wrap="wrap">
+                {step.state === 'done' ? <Text color="success">✓</Text> : step.state === 'now' ? <Text color="claude" bold>▸</Text> : <Text dimColor>○</Text>}{' '}
+                <Text dimColor={step.state === 'done'} bold={step.state === 'now'}>
+                  {step.text}
+                </Text>
+              </Text>
+            ))
+          case 'links':
+            return block.items.map((link, at) => (
+              <Text key={`link-${index}-${at}`}>
+                <Link href={link.url}>{link.label}</Link>
+              </Text>
+            ))
+          case 'callout':
+            return (
+              <Text wrap="wrap" color={TONE_COLOR[block.tone]}>
+                {block.text}
+              </Text>
+            )
+          case 'actions':
+            return (
+              <Box flexDirection="row" gap={2}>
+                {block.items.map(action => (
+                  <Button key={`action-${action.id}`} plain onPress={() => void pressAction($, live, action.label)}>
+                    {action.label}
+                  </Button>
+                ))}
+              </Box>
+            )
+        }
+      }
+      return frame(
+        `page-${page.id}`,
+        <Text bold>{page.title.toUpperCase()}</Text>,
+        counted.total === 0 ? undefined : <Text dimColor>{`${counted.pass} pass · ${counted.fail} fail · ${counted.left} left`}</Text>,
+        <Box flexDirection="column">
+          {page.blocks.map((block, index) => (
+            <Box key={`block-${index}`} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
+              {blockRows(block, index)}
+            </Box>
+          ))}
+          {picked !== undefined && (
+            <Box flexDirection="row" gap={2} marginTop={1}>
+              {noting === '' ? (
+                <Box flexDirection="row" gap={2}>
+                  <Button key="verdict-pass" plain dimColor hotkey="p" onPress={() => void judge($, live, picked, 'pass')}>
+                    pass
+                  </Button>
+                  <Button key="verdict-fail" plain dimColor hotkey="f" onPress={() => void judge($, live, picked, 'fail')}>
+                    fail with a note
+                  </Button>
+                  <Button key="verdict-skip" plain dimColor hotkey="s" onPress={() => void judge($, live, picked, 'skip')}>
+                    skip
+                  </Button>
+                </Box>
+              ) : (
+                <Button key="note-drop" plain dimColor hotkey="d" onPress={dropNote}>
+                  drop the note
+                </Button>
+              )}
+            </Box>
+          )}
+        </Box>,
+      )
+    }
+
     if (list.length === 0 && recent.length === 0)
       return (
         <Box flexDirection="column">
@@ -4280,11 +4663,21 @@ export const register: Register = on => {
           {help}
         </Box>
       )
+    if (shownPage !== undefined)
+      return (
+        <Box flexDirection="column">
+          {loading !== '' && <Text color="claude">◐ {loading}</Text>}
+          {tabRow}
+          {help}
+          {pageFrame(shownPage)}
+        </Box>
+      )
     const rows = forkRows.flatMap(entry => [forkRow(entry), ...liveSubs(entry).map(sub => forkRow(sub, entry))])
     const detail = shown === undefined ? undefined : detailOf(shown)
     return (
       <Box flexDirection="column">
         {loading !== '' && <Text color="claude">◐ {loading}</Text>}
+        {tabRow}
         {help}
         {rows}
         {closedFold}

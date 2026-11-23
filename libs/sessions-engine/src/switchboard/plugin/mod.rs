@@ -10,8 +10,8 @@ pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.13.0",
-  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat and logs it as a row in the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, files a merged result without waking its fork, gives each fork any other watcher result, keeps each fork's identity, done mark and stop in one session record, and brings each unfinished fork back into the agent list when the switchboard opens.",
+  "version": "1.14.0",
+  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat and logs it as a row in the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, files a merged result without waking its fork, gives each fork any other watcher result, keeps each fork's identity, done mark and stop in one session record, brings each unfinished fork back into the agent list when the switchboard opens, and draws the workflow pages forks put on the board as its front page, sending a failed check's note to its fork as the user's words.",
   "types": "./types/index.d.ts"
 }
 "#;
@@ -182,7 +182,8 @@ mod tests {
             "on('prompt.edit', async ($, e, next) => {",
             "return dropAs(`→ ${keyOf(at.entry)}`)",
             "const said = withHookContext(fromUser(at.message), hooked.context)",
-            "const sent = await sendTo($, at.entry, said, direct($))",
+            "await sayAsUser($, at.entry, said, forget)",
+            "const sent = await sendTo($, entry, said, direct($)).catch(() => undefined)",
             "const hooked = await promptHooks($, at.entry, at.message)",
             "return next({ ...e, text, ...(hooked.context.length === 0 ? {} : { context: [...(e.context ?? []), ...hooked.context] }) })",
             "$.env.get('CLAUDE_CONFIG_DIR')",
@@ -249,7 +250,7 @@ mod tests {
             "mergeBoards(healed(earlier), live.length === 0 ? healed(own).map(cutIfWorking) : own)",
             "const sent = await sendTo($, entry, CONTINUE)",
             "!entry.isDismissed && entry.successor === undefined && entry.isDone !== true",
-            "[program, 'sessions', 'record', verb, ...args]",
+            "[program, 'sessions', noun, verb, ...args]",
             "await recordRun($, 'resume', ['--key', marked])",
             "'--description', claimed?.description ?? session.description",
             "await recordRun($, 'done', ['--key', row.key, '--reason', CLOSED_REASON])",
@@ -318,5 +319,23 @@ mod tests {
             .modified()
             .unwrap();
         assert_eq!(written, again, "an unchanged file is not rewritten");
+    }
+
+    #[test]
+    fn the_module_draws_the_pages_the_page_verb_keeps_and_stamps_a_forks_page_call() {
+        for needle in [
+            format!("$.env.get('{}')", super::super::PAGES_ENV),
+            "$.clock.every(DELIVER_MS, () => void refreshPages($))".to_owned(),
+            "const ran = await verbExec($, 'page', 'read', [])".to_owned(),
+            "await verbExec($, 'page', 'clear', ['--owner', owner])".to_owned(),
+            "const ran = await verbExec($, 'page', 'answer', ['--id', live.page.id, '--item', item, '--verdict', verdict".to_owned(),
+            "await sayAsUser($, owner, said)".to_owned(),
+            "await verbExec($, 'page', 'clear', ['--owner', row.key])".to_owned(),
+            "const MESSAGING = /__session_(send|inbox|board|page)$/".to_owned(),
+        ] {
+            assert!(MODULE.contains(&needle), "{needle}");
+        }
+        assert!(STATE_TYPES.contains("pages: LivePage[]"));
+        assert!(MODULE_TESTS.contains("a fork's page is the board's front page"));
     }
 }

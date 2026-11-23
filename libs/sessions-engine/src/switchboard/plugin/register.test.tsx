@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, effortMeter, familyColor, folderParts, litBody, nowOf, taskBar, tasksDone, tokensText, withTaskCall, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, laneName, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, underParent, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
+import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, effortMeter, familyColor, folderParts, litBody, nowOf, taskBar, tasksDone, tokensText, withTaskCall, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, laneName, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, underParent, withoutCut, withoutHidden, withAction, withSent, writingMarks, actionSaid, failSaid, isOrphan, livePagesOf, pageCount, refreshPages } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1920,7 +1920,7 @@ test("a fork's messaging call carries its own agent id, and the switchboard's ow
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a1', 'a1-fork: a fork')
-  const tools = ['mcp__sessions__session_send', 'mcp__plugin_qol-sessions_qol-sessions__session_inbox', 'mcp__sessions__session_board']
+  const tools = ['mcp__sessions__session_send', 'mcp__plugin_qol-sessions_qol-sessions__session_inbox', 'mcp__sessions__session_board', 'mcp__sessions__session_page']
   for (const tool of tools) {
     await $.tool.call({ tool, agentId: 'a1', as_fork: 'another-fork' } as any)
     await $.tool.call({ tool, as_fork: 'a1' } as any)
@@ -2853,7 +2853,7 @@ test("a row keyed by a newer duplicate record goes back to the oldest record's k
   expect(calls.some(call => call[0] === 'claim')).toBe(false)
 })
 
-test('a fork whose record is unfinished comes back after a restart even when the board lost its row, and a stopped one with no row stays closed', async ($, on) => {
+test('a fork whose record is unfinished comes back after a restart even when the board lost its row, a stopped one with no row stays closed, and a sub-fork rebuilt from its record stays under its parent or closes with every fork above it', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
   const calls: string[][] = []
@@ -2864,7 +2864,13 @@ test('a fork whose record is unfinished comes back after a restart even when the
     { key: 'lost-fork', friendly: 'lost words', cwd: '/', created_ms: 2, parts: [{ n: 1, agent_id: 'b0' }, { n: 2, agent_id: 'b1' }] },
     { key: 'done-fork', friendly: 'done words', cwd: '/', created_ms: 3, parts: [{ n: 1, agent_id: 'c1' }], done: { at_ms: 4, reason: 'merged' } },
     { key: 'stopped-fork', friendly: 'stopped words', cwd: '/', created_ms: 5, parts: [{ n: 1, agent_id: 'd1' }], stopped_ms: 6 },
+    { key: 'closed-parent', friendly: 'closed words', cwd: '/', created_ms: 7, parts: [{ n: 1, agent_id: 'p9' }], done: { at_ms: 8, reason: 'Closed by the user.' } },
+    { key: 'orphan-sub', friendly: 'orphan words', cwd: '/', created_ms: 9, parts: [{ n: 1, agent_id: 'e1', transcript: '/old/subagents/agent-e1.jsonl' }] },
+    { key: 'kept-fork-sub', friendly: 'sub words', cwd: '/', created_ms: 10, parts: [{ n: 1, agent_id: 'f1', transcript: '/old/subagents/agent-f1.jsonl' }] },
+    { key: 'orphan-sub-sub', friendly: 'nested words', cwd: '/', created_ms: 11, parts: [{ n: 1, agent_id: 'g1', transcript: '/old/subagents/agent-g1.jsonl' }] },
   ])
+  const metas: Record<string, string> = { '/old/subagents/agent-e1.meta.json': JSON.stringify({ parentAgentId: 'p9' }), '/old/subagents/agent-f1.meta.json': JSON.stringify({ parentAgentId: 'a1' }), '/old/subagents/agent-g1.meta.json': JSON.stringify({ parentAgentId: 'e1' }) }
+  on('fs.read', (_: unknown, e: { path: string }) => ({ value: metas[e.path] }))
   on('agent.list', () => ({ value: [] }))
   const timers: Array<() => void> = []
   on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
@@ -2878,6 +2884,9 @@ test('a fork whose record is unfinished comes back after a restart even when the
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(board).toContain('lost-fork')
   expect(board).not.toContain('done-fork')
+  expect(board).toMatch(/kept-fork-sub: +\(idle, agent id f1, listed under kept-fork\)/)
+  expect(board).toMatch(/orphan-sub: +\(done, agent id e1/)
+  expect(board).toMatch(/orphan-sub-sub: +\(done, agent id g1/)
 })
 
 test('missingForks adds an unfinished record whose last fork has no board row, once', () => {
@@ -5020,4 +5029,156 @@ test('the board detail reads its values from the agent and the calls the fork ma
   expect([folderParts('/media/me/Git/qol-monorepo/'), folderParts('/work'), folderParts(''), folderParts(undefined)]).toEqual([{ parent: 'Git/', last: 'qol-monorepo' }, { parent: '', last: 'work' }, undefined, undefined])
   expect([tokensText(950), tokensText(199_000), tokensText(1_250_000)]).toEqual(['950', '199.0k', '1.3M'])
   expect([taskBar(4, 6), taskBar(0, 0), taskBar(9, 6)]).toEqual([{ done: '▰▰▰▰', rest: '▱▱' }, { done: '', rest: '▱▱▱▱▱▱' }, { done: '▰▰▰▰▰▰', rest: '' }])
+})
+
+const testPage = (owner: string) => ({
+  id: 'retail-test',
+  owner,
+  title: 'Retail test',
+  tab: 'tests',
+  blocks: [
+    { kind: 'kv', rows: [{ label: 'build', value: '1.4.2', tone: 'good' }] },
+    { kind: 'checklist', items: [{ id: 'hip', text: 'Hip light' }, { id: 'grip', text: 'Grip pose', detail: 'Hold the rifle at rest' }] },
+    { kind: 'actions', items: [{ id: 'rebuild', label: 'Rebuild the pak' }] },
+  ],
+})
+
+const pagesBoard = (on: any, sent: any[], page: any, isClearRefused = false) => {
+  const runs: string[][] = []
+  const live = { page, set_ms: 1, updated_ms: 1, answers: [] as any[] }
+  let listing = [{ name: `${page.id}.json`, kind: 'file', size: 1, mtimeMs: 1, isLink: false }]
+  engine(on, sent)
+  on('env.get', (_: unknown, e: { name: string }) => ({
+    value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : e.name === 'QOL_SWITCHBOARD_PAGES' ? '/data/pages' : undefined,
+  }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path === '/data/pages' }))
+  on('fs.list', () => ({ value: listing }))
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    const ok = (body: unknown) => ({ value: { exitCode: 0, stderr: '', stdout: JSON.stringify(body) } })
+    if (isRecord(e.argv)) return { value: recordReply(e.argv, []) }
+    if (e.argv[2] !== 'page') return { value: NO_RECORD }
+    runs.push(e.argv.slice(3))
+    const flag = (name: string) => e.argv[e.argv.indexOf(name) + 1] ?? ''
+    if (e.argv[3] === 'read') return ok({ pages: [live] })
+    if (e.argv[3] === 'clear') return isClearRefused ? { value: { exitCode: 1, stderr: '', stdout: '{"error":"busy"}' } } : ok({ cleared: [] })
+    const note = e.argv.includes('--note') ? { note: flag('--note') } : {}
+    live.answers = [...live.answers.filter(one => one.item !== flag('--item')), { item: flag('--item'), verdict: flag('--verdict'), ...note, at_ms: 2 }]
+    listing = [{ ...listing[0]!, size: listing[0]!.size + 1 }]
+    return ok(live)
+  })
+  return runs
+}
+
+test("a fork's page is the board's front page: p records a pass and moves on, f sends the note to the fork as the user's words, and t shows the forks with the page's count on the fork's row", async ($, on) => {
+  const sent: any[] = []
+  const runs = pagesBoard(on, sent, testPage('t1-fork'))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't1', 't1-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '0 pass · 0 fail · 2 left' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '1.4.2' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Hold the rifle at rest' })).toBeDefined()
+  expect((await ui.find({ key: 'verdict-pass' }))?.text).toBe('pass')
+  expect((await ui.find({ key: 'verdict-fail' }))?.text).toBe('fail with a note')
+  expect((await ui.find({ key: 'verdict-skip' }))?.text).toBe('skip')
+
+  await ui.press({ key: 'verdict-pass' })
+  expect(runs).toContainEqual(['answer', '--id', 'retail-test', '--item', 'hip', '--verdict', 'pass'])
+  expect(await ui.find({ type: 'Text', text: '1 pass · 0 fail · 1 left' })).toBeDefined()
+  expect(sent).toHaveLength(0)
+
+  await ui.press({ key: 'verdict-fail' })
+  await ui.input({ key: 'note', text: 'the grip floats', kind: 'submit' })
+  expect(runs).toContainEqual(['answer', '--id', 'retail-test', '--item', 'grip', '--verdict', 'fail', '--note', 'the grip floats'])
+  expect(sent.map(one => one.to)).toEqual(['t1'])
+  expect(JSON.stringify(sent[0])).toContain('Retail test: check grip failed (Grip pose): the grip floats')
+  expect(await ui.find({ type: 'Text', text: '1 pass · 1 fail · 0 left' })).toBeDefined()
+
+  await ui.press({ key: 'action-rebuild' })
+  expect(JSON.stringify(sent[1])).toContain('Retail test: Rebuild the pak')
+
+  await ui.press({ key: 'tab-forks' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '0 left · 1 failed' })).toBeDefined()
+  expect(await boardLines(ui)).toContain('1: ● t1-fork  0 left · 1 failed  working')
+  await ui.press({ key: 'tab-page-retail-test' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a page whose owner is not an open fork on the board never shows, and the board stays the forks alone', async ($, on) => {
+  const sent: any[] = []
+  pagesBoard(on, sent, testPage('someone-else'))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't2', 't2-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'tests' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a page counts its checks, and the words a fail and an action send name the page and read as the user', () => {
+  const page = testPage('t1-fork') as any
+  const live = { page, set_ms: 1, updated_ms: 1, answers: [{ item: 'hip', verdict: 'skip', at_ms: 1 }] } as any
+  expect(pageCount(live)).toEqual({ total: 2, pass: 0, fail: 0, left: 1 })
+  expect(failSaid(page, { id: 'grip', text: 'Grip pose' }, '')).toBe(fromUser('Retail test: check grip failed (Grip pose).'))
+  expect(actionSaid(page, 'Rebuild the pak')).toBe(fromUser('Retail test: Rebuild the pak'))
+  const open = { agentId: 'a', name: 't1-fork: a fork', key: 't1-fork' } as any
+  expect(livePagesOf([open], [live])).toHaveLength(1)
+  expect(livePagesOf([{ ...open, isClosed: true }], [live])).toHaveLength(0)
+  expect(isOrphan([open], live)).toBe(false)
+  expect(isOrphan([{ ...open, isDone: true }], live)).toBe(true)
+  expect(isOrphan([{ ...open, key: 'other-fork' }], live)).toBe(true)
+  expect(isOrphan([], live)).toBe(false)
+})
+
+test("a page whose owner has no row or has ended is taken down, so dead pages never fill the host's page cap, and a refused take-down is tried again", async ($, on) => {
+  const sent: any[] = []
+  const runs = pagesBoard(on, sent, testPage('gone-fork'), true)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't3', 't3-fork: a fork')
+  await settle()
+  await refreshPages($)
+  expect(runs).toContainEqual(['clear', '--owner', 'gone-fork'])
+  await settle()
+  await refreshPages($)
+  expect(runs.filter(run => run[0] === 'clear').length).toBeGreaterThan(1)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a page with the id forks is its own tab and the forks tab stays the forks', async ($, on) => {
+  const sent: any[] = []
+  pagesBoard(on, sent, { ...testPage('t4-fork'), id: 'forks' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't4', 't4-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
+  await ui.press({ key: 'tab-forks' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
+  await ui.press({ key: 'tab-page-forks' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a long check keeps its whole text when the pane has room for it', async ($, on) => {
+  const sent: any[] = []
+  const long = 'Trade with a merchant, close the trade: no crash and no lost gold'
+  const page = { ...testPage('t5-fork'), blocks: [{ kind: 'checklist', items: [{ id: 'trade', text: long }] }] }
+  pagesBoard(on, sent, page)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't5', 't5-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 100 } })
+  expect(await ui.find({ type: 'Text', text: new RegExp(`^${long} +$`) })).toBeDefined()
+  await ui.unmount()
 })

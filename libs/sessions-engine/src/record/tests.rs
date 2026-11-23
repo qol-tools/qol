@@ -4,8 +4,9 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use super::cli::{execute, EXIT_REFUSED, EXIT_UNKNOWN, EXIT_USAGE};
+use super::cli::execute;
 use super::store::RecordStore;
+use crate::verb::{EXIT_REFUSED, EXIT_UNKNOWN, EXIT_USAGE};
 
 fn abs(path: &str) -> String {
     std::env::temp_dir()
