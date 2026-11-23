@@ -242,6 +242,12 @@ pub(super) fn write_core_settings(bundle: &ProfileImportBundle) -> Result<()> {
         )?;
         record_imported_shortcut_programs(shortcuts)?;
     }
+    if let Some(theme) = &bundle.theme {
+        crate::features::theme::import_settings(theme)?;
+    }
+    if let Some(notifications) = &bundle.notifications {
+        crate::features::notifications::import_settings(notifications)?;
+    }
     Ok(())
 }
 

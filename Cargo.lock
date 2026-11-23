@@ -7138,6 +7138,7 @@ dependencies = [
  "getrandom 0.3.4",
  "log",
  "qol-config",
+ "qol-conventions",
  "qol-fs",
  "qol-platform",
  "reqwest",

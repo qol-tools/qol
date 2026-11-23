@@ -1,46 +1,100 @@
+mod look;
+
 use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::process::Command;
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct ThemeSettings {
-    accent: Option<String>,
-    theme: Option<String>,
-    native_theme: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    animations: Option<String>,
+pub use look::{remember_shown_look, show_current_look};
+
+const ACCENT_KEY: &str = "accent";
+const THEME_KEY: &str = "theme";
+const NATIVE_THEME_KEY: &str = "native_theme";
+
+fn stored_settings() -> Result<Map<String, Value>> {
+    Ok(qol_config::profile::THEME.read(&crate::paths::shared_config_dir()?))
 }
 
-fn update_settings(update: impl FnOnce(&mut ThemeSettings)) -> Result<()> {
-    let path = settings_path()?;
-    let mut settings: ThemeSettings =
-        crate::file_io::load_json_or_default(&path).context("failed to load theme settings")?;
+fn stored_key(key: &str) -> Result<Option<String>> {
+    match stored_settings()?.remove(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
+        Some(other) => Err(anyhow!("theme setting {key} is not a string: {other}")),
+    }
+}
+
+fn update_settings(update: impl FnOnce(&mut Map<String, Value>)) -> Result<()> {
+    let config_dir = crate::paths::shared_config_dir()?;
+    let _guard = crate::plugins::config::profile_config_write_guard_unmarked();
+    let mut settings = qol_config::profile::THEME.read(&config_dir);
     update(&mut settings);
-    crate::file_io::write_pretty_json(&path, &settings).context("failed to save theme settings")
+    qol_config::profile::THEME
+        .write(&config_dir, &settings)
+        .context("failed to save theme settings")
+}
+
+fn save_key(key: &str, value: Option<String>) -> Result<()> {
+    update_settings(|settings| {
+        match value {
+            Some(value) => settings.insert(key.to_string(), Value::String(value)),
+            None => settings.remove(key),
+        };
+    })
+}
+
+pub(crate) fn exported_settings() -> Map<String, Value> {
+    stored_settings().unwrap_or_default()
+}
+
+pub(crate) fn validate_import(imported: &Map<String, Value>) -> Result<()> {
+    imported
+        .iter()
+        .try_for_each(|(key, value)| check_imported(key, value))
+}
+
+pub(crate) fn import_settings(imported: &Map<String, Value>) -> Result<()> {
+    validate_import(imported)?;
+    let imported = imported.clone();
+    update_settings(|settings| *settings = imported)
+}
+
+fn check_imported(key: &str, value: &Value) -> Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let text = value.as_str();
+    let valid = match key {
+        ACCENT_KEY => text.is_some_and(|text| validated_accent_key(text).is_ok()),
+        THEME_KEY => text.is_some_and(|text| validated_theme_key(text).is_ok()),
+        NATIVE_THEME_KEY => text.is_some_and(|text| validated_native_theme_key(text).is_ok()),
+        qol_conventions::ANIMATIONS_KEY => text.and_then(qol_theme::Animations::parse).is_some(),
+        _ => true,
+    };
+    if valid {
+        return Ok(());
+    }
+    Err(anyhow!("unknown {key} in the imported profile: {value}"))
 }
 
 pub fn save_selected_accent_key(key: &str) -> Result<()> {
     let key = validated_accent_key(key)?.to_string();
-    update_settings(|settings| settings.accent = Some(key))
+    save_key(ACCENT_KEY, Some(key))
 }
 
 pub fn clear_selected_accent_key() -> Result<()> {
-    update_settings(|settings| settings.accent = None)
+    save_key(ACCENT_KEY, None)
 }
 
 pub fn save_selected_theme_key(key: &str) -> Result<()> {
     let key = validated_theme_key(key)?.to_string();
-    update_settings(|settings| settings.theme = Some(key))
+    save_key(THEME_KEY, Some(key))
 }
 
 pub fn clear_selected_theme_key() -> Result<()> {
-    update_settings(|settings| settings.theme = None)
+    save_key(THEME_KEY, None)
 }
 
 pub fn selected_theme_key() -> Result<Option<String>> {
-    let settings: ThemeSettings = crate::file_io::load_json_or_default(&settings_path()?)
-        .context("failed to load theme settings")?;
-    match settings.theme.as_deref() {
+    match stored_key(THEME_KEY)?.as_deref() {
         Some(key) => Ok(Some(validated_theme_key(key)?.to_string())),
         None => Ok(None),
     }
@@ -55,17 +109,15 @@ pub fn current_theme_key() -> String {
 
 pub fn save_selected_native_theme_key(key: &str) -> Result<()> {
     let key = validated_native_theme_key(key)?.to_string();
-    update_settings(|settings| settings.native_theme = Some(key))
+    save_key(NATIVE_THEME_KEY, Some(key))
 }
 
 pub fn clear_selected_native_theme_key() -> Result<()> {
-    update_settings(|settings| settings.native_theme = None)
+    save_key(NATIVE_THEME_KEY, None)
 }
 
 pub fn selected_native_theme_key() -> Result<Option<String>> {
-    let settings: ThemeSettings = crate::file_io::load_json_or_default(&settings_path()?)
-        .context("failed to load theme settings")?;
-    match settings.native_theme.as_deref() {
+    match stored_key(NATIVE_THEME_KEY)?.as_deref() {
         Some(key) => Ok(Some(validated_native_theme_key(key)?.to_string())),
         None => Ok(None),
     }
@@ -88,14 +140,16 @@ fn validated_native_theme_key(key: &str) -> Result<&str> {
 pub fn save_animations(key: &str) -> Result<()> {
     let choice = qol_theme::Animations::parse(key)
         .ok_or_else(|| anyhow!("unknown animations choice: {key}"))?;
-    update_settings(|settings| settings.animations = Some(choice.key().to_string()))
+    save_key(
+        qol_conventions::ANIMATIONS_KEY,
+        Some(choice.key().to_string()),
+    )
 }
 
 pub fn current_animations() -> qol_theme::Animations {
-    settings_path()
-        .and_then(|path| crate::file_io::load_json_or_default::<ThemeSettings>(&path))
+    stored_key(qol_conventions::ANIMATIONS_KEY)
         .ok()
-        .and_then(|settings| settings.animations)
+        .flatten()
         .and_then(|key| qol_theme::Animations::parse(&key))
         .unwrap_or_default()
 }
@@ -112,9 +166,7 @@ fn validated_theme_key(key: &str) -> Result<&str> {
 }
 
 pub fn selected_accent_key() -> Result<Option<String>> {
-    let settings: ThemeSettings = crate::file_io::load_json_or_default(&settings_path()?)
-        .context("failed to load theme settings")?;
-    match settings.accent.as_deref() {
+    match stored_key(ACCENT_KEY)?.as_deref() {
         Some(key) => Ok(Some(validated_accent_key(key)?.to_string())),
         None => Ok(None),
     }
@@ -145,10 +197,6 @@ pub fn apply_accent_env(command: &mut Command) {
     command.env(qol_conventions::ENV_THEME_ACCENT, resolved_accent_key());
 }
 
-fn settings_path() -> Result<std::path::PathBuf> {
-    crate::paths::shared_config_dir().map(|dir| dir.join(qol_conventions::THEME_SETTINGS_FILE))
-}
-
 fn validated_accent_key(key: &str) -> Result<&str> {
     if qol_theme::dark_accent_preset(key).is_some() {
         return Ok(key);
@@ -159,7 +207,20 @@ fn validated_accent_key(key: &str) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tempfile::TempDir;
+
+    fn profile_core_file(profile: &str) -> std::path::PathBuf {
+        crate::paths::profile_dir()
+            .unwrap()
+            .join(profile)
+            .join("core")
+            .join(qol_conventions::THEME_SETTINGS_FILE)
+    }
+
+    fn stored_json(path: &std::path::Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
 
     #[test]
     fn selected_accent_round_trips_valid_preset_key() {
@@ -256,5 +317,72 @@ mod tests {
         save_selected_accent_key("blue").unwrap();
 
         assert_eq!(native_accent_wire(), "blue");
+    }
+
+    #[test]
+    fn the_look_is_kept_in_the_synced_core_of_the_active_profile() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        save_selected_accent_key("blue").unwrap();
+        save_animations("off").unwrap();
+
+        assert_eq!(
+            stored_json(&profile_core_file("default")),
+            json!({ "accent": "blue", "animations": "off" })
+        );
+        assert!(!crate::paths::shared_config_dir()
+            .unwrap()
+            .join(qol_conventions::THEME_SETTINGS_FILE)
+            .exists());
+
+        std::fs::write(
+            crate::paths::active_profile_marker_path().unwrap(),
+            "work\n",
+        )
+        .unwrap();
+        assert_eq!(selected_accent_key().unwrap(), None);
+        save_selected_accent_key("green").unwrap();
+        assert_eq!(
+            stored_json(&profile_core_file("work")),
+            json!({ "accent": "green" })
+        );
+        assert_eq!(
+            stored_json(&profile_core_file("default"))["accent"],
+            json!("blue")
+        );
+    }
+
+    #[test]
+    fn a_setting_written_by_a_newer_version_survives_a_save() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let path = profile_core_file("default");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"accent": "blue", "corner_radius": 4}"#).unwrap();
+
+        save_selected_theme_key("midnight").unwrap();
+
+        assert_eq!(
+            stored_json(&path),
+            json!({ "accent": "blue", "corner_radius": 4, "theme": "midnight" })
+        );
+    }
+
+    #[test]
+    fn an_import_replaces_the_look_and_refuses_unknown_choices() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        save_selected_theme_key("midnight").unwrap();
+
+        let refused = json!({ "accent": "not-a-preset" });
+        assert!(import_settings(refused.as_object().unwrap()).is_err());
+        assert_eq!(current_theme_key(), "midnight");
+
+        let imported = json!({ "accent": "blue", "native_theme": "slate" });
+        import_settings(imported.as_object().unwrap()).unwrap();
+
+        assert_eq!(exported_settings(), *imported.as_object().unwrap());
+        assert_eq!(current_theme_key(), qol_theme::DEFAULT_TRAY_THEME_KEY);
     }
 }

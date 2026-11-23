@@ -18,6 +18,8 @@ pub fn build_export_bundle(
         task_runner: Value::Null,
         plugin_configs,
         plugins,
+        theme: crate::features::theme::exported_settings(),
+        notifications: crate::features::notifications::exported_settings(),
     })
 }
 

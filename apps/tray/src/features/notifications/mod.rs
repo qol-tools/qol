@@ -4,8 +4,17 @@ pub mod takeover;
 
 use anyhow::{Context, Result};
 use qol_config::placement::Spot;
+use qol_config::profile::{Scope, NOTIFICATIONS};
+use qol_conventions::{
+    LEGACY_MESSAGE_SECONDS_KEY, MESSAGE_STAY_KEY, NOTIFICATION_ENABLED_KEY,
+    NOTIFICATION_OTHER_APPS_KEY, NOTIFICATION_PLACEMENT_KEY,
+};
 use qol_plugin_daemon::notification::gate::NativeHandler;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+const HANDLER_KEY: &str = "handler";
+const LEGACY_SYSTEM_NOTIFICATIONS_KEY: &str = "use_system_notifications";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -14,30 +23,13 @@ pub enum OtherApps {
     Qol,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 struct NotificationSettings {
     enabled: bool,
-    #[serde(default)]
-    use_system_notifications: bool,
     handler: NativeHandler,
     other_apps: OtherApps,
-    #[serde(skip_serializing_if = "Option::is_none")]
     message_stay_seconds: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     placement: Option<String>,
-}
-
-impl Default for NotificationSettings {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            use_system_notifications: false,
-            handler: NativeHandler::Qol,
-            other_apps: OtherApps::Qol,
-            message_stay_seconds: None,
-            placement: None,
-        }
-    }
 }
 
 impl<'de> Deserialize<'de> for NotificationSettings {
@@ -70,7 +62,6 @@ impl<'de> Deserialize<'de> for NotificationSettings {
         });
         Ok(Self {
             enabled: raw.enabled.unwrap_or(true),
-            use_system_notifications: raw.use_system_notifications,
             handler,
             other_apps: raw.other_apps.unwrap_or(OtherApps::Qol),
             message_stay_seconds: qol_theme::stored_message_stay(
@@ -87,15 +78,60 @@ impl<'de> Deserialize<'de> for NotificationSettings {
     }
 }
 
-fn update_settings(update: impl FnOnce(&mut NotificationSettings)) -> Result<()> {
-    let path = settings_path()?;
-    let mut settings: NotificationSettings = crate::file_io::load_json_or_default(&path)
-        .context("failed to load notification settings")?;
-    update(&mut settings);
-    crate::file_io::write_pretty_json(&path, &settings)
-        .context("failed to save notification settings")?;
+fn stored_settings() -> Result<Map<String, Value>> {
+    Ok(NOTIFICATIONS.read(&crate::paths::shared_config_dir()?))
+}
+
+fn update_settings(update: impl FnOnce(&mut Map<String, Value>)) -> Result<()> {
+    let config_dir = crate::paths::shared_config_dir()?;
+    {
+        let _guard = crate::plugins::config::profile_config_write_guard_unmarked();
+        let mut settings = NOTIFICATIONS.read(&config_dir);
+        update(&mut settings);
+        NOTIFICATIONS
+            .write(&config_dir, &settings)
+            .context("failed to save notification settings")?;
+    }
     takeover::poke();
     Ok(())
+}
+
+fn save_value(key: &str, value: Value, replaces: &[&str]) -> Result<()> {
+    update_settings(|settings| {
+        for legacy in replaces {
+            settings.remove(*legacy);
+        }
+        settings.insert(key.to_string(), value);
+    })
+}
+
+fn choice_value(choice: impl Serialize) -> Result<Value> {
+    serde_json::to_value(choice).context("failed to encode a notification choice")
+}
+
+pub(crate) fn exported_settings() -> Map<String, Value> {
+    let mut settings = stored_settings().unwrap_or_default();
+    settings.retain(|key, _| NOTIFICATIONS.scope_of(key) != Scope::Device);
+    settings
+}
+
+pub(crate) fn validate_import(imported: &Map<String, Value>) -> Result<()> {
+    serde_json::from_value::<NotificationSettings>(Value::Object(imported.clone()))
+        .map(drop)
+        .context("the imported notification settings do not parse")
+}
+
+pub(crate) fn import_settings(imported: &Map<String, Value>) -> Result<()> {
+    validate_import(imported)?;
+    update_settings(|settings| {
+        settings.retain(|key, _| NOTIFICATIONS.scope_of(key) == Scope::Device);
+        settings.extend(
+            imported
+                .iter()
+                .filter(|(key, _)| NOTIFICATIONS.scope_of(key) != Scope::Device)
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    })
 }
 
 pub fn enabled() -> bool {
@@ -103,24 +139,19 @@ pub fn enabled() -> bool {
 }
 
 pub fn set_enabled(enabled: bool) -> Result<()> {
-    update_settings(|settings| settings.enabled = enabled)
+    save_value(NOTIFICATION_ENABLED_KEY, Value::Bool(enabled), &[])
 }
 
 pub fn set_use_system_notifications(enabled: bool) -> Result<()> {
-    update_settings(|settings| {
-        settings.use_system_notifications = enabled;
-        settings.handler = if enabled {
-            NativeHandler::Both
-        } else {
-            NativeHandler::Qol
-        };
+    set_native_handler(if enabled {
+        NativeHandler::Both
+    } else {
+        NativeHandler::Qol
     })
 }
 
 pub fn use_system_notifications() -> bool {
-    settings()
-        .map(|settings| settings.use_system_notifications)
-        .unwrap_or(false)
+    native_handler() == NativeHandler::Both
 }
 
 pub fn native_handler() -> NativeHandler {
@@ -130,10 +161,11 @@ pub fn native_handler() -> NativeHandler {
 }
 
 pub fn set_native_handler(handler: NativeHandler) -> Result<()> {
-    update_settings(|settings| {
-        settings.use_system_notifications = handler == NativeHandler::Both;
-        settings.handler = handler;
-    })
+    save_value(
+        HANDLER_KEY,
+        choice_value(handler)?,
+        &[LEGACY_SYSTEM_NOTIFICATIONS_KEY],
+    )
 }
 
 pub fn message_seconds() -> f64 {
@@ -149,7 +181,11 @@ pub fn set_message_seconds(seconds: f64) -> Result<()> {
     if seconds == message_seconds() {
         return Ok(());
     }
-    update_settings(|settings| settings.message_stay_seconds = Some(seconds))
+    save_value(
+        MESSAGE_STAY_KEY,
+        choice_value(seconds)?,
+        &[LEGACY_MESSAGE_SECONDS_KEY],
+    )
 }
 
 pub fn placement() -> Spot {
@@ -164,7 +200,7 @@ pub fn set_placement(spot: Spot) -> Result<()> {
     if spot == placement() {
         return Ok(());
     }
-    update_settings(|settings| settings.placement = Some(spot.token()))
+    save_value(NOTIFICATION_PLACEMENT_KEY, Value::String(spot.token()), &[])
 }
 
 pub fn other_apps() -> OtherApps {
@@ -174,7 +210,7 @@ pub fn other_apps() -> OtherApps {
 }
 
 pub fn set_other_apps(other_apps: OtherApps) -> Result<()> {
-    update_settings(|settings| settings.other_apps = other_apps)
+    save_value(NOTIFICATION_OTHER_APPS_KEY, choice_value(other_apps)?, &[])
 }
 
 pub fn takeover_wanted() -> bool {
@@ -182,24 +218,37 @@ pub fn takeover_wanted() -> bool {
 }
 
 fn settings() -> Result<NotificationSettings> {
-    let path = settings_path()?;
-    crate::file_io::load_json_or_default(&path).context("failed to load notification settings")
-}
-
-fn settings_path() -> Result<std::path::PathBuf> {
-    crate::paths::shared_config_dir()
-        .map(|dir| dir.join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE))
+    serde_json::from_value(Value::Object(stored_settings()?))
+        .context("failed to load notification settings")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tempfile::TempDir;
 
+    fn slice_file(scope: Scope) -> std::path::PathBuf {
+        let profile_root = crate::paths::profile_dir().unwrap();
+        NOTIFICATIONS.path_in(
+            &qol_config::profile::active_profile_dir(&profile_root),
+            scope,
+        )
+    }
+
+    fn write_core(contents: &str) {
+        let path = slice_file(Scope::Core);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, contents).unwrap();
+    }
+
+    fn stored_slice(scope: Scope) -> Option<Value> {
+        let text = std::fs::read_to_string(slice_file(scope)).ok()?;
+        Some(serde_json::from_str(&text).unwrap())
+    }
+
     fn write_legacy_file(use_system_notifications: bool) {
-        let path = settings_path().unwrap();
-        let json = serde_json::json!({ "use_system_notifications": use_system_notifications });
-        crate::file_io::write_pretty_json(&path, &json).unwrap();
+        write_core(&json!({ "use_system_notifications": use_system_notifications }).to_string());
     }
 
     #[test]
@@ -266,9 +315,7 @@ mod tests {
 
         set_message_seconds(qol_theme::STAY_MESSAGE.as_secs_f64()).unwrap();
         assert_eq!(settings().unwrap().message_stay_seconds, None);
-        let path = settings_path().unwrap();
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, r#"{"message_seconds": 3}"#).unwrap();
+        write_core(r#"{"message_seconds": 3}"#);
         assert_eq!(
             message_seconds(),
             qol_theme::STAY_MESSAGE.as_secs_f64(),
@@ -276,7 +323,7 @@ mod tests {
         );
         set_message_seconds(3.0).unwrap();
         assert_eq!(message_seconds(), 3.0, "an explicit 3 s pick is kept");
-        std::fs::write(&path, r#"{"message_seconds": 5}"#).unwrap();
+        write_core(r#"{"message_seconds": 5}"#);
         assert_eq!(
             message_seconds(),
             5.0,
@@ -290,13 +337,15 @@ mod tests {
         let _guard = crate::paths::push_test_path_root(root.path());
 
         assert!(enabled());
-        let path = settings_path().unwrap();
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, r#"{"handler": "both"}"#).unwrap();
+        write_core(r#"{"handler": "both"}"#);
         assert!(enabled(), "a file without the key keeps notifications on");
         set_enabled(false).unwrap();
         assert!(!enabled());
         assert_eq!(native_handler(), NativeHandler::Both);
+        assert_eq!(
+            stored_slice(Scope::Core),
+            Some(json!({ "handler": "both" }))
+        );
         set_enabled(true).unwrap();
         assert!(enabled());
     }
@@ -318,7 +367,7 @@ mod tests {
         set_native_handler(NativeHandler::Both).unwrap();
         set_message_seconds(4.0).unwrap();
         assert_eq!(placement(), free);
-        let saved = std::fs::read_to_string(settings_path().unwrap()).unwrap();
+        let saved = std::fs::read_to_string(slice_file(Scope::Core)).unwrap();
         assert!(saved.contains(r#""placement": "0.25,0.6""#), "{saved}");
     }
 
@@ -327,14 +376,12 @@ mod tests {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
-        let path = settings_path().unwrap();
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         for stored in [r#""somewhere""#, "7", r#""2,2""#] {
-            std::fs::write(&path, format!(r#"{{"placement": {stored}}}"#)).unwrap();
+            write_core(&format!(r#"{{"placement": {stored}}}"#));
             assert_eq!(placement(), Spot::TOP_RIGHT, "{stored}");
             assert_eq!(settings().unwrap().placement, None, "{stored}");
         }
-        std::fs::write(&path, r#"{"placement": "bottom-center"}"#).unwrap();
+        write_core(r#"{"placement": "bottom-center"}"#);
         assert_eq!(placement(), Spot::new(0.5, 1.0));
     }
 
@@ -359,9 +406,7 @@ mod tests {
 
         assert_eq!(other_apps(), OtherApps::Qol);
         assert!(takeover_wanted());
-        let path = settings_path().unwrap();
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, r#"{"handler": "qol"}"#).unwrap();
+        write_core(r#"{"handler": "qol"}"#);
         assert!(
             takeover_wanted(),
             "a file from before the choice existed keeps the old meaning of qol"
@@ -386,5 +431,75 @@ mod tests {
             OtherApps::Os,
             "the choice survives a handler change"
         );
+    }
+
+    #[test]
+    fn each_choice_is_kept_where_sync_carries_it() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        set_enabled(false).unwrap();
+        set_other_apps(OtherApps::Os).unwrap();
+        set_native_handler(NativeHandler::Both).unwrap();
+        set_placement(Spot::new(0.5, 1.0)).unwrap();
+        set_message_seconds(4.0).unwrap();
+
+        assert_eq!(
+            stored_slice(Scope::Core),
+            Some(json!({
+                "handler": "both",
+                "placement": Spot::new(0.5, 1.0).token(),
+                "message_stay_seconds": 4.0,
+            }))
+        );
+        assert_eq!(stored_slice(Scope::Os), Some(json!({ "other_apps": "os" })));
+        assert_eq!(
+            stored_slice(Scope::Device),
+            Some(json!({ "enabled": false }))
+        );
+        assert!(!crate::paths::shared_config_dir()
+            .unwrap()
+            .join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE)
+            .exists());
+    }
+
+    #[test]
+    fn a_mute_or_takeover_choice_from_another_computer_is_not_read() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        write_core(r#"{"enabled": false, "other_apps": "os", "handler": "qol"}"#);
+
+        assert!(enabled());
+        assert_eq!(other_apps(), OtherApps::Qol);
+        assert!(takeover_wanted());
+    }
+
+    #[test]
+    fn an_import_keeps_this_computers_mute_and_drops_the_legacy_bool() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        set_enabled(false).unwrap();
+        write_legacy_file(true);
+
+        let exported = exported_settings();
+        assert_eq!(
+            exported,
+            *json!({ "use_system_notifications": true })
+                .as_object()
+                .unwrap()
+        );
+
+        let refused = json!({ "handler": "nowhere" });
+        assert!(import_settings(refused.as_object().unwrap()).is_err());
+        assert_eq!(native_handler(), NativeHandler::Both);
+
+        let imported = json!({ "handler": "os", "other_apps": "os", "enabled": true });
+        import_settings(imported.as_object().unwrap()).unwrap();
+
+        assert_eq!(native_handler(), NativeHandler::Os);
+        assert_eq!(other_apps(), OtherApps::Os);
+        assert!(!enabled(), "the mute stays a choice of this computer");
+        assert_eq!(stored_slice(Scope::Core), Some(json!({ "handler": "os" })));
     }
 }

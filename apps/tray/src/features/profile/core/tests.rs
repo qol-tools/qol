@@ -394,6 +394,8 @@ fn profile_export_bundle_serializes_flat_hotkeys_and_shortcuts() {
         task_runner: json!({"actions": {}}),
         plugin_configs: HashMap::new(),
         plugins: Vec::new(),
+        theme: serde_json::Map::new(),
+        notifications: serde_json::Map::new(),
     };
 
     let value = serde_json::to_value(bundle).unwrap();

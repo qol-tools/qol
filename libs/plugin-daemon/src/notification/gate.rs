@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use qol_config::config_dir;
+use qol_config::profile::NOTIFICATIONS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -11,30 +13,26 @@ pub enum NativeHandler {
 }
 
 pub fn stored_handler() -> NativeHandler {
-    stored_config().map_or(NativeHandler::Qol, |contents| parse_config(&contents))
+    stored_config().map_or(NativeHandler::Qol, |settings| parse_config(&settings))
 }
 
-fn stored_config() -> Option<String> {
-    let path = config_dir()?.join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE);
-    std::fs::read_to_string(path).ok()
+fn stored_config() -> Option<Value> {
+    config_dir().map(|dir| Value::Object(NOTIFICATIONS.read(&dir)))
 }
 
 pub fn enabled_now() -> bool {
-    stored_config().is_none_or(|contents| parse_enabled(&contents))
+    stored_config().is_none_or(|settings| parse_enabled(&settings))
 }
 
-fn parse_enabled(contents: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(contents)
-        .ok()
-        .and_then(|value| value.get("enabled")?.as_bool())
+fn parse_enabled(settings: &Value) -> bool {
+    settings
+        .get(qol_conventions::NOTIFICATION_ENABLED_KEY)
+        .and_then(Value::as_bool)
         .unwrap_or(true)
 }
 
-fn parse_config(contents: &str) -> NativeHandler {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(contents) else {
-        return NativeHandler::Qol;
-    };
-    if let Some(handler) = value.get("handler").and_then(serde_json::Value::as_str) {
+fn parse_config(settings: &Value) -> NativeHandler {
+    if let Some(handler) = settings.get("handler").and_then(Value::as_str) {
         return match handler {
             "qol" => NativeHandler::Qol,
             "os" => NativeHandler::Os,
@@ -42,9 +40,9 @@ fn parse_config(contents: &str) -> NativeHandler {
             _ => NativeHandler::Qol,
         };
     }
-    match value
+    match settings
         .get("use_system_notifications")
-        .and_then(serde_json::Value::as_bool)
+        .and_then(Value::as_bool)
     {
         Some(true) => NativeHandler::Both,
         _ => NativeHandler::Qol,
@@ -53,56 +51,42 @@ fn parse_config(contents: &str) -> NativeHandler {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
 
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-
-    fn write_temp_config(contents: &str) -> PathBuf {
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("qol-notification-gate-{}-{id}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("notifications.json");
-        fs::write(&path, contents).unwrap();
-        path
-    }
-
-    fn parse_file(path: &PathBuf) -> NativeHandler {
-        parse_config(&fs::read_to_string(path).unwrap())
+    fn parse(contents: &str) -> NativeHandler {
+        parse_config(&serde_json::from_str(contents).unwrap())
     }
 
     #[test]
     fn parses_handler_key() {
-        let path = write_temp_config(r#"{"handler": "os"}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Os);
-        let path = write_temp_config(r#"{"handler": "both"}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Both);
-        let path = write_temp_config(r#"{"handler": "qol"}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Qol);
+        assert_eq!(parse(r#"{"handler": "os"}"#), NativeHandler::Os);
+        assert_eq!(parse(r#"{"handler": "both"}"#), NativeHandler::Both);
+        assert_eq!(parse(r#"{"handler": "qol"}"#), NativeHandler::Qol);
     }
 
     #[test]
     fn handler_key_wins_over_legacy_key() {
-        let path = write_temp_config(r#"{"handler": "qol", "use_system_notifications": true}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Qol);
+        assert_eq!(
+            parse(r#"{"handler": "qol", "use_system_notifications": true}"#),
+            NativeHandler::Qol
+        );
     }
 
     #[test]
     fn parses_legacy_key() {
-        let path = write_temp_config(r#"{"use_system_notifications": true}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Both);
-        let path = write_temp_config(r#"{"use_system_notifications": false}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Qol);
+        assert_eq!(
+            parse(r#"{"use_system_notifications": true}"#),
+            NativeHandler::Both
+        );
+        assert_eq!(
+            parse(r#"{"use_system_notifications": false}"#),
+            NativeHandler::Qol
+        );
     }
 
     #[test]
     fn defaults_to_qol_when_unset() {
-        let path = write_temp_config(r#"{}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Qol);
+        assert_eq!(parse(r#"{}"#), NativeHandler::Qol);
     }
 
     #[test]
@@ -114,23 +98,31 @@ mod tests {
             (r#"{"enabled": false}"#, false),
             (r#"{"handler": "both", "enabled": false}"#, false),
             (r#"{"enabled": "no"}"#, true),
-            (r#"{not json"#, true),
-            ("", true),
         ];
         for (contents, expected) in cases {
-            assert_eq!(parse_enabled(contents), expected, "{contents}");
+            assert_eq!(
+                parse_enabled(&serde_json::from_str(contents).unwrap()),
+                expected,
+                "{contents}"
+            );
         }
     }
 
     #[test]
-    fn corrupt_json_defaults_to_qol() {
-        let path = write_temp_config(r#"{not json"#);
-        assert_eq!(parse_file(&path), NativeHandler::Qol);
+    fn unknown_handler_defaults_to_qol() {
+        assert_eq!(parse(r#"{"handler": "native"}"#), NativeHandler::Qol);
     }
 
     #[test]
-    fn unknown_handler_defaults_to_qol() {
-        let path = write_temp_config(r#"{"handler": "native"}"#);
-        assert_eq!(parse_file(&path), NativeHandler::Qol);
+    fn the_gate_reads_the_mute_of_this_computer_and_the_synced_handler() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = serde_json::json!({ "handler": "both", "enabled": false });
+        NOTIFICATIONS
+            .write_in(dir.path(), settings.as_object().unwrap())
+            .unwrap();
+
+        let stored = Value::Object(NOTIFICATIONS.read_in(dir.path()));
+        assert_eq!(parse_config(&stored), NativeHandler::Both);
+        assert!(!parse_enabled(&stored));
     }
 }

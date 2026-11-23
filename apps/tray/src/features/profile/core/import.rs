@@ -14,6 +14,12 @@ pub async fn apply_import_bundle(
     if let Some(plugin_configs) = &bundle.plugin_configs {
         validate_plugin_config_keys(plugin_configs)?;
     }
+    if let Some(theme) = &bundle.theme {
+        crate::features::theme::validate_import(theme)?;
+    }
+    if let Some(notifications) = &bundle.notifications {
+        crate::features::notifications::validate_import(notifications)?;
+    }
     super::ensure_profile_dirs()?;
     let plugins = super::import_plugins(bundle);
     let stored = super::load_plugins_lock().unwrap_or_else(|_| super::PluginsLock::empty());

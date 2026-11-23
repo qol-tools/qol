@@ -9,7 +9,7 @@ description = "How qol tells you something happened."
 [field.enabled]
 type = "boolean"
 label = "Show notifications"
-description = "Turn off to silence every qol notification. The tray menu's Mute notifications flips the same switch."
+description = "Turn off to silence every qol notification on this computer. The tray menu's Mute notifications flips the same switch."
 section = "notifications"
 default = true
 

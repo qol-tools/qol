@@ -1,3 +1,4 @@
+use qol_tray::features::{notifications, theme};
 use qol_tray::paths;
 use qol_tray::profile::{self, ProfileExportBundle, ProfileImportBundle};
 use serde_json::{json, Value};
@@ -170,6 +171,9 @@ async fn profile_export_import_round_trip_preserves_effective_state() {
         write_live_plugin_config(&source, "plugin-live", &json!({ "source": "live" }));
         write_live_plugin_config(&source, "plugin-shared", &json!({ "source": "live" }));
         write_profile_plugin_config("plugin-shared", &json!({ "source": "profile" }));
+        theme::save_selected_accent_key("blue").unwrap();
+        notifications::set_use_system_notifications(true).unwrap();
+        notifications::set_enabled(false).unwrap();
     }
 
     {
@@ -221,6 +225,15 @@ async fn profile_export_import_round_trip_preserves_effective_state() {
             json!({ "source": "profile" })
         );
         assert!(!live_plugin_config_path(&target, "plugin-stale").exists());
+        assert_eq!(
+            theme::selected_accent_key().unwrap().as_deref(),
+            Some("blue")
+        );
+        assert!(notifications::use_system_notifications());
+        assert!(
+            notifications::enabled(),
+            "muting notifications stays a choice of each computer"
+        );
     }
 
     let target_bundle = build_export_bundle(&target);
@@ -230,4 +243,6 @@ async fn profile_export_import_round_trip_preserves_effective_state() {
     assert!(source_bundle.task_runner.is_null());
     assert_eq!(target_bundle.task_runner, source_bundle.task_runner);
     assert_eq!(target_bundle.plugin_configs, source_bundle.plugin_configs);
+    assert_eq!(target_bundle.theme, source_bundle.theme);
+    assert_eq!(target_bundle.notifications, source_bundle.notifications);
 }

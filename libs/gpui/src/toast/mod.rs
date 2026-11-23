@@ -377,10 +377,7 @@ impl Toast {
 
 fn notification_settings() -> Option<serde_json::Value> {
     qol_config::config_dir()
-        .and_then(|dir| {
-            std::fs::read_to_string(dir.join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE)).ok()
-        })
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .map(|dir| serde_json::Value::Object(qol_config::profile::NOTIFICATIONS.read(&dir)))
 }
 
 fn chosen_placement() -> MonitorPlacement {

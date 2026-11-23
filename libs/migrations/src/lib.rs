@@ -15,6 +15,7 @@ mod v3_137_to_v3_138_keyremap_backend_device;
 mod v3_138_to_v3_139_sync_code_channels;
 mod v3_139_to_v3_140_shortcut_device_programs;
 mod v3_140_to_v3_141_bluetooth_reconnect_per_device;
+mod v3_151_to_v3_152_appearance_in_profile;
 mod v3_15_to_v3_16;
 mod v3_15_to_v3_16_gist_to_repo;
 mod v3_16_to_v3_17_device_to_os;
@@ -136,6 +137,9 @@ impl PreFlightRegistry {
         ));
         registry.register(Box::new(
             v3_140_to_v3_141_bluetooth_reconnect_per_device::V3_140ToV3_141BluetoothReconnectPerDevice,
+        ));
+        registry.register(Box::new(
+            v3_151_to_v3_152_appearance_in_profile::V3_151ToV3_152AppearanceInProfile,
         ));
         registry
     }
