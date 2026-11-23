@@ -12,7 +12,7 @@ use super::switchboard::SWITCHBOARD_KEY;
 pub(crate) const ATTENTION_STALE_AFTER_MS: u64 = 30_000;
 const WORK_DAY_START_HOUR: u32 = 5;
 
-pub(crate) const SWITCHBOARD_TOOLS: [&str; 10] = [
+pub(crate) const SWITCHBOARD_TOOLS: [&str; 11] = [
     "sessions_list",
     "sessions_closed",
     "session_records",
@@ -23,6 +23,7 @@ pub(crate) const SWITCHBOARD_TOOLS: [&str; 10] = [
     "session_send",
     "session_inbox",
     "session_board",
+    "session_page",
 ];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -858,6 +859,51 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                 "required": ["action"],
             }),
         },
+        ToolSpec {
+            name: "session_page",
+            label: "Put a page on the board",
+            description: "Put a workflow page on the switchboard board, so steps and checks the user works through by hand live on the board instead of in the chat. While a page is up it is the board's front page and t switches between it and the forks; the user marks each checklist item pass (p), fail with a note (f) or skip (s), and presses actions. A pass or skip is only recorded; a fail note and a pressed action reach you as the user's own words and wake you; answers reads every verdict. action set puts up page (replacing your page with the same id and keeping the answers to items still on it); read returns your pages with their answers; answers returns one page by id; clear takes one of yours down. The page is under you: leave owner out. Page JSON: id (lowercase letters, digits, dashes), title (at most 80 characters), optional tab (the header name, at most 16, default the id) and blocks, each with kind kv {rows: [{label, value, tone?}]}, checklist {items: [{id, text, detail?}]}, steps {items: [{text, state?: done|now|todo}]}, links {items: [{label, url}]}, callout {tone?, text} or actions {items: [{id, label}]}; tone is info, good, warn or bad. Text is one line; unknown fields are refused; at most 8 pages are up on the host. qol sessions page help has the whole contract.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "set, read, answers or clear",
+                        "enum": ["set", "read", "answers", "clear"],
+                    },
+                    "page": {
+                        "type": "object",
+                        "description": "set: the page JSON",
+                        "properties": {
+                            "id": { "type": "string", "description": "Lowercase letters, digits and dashes" },
+                            "title": { "type": "string", "description": "At most 80 characters" },
+                            "tab": { "type": "string", "description": "The page's name in the board header, at most 16 characters" },
+                            "blocks": {
+                                "type": "array",
+                                "description": "1 to 24 blocks, each 1 to 40 entries",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "kind": {
+                                            "type": "string",
+                                            "enum": ["kv", "checklist", "steps", "links", "callout", "actions"],
+                                        },
+                                    },
+                                    "required": ["kind"],
+                                },
+                            },
+                        },
+                        "required": ["id", "title", "blocks"],
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": "answers or clear: the page id",
+                    },
+                    AS_FORK: as_fork_property(),
+                },
+                "required": ["action"],
+            }),
+        },
     ]
 }
 
@@ -905,13 +951,14 @@ mod tests {
                 "session_remote_control",
                 "session_send",
                 "session_inbox",
-                "session_board"
+                "session_board",
+                "session_page"
             ]
         );
     }
 
     #[test]
-    fn the_switchboard_profile_lists_only_its_ten_tools_in_contract_order() {
+    fn the_switchboard_profile_lists_only_its_eleven_tools_in_contract_order() {
         let names = mcp_tool_specs_for(McpProfile::Switchboard)
             .into_iter()
             .map(|spec| spec.name)
@@ -928,7 +975,8 @@ mod tests {
                 "session_remote_control",
                 "session_send",
                 "session_inbox",
-                "session_board"
+                "session_board",
+                "session_page"
             ]
         );
         assert_eq!(

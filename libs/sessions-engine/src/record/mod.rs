@@ -8,6 +8,7 @@ mod tests;
 
 use std::ffi::OsString;
 
+pub(crate) use key::is_key;
 pub(crate) use search::rows;
 #[cfg(test)]
 pub(crate) use store::Placement;

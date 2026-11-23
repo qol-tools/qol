@@ -10,7 +10,7 @@ pub(super) struct Claimed {
     pub(super) friendly: String,
 }
 
-pub(super) fn is_key(text: &str) -> bool {
+pub(crate) fn is_key(text: &str) -> bool {
     shaped(text) && text.len() <= KEY_MAX
 }
 

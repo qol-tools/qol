@@ -62,6 +62,26 @@ export type Doing = { counts: Partial<Record<ActionKind, number>>; recent: strin
 
 export type Lit = { writing?: string; writingUnder?: string[] }
 
+export type Tone = 'info' | 'good' | 'warn' | 'bad'
+
+export type Verdict = 'pass' | 'fail' | 'skip'
+
+export type Check = { id: string; text: string; detail?: string }
+
+export type PageBlock =
+  | { kind: 'kv'; rows: { label: string; value: string; tone?: Tone }[] }
+  | { kind: 'checklist'; items: Check[] }
+  | { kind: 'steps'; items: { text: string; state: 'done' | 'now' | 'todo' }[] }
+  | { kind: 'links'; items: { label: string; url: string }[] }
+  | { kind: 'callout'; tone: Tone; text: string }
+  | { kind: 'actions'; items: { id: string; label: string }[] }
+
+export type Page = { id: string; owner: string; title: string; tab?: string; blocks: PageBlock[] }
+
+export type PageAnswer = { item: string; verdict: Verdict; note?: string; at_ms: number }
+
+export type LivePage = { page: Page; set_ms: number; updated_ms: number; answers: PageAnswer[] }
+
 declare module 'claude-code' {
   interface PluginState {
     'qol-switchboard': {
@@ -83,6 +103,10 @@ declare module 'claude-code' {
       rowsCapped: boolean
       starting: string
       current: string
+      pages: LivePage[]
+      pageShown: string
+      pageCursor: string
+      pageNoting: string
     }
   }
 }

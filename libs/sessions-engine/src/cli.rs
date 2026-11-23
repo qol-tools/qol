@@ -103,7 +103,14 @@ pub(crate) fn watch(args: &[OsString]) -> Result<()> {
 }
 
 pub(crate) fn record(args: &[OsString]) -> Result<()> {
-    let (stdout, code) = crate::record::execute(args);
+    verb_reply(crate::record::execute(args))
+}
+
+pub(crate) fn page(args: &[OsString]) -> Result<()> {
+    verb_reply(crate::page::execute(args, &mut io::stdin()))
+}
+
+fn verb_reply((stdout, code): (String, u8)) -> Result<()> {
     line(stdout);
     if code != 0 {
         std::process::exit(i32::from(code));

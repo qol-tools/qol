@@ -432,6 +432,7 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
         "session_send"
         | "session_inbox"
         | "session_board"
+        | "session_page"
         | "sessions_closed"
         | "session_records"
         | "session_reopen"
