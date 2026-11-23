@@ -5144,5 +5144,11 @@ test('a click on pass, fail or skip in a check row answers that row, with no key
   await ui.press({ key: 'verdict-pass-hip' })
   expect(runs).toContainEqual(['answer', '--id', 'retail-test', '--item', 'hip', '--verdict', 'pass'])
   expect(await ui.find({ type: 'Text', text: '1 pass · 0 fail · 0 left' })).toBeDefined()
+
+  await ui.press({ key: 'verdict-fail-grip' })
+  expect(await ui.find({ key: 'note' })).toBeDefined()
+  await ui.press({ key: 'verdict-pass-grip' })
+  expect(await ui.find({ key: 'note' })).toBeUndefined()
+  expect(runs).toContainEqual(['answer', '--id', 'retail-test', '--item', 'grip', '--verdict', 'pass'])
   await ui.unmount()
 })

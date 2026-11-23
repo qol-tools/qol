@@ -1618,6 +1618,7 @@ export const judge = async ($: EngineInterface, live: LivePage, check: Check, ve
     void $.ui.focus({ requestId: PANE, key: NOTE_KEY }).catch(() => undefined)
     return
   }
+  await update($, pageNoting, () => '')
   const stored = await answerItem($, live, check.id, verdict)
   if (stored === undefined) {
     $.ui.toast(`${check.text}: the ${verdict} was not recorded.`)
