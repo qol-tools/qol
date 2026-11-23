@@ -1728,11 +1728,26 @@ const withRecords = async ($: EngineInterface, rows: Entry[]): Promise<Entry[]> 
       if (row.launcher !== undefined || row.isDismissed || row.isDone === true || record === undefined) return row
       const launcher = await recordedLauncher($, record, row.agentId).catch(() => undefined)
       if (launcher === undefined) return row
-      const parentKey = owners.get(launcher)
-      const isParentClosed = parentKey !== undefined && records.get(parentKey)?.done !== undefined
-      return { ...row, launcher, ...(isParentClosed ? { isDone: true } : {}) }
+      const isAncestorClosed = await closedAbove($, launcher, owners, records)
+      return { ...row, launcher, ...(isAncestorClosed ? { isDone: true } : {}) }
     }),
   )
+}
+
+const ANCESTOR_DEPTH_MAX = 8
+
+const closedAbove = async ($: EngineInterface, launcher: string, owners: ReadonlyMap<string, string>, records: ReadonlyMap<string, SessionRecord>): Promise<boolean> => {
+  const seen = new Set<string>()
+  let agentId: string | undefined = launcher
+  while (agentId !== undefined && !seen.has(agentId) && seen.size < ANCESTOR_DEPTH_MAX) {
+    seen.add(agentId)
+    const key = owners.get(agentId)
+    const record = key === undefined ? undefined : records.get(key)
+    if (record === undefined) return false
+    if (record.done !== undefined) return true
+    agentId = await recordedLauncher($, record, agentId).catch(() => undefined)
+  }
+  return false
 }
 
 const transcriptOf = (record: SessionRecord, agentId: string): string | undefined => {
