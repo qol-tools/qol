@@ -20,6 +20,12 @@ pub(crate) fn update_settings_file(
         .with_context(|| format!("failed to save {}", file.name()))
 }
 
+pub(crate) fn check_settings_file(file: &qol_config::profile::SettingsFile) -> anyhow::Result<()> {
+    let config_dir = crate::paths::shared_config_dir()?;
+    file.check_updatable(&config_dir)
+        .with_context(|| format!("failed to read {}", file.name()))
+}
+
 pub(crate) fn feature_flag_enabled(flag: &qol_config::feature_flags::FeatureFlag) -> bool {
     crate::paths::profile_dir().is_ok_and(|root| {
         let core = qol_plugin_api::profile::active_core_dir(&root);

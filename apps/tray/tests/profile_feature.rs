@@ -1,3 +1,4 @@
+use qol_config::profile::{Scope, NOTIFICATIONS, THEME};
 use qol_tray::features::{notifications, theme};
 use qol_tray::paths;
 use qol_tray::profile::{self, ProfileExportBundle, ProfileImportBundle};
@@ -296,4 +297,91 @@ async fn a_wrong_typed_look_or_notification_choice_refuses_the_import_before_any
         );
         assert!(notifications::use_system_notifications(), "{case}");
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_unreadable_look_or_notification_file_refuses_the_import_before_any_write() {
+    let _guard = env_lock().lock().await;
+    let env = TestEnv::new();
+    let _ctx = env.enter();
+    profile::ensure_profile_dirs().unwrap();
+    write_hotkeys(json!([{ "id": "hk-old" }]));
+    write_shortcuts(json!([{ "id": "sc-old" }]));
+    write_live_plugin_config(&env, "plugin-kept", &json!({ "source": "old" }));
+    write_profile_plugin_config("plugin-kept", &json!({ "source": "old" }));
+    theme::save_selected_accent_key(Some("blue")).unwrap();
+    notifications::set_use_system_notifications(true).unwrap();
+    notifications::set_enabled(false).unwrap();
+    let bundle: ProfileImportBundle = serde_json::from_value(json!({
+        "hotkeys": [{ "id": "hk-new" }],
+        "shortcuts": [{ "id": "sc-new" }],
+        "plugin_configs": { "plugin-kept": { "source": "new" } },
+        "theme": { "accent": "green" },
+        "notifications": { "handler": "qol" },
+    }))
+    .unwrap();
+    let profile_dir = paths::profile_dir()
+        .unwrap()
+        .join(paths::active_profile_name());
+    let files = [
+        THEME.path_in(&profile_dir, Scope::Core),
+        NOTIFICATIONS.path_in(&profile_dir, Scope::Core),
+        NOTIFICATIONS.path_in(&profile_dir, Scope::Os),
+        NOTIFICATIONS.path_in(&profile_dir, Scope::Device),
+    ];
+
+    for broken in &files {
+        let kept = fs::read(broken).ok();
+        fs::create_dir_all(broken.parent().unwrap()).unwrap();
+        fs::write(broken, "").unwrap();
+
+        let imported = profile::apply_import_bundle(&env.plugins_dir, &bundle).await;
+
+        let case = broken.display().to_string();
+        assert!(imported.is_err(), "{case}");
+        assert_eq!(
+            profile::read_hotkeys_list(),
+            vec![json!({ "id": "hk-old" })],
+            "{case}"
+        );
+        assert_eq!(
+            profile::read_shortcuts_list(),
+            vec![json!({ "id": "sc-old" })],
+            "{case}"
+        );
+        assert_eq!(
+            read_profile_plugin_config("plugin-kept"),
+            Some(json!({ "source": "old" })),
+            "{case}"
+        );
+        assert_eq!(
+            read_live_plugin_config(&env, "plugin-kept"),
+            json!({ "source": "old" }),
+            "{case}"
+        );
+        assert_eq!(fs::read_to_string(broken).unwrap(), "", "{case}");
+        match kept {
+            Some(kept) => fs::write(broken, kept).unwrap(),
+            None => fs::remove_file(broken).unwrap(),
+        }
+    }
+
+    profile::apply_import_bundle(&env.plugins_dir, &bundle)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        profile::read_hotkeys_list(),
+        vec![json!({ "id": "hk-new" })]
+    );
+    assert_eq!(
+        read_live_plugin_config(&env, "plugin-kept"),
+        json!({ "source": "new" })
+    );
+    assert_eq!(
+        theme::selected_accent_key().unwrap().as_deref(),
+        Some("green")
+    );
+    assert!(!notifications::use_system_notifications());
+    assert!(!notifications::enabled());
 }

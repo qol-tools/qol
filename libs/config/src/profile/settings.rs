@@ -80,15 +80,17 @@ impl SettingsFile {
         self.update_in(&active_profile_dir_in(config_dir), update)
     }
 
+    pub fn check_updatable(&self, config_dir: &Path) -> io::Result<()> {
+        self.load_scopes(&active_profile_dir_in(config_dir))
+            .map(drop)
+    }
+
     pub fn update_in(
         &self,
         profile_dir: &Path,
         update: impl FnOnce(&mut Map<String, Value>),
     ) -> io::Result<()> {
-        let mut stored = Vec::with_capacity(Scope::ALL.len());
-        for scope in Scope::ALL {
-            stored.push((scope, load_object(&self.path_in(profile_dir, scope))?));
-        }
+        let stored = self.load_scopes(profile_dir)?;
         let mut settings = self.owned(&stored);
         update(&mut settings);
         for (scope, object) in stored {
@@ -110,6 +112,15 @@ impl SettingsFile {
             .iter()
             .filter(|(key, value)| self.scope_of(key) == scope && !value.is_null())
             .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
+
+    fn load_scopes(&self, profile_dir: &Path) -> io::Result<Vec<(Scope, Map<String, Value>)>> {
+        Scope::ALL
+            .into_iter()
+            .map(|scope| {
+                load_object(&self.path_in(profile_dir, scope)).map(|object| (scope, object))
+            })
             .collect()
     }
 
@@ -316,6 +327,34 @@ mod tests {
                 assert!(saved.is_err(), "{scope:?} {text:?}");
                 assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
             }
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn an_unreadable_scope_file_is_found_before_an_update_is_tried() {
+        let config = tempfile::tempdir().unwrap();
+        let profile = config
+            .path()
+            .join(super::super::PROFILE_DIR)
+            .join(super::super::DEFAULT_PROFILE_NAME);
+        assert!(NOTIFICATIONS.check_updatable(config.path()).is_ok());
+
+        for scope in Scope::ALL {
+            let path = NOTIFICATIONS.path_in(&profile, scope);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "{}").unwrap();
+            assert!(
+                NOTIFICATIONS.check_updatable(config.path()).is_ok(),
+                "{scope:?}"
+            );
+
+            std::fs::write(&path, "").unwrap();
+            assert!(
+                NOTIFICATIONS.check_updatable(config.path()).is_err(),
+                "{scope:?}"
+            );
+            assert!(THEME.check_updatable(config.path()).is_ok(), "{scope:?}");
             std::fs::remove_file(&path).unwrap();
         }
     }

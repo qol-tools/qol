@@ -99,7 +99,8 @@ pub(crate) fn exported_settings() -> Map<String, Value> {
 pub(crate) fn validate_import(imported: &Map<String, Value>) -> Result<()> {
     imported
         .iter()
-        .try_for_each(|(key, value)| check_imported(key, value))
+        .try_for_each(|(key, value)| check_imported(key, value))?;
+    crate::features::profile::check_settings_file(&NOTIFICATIONS)
 }
 
 fn check_imported(key: &str, value: &Value) -> Result<()> {
