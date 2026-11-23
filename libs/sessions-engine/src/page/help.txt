@@ -1,0 +1,85 @@
+qol-cli-sessions sessions page <verb>
+
+Put a workflow page on the switchboard board, so steps and checks the user
+works through by hand live on the board and not in the chat. While a page is
+up it is the board's front page, the header reads `<tab> · forks`, and t
+switches between the page and the forks. Pages live in the CLI Sessions data
+folder, in pages/<id>.json. Any workflow can send one: a fork with the
+session_page tool, a script with this verb.
+
+Usage:
+  qol-cli-sessions sessions page set [--file PATH]
+  qol-cli-sessions sessions page read
+  qol-cli-sessions sessions page answers --id ID
+  qol-cli-sessions sessions page answer --id ID --item ITEM --verdict pass|fail|skip [--note TEXT]
+  qol-cli-sessions sessions page clear (--id ID | --owner KEY | --id ID --owner KEY)
+
+Verbs:
+  set       Put up the page JSON read from stdin, or from --file PATH.
+            A page with the same id is replaced, and the answers to its
+            checklist items that are still on the page are kept. A page id
+            another owner holds is refused. At most 8 pages are up at once.
+  read      Every page, oldest first, with its answers.
+  answers   One page with its answers.
+  answer    Record the user's answer to one checklist item; the board runs
+            it when the user presses p, f or s. A new answer to the same
+            item replaces the old one.
+  clear     Take a page down. --owner alone takes down every page of that
+            owner; with --id it is refused unless that key owns the page.
+            The board takes a page down once its owner fork closes, or
+            when no fork on the board has that key.
+
+Page JSON:
+  {
+    "id": "kcd2-tests",
+    "owner": "check-kcd2",
+    "title": "KCD2 tests",
+    "tab": "tests",
+    "blocks": [
+      { "kind": "kv", "rows": [
+          { "label": "build", "value": "main 609fd3a5", "tone": "good" } ] },
+      { "kind": "checklist", "items": [
+          { "id": "1", "text": "Jump with hip flash on",
+            "detail": "the beam comes from the gun" } ] },
+      { "kind": "steps", "items": [
+          { "text": "Start the game", "state": "done" } ] },
+      { "kind": "links", "items": [
+          { "label": "Release notes", "url": "https://example.com/notes" } ] },
+      { "kind": "callout", "tone": "warn", "text": "Save before the test" },
+      { "kind": "actions", "items": [
+          { "id": "rerun", "label": "run the round again" } ] }
+    ]
+  }
+
+  id and owner are lowercase letters, digits and dashes, at most 64
+  characters; owner is the spawn key of the fork that owns the page, and the
+  board shows a page only while that fork is open. title is at most 80
+  characters; tab, the page's name in the board header, at most 16 and
+  defaults to the id. A page has 1 to 24 blocks and each block 1 to 40
+  entries. Item ids (checklist and actions) are lowercase letters, digits
+  and dashes, at most 32 characters, unique on the page. tone is info
+  (default), good, warn or bad; state is done, now or todo (default). Text
+  is one line: control characters and runs of spaces become one space. A
+  url is one http or https address. Unknown fields are refused.
+
+Answers:
+  A pass, fail or skip answer is stored on the page as
+  { "item": "1", "verdict": "fail", "note": "...", "at_ms": 0 }. A pass or
+  skip on the board is only stored, so read it with answers. A fail on the
+  board also reaches the owner fork as the user's own words,
+  `<title>: check <item> failed (<text>): <note>`, and a pressed action
+  reaches it as `<title>: <label>`; both wake the fork.
+
+Output:
+  Every verb prints one JSON object. set, answers and answer print the page
+  as { "page": {...}, "set_ms": N, "updated_ms": N, "answers": [...] };
+  read prints { "pages": [...] }; clear prints { "cleared": [ids] }. An
+  error prints { "error": text }.
+
+Exit codes:
+  0 success
+  1 the pages folder cannot be read or written
+  2 usage error, or JSON that is not a page
+  3 unknown page or checklist item
+  4 refused: a page that breaks the rules above, an id another owner holds,
+    or a ninth page

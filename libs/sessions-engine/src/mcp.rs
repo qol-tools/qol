@@ -66,6 +66,7 @@ pub(crate) struct McpSessionServer {
     knocks: super::knocks::KnockStore,
     board: super::board::BoardStore,
     records: super::record::RecordStore,
+    pages: super::page::PageStore,
     closed_dir: std::path::PathBuf,
     switchboard_dir: std::path::PathBuf,
     parked_dir: std::path::PathBuf,
@@ -99,6 +100,7 @@ impl McpSessionServer {
                 .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?,
             board: super::board::BoardStore::system()?,
             records: super::record::RecordStore::system()?,
+            pages: super::page::PageStore::system(),
             closed_dir: qol_terminal_sessions::closed::closed_dir()
                 .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?,
             switchboard_dir: qol_config::data_subdir("sessions")
@@ -143,6 +145,7 @@ impl McpSessionServer {
             knocks: super::knocks::KnockStore::with_dir(root.path().join("knocks")),
             board: super::board::BoardStore::with_dir(root.path().join("board")),
             records: super::record::RecordStore::with_dir(root.path().join("records")),
+            pages: super::page::PageStore::with_dir(root.path().join("pages")),
             closed_dir: root.path().join("closed"),
             switchboard_dir: root.path().join(super::SWITCHBOARD_KEY),
             parked_dir: root.path().join("parked"),
@@ -179,6 +182,7 @@ impl McpSessionServer {
             knocks: super::knocks::KnockStore::with_dir(dir.join("knocks")),
             board: super::board::BoardStore::with_dir(dir.join("board")),
             records: super::record::RecordStore::with_dir(dir.join("records")),
+            pages: super::page::PageStore::with_dir(dir.join("pages")),
             closed_dir: dir.join("closed"),
             switchboard_dir: dir.join(super::SWITCHBOARD_KEY),
             parked_dir: dir.join("parked"),
@@ -295,6 +299,7 @@ impl McpSessionServer {
             "session_send" => Some(self.tool_send(&arguments)),
             "session_inbox" => Some(self.tool_inbox(&arguments)),
             "session_board" => Some(self.tool_board(&arguments)),
+            "session_page" => Some(self.tool_page(&arguments)),
             _ => None,
         }
     }
@@ -716,6 +721,11 @@ impl McpSessionServer {
                 )
             })
             .collect())
+    }
+
+    fn tool_page(&self, arguments: &Value) -> Result<String, String> {
+        let owner = self.identified_caller("session_page", arguments)?;
+        super::page::tool(&self.pages, &owner, arguments, super::mailbox::now_ms())
     }
 
     fn tool_records(&self, arguments: &Value) -> Result<String, String> {
@@ -2707,7 +2717,8 @@ mod tests {
                 "session_remote_control",
                 "session_send",
                 "session_inbox",
-                "session_board"
+                "session_board",
+                "session_page"
             ]
         );
     }
@@ -7351,6 +7362,47 @@ mod tests {
             "not a message in your inbox",
         );
         assert!(server.knocks.pending_knocks().is_empty());
+    }
+
+    #[test]
+    fn a_switchboard_fork_sets_its_page_under_its_own_key() {
+        let (server, backend, _root) = keyed_server(&[SWITCHBOARD_KEY_FOR_TESTS]);
+        let record = server
+            .records
+            .claim(
+                "alpha: Alpha fork",
+                crate::record::Placement::Under(None),
+                "/work/project",
+                1,
+            )
+            .unwrap();
+        server
+            .records
+            .add_part(&record.key, "agent-alpha", "/chat.jsonl", 2)
+            .unwrap();
+        act_as(&backend, SWITCHBOARD_KEY_FOR_TESTS);
+        let page = json!({
+            "id": "alpha-tests",
+            "title": "Alpha tests",
+            "blocks": [{ "kind": "checklist", "items": [{ "id": "1", "text": "Open it" }] }],
+        });
+        let set = tool_json(&tool_call(
+            &server,
+            "session_page",
+            json!({"action": "set", "page": page, "as_fork": "agent-alpha"}),
+        ));
+        assert_eq!(set["page"]["owner"], "alpha");
+        let mine = tool_json(&tool_call(
+            &server,
+            "session_page",
+            json!({"action": "read", "as_fork": "agent-alpha"}),
+        ));
+        assert_eq!(mine["pages"][0]["page"]["id"], "alpha-tests");
+        backend.set_current(architect_facts("/work"));
+        refused(
+            &tool_call(&server, "session_page", json!({"action": "read"})),
+            "spawn key",
+        );
     }
 
     #[test]

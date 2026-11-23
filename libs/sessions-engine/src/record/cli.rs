@@ -1,77 +1,16 @@
 use std::ffi::OsString;
-use std::path::Path;
 
-use serde_json::{json, Value};
+use serde_json::json;
 
-use super::store::{Error, Placement, Record, RecordStore};
-
-pub(crate) const EXIT_USAGE: u8 = 2;
-pub(crate) const EXIT_UNKNOWN: u8 = 3;
-pub(crate) const EXIT_REFUSED: u8 = 4;
-const EXIT_FAILED: u8 = 1;
+use super::store::{Placement, Record, RecordStore};
+use crate::verb::{Failure, Flags, Outcome};
 
 pub(crate) const HELP: &str = include_str!("help.txt");
 
-pub(crate) struct Outcome {
-    pub(crate) stdout: String,
-    pub(crate) code: u8,
-}
-
-impl Outcome {
-    fn ok(value: Value) -> Self {
-        Self {
-            stdout: value.to_string(),
-            code: 0,
-        }
-    }
-
-    fn failed(code: u8, message: impl std::fmt::Display) -> Self {
-        Self {
-            stdout: json!({ "error": message.to_string() }).to_string(),
-            code,
-        }
-    }
-
-    fn usage(message: impl std::fmt::Display) -> Self {
-        Self::failed(EXIT_USAGE, format!("{message}\n\n{HELP}"))
-    }
-}
-
 pub(crate) fn execute(args: &[OsString], store: &RecordStore, now_ms: u64) -> Outcome {
-    let Some((verb, rest)) = args.split_first() else {
-        return Outcome::usage("a record verb is required");
-    };
-    let Some(verb) = verb.to_str() else {
-        return Outcome::usage("the record verb must be valid UTF-8");
-    };
-    if matches!(verb, "help" | "-h" | "--help") {
-        return Outcome {
-            stdout: HELP.to_owned(),
-            code: 0,
-        };
-    }
-    let flags = match Flags::parse(rest) {
-        Ok(flags) => flags,
-        Err(message) => return Outcome::usage(message),
-    };
-    match run_verb(verb, &flags, store, now_ms) {
-        Ok(outcome) => outcome,
-        Err(Failure::Usage(message)) => Outcome::usage(message),
-        Err(Failure::Store(Error::Unknown(message))) => Outcome::failed(EXIT_UNKNOWN, message),
-        Err(Failure::Store(Error::Refused(message))) => Outcome::failed(EXIT_REFUSED, message),
-        Err(Failure::Store(error)) => Outcome::failed(EXIT_FAILED, error),
-    }
-}
-
-enum Failure {
-    Usage(String),
-    Store(Error),
-}
-
-impl From<Error> for Failure {
-    fn from(error: Error) -> Self {
-        Self::Store(error)
-    }
+    crate::verb::execute(args, "record", HELP, |verb, flags| {
+        run_verb(verb, flags, store, now_ms)
+    })
 }
 
 fn run_verb(
@@ -173,65 +112,4 @@ fn run_verb(
 
 fn record_outcome(record: Record) -> Outcome {
     Outcome::ok(json!(record))
-}
-
-struct Flags {
-    values: Vec<(String, String)>,
-}
-
-impl Flags {
-    fn parse(args: &[OsString]) -> Result<Self, String> {
-        let mut values: Vec<(String, String)> = Vec::new();
-        let mut args = args.iter();
-        while let Some(flag) = args.next() {
-            let name = flag
-                .to_str()
-                .and_then(|flag| flag.strip_prefix("--"))
-                .filter(|name| !name.is_empty())
-                .ok_or_else(|| format!("unexpected argument `{}`", flag.to_string_lossy()))?;
-            let value = args
-                .next()
-                .ok_or_else(|| format!("--{name} needs a value"))?
-                .to_str()
-                .ok_or_else(|| format!("--{name} must be valid UTF-8"))?;
-            if values.iter().any(|(seen, _)| seen == name) {
-                return Err(format!("--{name} was given twice"));
-            }
-            values.push((name.to_owned(), value.to_owned()));
-        }
-        Ok(Self { values })
-    }
-
-    fn only(&self, allowed: &[&str]) -> Result<(), Failure> {
-        match self
-            .values
-            .iter()
-            .find(|(name, _)| !allowed.contains(&name.as_str()))
-        {
-            Some((name, _)) => Err(Failure::Usage(format!("unknown flag --{name}"))),
-            None => Ok(()),
-        }
-    }
-
-    fn get(&self, name: &str) -> Option<&str> {
-        self.values
-            .iter()
-            .find(|(flag, _)| flag == name)
-            .map(|(_, value)| value.as_str())
-    }
-
-    fn required(&self, name: &str) -> Result<&str, Failure> {
-        self.get(name)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| Failure::Usage(format!("--{name} is required")))
-    }
-
-    fn absolute(&self, name: &str) -> Result<&str, Failure> {
-        let value = self.required(name)?;
-        if Path::new(value).is_absolute() {
-            Ok(value)
-        } else {
-            Err(Failure::Usage(format!("--{name} must be an absolute path")))
-        }
-    }
 }

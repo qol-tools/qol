@@ -1,4 +1,3 @@
-use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -8,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::key;
 use crate::lineage;
+pub(crate) use crate::verb::{Error, Result};
 
 const RECORD_SUFFIX: &str = "json";
 const LOCK_SUFFIX: &str = "lock";
@@ -56,36 +56,6 @@ pub(crate) enum Placement<'a> {
     Under(Option<&'a str>),
     Existing,
 }
-
-#[derive(Debug)]
-pub(crate) enum Error {
-    Unknown(String),
-    Refused(String),
-    Failed(anyhow::Error),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unknown(message) | Self::Refused(message) => formatter.write_str(message),
-            Self::Failed(error) => write!(formatter, "{error:#}"),
-        }
-    }
-}
-
-impl From<anyhow::Error> for Error {
-    fn from(error: anyhow::Error) -> Self {
-        Self::Failed(error)
-    }
-}
-
-impl From<std::io::Error> for Error {
-    fn from(error: std::io::Error) -> Self {
-        Self::Failed(error.into())
-    }
-}
-
-pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 pub(crate) struct RecordStore {
     dir: PathBuf,

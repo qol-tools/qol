@@ -60,7 +60,7 @@ const LOGIN_PATH_TIMEOUT: Duration = Duration::from_secs(5);
 const LOGIN_ENV_LIMIT: usize = 256 * 1024;
 const ROLE_REVISION_PREFIX: &str = "Switchboard role revision ";
 pub(super) const SWITCHBOARD_ROLE: &str = concat!(
-    "You are the switchboard: the user's one control chat for their work and the only terminal the user keeps open, because every other session runs as a fork inside it. Your only job is starting forks, relaying the user's words to them, continuing closed sessions as forks, and listing, closing and messaging the terminal sessions that still run and turning their Remote Control on or off. You start forks with the Agent tool, bring closed sessions back as forks with resume_session and talk to forks with SendMessage; you reach terminal sessions with the sessions tools, which you load with ToolSearch: sessions_list, sessions_closed, session_records, session_fork, session_reopen, session_close, session_remote_control, session_send, session_inbox and session_board. You have no file, shell or web tools, and you never investigate, explain or discuss the details of any fork's or session's work; that belongs to whoever owns it. ",
+    "You are the switchboard: the user's one control chat for their work and the only terminal the user keeps open, because every other session runs as a fork inside it. Your only job is starting forks, relaying the user's words to them, continuing closed sessions as forks, and listing, closing and messaging the terminal sessions that still run and turning their Remote Control on or off. You start forks with the Agent tool, bring closed sessions back as forks with resume_session and talk to forks with SendMessage; you reach terminal sessions with the sessions tools, which you load with ToolSearch: sessions_list, sessions_closed, session_records, session_fork, session_reopen, session_close, session_remote_control, session_send, session_inbox and session_board, while session_page is for forks, which put pages of steps the user works through on the board with it, and you never call it. You have no file, shell or web tools, and you never investigate, explain or discuss the details of any fork's or session's work; that belongs to whoever owns it. ",
     "When the user describes new work or asks anything that needs investigation, such as why something stopped working or how something works, call the Agent tool right away with subagent_type project-fork, a description written `<key-name>: <friendly description>`, where the key-name is a lowercase hyphenated name the user can address, at most 24 characters with the area first and then the topic, such as `session-lookup-bug`, because every fork and lane under that fork starts with it, and the friendly description is three to six plain words, and a prompt whose first line is `Project: <absolute path of the project folder the work belongs to>` followed by the user's own words. Pass model or effort only when the user names one. For a model the Agent tool's model parameter does not list, such as Mythos 5.1, leave model out and put the line `Model: <full model id, such as claude-mythos-5-1>` right under the Project line. Write nothing before the Agent call, and reply with only `Started <key-name>.`: never say what you cannot do, never apologize and never restate the request. ",
     "When what the user describes continues, changes or adds to the work of a fork that is still open, never start a new fork for it: pass the user's words to that fork with SendMessage, so one piece of work stays with one fork and one pull request. Start a new fork only for work that no open fork owns. ",
     "A fork owns its delivery: in a qol-tools repository it works in a worktree, pushes its branch and opens a pull request with auto-merge armed on its own, or a draft that waits for the user's approval when the change involves design, and in any other repository it delivers the way that repository's own instructions say. So never add push, pull request or merge conditions of your own to a prompt and never ask the user whether a fork may push or open a pull request; when a fork asks you that anyway, answer it with SendMessage that it follows that delivery policy, unless the user's own words restricted pushing, in which case answer that the user's restriction stands. ",
@@ -141,6 +141,7 @@ pub(super) struct LaunchPlan {
     fork: agents::ForkAgent,
     watches: Option<PathBuf>,
     knocks: Option<PathBuf>,
+    pages: Option<PathBuf>,
     chords: chords::Bound,
 }
 
@@ -159,6 +160,7 @@ impl LaunchPlan {
             fork: agents::ForkAgent::default(),
             watches: None,
             knocks: None,
+            pages: None,
             chords: chords::Bound::default(),
         }
     }
@@ -179,6 +181,7 @@ impl LaunchPlan {
             config_home,
             watches: watches.map(|store| store.dir().to_path_buf()),
             knocks: crate::knocks::dir(),
+            pages: Some(crate::page::PageStore::system().dir().to_path_buf()),
             model: profile.model.clone(),
             effort: profile.effort.clone(),
             mcp_program: mcp_program(
@@ -294,6 +297,7 @@ const CLI_SESSIONS_ENV: &str = "QOL_CLI_SESSIONS";
 const RETIRED_WAKE_FILE: &str = "wake.json";
 const WATCHES_ENV: &str = "QOL_SWITCHBOARD_WATCHES";
 const KNOCKS_ENV: &str = "QOL_SWITCHBOARD_KNOCKS";
+const PAGES_ENV: &str = "QOL_SWITCHBOARD_PAGES";
 const STATE_LOOKS_ENV: &str = "QOL_SWITCHBOARD_STATE_LOOKS";
 const MARKS_ENV: &str = "QOL_SWITCHBOARD_MARKS";
 const MODELS_ENV: &str = "QOL_SWITCHBOARD_MODELS";
@@ -330,6 +334,11 @@ fn claude_env(plan: &LaunchPlan) -> Vec<(String, String)> {
             plan.knocks
                 .iter()
                 .map(|knocks| (KNOCKS_ENV.to_owned(), text(knocks))),
+        )
+        .chain(
+            plan.pages
+                .iter()
+                .map(|pages| (PAGES_ENV.to_owned(), text(pages))),
         )
         .collect()
 }
@@ -961,6 +970,7 @@ mod tests {
             fork: agents::ForkAgent::default(),
             watches: None,
             knocks: None,
+            pages: None,
             chords: chords::Bound::default(),
         }
     }
@@ -1053,7 +1063,7 @@ mod tests {
         assert!(servers["sessions"].get("env").is_none(), "{config}");
         assert_eq!(
             args.last().unwrap(),
-            "--allowedTools=mcp__sessions__sessions_list,mcp__sessions__sessions_closed,mcp__sessions__session_records,mcp__sessions__session_fork,mcp__sessions__session_reopen,mcp__sessions__session_close,mcp__sessions__session_remote_control,mcp__sessions__session_send,mcp__sessions__session_inbox,mcp__sessions__session_board,mcp__qol-switchboard__fork_board,mcp__qol-switchboard__resume_session"
+            "--allowedTools=mcp__sessions__sessions_list,mcp__sessions__sessions_closed,mcp__sessions__session_records,mcp__sessions__session_fork,mcp__sessions__session_reopen,mcp__sessions__session_close,mcp__sessions__session_remote_control,mcp__sessions__session_send,mcp__sessions__session_inbox,mcp__sessions__session_board,mcp__sessions__session_page,mcp__qol-switchboard__fork_board,mcp__qol-switchboard__resume_session"
         );
     }
 
@@ -1119,6 +1129,7 @@ mod tests {
             path: Some("/home/u/.nvm/bin:/usr/bin".to_owned()),
             watches: Some(PathBuf::from("/data/sessions/fork-watches")),
             knocks: Some(PathBuf::from("/data/sessions/knocks")),
+            pages: Some(PathBuf::from("/data/sessions/pages")),
             fork: agents::ForkAgent {
                 models: vec!["claude-opus-5-5".to_owned(), "haiku".to_owned()],
                 ..agents::ForkAgent::default()
@@ -1140,6 +1151,7 @@ mod tests {
                     "/data/sessions/fork-watches".to_owned()
                 ),
                 (KNOCKS_ENV.to_owned(), "/data/sessions/knocks".to_owned()),
+                (PAGES_ENV.to_owned(), "/data/sessions/pages".to_owned()),
             ]
         );
         assert_eq!(
