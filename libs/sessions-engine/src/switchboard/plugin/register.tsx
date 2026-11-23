@@ -833,9 +833,9 @@ const ready = async ($: EngineInterface): Promise<void> => {
 export const cutIn = (list: Entry[], entry: Entry): Entry[] => [entry, ...forksUnder(list, entry)].filter(isCut)
 
 export const stoppedFamilies = (list: Entry[]): Entry[] =>
-  list.filter(entry => parentOf(list, entry) === undefined && !needsYou(entry) && cutIn(list, entry).length > 0)
+  list.filter(entry => parentOf(list, entry) === undefined && !needsYou(list, entry) && cutIn(list, entry).length > 0)
 
-export const needYouCount = (list: Entry[]): number => list.filter(entry => asksYou(list, entry)).length + stoppedFamilies(list).length
+export const needYouCount = (list: Entry[]): number => list.filter(entry => needsYou(list, entry)).length + stoppedFamilies(list).length
 
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
@@ -868,8 +868,8 @@ const isCut = (entry: Entry): boolean => entry.isInterrupted === true && !entry.
 export const isUnfinished = (entry: Entry): boolean =>
   !entry.isDismissed && entry.successor === undefined && entry.isDone !== true
 
-const needsYou = (entry: Entry): boolean =>
-  !entry.isDismissed && !entry.isWorking && !isCut(entry) && entry.isDone !== true && entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
+const needsYou = (list: Entry[], entry: Entry): boolean =>
+  parentOf(list, entry) === undefined && !entry.isDismissed && !entry.isWorking && !isCut(entry) && entry.isDone !== true && entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
 
 type StateLook = { color: string; isBold: boolean }
 type PullPart = { text: string; color?: string; isDim?: boolean }
@@ -935,19 +935,15 @@ export const forksUnder = (list: Entry[], parent: Entry): Entry[] => {
   return found
 }
 
-const asksYou = (list: Entry[], entry: Entry): boolean => needsYou(entry) && parentOf(list, entry) === undefined
-
-const isOwed = (entry: Entry): boolean => needsYou(entry) || isCut(entry)
-
 export const backAtRestart = (list: Entry[]): string[] =>
   list
     .filter(entry => entry.launcher === undefined && isUnfinished(entry))
-    .flatMap(top => [top, ...forksUnder(list, top).filter(sub => isUnfinished(sub) && [sub, ...forksUnder(list, sub)].some(isOwed))])
+    .flatMap(top => [top, ...forksUnder(list, top).filter(sub => isUnfinished(sub) && [sub, ...forksUnder(list, sub)].some(isCut))])
     .map(entry => entry.agentId)
 
 const isBusy = (entry: Entry, states: Record<string, RunState>): boolean => entry.isWorking || isWaiting(entry, states)
 
-const isLive = (entry: Entry, states: Record<string, RunState>): boolean => isBusy(entry, states) || needsYou(entry)
+const isLive = (list: Entry[], entry: Entry, states: Record<string, RunState>): boolean => isBusy(entry, states) || needsYou(list, entry)
 
 export type Shown = { label: string; state?: string }
 
@@ -955,7 +951,7 @@ export const shownState = (entry: Entry, list: Entry[] = [], states: Record<stri
   if (entry.isWorking) return { label: 'working', state: WORKING_STATE }
   if (isEnded(entry)) return { label: 'closed' }
   if (isCut(entry)) return { label: 'stopped mid-turn' }
-  if (needsYou(entry)) return { label: entry.kind ?? 'ask', ...(parentOf(list, entry) === undefined ? { state: YOUR_TURN_STATE } : {}) }
+  if (needsYou(list, entry)) return { label: entry.kind ?? 'ask', state: YOUR_TURN_STATE }
   const live = forksUnder(list, entry).filter(sub => isBusy(sub, states)).length
   if (live > 0) return { label: `waits on ${live}`, state: WAITING_STATE }
   if (isWaiting(entry, states)) return { label: [WAITING_STATE, (states[entry.agentId]?.pulls ?? []).map(url => `#${url.split('/').pop() ?? '?'}`).join(',')].filter(part => part !== '').join(' '), state: WAITING_STATE }
@@ -969,7 +965,7 @@ export const hasUnread = (list: Entry[], entry: Entry): boolean => entry.hasNewR
 
 export const marksOf = (list: Entry[]): { fresh: string[]; asks: string[] } => ({
   fresh: list.filter(entry => !entry.isDismissed && entry.hasNewReply === true).map(entry => entry.agentId),
-  asks: list.filter(entry => asksYou(list, entry)).map(entry => entry.agentId),
+  asks: list.filter(entry => needsYou(list, entry)).map(entry => entry.agentId),
 })
 
 let marksWritten = ''
@@ -1222,11 +1218,11 @@ export const reachable = (list: Entry[]): Entry[] => {
   const shown = list.filter(entry => !entry.isDismissed && entry.successor === undefined)
   const by = (keep: (entry: Entry) => boolean) => shown.filter(keep).sort((a, b) => a.at - b.at)
   const ordered = [
-    ...by(needsYou),
+    ...by(entry => needsYou(list, entry)),
     ...by(isCut),
     ...by(entry => entry.isWorking),
-    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && !isEnded(entry)),
-    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && isEnded(entry)).reverse(),
+    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(list, entry) && !isEnded(entry)),
+    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(list, entry) && isEnded(entry)).reverse(),
   ]
   const isTop = (entry: Entry) => parentOf(list, entry) === undefined
   const seen = new Set<string>()
@@ -2020,7 +2016,7 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   )
   const entry = filed as Entry
   if (entry.key !== undefined) void recordRun($, 'archive', ['--key', entry.key])
-  if (isNew && !isShown && asksYou(await read($, board), entry)) {
+  if (isNew && !isShown && needsYou(await read($, board), entry)) {
     void $.ui.notify(entry.headline, { title: keyName(entry.name) }).catch(() => {})
   }
   return entry
@@ -4015,7 +4011,7 @@ export const register: Register = on => {
     const top = list.filter(entry => parentOf(list, entry) === undefined)
     const subsOf = (entry: Entry) => subForksOf(list, entry)
     const familyIn = (entry: Entry) => forksUnder(list, entry)
-    const needs = top.filter(needsYou).sort((a, b) => a.at - b.at)
+    const needs = top.filter(entry => needsYou(list, entry)).sort((a, b) => a.at - b.at)
     const cut = stoppedFamilies(list).sort((a, b) => a.at - b.at)
     const working = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && (entry.isWorking || familyIn(entry).some(sub => isBusy(sub, states)))).sort((a, b) => a.at - b.at)
     const waiting = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && !working.includes(entry) && isWaiting(entry, states)).sort((a, b) => a.at - b.at)
@@ -4025,7 +4021,7 @@ export const register: Register = on => {
       return count === 0 ? '' : ` +${count}`
     }
     const hasOpenPull = (entry: Entry) => [entry, ...familyIn(entry)].some(one => pullsOf(ledger, one.agentId).some(isOpen))
-    const isAtRest = (entry: Entry) => ![entry, ...familyIn(entry)].some(one => isLive(one, states) || isCut(one)) && !hasOpenPull(entry)
+    const isAtRest = (entry: Entry) => ![entry, ...familyIn(entry)].some(one => isLive(list, one, states) || isCut(one)) && !hasOpenPull(entry)
     const foldable = idle.filter(entry => entry.agentId !== target?.agentId && !hasOpenPull(entry))
     const folded = isIdleShown ? [] : foldable
     const closedFoldable = recent.filter(entry => !hasOpenPull(entry)).length

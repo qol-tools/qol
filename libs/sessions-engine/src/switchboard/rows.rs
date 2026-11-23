@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::adopt_session::RESUMED_FROM;
-use super::fork_state::{self, ForkState};
+use super::fork_state::{self, meta_of, ForkState, PARENT_KEY};
 
 const MODEL_COLOR: &str = "\x1b[33m";
 const COLOR_OFF: &str = "\x1b[39m";
@@ -30,7 +30,6 @@ const WAITS_ON_LABEL: &str = "waits on";
 const ASKS_LABEL: &str = "asks you";
 const FRESH_MARK: char = '◉';
 const FRESH_LOOK: &str = "\x1b[1m\x1b[38;5;147m";
-const PARENT_KEY: &str = "parentAgentId";
 const MARKS_EXTENSION: &str = ".json";
 const ELLIPSIS: char = '…';
 const GAP: &str = "  ";
@@ -728,10 +727,6 @@ fn continued_from(prompt: &str) -> Option<PathBuf> {
     let (path, _) = rest.split_once(CONTINUE_END)?;
     let path = path.trim();
     (!path.is_empty() && !path.contains('\n')).then(|| PathBuf::from(path))
-}
-
-fn meta_of(transcript: &Path) -> Option<Value> {
-    serde_json::from_slice(&std::fs::read(transcript.with_extension("meta.json")).ok()?).ok()
 }
 
 fn meta_path(meta: &Value, key: &str) -> Option<PathBuf> {
