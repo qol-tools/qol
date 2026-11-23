@@ -2496,6 +2496,10 @@ test('waiting comes from what a fork runs, and a fork that started forks counts 
   expect(shownState(parent, list)).toEqual({ label: 'waits on 1', state: 'waiting' })
   expect(shownState(list[3], list)).toEqual({ label: 'ask' })
   expect(needYouCount(list)).toBe(0)
+  const orphans = [row('p1', { kind: 'note', isDismissed: true }), row('k3', { launcher: 'p1', kind: 'ask' }), row('k9', { launcher: 'gone', kind: 'test' })]
+  expect(needYouCount(orphans)).toBe(2)
+  expect(marksOf(orphans).asks).toEqual(['k3', 'k9'])
+  expect(shownState(orphans[1], orphans)).toEqual({ label: 'ask', state: 'your turn' })
   const quiet = list.filter(one => one.agentId !== 'k3')
   expect(shownState(parent, quiet)).toEqual({ label: 'waits on 1', state: 'waiting' })
   expect(shownState(parent, quiet, { k2: { state: 'waiting' } })).toEqual({ label: 'waits on 2', state: 'waiting' })
