@@ -7,7 +7,7 @@ const POLL: Duration = Duration::from_millis(250);
 const REPLACED_SUFFIX: &str = " (deleted)";
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum Restart {
+pub(crate) enum Restart {
     NotRunning,
     Restarted { old: u32, new: u32 },
     Pending { old: u32 },
@@ -15,7 +15,7 @@ pub(super) enum Restart {
 }
 
 impl Restart {
-    pub(super) fn describe(&self) -> String {
+    pub(crate) fn describe(&self) -> String {
         match self {
             Self::NotRunning => "installed; no daemon was running".to_string(),
             Self::Restarted { old, new } => {
@@ -31,7 +31,7 @@ impl Restart {
     }
 }
 
-pub(super) fn restart(pids: &Path, id: &str, binary: &Path) -> Result<Restart> {
+pub(crate) fn restart(pids: &Path, id: &str, binary: &Path) -> Result<Restart> {
     let Some(old) = tracked_pid(pids, id).filter(|pid| qol_process::is_pid_alive(*pid)) else {
         return Ok(Restart::NotRunning);
     };
@@ -59,7 +59,7 @@ fn tracked_pid(pids: &Path, id: &str) -> Option<u32> {
         .ok()
 }
 
-pub(super) fn runs_binary(pid: u32, binary: &Path) -> bool {
+pub fn runs_binary(pid: u32, binary: &Path) -> bool {
     let wanted = binary
         .canonicalize()
         .unwrap_or_else(|_| binary.to_path_buf());

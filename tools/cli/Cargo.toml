@@ -32,6 +32,7 @@ qol-log.workspace = true
 qol-peers.workspace = true
 qol-terminal-sessions.workspace = true
 qol-host-fixes.workspace = true
+qol-pr-try.workspace = true
 qol-process.workspace = true
 qol-secrets.workspace = true
 qol-sessions-engine.workspace = true

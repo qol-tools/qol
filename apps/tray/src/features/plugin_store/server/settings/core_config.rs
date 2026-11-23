@@ -19,6 +19,7 @@ struct CoreConfigResponse {
     animations: &'static str,
     profile: String,
     residency: bool,
+    pull_request_builds: bool,
 }
 
 #[derive(Deserialize)]
@@ -35,6 +36,7 @@ fn current_config() -> CoreConfigResponse {
         animations: crate::features::theme::current_animations().key(),
         profile: crate::paths::active_profile_name(),
         residency: qol_host_fixes::residency::HostResidency::current().is_resident(),
+        pull_request_builds: crate::features::profile::pull_request_builds::enabled(),
     }
 }
 
@@ -87,6 +89,9 @@ fn dispatch_field(state: &AppState, field: &str, value: &serde_json::Value) -> H
             &as_str(field, value)?,
         ),
         "residency" => set_residency(as_bool(field, value)?),
+        "pull_request_builds" => {
+            crate::features::profile::pull_request_builds::set(as_bool(field, value)?)
+        }
         _ => return Err(Box::new(bad_request(&format!("unknown field: {field}")))),
     };
     result.map_err(|error| Box::new(bad_request(&format!("{error:#}"))))

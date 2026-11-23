@@ -5,7 +5,7 @@ use super::model::{RowAction, Summary, Trial, UpdatesSnapshot};
 
 pub(super) const TITLE: &str = "Pull request build";
 pub(super) const GROUP: &str = "Development";
-pub(super) const GROUP_DETAIL: &str = "Behind a feature flag.";
+pub(super) const GROUP_DETAIL: &str = "Turned on in qol settings, under Testing.";
 const OFF: &str = "Off";
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]

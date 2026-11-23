@@ -7,7 +7,7 @@ const CODESIGN: &str = "/usr/bin/codesign";
 const AD_HOC: &str = "-";
 const TRAY_ARCHIVE: &str = "qol-tray-macos-aarch64.tar.gz";
 
-pub(in crate::commands::pr) fn tray_binary(tray_dir: &Path) -> Result<PathBuf> {
+pub(crate) fn tray_binary(tray_dir: &Path) -> Result<PathBuf> {
     let archive = tray_dir.join(TRAY_ARCHIVE);
     if !archive.is_file() {
         bail!("the build carries the tray but no {}", archive.display());
@@ -25,14 +25,14 @@ pub(in crate::commands::pr) fn tray_binary(tray_dir: &Path) -> Result<PathBuf> {
     Ok(binary)
 }
 
-pub(in crate::commands::pr) fn prepare_tray(binary: &Path) -> Result<()> {
+pub(crate) fn prepare_tray(binary: &Path) -> Result<()> {
     let bundle = bundle_root(binary)
         .with_context(|| format!("{} is not inside an app bundle", binary.display()))?;
     let identity = qol_config::codesign_identity().unwrap_or_else(|| AD_HOC.to_string());
     sign(&identity, bundle, None)
 }
 
-pub(in crate::commands::pr) fn prepare_plugin(binary: &Path, bin_name: &str) -> Result<()> {
+pub(crate) fn prepare_plugin(binary: &Path, bin_name: &str) -> Result<()> {
     sign(AD_HOC, binary, Some(bin_name))
 }
 
@@ -41,7 +41,7 @@ fn bundle_binary(tray_dir: &Path) -> PathBuf {
         .join(format!("{}.app", qol_conventions::TRAY_DISPLAY_NAME))
         .join("Contents")
         .join("MacOS")
-        .join(super::super::tray::BINARY)
+        .join(crate::TRAY_BINARY)
 }
 
 fn bundle_root(binary: &Path) -> Option<&Path> {

@@ -192,9 +192,7 @@ pub(super) async fn get_updates(state: AppState) -> Response {
     http_json::blocking("updates query", move || {
         let view = collect_view(&state);
         let mut payload = build_updates_payload(&view, SystemTime::now());
-        if crate::features::profile::feature_flag_enabled(
-            &qol_config::feature_flags::PULL_REQUEST_BUILDS,
-        ) {
+        if super::pull_request_builds::shown() {
             payload.can_try_pull_requests = true;
             payload.pull_request_build = super::pull_request_builds::current();
         }
@@ -233,7 +231,7 @@ pub(super) async fn post_core_action(
         "update" => start_update_action(&state, request.id.as_deref()),
         "update_all" => start_update_all_action(&state),
         "stop_updates" => stop_updates_action(),
-        _ => super::pull_request_builds::post_action(&action, &request)
+        _ => super::pull_request_builds::post_action(&state, &action, &request)
             .or_else(|| super::plugins_handlers::post_plugins_action(&state, &action, &request))
             .unwrap_or_else(|| action_error(StatusCode::NOT_FOUND, "Unknown action")),
     }

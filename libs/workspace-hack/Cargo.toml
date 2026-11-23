@@ -191,6 +191,7 @@ yoke = { version = "0.8", features = ["derive"] }
 zbus = { version = "5", features = ["url"] }
 zerofrom = { version = "0.1", default-features = false, features = ["alloc", "derive"] }
 zeroize = { version = "1", features = ["zeroize_derive"] }
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 zvariant = { version = "5", features = ["enumflags2", "gvariant", "url"] }
 zvariant_utils = { version = "3", features = ["gvariant"] }
 
@@ -250,6 +251,7 @@ zbus = { version = "5", features = ["url"] }
 zbus_macros = { version = "5", features = ["blocking-api", "gvariant"] }
 zerofrom = { version = "0.1", default-features = false, features = ["alloc", "derive"] }
 zeroize = { version = "1", features = ["zeroize_derive"] }
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 zvariant = { version = "5", features = ["enumflags2", "gvariant", "url"] }
 zvariant_derive = { version = "5", features = ["gvariant"] }
 zvariant_utils = { version = "3", features = ["gvariant"] }
@@ -419,6 +421,7 @@ windows-sys-c8eced492e86ede7 = { package = "windows-sys", version = "0.48", feat
 windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Devices_DeviceAndDriverInstallation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
 yoke = { version = "0.8", features = ["derive"] }
 zerofrom = { version = "0.1", default-features = false, features = ["alloc", "derive"] }
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 
 [target.x86_64-pc-windows-msvc.build-dependencies]
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "wasm_simd"] }
@@ -453,6 +456,7 @@ windows-sys-c8eced492e86ede7 = { package = "windows-sys", version = "0.48", feat
 windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Devices_DeviceAndDriverInstallation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
 yoke = { version = "0.8", features = ["derive"] }
 zerofrom = { version = "0.1", default-features = false, features = ["alloc", "derive"] }
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 
 ### END HAKARI SECTION
 

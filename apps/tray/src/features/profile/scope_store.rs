@@ -16,6 +16,7 @@ pub(crate) const HOTKEYS_FILE: &str = "hotkeys.json";
 pub(crate) const SHORTCUTS_FILE: &str = "shortcuts.json";
 pub(crate) const TASK_RUNNER_FILE: &str = "task-runner.json";
 pub(crate) const SHORTCUT_PROGRAMS_FILE: &str = "shortcut-programs.json";
+pub(crate) const PULL_REQUEST_BUILDS_FILE: &str = "pull-request-builds.json";
 pub(crate) const SYNC_STATE_FILE: &str = "state.json";
 pub(crate) const SYNC_TOGGLES_FILE: &str = "toggles.json";
 
@@ -179,6 +180,10 @@ impl ProfileScopeStore {
 
     pub fn task_runner_path(&self) -> PathBuf {
         self.device_dir().join(TASK_RUNNER_FILE)
+    }
+
+    pub fn pull_request_builds_path(&self) -> PathBuf {
+        self.device_dir().join(PULL_REQUEST_BUILDS_FILE)
     }
 
     pub fn shortcut_programs_path(&self) -> PathBuf {

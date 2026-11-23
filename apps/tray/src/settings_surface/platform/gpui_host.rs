@@ -1443,6 +1443,10 @@ mod tests {
             ("native_theme", qol_config::contract::FieldKind::Select),
             ("accent", qol_config::contract::FieldKind::Select),
             ("residency", qol_config::contract::FieldKind::Boolean),
+            (
+                "pull_request_builds",
+                qol_config::contract::FieldKind::Boolean,
+            ),
         ] {
             let field = spec.field(name).unwrap_or_else(|| panic!("missing {name}"));
             assert_eq!(field.kind, kind, "wrong kind for {name}");

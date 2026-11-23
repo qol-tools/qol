@@ -11,12 +11,7 @@ pub const PLUGIN_SOURCES: FeatureFlag = FeatureFlag {
     label: "Add plugin sources",
 };
 
-pub const PULL_REQUEST_BUILDS: FeatureFlag = FeatureFlag {
-    id: "updates.pull_request_builds",
-    label: "Try pull request builds",
-};
-
-pub const ALL: &[FeatureFlag] = &[PLUGIN_SOURCES, PULL_REQUEST_BUILDS];
+pub const ALL: &[FeatureFlag] = &[PLUGIN_SOURCES];
 
 pub const FILE: &str = "feature-flags.json";
 
@@ -77,10 +72,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let core = dir.path().join("core");
         assert_eq!(load(&core), None);
-        assert!(!enabled_in(&core, &PULL_REQUEST_BUILDS));
-        save(&core, &[PULL_REQUEST_BUILDS.id.to_string()]).unwrap();
-        assert_eq!(load(&core), Some(vec![PULL_REQUEST_BUILDS.id.to_string()]));
-        assert!(enabled_in(&core, &PULL_REQUEST_BUILDS));
+        assert!(!enabled_in(&core, &PLUGIN_SOURCES));
+        save(&core, &[PLUGIN_SOURCES.id.to_string()]).unwrap();
+        assert_eq!(load(&core), Some(vec![PLUGIN_SOURCES.id.to_string()]));
+        assert!(enabled_in(&core, &PLUGIN_SOURCES));
+        save(&core, &["from.another.machine".to_string()]).unwrap();
         assert!(!enabled_in(&core, &PLUGIN_SOURCES));
     }
 }
