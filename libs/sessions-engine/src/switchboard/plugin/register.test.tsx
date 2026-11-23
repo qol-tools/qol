@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { actionSaid, backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, failSaid, litBody, livePagesOf, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, laneName, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pageCount, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, refreshPages, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, underParent, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
+import { actionSaid, backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, failSaid, isOrphan, litBody, livePagesOf, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, laneName, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pageCount, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, refreshPages, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, underParent, withoutCut, withoutHidden, withAction, withSent, writingMarks } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -5003,6 +5003,7 @@ test("a fork's page is the board's front page: p records a pass and moves on, f 
   const runs = pagesBoard(on, sent, testPage('t1-fork'))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 't1', 't1-fork: a fork')
+  await settle()
   await refreshPages($)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
@@ -5028,7 +5029,7 @@ test("a fork's page is the board's front page: p records a pass and moves on, f 
   await ui.press({ key: 'tab-forks' })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '0 left · 1 failed' })).toBeDefined()
-  await ui.press({ key: 'tab-retail-test' })
+  await ui.press({ key: 'tab-page-retail-test' })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
   await ui.unmount()
 })
@@ -5038,6 +5039,7 @@ test('a page whose owner is not an open fork on the board never shows, and the b
   pagesBoard(on, sent, testPage('someone-else'))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 't2', 't2-fork: a fork')
+  await settle()
   await refreshPages($)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
@@ -5054,4 +5056,37 @@ test('a page counts its checks, and the words a fail and an action send name the
   const open = { agentId: 'a', name: 't1-fork: a fork', key: 't1-fork' } as any
   expect(livePagesOf([open], [live])).toHaveLength(1)
   expect(livePagesOf([{ ...open, isClosed: true }], [live])).toHaveLength(0)
+  expect(isOrphan([open], live)).toBe(false)
+  expect(isOrphan([{ ...open, isDone: true }], live)).toBe(true)
+  expect(isOrphan([{ ...open, key: 'other-fork' }], live)).toBe(true)
+  expect(isOrphan([], live)).toBe(false)
+})
+
+test("a page whose owner has no row or has ended is taken down, so dead pages never fill the host's page cap", async ($, on) => {
+  const sent: any[] = []
+  const runs = pagesBoard(on, sent, testPage('gone-fork'))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't3', 't3-fork: a fork')
+  await settle()
+  await refreshPages($)
+  expect(runs).toContainEqual(['clear', '--owner', 'gone-fork'])
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a page with the id forks is its own tab and the forks tab stays the forks', async ($, on) => {
+  const sent: any[] = []
+  pagesBoard(on, sent, { ...testPage('t4-fork'), id: 'forks' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't4', 't4-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
+  await ui.press({ key: 'tab-forks' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
+  await ui.press({ key: 'tab-page-forks' })
+  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
+  await ui.unmount()
 })

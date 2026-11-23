@@ -26,7 +26,8 @@ Verbs:
             item replaces the old one.
   clear     Take a page down. --owner alone takes down every page of that
             owner; with --id it is refused unless that key owns the page.
-            The board also stops showing a page once its owner fork closes.
+            The board takes a page down once its owner fork closes, or
+            when no fork on the board has that key.
 
 Page JSON:
   {

@@ -56,7 +56,8 @@ const IDLE_KEY = 'i'
 const CLOSED_KEY = 'r'
 const SUB_FORK_KEYS = 'abcdefghjklmopqstuvwz'
 const PAGE_KEY = 't'
-const FORKS_TAB = 'forks'
+const FORKS_TAB = '#forks'
+const FORKS_LABEL = 'forks'
 const ITEM_PREFIX = 'item-'
 const NOTE_KEY = 'note'
 const PAGE_INDENT = 5
@@ -1543,6 +1544,11 @@ const isLivePage = (value: unknown): value is LivePage => {
 
 const ownerRow = (rows: readonly Entry[], live: LivePage): Entry | undefined => rows.find(entry => keyOf(entry) === live.page.owner)
 
+export const isOrphan = (rows: readonly Entry[], live: LivePage): boolean => {
+  const owner = ownerRow(rows, live)
+  return owner === undefined ? rows.length > 0 : isEnded(owner)
+}
+
 export const livePagesOf = (rows: readonly Entry[], all: readonly LivePage[]): LivePage[] =>
   all.filter(live => {
     const owner = ownerRow(rows, live)
@@ -1563,15 +1569,17 @@ export const refreshPages = async ($: EngineInterface): Promise<void> => {
   try {
     const folder = await $.env.get('QOL_SWITCHBOARD_PAGES')
     if (folder === undefined || folder === '') return
-    const listing = (await $.fs.exists(folder)) ? await listingOf($, folder) : ''
+    await ensureLoaded($)
+    const rows = await read($, board)
+    const open = rows.filter(entry => !isEnded(entry)).map(keyOf).sort()
+    const listing = `${(await $.fs.exists(folder)) ? await listingOf($, folder) : ''}\n${open.join(' ')}`
     if (listing === pagesListed) return
     const ran = await verbExec($, 'page', 'read', [])
     if (ran?.exitCode !== 0) return
-    const all = (Array.isArray(ran.value.pages) ? ran.value.pages : []).filter(isLivePage)
-    const rows = await read($, board)
-    for (const owner of new Set(all.map(live => ownerRow(rows, live)).filter(entry => entry !== undefined && isEnded(entry)).map(entry => keyOf(entry as Entry)))) {
-      await verbExec($, 'page', 'clear', ['--owner', owner])
-    }
+    const listed = (Array.isArray(ran.value.pages) ? ran.value.pages : []).filter(isLivePage)
+    const orphans = new Set(listed.filter(live => isOrphan(rows, live)).map(live => live.page.owner))
+    for (const owner of orphans) await verbExec($, 'page', 'clear', ['--owner', owner])
+    const all = listed.filter(live => !orphans.has(live.page.owner))
     pagesListed = listing
     const fresh = all.filter(live => !pagesSeen.has(live.page.id))
     for (const live of fresh) pagesSeen.add(live.page.id)
@@ -3996,7 +4004,7 @@ export const register: Register = on => {
     const shownPage = shownTab === FORKS_TAB ? undefined : (livePages.find(live => live.page.id === shownTab) ?? livePages[livePages.length - 1])
     const cursor = await read($, pageCursor)
     const noting = await read($, pageNoting)
-    const tabs = livePages.length === 0 ? [] : [...livePages.map(live => ({ id: live.page.id, label: live.page.tab ?? live.page.id })), { id: FORKS_TAB, label: FORKS_TAB }]
+    const tabs = livePages.length === 0 ? [] : [...livePages.map(live => ({ id: live.page.id, label: live.page.tab ?? live.page.id })), { id: FORKS_TAB, label: FORKS_LABEL }]
     const currentTab = shownPage?.page.id ?? FORKS_TAB
     const nextTab = tabs[(tabs.findIndex(tab => tab.id === currentTab) + 1) % Math.max(1, tabs.length)]
     const subKeys = livePages.length === 0 ? SUB_FORK_KEYS : SUB_FORK_KEYS.replace(PAGE_KEY, '')
@@ -4439,6 +4447,7 @@ export const register: Register = on => {
       await update($, pageShown, () => id)
       $.ui.invalidate('ui.render')
     }
+    const tabKey = (id: string) => (id === FORKS_TAB ? 'tab-forks' : `tab-page-${id}`)
     const withTabs = (line: JSX.Children) =>
       tabs.length === 0 ? (
         line
@@ -4447,11 +4456,11 @@ export const register: Register = on => {
           {tabs.flatMap((tab, index) => [
             ...(index === 0 ? [] : [<Text key={`tab-gap-${tab.id}`} dimColor>{' · '}</Text>]),
             tab.id === currentTab ? (
-              <Text key={`tab-${tab.id}`} bold>
+              <Text key={tabKey(tab.id)} bold>
                 {tab.label}
               </Text>
             ) : (
-              <Button key={`tab-${tab.id}`} plain dimColor {...(isFocused && tab.id === nextTab?.id ? { hotkey: PAGE_KEY } : {})} onPress={showTab(tab.id)}>
+              <Button key={tabKey(tab.id)} plain dimColor {...(isFocused && tab.id === nextTab?.id ? { hotkey: PAGE_KEY } : {})} onPress={showTab(tab.id)}>
                 {tab.label}
               </Button>
             ),
