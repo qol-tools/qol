@@ -184,12 +184,17 @@ pub fn try_build(
         host.say(&format!("  {}: {started}", carried.tray));
     } else if let Some(previous) = previous_tray {
         let installed = installed_tray(&state)?;
+        let kept = state.clone();
         let state_path = places.state.clone();
-        let put_back = host.put_back_tray(&previous, &installed, &mut || {
-            state.tray = None;
-            state.installed_tray = None;
-            state.save(&state_path)
-        })?;
+        let put_back = keep_on_failure(
+            host.put_back_tray(&previous, &installed, &mut || {
+                state.tray = None;
+                state.installed_tray = None;
+                state.save(&state_path)
+            }),
+            &kept,
+            &places.state,
+        )?;
         host.say(&format!("  {TRAY_BINARY}: no longer changed; {put_back}"));
     }
     let state = State::load(&places.state)?;
@@ -262,10 +267,25 @@ fn put_back_tray(
     };
     put_back.push(TRAY_BINARY.to_string());
     let installed = installed_tray(state)?;
-    let restarted =
-        host.put_back_tray(&try_binary, &installed, &mut || State::clear(&places.state))?;
+    let restarted = keep_on_failure(
+        host.put_back_tray(&try_binary, &installed, &mut || State::clear(&places.state)),
+        state,
+        &places.state,
+    )?;
     host.say(&format!("  {TRAY_BINARY}: {restarted}"));
     Ok(())
+}
+
+fn keep_on_failure(put_back: Result<String>, kept: &State, path: &Path) -> Result<String> {
+    let Err(error) = put_back else {
+        return put_back;
+    };
+    match kept.save(path) {
+        Ok(()) => Err(error),
+        Err(saved) => Err(error.context(format!(
+            "the record of the tray build could not be kept either: {saved:#}"
+        ))),
+    }
 }
 
 fn running_tray_refusal(number: u64, keep_tray: bool, state: &State) -> Option<RestartsTray> {

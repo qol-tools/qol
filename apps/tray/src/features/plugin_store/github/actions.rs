@@ -11,6 +11,8 @@ use crate::features::connection_health::observe_body;
 const API: &str = "https://api.github.com/repos";
 const JOBS_PER_PAGE: u32 = 100;
 const PULL_REQUEST_EVENT: &str = "pull_request";
+const CHECKS_AT_ONCE: usize = 8;
+const LOG: &str = "[pull-request-builds]";
 
 pub(crate) struct Actions {
     repo: &'static str,
@@ -99,15 +101,13 @@ impl Actions {
         format!("{API}/{}/{path}", self.repo)
     }
 
+    fn request(&self, path: &str, query: &[(&str, String)]) -> reqwest::RequestBuilder {
+        build_github_request(&self.client, &self.url(path), Some(&self.token)).query(query)
+    }
+
     fn get<T: DeserializeOwned>(&self, path: &str, query: &[(&str, String)]) -> Result<T> {
-        let request =
-            build_github_request(&self.client, &self.url(path), Some(&self.token)).query(query);
-        let body = self.runtime.block_on(async {
-            let response = send_checked(request).await?;
-            anyhow::Ok(observe_body(response).bytes().await?)
-        })?;
-        serde_json::from_slice(&body)
-            .with_context(|| format!("GitHub answered {path} with something unreadable"))
+        self.runtime
+            .block_on(fetch(self.request(path, query), path.to_string()))
     }
 
     fn save(&self, path: &str, file: &mut std::fs::File) -> Result<()> {
@@ -176,35 +176,81 @@ impl Source for Actions {
                 ("per_page", LIST_LIMIT.to_string()),
             ],
         )?;
-        let mut open = Vec::new();
-        for pull in pulls {
-            let number = pull.number;
-            let title = pull.title.clone();
-            let head = pull_request(pull, self.repo);
-            let built = !head.from_fork && self.built(&head.head_sha, job)?;
-            open.push(OpenPull {
-                number,
-                title,
-                head_sha: head.head_sha,
-                from_fork: head.from_fork,
-                built,
-            });
+        let mut open: Vec<OpenPull> = pulls
+            .into_iter()
+            .map(|pull| {
+                let number = pull.number;
+                let title = pull.title.clone();
+                let head = pull_request(pull, self.repo);
+                OpenPull {
+                    number,
+                    title,
+                    head_sha: head.head_sha,
+                    from_fork: head.from_fork,
+                    built: false,
+                }
+            })
+            .collect();
+        let shas: Vec<Option<&str>> = open
+            .iter()
+            .map(|pull| (!pull.from_fork).then_some(pull.head_sha.as_str()))
+            .collect();
+        let built = self.built_among(&shas, job);
+        for (pull, built) in open.iter_mut().zip(built) {
+            pull.built = built;
         }
         Ok(open)
     }
 }
 
 impl Actions {
-    fn built(&self, sha: &str, job: &str) -> Result<bool> {
-        let checks: CheckRuns = self.get(
-            &format!("commits/{sha}/check-runs"),
-            &[
-                ("check_name", job.to_string()),
-                ("filter", "latest".to_string()),
-            ],
-        )?;
-        Ok(any_succeeded(&checks.check_runs, job))
+    fn built_among(&self, shas: &[Option<&str>], job: &str) -> Vec<bool> {
+        self.runtime.block_on(async {
+            let mut built = vec![false; shas.len()];
+            let asked: Vec<(usize, &str)> = shas
+                .iter()
+                .enumerate()
+                .filter_map(|(index, sha)| sha.map(|sha| (index, sha)))
+                .collect();
+            for batch in asked.chunks(CHECKS_AT_ONCE) {
+                let mut checks = tokio::task::JoinSet::new();
+                for (index, sha) in batch {
+                    let path = format!("commits/{sha}/check-runs");
+                    let request = self.request(
+                        &path,
+                        &[
+                            ("check_name", job.to_string()),
+                            ("filter", "latest".to_string()),
+                        ],
+                    );
+                    let index = *index;
+                    checks.spawn(async move { (index, fetch::<CheckRuns>(request, path).await) });
+                }
+                while let Some(joined) = checks.join_next().await {
+                    match joined {
+                        Ok((index, Ok(found))) => {
+                            built[index] = any_succeeded(&found.check_runs, job);
+                        }
+                        Ok((index, Err(error))) => {
+                            log::warn!(
+                                "{LOG} the checks of {} are unreadable: {error:#}",
+                                shas[index].unwrap_or_default()
+                            );
+                        }
+                        Err(error) => log::warn!("{LOG} a check lookup stopped: {error}"),
+                    }
+                }
+            }
+            built
+        })
     }
+}
+
+async fn fetch<T: DeserializeOwned>(request: reqwest::RequestBuilder, path: String) -> Result<T> {
+    let response = send_checked(request).await?;
+    let body = observe_body(response).bytes().await?;
+    serde_json::from_slice(&body)
+        .with_context(|| format!("GitHub answered {path} with something unreadable"))
 }
 
 fn pull_request(pull: Pull, repo: &str) -> PullRequest {

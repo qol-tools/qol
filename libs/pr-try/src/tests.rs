@@ -73,6 +73,7 @@ struct Recorder {
     events: Vec<String>,
     record_at: Option<PathBuf>,
     caught_up: Vec<Vec<String>>,
+    hand_over_fails: bool,
 }
 
 impl Host for Recorder {
@@ -94,6 +95,9 @@ impl Host for Recorder {
         settle: &mut dyn FnMut() -> Result<()>,
     ) -> Result<String> {
         settle()?;
+        if self.hand_over_fails {
+            anyhow::bail!("the installed tray did not start");
+        }
         self.events.push(format!(
             "put back {} for {}",
             installed.display(),
@@ -277,6 +281,68 @@ fn a_plugin_only_build_after_a_tray_build_brings_the_installed_tray_back_and_kee
         .lines
         .iter()
         .any(|line| line.ends_with("installed; the installed tray starts it")));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_hand_over_keeps_the_record_so_off_can_run_again() {
+    let at = machine();
+    let mut host = Recorder::default();
+    let build = host_build().unwrap();
+    let with_tray = Fake {
+        number: 412,
+        tray: true,
+    };
+    try_build(&with_tray, &mut host, tried(412, false), build, &at.places).unwrap();
+    host.hand_over_fails = true;
+    let error = format!("{:#}", turn_off(&mut host, &at.places).unwrap_err());
+    assert!(error.contains("did not start"), "{error}");
+    let kept = State::load(&at.places.state).unwrap();
+    assert_eq!(kept.pull_request, Some(412));
+    assert!(kept.tray.is_some());
+    assert!(kept.plugins.is_empty());
+
+    host.hand_over_fails = false;
+    turn_off(&mut host, &at.places).unwrap();
+    assert!(!at.places.state.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_hand_over_after_a_plugin_only_build_keeps_the_tray_build_recorded() {
+    let at = machine();
+    let mut host = Recorder::default();
+    let build = host_build().unwrap();
+    let with_tray = Fake {
+        number: 412,
+        tray: true,
+    };
+    try_build(&with_tray, &mut host, tried(412, false), build, &at.places).unwrap();
+    host.hand_over_fails = true;
+    let plugins_only = Fake {
+        number: 413,
+        tray: false,
+    };
+    try_build(
+        &plugins_only,
+        &mut host,
+        tried(413, false),
+        build,
+        &at.places,
+    )
+    .unwrap_err();
+    let kept = State::load(&at.places.state).unwrap();
+    assert_eq!(kept.pull_request, Some(413));
+    assert!(kept.tray.is_some());
+    assert!(kept.installed_tray.is_some());
+    assert_eq!(kept.plugins.len(), 1);
+
+    host.hand_over_fails = false;
+    assert_eq!(
+        turn_off(&mut host, &at.places).unwrap(),
+        [PLUGIN, TRAY_BINARY]
+    );
+    assert!(!at.places.state.exists());
 }
 
 #[test]
