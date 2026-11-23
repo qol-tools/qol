@@ -1444,7 +1444,7 @@ mod tests {
             ("accent", qol_config::contract::FieldKind::Select),
             ("residency", qol_config::contract::FieldKind::Boolean),
             (
-                "pull_request_builds",
+                "try_pull_request_builds",
                 qol_config::contract::FieldKind::Boolean,
             ),
         ] {

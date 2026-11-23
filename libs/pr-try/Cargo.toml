@@ -19,7 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 tempfile = "3.8"
 workspace-hack.workspace = true
-zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9.8", default-features = false, features = ["deflate-flate2"] }
 
 [lints]
 workspace = true

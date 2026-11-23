@@ -70,6 +70,7 @@ ttf-parser = { version = "0.25", features = ["no-std-float"] }
 typenum = { version = "1", default-features = false, features = ["const-generics"] }
 winnow-dff4ba8e3ae991db = { package = "winnow", version = "1" }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
+zeroize = { version = "1", features = ["derive"] }
 
 [build-dependencies]
 aho-corasick = { version = "1" }
@@ -132,6 +133,7 @@ ttf-parser = { version = "0.25", features = ["no-std-float"] }
 typenum = { version = "1", default-features = false, features = ["const-generics"] }
 winnow-dff4ba8e3ae991db = { package = "winnow", version = "1" }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
+zeroize = { version = "1", features = ["derive"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 ahash = { version = "0.8", features = ["compile-time-rng", "serde"] }
@@ -158,7 +160,7 @@ libgit2-sys = { version = "0.18", default-features = false, features = ["https",
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
 memmap2 = { version = "0.9", default-features = false, features = ["stable_deref_trait"] }
 naga = { version = "25", features = ["spv-out", "wgsl-in"] }
-nix = { version = "0.29", features = ["event", "fs", "ioctl", "user"] }
+nix-b73a96c0a5f6a7d9 = { package = "nix", version = "0.29", features = ["event", "fs", "ioctl", "user"] }
 num-bigint = { version = "0.4" }
 num-complex = { version = "0.4", default-features = false, features = ["bytemuck", "std"] }
 object-d736d0ac4424f0f1 = { package = "object", version = "0.37", default-features = false, features = ["read", "std"] }
@@ -190,8 +192,6 @@ x11rb-protocol = { version = "0.13", default-features = false, features = ["comp
 yoke = { version = "0.8", features = ["derive"] }
 zbus = { version = "5", features = ["url"] }
 zerofrom = { version = "0.1", default-features = false, features = ["alloc", "derive"] }
-zeroize = { version = "1", features = ["zeroize_derive"] }
-zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 zvariant = { version = "5", features = ["enumflags2", "gvariant", "url"] }
 zvariant_utils = { version = "3", features = ["gvariant"] }
 
@@ -220,7 +220,7 @@ libgit2-sys = { version = "0.18", default-features = false, features = ["https",
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
 memmap2 = { version = "0.9", default-features = false, features = ["stable_deref_trait"] }
 naga = { version = "25", features = ["spv-out", "wgsl-in"] }
-nix = { version = "0.29", features = ["event", "fs", "ioctl", "user"] }
+nix-b73a96c0a5f6a7d9 = { package = "nix", version = "0.29", features = ["event", "fs", "ioctl", "user"] }
 num-bigint = { version = "0.4" }
 num-complex = { version = "0.4", default-features = false, features = ["bytemuck", "std"] }
 object-d736d0ac4424f0f1 = { package = "object", version = "0.37", default-features = false, features = ["read", "std"] }
@@ -250,8 +250,6 @@ yoke = { version = "0.8", features = ["derive"] }
 zbus = { version = "5", features = ["url"] }
 zbus_macros = { version = "5", features = ["blocking-api", "gvariant"] }
 zerofrom = { version = "0.1", default-features = false, features = ["alloc", "derive"] }
-zeroize = { version = "1", features = ["zeroize_derive"] }
-zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 zvariant = { version = "5", features = ["enumflags2", "gvariant", "url"] }
 zvariant_derive = { version = "5", features = ["gvariant"] }
 zvariant_utils = { version = "3", features = ["gvariant"] }
@@ -272,6 +270,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 libc = { version = "0.2", features = ["extra_traits"] }
 libgit2-sys = { version = "0.18", default-features = false, features = ["https", "vendored"] }
 naga = { version = "25", features = ["msl-out", "wgsl-in"] }
+nix-5f5a217a62ea0662 = { package = "nix", version = "0.31", features = ["fs"] }
 nom = { version = "7" }
 objc2-app-kit = { version = "0.3" }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFAttributedString", "CFByteOrder", "CFCGTypes", "CFCalendar", "CFCharacterSet", "CFData", "CFDate", "CFDictionary", "CFError", "CFFileSecurity", "CFLocale", "CFMachPort", "CFMessagePort", "CFNumber", "CFRunLoop", "CFSet", "CFStream", "CFString", "CFURL", "objc2", "std"] }
@@ -305,6 +304,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 libc = { version = "0.2", features = ["extra_traits"] }
 libgit2-sys = { version = "0.18", default-features = false, features = ["https", "vendored"] }
 naga = { version = "25", features = ["msl-out", "wgsl-in"] }
+nix-5f5a217a62ea0662 = { package = "nix", version = "0.31", features = ["fs"] }
 nom = { version = "7" }
 objc2-app-kit = { version = "0.3" }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFAttributedString", "CFByteOrder", "CFCGTypes", "CFCalendar", "CFCharacterSet", "CFData", "CFDate", "CFDictionary", "CFError", "CFFileSecurity", "CFLocale", "CFMachPort", "CFMessagePort", "CFNumber", "CFRunLoop", "CFSet", "CFStream", "CFString", "CFURL", "objc2", "std"] }
@@ -338,6 +338,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 libc = { version = "0.2", features = ["extra_traits"] }
 libgit2-sys = { version = "0.18", default-features = false, features = ["https", "vendored", "vendored-openssl"] }
 naga = { version = "25", features = ["msl-out", "wgsl-in"] }
+nix-5f5a217a62ea0662 = { package = "nix", version = "0.31", features = ["fs"] }
 nom = { version = "7" }
 objc2-app-kit = { version = "0.3" }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFAttributedString", "CFByteOrder", "CFCGTypes", "CFCalendar", "CFCharacterSet", "CFData", "CFDate", "CFDictionary", "CFError", "CFFileSecurity", "CFLocale", "CFMachPort", "CFMessagePort", "CFNumber", "CFRunLoop", "CFSet", "CFStream", "CFString", "CFURL", "objc2", "std"] }
@@ -371,6 +372,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 libc = { version = "0.2", features = ["extra_traits"] }
 libgit2-sys = { version = "0.18", default-features = false, features = ["https", "vendored", "vendored-openssl"] }
 naga = { version = "25", features = ["msl-out", "wgsl-in"] }
+nix-5f5a217a62ea0662 = { package = "nix", version = "0.31", features = ["fs"] }
 nom = { version = "7" }
 objc2-app-kit = { version = "0.3" }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFAttributedString", "CFByteOrder", "CFCGTypes", "CFCalendar", "CFCharacterSet", "CFData", "CFDate", "CFDictionary", "CFError", "CFFileSecurity", "CFLocale", "CFMachPort", "CFMessagePort", "CFNumber", "CFRunLoop", "CFSet", "CFStream", "CFString", "CFURL", "objc2", "std"] }
@@ -415,13 +417,11 @@ winapi = { version = "0.3", default-features = false, features = ["consoleapi", 
 windows = { version = "0.61", features = ["ApplicationModel", "Data_Xml_Dom", "Devices_Radios", "Foundation_Numerics", "Management_Deployment", "Storage_Search", "Storage_Streams", "System_Threading", "UI_Notifications", "UI_ViewManagement", "Wdk_System_SystemServices", "Win32_Devices_Bluetooth", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_FunctionDiscovery", "Win32_Devices_Properties", "Win32_Globalization", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_DirectComposition", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dwm", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Graphics_Hlsl", "Win32_Graphics_Imaging", "Win32_Media_Audio_Endpoints", "Win32_Media_KernelStreaming", "Win32_Networking_WinSock", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com_StructuredStorage", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Performance", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_WinRT", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
 windows-core = { version = "0.61" }
 windows-numerics = { version = "0.2" }
-windows-sys-4db8c43aad08e7ae = { package = "windows-sys", version = "0.60", features = ["Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys-4db8c43aad08e7ae = { package = "windows-sys", version = "0.60", features = ["Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows-sys-73dcd821b1037cfd = { package = "windows-sys", version = "0.59", features = ["Wdk_System_Threading", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Display", "Win32_Devices_HumanInterfaceDevice", "Win32_Globalization", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Storage_FileSystem", "Win32_Storage_Xps", "Win32_System_Com", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Environment", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Time", "Win32_System_WindowsProgramming", "Win32_UI_ColorSystem", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input_XboxController", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
-windows-sys-c8eced492e86ede7 = { package = "windows-sys", version = "0.48", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Memory", "Win32_System_SystemInformation"] }
-windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Devices_DeviceAndDriverInstallation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
+windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Globalization", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
 yoke = { version = "0.8", features = ["derive"] }
 zerofrom = { version = "0.1", default-features = false, features = ["alloc", "derive"] }
-zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 
 [target.x86_64-pc-windows-msvc.build-dependencies]
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "wasm_simd"] }
@@ -450,13 +450,11 @@ winapi = { version = "0.3", default-features = false, features = ["consoleapi", 
 windows = { version = "0.61", features = ["ApplicationModel", "Data_Xml_Dom", "Devices_Radios", "Foundation_Numerics", "Management_Deployment", "Storage_Search", "Storage_Streams", "System_Threading", "UI_Notifications", "UI_ViewManagement", "Wdk_System_SystemServices", "Win32_Devices_Bluetooth", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_FunctionDiscovery", "Win32_Devices_Properties", "Win32_Globalization", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_DirectComposition", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dwm", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Graphics_Hlsl", "Win32_Graphics_Imaging", "Win32_Media_Audio_Endpoints", "Win32_Media_KernelStreaming", "Win32_Networking_WinSock", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com_StructuredStorage", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Performance", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_WinRT", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
 windows-core = { version = "0.61" }
 windows-numerics = { version = "0.2" }
-windows-sys-4db8c43aad08e7ae = { package = "windows-sys", version = "0.60", features = ["Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys-4db8c43aad08e7ae = { package = "windows-sys", version = "0.60", features = ["Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows-sys-73dcd821b1037cfd = { package = "windows-sys", version = "0.59", features = ["Wdk_System_Threading", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Display", "Win32_Devices_HumanInterfaceDevice", "Win32_Globalization", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Storage_FileSystem", "Win32_Storage_Xps", "Win32_System_Com", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Environment", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Time", "Win32_System_WindowsProgramming", "Win32_UI_ColorSystem", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input_XboxController", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
-windows-sys-c8eced492e86ede7 = { package = "windows-sys", version = "0.48", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Memory", "Win32_System_SystemInformation"] }
-windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Devices_DeviceAndDriverInstallation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
+windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Globalization", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
 yoke = { version = "0.8", features = ["derive"] }
 zerofrom = { version = "0.1", default-features = false, features = ["alloc", "derive"] }
-zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 
 ### END HAKARI SECTION
 

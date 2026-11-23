@@ -14,11 +14,15 @@ pub fn unpack_zip(archive: &Path, dir: &Path) -> Result<()> {
             bail!(
                 "{} holds `{}`, which points outside the build",
                 archive.display(),
-                entry.name()
+                String::from_utf8_lossy(entry.name_raw())
             );
         };
         if entry.is_symlink() {
-            bail!("{} holds the link `{}`", archive.display(), entry.name());
+            bail!(
+                "{} holds the link `{}`",
+                archive.display(),
+                String::from_utf8_lossy(entry.name_raw())
+            );
         }
         let target = dir.join(relative);
         if entry.is_dir() {
