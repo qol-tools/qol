@@ -4972,7 +4972,7 @@ const testPage = (owner: string) => ({
   ],
 })
 
-const pagesBoard = (on: any, sent: any[], page: any) => {
+const pagesBoard = (on: any, sent: any[], page: any, isClearRefused = false) => {
   const runs: string[][] = []
   const live = { page, set_ms: 1, updated_ms: 1, answers: [] as any[] }
   let listing = [{ name: `${page.id}.json`, kind: 'file', size: 1, mtimeMs: 1, isLink: false }]
@@ -4989,7 +4989,7 @@ const pagesBoard = (on: any, sent: any[], page: any) => {
     runs.push(e.argv.slice(3))
     const flag = (name: string) => e.argv[e.argv.indexOf(name) + 1] ?? ''
     if (e.argv[3] === 'read') return ok({ pages: [live] })
-    if (e.argv[3] === 'clear') return ok({ cleared: [] })
+    if (e.argv[3] === 'clear') return isClearRefused ? { value: { exitCode: 1, stderr: '', stdout: '{"error":"busy"}' } } : ok({ cleared: [] })
     const note = e.argv.includes('--note') ? { note: flag('--note') } : {}
     live.answers = [...live.answers.filter(one => one.item !== flag('--item')), { item: flag('--item'), verdict: flag('--verdict'), ...note, at_ms: 2 }]
     listing = [{ ...listing[0]!, size: listing[0]!.size + 1 }]
@@ -5062,14 +5062,17 @@ test('a page counts its checks, and the words a fail and an action send name the
   expect(isOrphan([], live)).toBe(false)
 })
 
-test("a page whose owner has no row or has ended is taken down, so dead pages never fill the host's page cap", async ($, on) => {
+test("a page whose owner has no row or has ended is taken down, so dead pages never fill the host's page cap, and a refused take-down is tried again", async ($, on) => {
   const sent: any[] = []
-  const runs = pagesBoard(on, sent, testPage('gone-fork'))
+  const runs = pagesBoard(on, sent, testPage('gone-fork'), true)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 't3', 't3-fork: a fork')
   await settle()
   await refreshPages($)
   expect(runs).toContainEqual(['clear', '--owner', 'gone-fork'])
+  await settle()
+  await refreshPages($)
+  expect(runs.filter(run => run[0] === 'clear').length).toBeGreaterThan(1)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
   await ui.unmount()

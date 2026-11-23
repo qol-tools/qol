@@ -1578,9 +1578,10 @@ export const refreshPages = async ($: EngineInterface): Promise<void> => {
     if (ran?.exitCode !== 0) return
     const listed = (Array.isArray(ran.value.pages) ? ran.value.pages : []).filter(isLivePage)
     const orphans = new Set(listed.filter(live => isOrphan(rows, live)).map(live => live.page.owner))
-    for (const owner of orphans) await verbExec($, 'page', 'clear', ['--owner', owner])
+    let isCleared = true
+    for (const owner of orphans) if ((await verbExec($, 'page', 'clear', ['--owner', owner]))?.exitCode !== 0) isCleared = false
     const all = listed.filter(live => !orphans.has(live.page.owner))
-    pagesListed = listing
+    if (isCleared) pagesListed = listing
     const fresh = all.filter(live => !pagesSeen.has(live.page.id))
     for (const live of fresh) pagesSeen.add(live.page.id)
     await update($, pages, () => all)
