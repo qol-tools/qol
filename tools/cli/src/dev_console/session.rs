@@ -534,6 +534,9 @@ pub(super) fn persist_if_dirty(dash: &mut Dash) {
                 }
             }
             Err(error) => {
+                let mut pending = changes;
+                pending.append(&mut dash.flag_changes);
+                dash.flag_changes = pending;
                 dash.notice = Some((Instant::now(), format!("feature flags not saved: {error}")));
             }
         }

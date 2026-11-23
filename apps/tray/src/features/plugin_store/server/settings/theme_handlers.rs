@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn delegated_queries_stay_out_of_the_legacy_inner_table() {
-        assert!(get_core_query_inner(core_queries::UPDATES).is_err());
+        assert!(get_core_query_inner(qol_conventions::core_queries::UPDATES).is_err());
         assert!(get_core_query_inner(super::super::update_handlers::ATTENTION_QUERY).is_err());
     }
 

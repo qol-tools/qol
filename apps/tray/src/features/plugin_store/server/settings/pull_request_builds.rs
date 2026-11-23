@@ -85,6 +85,7 @@ struct Listed {
 fn output_within(mut command: Command, deadline: Duration) -> std::io::Result<Option<Listed>> {
     let mut stdout = tempfile::tempfile()?;
     let stderr = tempfile::tempfile()?;
+    qol_process::isolate_owned_session(&mut command)?;
     let mut child = command
         .stdin(Stdio::null())
         .stdout(stdout.try_clone()?)
@@ -96,6 +97,7 @@ fn output_within(mut command: Command, deadline: Duration) -> std::io::Result<Op
             break status;
         }
         if Instant::now() >= end {
+            let _ = qol_process::kill_group(child.id());
             let _ = child.kill();
             let _ = child.wait();
             return Ok(None);
@@ -430,12 +432,28 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_listing_past_its_deadline_is_killed() {
-        let mut slow = Command::new("sleep");
-        slow.arg("5");
-        assert!(output_within(slow, Duration::from_millis(200))
+    fn a_listing_past_its_deadline_is_killed_with_what_it_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let mut slow = Command::new("sh");
+        slow.args(["-c", "sleep 30 & echo $! > \"$0\"; wait"])
+            .arg(&pid_file);
+        assert!(output_within(slow, Duration::from_millis(500))
             .unwrap()
             .is_none());
+        let started: u32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let gone_by = Instant::now() + Duration::from_secs(5);
+        while !qol_process::is_pid_gone(started) && Instant::now() < gone_by {
+            std::thread::sleep(LIST_POLL);
+        }
+        assert!(
+            qol_process::is_pid_gone(started),
+            "pid {started} outlived the listing"
+        );
         let mut quick = Command::new("echo");
         quick.arg("[]");
         let listed = output_within(quick, Duration::from_secs(5))
