@@ -2496,6 +2496,10 @@ test('waiting comes from what a fork runs, and a fork that started forks counts 
   expect(shownState(parent, list)).toEqual({ label: 'waits on 1', state: 'waiting' })
   expect(shownState(list[3], list)).toEqual({ label: 'ask' })
   expect(needYouCount(list)).toBe(0)
+  const orphans = [row('p1', { kind: 'note', isDismissed: true }), row('k3', { launcher: 'p1', kind: 'ask' }), row('k9', { launcher: 'gone', kind: 'test' })]
+  expect(needYouCount(orphans)).toBe(2)
+  expect(marksOf(orphans).asks).toEqual(['k3', 'k9'])
+  expect(shownState(orphans[1], orphans)).toEqual({ label: 'ask', state: 'your turn' })
   const quiet = list.filter(one => one.agentId !== 'k3')
   expect(shownState(parent, quiet)).toEqual({ label: 'waits on 1', state: 'waiting' })
   expect(shownState(parent, quiet, { k2: { state: 'waiting' } })).toEqual({ label: 'waits on 2', state: 'waiting' })
@@ -3302,7 +3306,7 @@ const forkChat = async ($: any, panes: string[]): Promise<string[]> => {
   return rows
 }
 
-test('a fork that started forks holds them on its row: their questions stay with it and never count as needing you, and writing to it lists them by letter and reads their replies', async ($, on) => {
+test('a fork that started forks holds them on its row: their questions stay with it and never count as needing you, and writing to it lists the busy ones by letter, folds one that only asked it under finished and reads their replies', async ($, on) => {
   const sent: any[] = []
   const viewed: string[] = []
   const written: Record<string, string> = {}
@@ -3351,7 +3355,8 @@ test('a fork that started forks holds them on its row: their questions stay with
   expect(await writing.find({ type: 'Text', text: 'sub-forks' })).toBeDefined()
   expect(await writing.find({ type: 'Text', text: /^parent-fork \+2 +$/ })).toBeDefined()
   expect(await writing.find({ type: 'Text', text: /letter opens a sub-fork/ })).toBeDefined()
-  expect(await writing.find({ type: 'Text', text: /child-fork/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /child-fork/ })).toBeUndefined()
+  expect(await writing.find({ type: 'Text', text: '1 finished' })).toBeDefined()
   expect(await writing.find({ type: 'Text', text: /helper-fork/ })).toBeDefined()
   expect(await writing.find({ type: 'Text', text: /◉/ })).toBeUndefined()
   await writing.press({ key: 'sub-k2' })
@@ -3564,7 +3569,7 @@ test('a start drops the switchboard log an older board saved', async ($, on) => 
   expect(store.has('model-choices')).toBe(true)
 })
 
-test('an idle fork with an open pull request never folds, and the fork you write to folds its finished sub-forks', async ($, on) => {
+test('an idle fork with an open pull request never folds, and the fork you write to folds its finished sub-forks, also one whose report asked its parent for a test', async ($, on) => {
   engine(on)
   on('session.messages', () => ({ value: [] }))
   on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
@@ -3578,7 +3583,9 @@ test('an idle fork with an open pull request never folds, and the fork you write
   for (const id of ['p1', 'p2', 'p3']) await spawn($, id, `${id}-fork: a fork`)
   await spawn($, 'k1', 'done-sub: a sub-fork', 'p2')
   await spawn($, 'k2', 'busy-sub: a sub-fork', 'p2')
+  await spawn($, 'k3', 'test-sub: a sub-fork', 'p2')
   for (const [id, name] of [['p1', 'p1-fork: a fork'], ['p2', 'p2-fork: a fork'], ['p3', 'p3-fork: a fork'], ['k1', 'done-sub: a sub-fork']] as const) await deliver($, notification(id, name, 'Done for now.'))
+  await deliver($, notification('k3', 'test-sub: a sub-fork', 'Hip light needs a test in game.'))
   await settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: 'IDLE' })).toBeDefined()
@@ -3593,9 +3600,11 @@ test('an idle fork with an open pull request never folds, and the fork you write
   expect(await writing.find({ type: 'Text', text: 'sub-forks' })).toBeDefined()
   expect(await writing.find({ type: 'Text', text: /^busy-sub +$/ })).toBeDefined()
   expect(await writing.find({ type: 'Text', text: /^done-sub +$/ })).toBeUndefined()
-  expect(await writing.find({ type: 'Text', text: '1 finished' })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /^test-sub +$/ })).toBeUndefined()
+  expect(await writing.find({ type: 'Text', text: '2 finished' })).toBeDefined()
   await writing.press({ key: 'finished-fold' })
   expect(await writing.find({ type: 'Text', text: /^done-sub +$/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /^test-sub +$/ })).toBeDefined()
   expect(await writing.find({ type: 'Text', text: /^p3-fork +$/ })).toBeDefined()
   expect(await writing.find({ type: 'Text', text: 'hide finished' })).toBeDefined()
   await writing.unmount()
@@ -4851,7 +4860,7 @@ test('a fork its killed hold wakes as the switchboard shuts down keeps its row, 
   expect(saved().map(one => one.slice(0, 3))).toEqual([['a1', true, 'The first report.']])
 })
 
-test('a restart puts each fork the switchboard started back in the agent list with its sub-forks that ask or were cut, tells the cut one to continue, and leaves finished sub-forks and those of a fork that is gone on the board', async ($, on) => {
+test('a restart puts each fork the switchboard started back in the agent list with its sub-forks that were cut, tells the cut one to continue, and leaves sub-forks that only asked their parent, finished ones and those of a fork that is gone on the board', async ($, on) => {
   const store = new Map<string, unknown>([['cuts-healed-2', true]])
   const sent: any[] = []
   const fork = (agentId: string, name: string, extra: object = {}) => ({ agentId, name, kind: 'note', headline: 'Done for now.', report: 'Done for now.', at: 7, isWorking: false, isDismissed: false, ...extra })
@@ -4875,7 +4884,7 @@ test('a restart puts each fork the switchboard started back in the agent list wi
     await settle()
   }
   expect(sent[0].to).toBe('m1')
-  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['c1', 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'], ['m1', 'Back in the agent list.']])
+  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['c1', 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'], ['m1', 'Back in the agent list.']])
   const kept = (store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isInterrupted === true, one.kind, one.headline, one.isWorking])
   expect(kept.filter(([id]) => ['a1', 'c1', 'm1', 'o1', 's1'].includes(id)).sort()).toEqual([
     ['a1', false, 'ask', 'Which colour?', false],
@@ -4935,17 +4944,18 @@ test("a fork's view sums a run of tool calls up as a count line and its last fou
   await inFork.unmount()
 })
 
-test('the forks a restart brings back are each top-level unfinished fork, then the sub-forks under it that ask, were cut or hold one that does', () => {
+test('the forks a restart brings back are each top-level unfinished fork, then the sub-forks under it that were cut or hold one that was, and a sub-fork whose report asks its parent stays out', () => {
   const fork = (agentId: string, extra: object = {}): any => ({ agentId, name: `${agentId}-fork: words`, kind: 'note', headline: 'Done.', report: 'Done.', at: 1, isWorking: false, isDismissed: false, hasNewReply: false, ...extra })
   const sub = (agentId: string, launcher: string, extra: object = {}) => fork(agentId, { launcher, ...extra })
   expect(backAtRestart([fork('m1'), fork('m2')])).toEqual(['m1', 'm2'])
-  expect(backAtRestart([fork('m1'), sub('idle', 'm1'), sub('asks', 'm1', { kind: 'ask' }), sub('blocked', 'm1', { kind: 'blocked' }), sub('cut', 'm1', { isInterrupted: true })])).toEqual(['m1', 'asks', 'blocked', 'cut'])
-  expect(backAtRestart([sub('deep', 'lane', { kind: 'ask' }), sub('lane', 'm1'), sub('quiet', 'lane'), fork('m1'), sub('other', 'm1')])).toEqual(['m1', 'lane', 'deep'])
+  expect(backAtRestart([fork('m1'), sub('idle', 'm1'), sub('asks', 'm1', { kind: 'ask' }), sub('blocked', 'm1', { kind: 'blocked' }), sub('cut', 'm1', { isInterrupted: true })])).toEqual(['m1', 'cut'])
+  expect(backAtRestart([sub('deep', 'lane', { kind: 'ask' }), sub('lane', 'm1'), sub('quiet', 'lane'), fork('m1'), sub('other', 'm1')])).toEqual(['m1'])
+  expect(backAtRestart([sub('deep', 'lane', { isInterrupted: true }), sub('lane', 'm1'), sub('quiet', 'lane'), fork('m1'), sub('other', 'm1')])).toEqual(['m1', 'lane', 'deep'])
   expect(backAtRestart([fork('m1', { isDone: true }), sub('asks', 'm1', { kind: 'ask' })])).toEqual([])
   expect(backAtRestart([fork('m1', { isDismissed: true }), sub('asks', 'm1', { kind: 'ask' })])).toEqual([])
   expect(backAtRestart([fork('m1'), sub('lane', 'm1', { isDone: true }), sub('deep', 'lane', { kind: 'ask' })])).toEqual(['m1'])
   expect(backAtRestart([fork('m1'), sub('asks', 'm1', { kind: 'ask', isDone: true }), sub('gone', 'm1', { kind: 'ask', isDismissed: true }), sub('old', 'm1', { kind: 'ask', successor: 'new' })])).toEqual(['m1'])
   expect(backAtRestart([sub('asks', 'nobody', { kind: 'ask' })])).toEqual([])
-  expect(backAtRestart([fork('m1'), sub('a', 'm1', { kind: 'ask' }), fork('m2'), sub('b', 'm2', { isInterrupted: true })])).toEqual(['m1', 'a', 'm2', 'b'])
+  expect(backAtRestart([fork('m1'), sub('a', 'm1', { isInterrupted: true }), fork('m2'), sub('b', 'm2', { isInterrupted: true })])).toEqual(['m1', 'a', 'm2', 'b'])
 })
 

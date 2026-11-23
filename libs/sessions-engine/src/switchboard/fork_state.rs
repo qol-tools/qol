@@ -1,12 +1,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::adopt::META_SUFFIX;
 use super::background::{self, Background};
 use super::resume::AGENT_PREFIX;
 
 const TURN_STATUSES: [&str; 2] = ["running", "pending"];
 pub(super) const SETTLED_STATUS: &str = "completed";
 const SUBAGENTS: &str = "subagents";
+pub(super) const PARENT_KEY: &str = "parentAgentId";
 const GH: &str = "gh";
 const CI_WAITS: [(&[&str], Option<&str>); 2] = [
     (&["run", "watch"], None),
@@ -71,7 +73,23 @@ fn waits_on_ci(command: &str) -> bool {
     })
 }
 
-fn settled(running: &[Background]) -> ForkState {
+pub(super) fn meta_of(transcript: &Path) -> Option<serde_json::Value> {
+    serde_json::from_slice(&fs::read(meta_path(transcript)).ok()?).ok()
+}
+
+fn meta_path(transcript: &Path) -> PathBuf {
+    transcript.with_extension(META_SUFFIX.trim_start_matches('.'))
+}
+
+fn is_sub_fork(transcript: &Path) -> bool {
+    meta_of(transcript)
+        .as_ref()
+        .and_then(|meta| meta.get(PARENT_KEY))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|parent| !parent.is_empty())
+}
+
+fn settled(running: &[Background], is_sub_fork: bool) -> ForkState {
     let own: Vec<&str> = running
         .iter()
         .filter(|work| !work.is_hold())
@@ -88,10 +106,10 @@ fn settled(running: &[Background]) -> ForkState {
     if !prs.is_empty() || own.iter().any(|command| waits_on_ci(command)) {
         return ForkState::Waiting(prs);
     }
-    if running.iter().any(Background::is_hold) {
+    if !is_sub_fork && running.iter().any(Background::is_hold) {
         return ForkState::YourTurn;
     }
-    if running.is_empty() {
+    if own.is_empty() {
         ForkState::Idle
     } else {
         ForkState::Waiting(prs)
@@ -110,7 +128,7 @@ pub(super) fn state(status: Option<&str>, transcript: Option<&Path>) -> Option<F
         .and_then(|path| fs::read_to_string(path).ok())
         .map(|text| background::running(&text))
         .unwrap_or_default();
-    Some(settled(&running))
+    Some(settled(&running, transcript.is_some_and(is_sub_fork)))
 }
 
 #[cfg(test)]
@@ -173,6 +191,34 @@ mod tests {
             Some(ForkState::Idle)
         );
         assert_eq!(state(Some(SETTLED_STATUS), None), Some(ForkState::Idle));
+    }
+
+    #[test]
+    fn a_sub_fork_left_with_only_a_hold_is_idle_and_still_waits_on_its_own_work() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("agent-a2.jsonl");
+        let hold = waiting("bhold", HOLD_COMMAND);
+        let sub = |transcript: &str, parent: &str| {
+            fs::write(&path, transcript).unwrap();
+            fs::write(
+                meta_path(&path),
+                serde_json::json!({ PARENT_KEY: parent }).to_string(),
+            )
+            .unwrap();
+            state(Some(SETTLED_STATUS), Some(path.as_path()))
+        };
+        assert_eq!(sub(&hold, "a1"), Some(ForkState::Idle));
+        assert_eq!(
+            sub(&[hold.clone(), waiting("bwatch", WATCH)].concat(), "a1"),
+            Some(ForkState::Waiting(vec![
+                "https://github.com/o/r/pull/407".to_owned()
+            ]))
+        );
+        assert_eq!(
+            sub(&waiting("bgame", "./kcd2-forge play"), "a1"),
+            Some(ForkState::Waiting(Vec::new()))
+        );
+        assert_eq!(sub(&hold, ""), Some(ForkState::YourTurn));
     }
 
     #[test]
