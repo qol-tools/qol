@@ -1,5 +1,7 @@
 use anyhow::{bail, Context, Result};
-use qol_pr_try::{OpenPull, PullRequest, Run, Source, LIST_LIMIT, RUN_LIMIT, WORKFLOW};
+use qol_pr_try::{
+    MissingArtifact, OpenPull, PullRequest, Run, Source, LIST_LIMIT, RUN_LIMIT, WORKFLOW,
+};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::io::Write;
@@ -286,7 +288,7 @@ fn usable_artifact(listed: Artifacts, name: &str, run: u64) -> Result<Artifact> 
         .artifacts
         .into_iter()
         .find(|artifact| artifact.name == name)
-        .with_context(|| format!("run {run} has no {name}"))?;
+        .ok_or_else(|| MissingArtifact(format!("run {run} has no {name}")))?;
     if found.expired {
         bail!(
             "the {name} build of run {run} expired; a new push to the pull request builds it again"

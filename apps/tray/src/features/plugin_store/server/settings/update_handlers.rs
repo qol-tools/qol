@@ -665,6 +665,29 @@ fn update_all_plan(plugins: &[PluginView], host_available: bool) -> Vec<PlannedJ
     plugin_ids.map(|id| (id, Operation::Update)).collect()
 }
 
+pub(super) fn update_put_back(state: &AppState, put_back: &[String]) {
+    let host_available =
+        crate::updates::checks_enabled() && crate::updates::host_update_available();
+    for (id, operation) in put_back_plan(plugin_views(state), put_back, host_available) {
+        if let Err(message) = jobs::push(&id, operation) {
+            log::warn!("[pull-request-builds] could not update {id}: {message}");
+        }
+    }
+}
+
+fn put_back_plan(
+    plugins: Vec<PluginView>,
+    put_back: &[String],
+    host_available: bool,
+) -> Vec<PlannedJob> {
+    let plugins: Vec<PluginView> = plugins
+        .into_iter()
+        .filter(|plugin| put_back.contains(&plugin.id))
+        .collect();
+    let host = host_available && put_back.iter().any(|id| id == HOST_PLUGIN_ID);
+    update_all_plan(&plugins, host)
+}
+
 pub(super) fn action_ok(message: &str) -> Response {
     Json(CoreActionResponse {
         success: true,
@@ -1242,6 +1265,37 @@ mod tests {
         for (running, plan, expected) in cases {
             assert_eq!(update_all_refusal(*running, plan), *expected);
         }
+    }
+
+    #[test]
+    fn what_a_try_put_back_is_updated_and_nothing_else() {
+        let plugins = || {
+            vec![
+                plugin("qol-alt-tab", "Alt Tab", "1.0.0", Some("1.1.0")),
+                plugin("qol-launcher", "Launcher", "1.0.0", Some("1.0.0")),
+                plugin("qol-lights", "Lights", "1.0.0", Some("1.1.0")),
+            ]
+        };
+        let put_back = ["qol-alt-tab".to_string(), "qol-launcher".to_string()];
+        assert_eq!(
+            put_back_plan(plugins(), &put_back, true),
+            vec![("qol-alt-tab".to_string(), Operation::Update)]
+        );
+        let with_tray = ["qol-alt-tab".to_string(), HOST_PLUGIN_ID.to_string()];
+        assert_eq!(
+            put_back_plan(plugins(), &with_tray, true),
+            vec![(
+                HOST_PLUGIN_ID.to_string(),
+                Operation::Host {
+                    confirm_after_restart: true,
+                    update_plugins: vec!["qol-alt-tab".to_string()],
+                }
+            )]
+        );
+        assert_eq!(
+            put_back_plan(plugins(), &with_tray, false),
+            vec![("qol-alt-tab".to_string(), Operation::Update)]
+        );
     }
 
     #[test]

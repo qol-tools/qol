@@ -37,6 +37,17 @@ pub struct OpenPull {
     pub built: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingArtifact(pub String);
+
+impl std::fmt::Display for MissingArtifact {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for MissingArtifact {}
+
 pub trait Source {
     fn pull_request(&self, number: u64) -> Result<PullRequest>;
     fn live_test_runs(&self, pull: &PullRequest) -> Result<Vec<Run>>;
@@ -118,14 +129,17 @@ pub(crate) fn fetch(source: &dyn Source, run: &Run, build: &Build, dir: &Path) -
         std::fs::remove_dir_all(dir).with_context(|| format!("clearing {}", dir.display()))?;
     }
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    source.download(run, build.artifact, dir).with_context(|| {
-        format!(
+    source.download(run, build.artifact, dir).map_err(|error| {
+        if error.downcast_ref::<MissingArtifact>().is_none() {
+            return error;
+        }
+        error.context(format!(
             "the live test run uploaded no {}: nothing it changes runs on {}, or `{}` did not run; see {}",
             build.artifact,
             build.label(),
             build.job,
             run.url
-        )
+        ))
     })
 }
 
@@ -179,6 +193,60 @@ mod tests {
             head_branch: BRANCH.into(),
             from_fork,
         }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    struct Downloads(fn() -> anyhow::Error);
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    impl Source for Downloads {
+        fn pull_request(&self, _number: u64) -> Result<PullRequest> {
+            Ok(pull(false))
+        }
+
+        fn live_test_runs(&self, _pull: &PullRequest) -> Result<Vec<Run>> {
+            Ok(Vec::new())
+        }
+
+        fn job_succeeded(&self, _run: &Run, _job: &str) -> Result<bool> {
+            Ok(true)
+        }
+
+        fn download(&self, _run: &Run, _artifact: &str, _dir: &Path) -> Result<()> {
+            Err((self.0)())
+        }
+
+        fn open_pulls(&self, _job: &str) -> Result<Vec<OpenPull>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn only_a_missing_artifact_is_explained_as_never_uploaded() {
+        let root = tempfile::tempdir().unwrap();
+        let build = crate::platform::host_build().unwrap();
+        let failed = |source: &Downloads| {
+            format!(
+                "{:#}",
+                fetch(
+                    source,
+                    &run(41, COMPLETED, SUCCESS, BRANCH),
+                    build,
+                    root.path()
+                )
+                .unwrap_err()
+            )
+        };
+        let missing = failed(&Downloads(|| {
+            MissingArtifact("run 41 has no build".into()).into()
+        }));
+        assert!(missing.contains("uploaded no"), "{missing}");
+        assert!(missing.contains("run 41 has no build"), "{missing}");
+        let expired = failed(&Downloads(|| {
+            anyhow::anyhow!("the build of run 41 expired")
+        }));
+        assert_eq!(expired, "the build of run 41 expired");
     }
 
     #[test]

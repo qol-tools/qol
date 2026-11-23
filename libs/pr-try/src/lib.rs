@@ -16,7 +16,8 @@ pub use daemon::runs_binary;
 pub use install::{Places, RecordFile, State};
 pub use platform::{host_build, Build};
 pub use source::{
-    ready, succeeded, OpenPull, PullRequest, Run, Source, LIST_LIMIT, RUN_LIMIT, WORKFLOW,
+    ready, succeeded, MissingArtifact, OpenPull, PullRequest, Run, Source, LIST_LIMIT, RUN_LIMIT,
+    WORKFLOW,
 };
 pub use unpack::unpack_zip;
 
@@ -33,9 +34,15 @@ pub trait Host {
         try_binary: &Path,
         installed: &Path,
         settle: &mut dyn FnMut() -> Result<()>,
-    ) -> Result<String>;
+    ) -> Result<TrayBack>;
     fn running_install(&self, downloads: &Path) -> Result<Option<PathBuf>>;
     fn catch_up(&mut self, put_back: &[String]);
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct TrayBack {
+    pub said: String,
+    pub started: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -71,6 +78,11 @@ pub struct Try {
 pub enum Tried {
     Installed,
     Nothing,
+}
+
+struct Waiting {
+    id: String,
+    target: PathBuf,
 }
 
 pub fn try_build(
@@ -112,16 +124,25 @@ pub fn try_build(
     } else {
         previous_tray.as_ref().map(|_| INSTALLED_TRAY_STARTS)
     };
+    let mut waiting = Vec::new();
     if state.pull_request.is_some_and(|other| other != number) {
         let replaced = state.pull_request.unwrap_or(number);
         host.say(&format!(
             "putting back the builds pull request #{replaced} replaced"
         ));
         let mut put_back = Vec::new();
-        let restored = restore_plugins(places, &mut state, host, &mut put_back, tray_starts);
+        let restore_starts = state.tray.as_ref().and(tray_starts);
+        let restored = restore_plugins(
+            places,
+            &mut state,
+            host,
+            &mut put_back,
+            restore_starts,
+            &mut waiting,
+        );
         let kept = put_back
             .into_iter()
-            .filter(|id| id != TRAY_BINARY && !carried.replaces(id))
+            .filter(|id| !carried.replaces(id))
             .collect::<Vec<_>>();
         host.catch_up(&kept);
         restored?;
@@ -160,6 +181,11 @@ pub fn try_build(
                 "  {} {}: installed; {starts}",
                 plugin.id, plugin.version
             ));
+            waiting.retain(|waits| waits.id != plugin.id);
+            waiting.push(Waiting {
+                id: plugin.id.clone(),
+                target: target.clone(),
+            });
             continue;
         }
         let restart = daemon::restart(&places.pids, &plugin.id, &target)?;
@@ -186,7 +212,7 @@ pub fn try_build(
         let installed = installed_tray(&state)?;
         let kept = state.clone();
         let state_path = places.state.clone();
-        let put_back = keep_on_failure(
+        let back = keep_on_failure(
             host.put_back_tray(&previous, &installed, &mut || {
                 state.tray = None;
                 state.installed_tray = None;
@@ -195,7 +221,11 @@ pub fn try_build(
             &kept,
             &places.state,
         )?;
-        host.say(&format!("  {TRAY_BINARY}: no longer changed; {put_back}"));
+        host.say(&format!(
+            "  {TRAY_BINARY}: no longer changed; {}",
+            back.said
+        ));
+        restart_unless_started(places, host, &back, &waiting)?;
     }
     let state = State::load(&places.state)?;
     if state.plugins.is_empty() && state.tray.is_none() {
@@ -215,9 +245,17 @@ pub fn turn_off(host: &mut dyn Host, places: &Places) -> Result<Vec<String>> {
         "putting back the builds pull request #{number} replaced"
     ));
     let mut put_back = Vec::new();
+    let mut waiting = Vec::new();
     let tray_starts = state.tray.as_ref().map(|_| INSTALLED_TRAY_STARTS);
-    let result = restore_plugins(places, &mut state, host, &mut put_back, tray_starts)
-        .and_then(|()| put_back_tray(places, &state, host, &mut put_back));
+    let result = restore_plugins(
+        places,
+        &mut state,
+        host,
+        &mut put_back,
+        tray_starts,
+        &mut waiting,
+    )
+    .and_then(|()| put_back_tray(places, &state, host, &mut put_back, &waiting));
     match result {
         Ok(()) => Ok(put_back),
         Err(error) => {
@@ -233,6 +271,7 @@ fn restore_plugins(
     host: &mut dyn Host,
     put_back: &mut Vec<String>,
     tray_starts: Option<&str>,
+    waiting: &mut Vec<Waiting>,
 ) -> Result<()> {
     while let Some(swapped) = state.plugins.last().cloned() {
         contracts::restore(folder(&swapped.target)?, folder(&swapped.backup)?)?;
@@ -244,6 +283,10 @@ fn restore_plugins(
             host.say(&format!("  {}: {}", swapped.id, restored.describe()));
         } else if let Some(starts) = tray_starts {
             host.say(&format!("  {}: put back; {starts}", swapped.id));
+            waiting.push(Waiting {
+                id: swapped.id.clone(),
+                target: swapped.target.clone(),
+            });
         } else {
             let restart = daemon::restart(&places.pids, &swapped.id, &swapped.target)?;
             host.say(&format!(
@@ -261,22 +304,39 @@ fn put_back_tray(
     state: &State,
     host: &mut dyn Host,
     put_back: &mut Vec<String>,
+    waiting: &[Waiting],
 ) -> Result<()> {
     let Some(try_binary) = state.tray.clone() else {
         return State::clear(&places.state);
     };
     put_back.push(TRAY_BINARY.to_string());
     let installed = installed_tray(state)?;
-    let restarted = keep_on_failure(
+    let back = keep_on_failure(
         host.put_back_tray(&try_binary, &installed, &mut || State::clear(&places.state)),
         state,
         &places.state,
     )?;
-    host.say(&format!("  {TRAY_BINARY}: {restarted}"));
+    host.say(&format!("  {TRAY_BINARY}: {}", back.said));
+    restart_unless_started(places, host, &back, waiting)
+}
+
+fn restart_unless_started(
+    places: &Places,
+    host: &mut dyn Host,
+    back: &TrayBack,
+    waiting: &[Waiting],
+) -> Result<()> {
+    if back.started {
+        return Ok(());
+    }
+    for plugin in waiting {
+        let restart = daemon::restart(&places.pids, &plugin.id, &plugin.target)?;
+        host.say(&format!("  {}: {}", plugin.id, restart.describe()));
+    }
     Ok(())
 }
 
-fn keep_on_failure(put_back: Result<String>, kept: &State, path: &Path) -> Result<String> {
+fn keep_on_failure<T>(put_back: Result<T>, kept: &State, path: &Path) -> Result<T> {
     let Err(error) = put_back else {
         return put_back;
     };

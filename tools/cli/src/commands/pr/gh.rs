@@ -1,5 +1,7 @@
 use anyhow::{bail, Context, Result};
-use qol_pr_try::{OpenPull, PullRequest, Run, Source, LIST_LIMIT, RUN_LIMIT, WORKFLOW};
+use qol_pr_try::{
+    MissingArtifact, OpenPull, PullRequest, Run, Source, LIST_LIMIT, RUN_LIMIT, WORKFLOW,
+};
 use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
@@ -117,6 +119,7 @@ impl Source for Gh {
             "run", "download", &id, "--repo", self.repo, "--name", artifact, "--dir", &dir_arg,
         ])
         .map(drop)
+        .map_err(|error| MissingArtifact(format!("{error:#}")).into())
     }
 
     fn open_pulls(&self, job: &str) -> Result<Vec<OpenPull>> {

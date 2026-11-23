@@ -5,7 +5,9 @@ mod updates;
 
 use anyhow::{bail, Context, Result};
 use qol_conventions::pr_try::{CARRIES_TRAY_EXIT_CODE, KEEP_TRAY_FLAG};
-use qol_pr_try::{Build, Host, Places, RestartsTray, Source, Tried, Try, REPO, TRAY_BINARY};
+use qol_pr_try::{
+    Build, Host, Places, RestartsTray, Source, TrayBack, Tried, Try, REPO, TRAY_BINARY,
+};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -100,10 +102,13 @@ impl Host for Console {
         try_binary: &Path,
         installed: &Path,
         settle: &mut dyn FnMut() -> Result<()>,
-    ) -> Result<String> {
+    ) -> Result<TrayBack> {
         let put_back = tray::put_back(try_binary, installed)?;
         settle()?;
-        Ok(put_back.describe().to_string())
+        Ok(TrayBack {
+            said: put_back.describe().to_string(),
+            started: matches!(put_back, tray::PutBack::Started(_)),
+        })
     }
 
     fn running_install(&self, downloads: &Path) -> Result<Option<PathBuf>> {

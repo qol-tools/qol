@@ -74,6 +74,7 @@ struct Recorder {
     record_at: Option<PathBuf>,
     caught_up: Vec<Vec<String>>,
     hand_over_fails: bool,
+    tray_already_runs: bool,
 }
 
 impl Host for Recorder {
@@ -82,9 +83,14 @@ impl Host for Recorder {
     }
 
     fn run_tray(&mut self, binary: &Path) -> Result<String> {
-        let saved = self.record_at.as_deref().is_some_and(Path::is_file);
+        let saved = self
+            .record_at
+            .as_deref()
+            .filter(|path| path.is_file())
+            .map(|path| State::load(path).unwrap())
+            .map(|state| (state.tray.is_some(), state.installed_tray.is_some()));
         self.events
-            .push(format!("run {} saved={saved}", binary.display()));
+            .push(format!("run {} saved={saved:?}", binary.display()));
         Ok("runs".into())
     }
 
@@ -93,7 +99,7 @@ impl Host for Recorder {
         try_binary: &Path,
         installed: &Path,
         settle: &mut dyn FnMut() -> Result<()>,
-    ) -> Result<String> {
+    ) -> Result<TrayBack> {
         settle()?;
         if self.hand_over_fails {
             anyhow::bail!("the installed tray did not start");
@@ -103,7 +109,10 @@ impl Host for Recorder {
             installed.display(),
             try_binary.display()
         ));
-        Ok("back".into())
+        Ok(TrayBack {
+            said: "back".into(),
+            started: !self.tray_already_runs,
+        })
     }
 
     fn running_install(&self, _downloads: &Path) -> Result<Option<PathBuf>> {
@@ -213,7 +222,11 @@ fn a_tray_build_is_recorded_before_the_tray_hands_over_and_cleared_before_it_com
     )
     .unwrap();
     assert_eq!(host.events.len(), 1);
-    assert!(host.events[0].ends_with("saved=true"), "{:?}", host.events);
+    assert!(
+        host.events[0].ends_with("saved=Some((true, true))"),
+        "{:?}",
+        host.events
+    );
     let record = State::load(&at.places.state).unwrap();
     assert_eq!(
         record.installed_tray,
@@ -280,6 +293,78 @@ fn a_plugin_only_build_after_a_tray_build_brings_the_installed_tray_back_and_kee
         .lines
         .iter()
         .any(|line| line.ends_with("installed; the installed tray starts it")));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn plugins_are_restarted_when_putting_the_tray_back_started_none() {
+    let at = machine();
+    let mut host = Recorder {
+        tray_already_runs: true,
+        ..Recorder::default()
+    };
+    let build = host_build().unwrap();
+    let with_tray = Fake {
+        number: 412,
+        tray: true,
+    };
+    try_build(&with_tray, &mut host, tried(412, false), build, &at.places).unwrap();
+    let plugins_only = Fake {
+        number: 413,
+        tray: false,
+    };
+    try_build(
+        &plugins_only,
+        &mut host,
+        tried(413, false),
+        build,
+        &at.places,
+    )
+    .unwrap();
+    let restarted = format!("  {PLUGIN}: installed; no daemon was running");
+    assert_eq!(
+        host.lines.iter().filter(|line| **line == restarted).count(),
+        1,
+        "{:?}",
+        host.lines
+    );
+
+    try_build(&with_tray, &mut host, tried(412, false), build, &at.places).unwrap();
+    host.lines.clear();
+    turn_off(&mut host, &at.places).unwrap();
+    assert!(host.lines.contains(&restarted), "{:?}", host.lines);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_switch_from_a_plugin_only_build_restarts_what_it_put_back_before_a_tray_build() {
+    let at = machine();
+    let mut host = Recorder::default();
+    let build = host_build().unwrap();
+    let plugins_only = Fake {
+        number: 412,
+        tray: false,
+    };
+    try_build(
+        &plugins_only,
+        &mut host,
+        tried(412, true),
+        build,
+        &at.places,
+    )
+    .unwrap();
+    let with_tray = Fake {
+        number: 413,
+        tray: true,
+    };
+    try_build(&with_tray, &mut host, tried(413, false), build, &at.places).unwrap();
+    assert!(
+        host.lines.contains(&format!(
+            "  {PLUGIN}: put back; installed; no daemon was running"
+        )),
+        "{:?}",
+        host.lines
+    );
 }
 
 #[cfg(target_os = "linux")]

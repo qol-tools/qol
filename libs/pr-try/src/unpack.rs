@@ -92,6 +92,21 @@ mod tests {
     }
 
     #[test]
+    fn a_link_entry_is_refused_and_never_made() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("build.zip");
+        let mut writer = zip::ZipWriter::new(File::create(&path).unwrap());
+        writer
+            .add_symlink("tray/qol-tray", "/etc/passwd", SimpleFileOptions::default())
+            .unwrap();
+        writer.finish().unwrap();
+        let dir = root.path().join("out");
+        let error = format!("{:#}", unpack_zip(&path, &dir).unwrap_err());
+        assert!(error.contains("holds the link `tray/qol-tray`"), "{error}");
+        assert!(fs::symlink_metadata(dir.join("tray/qol-tray")).is_err());
+    }
+
+    #[test]
     fn a_file_that_is_not_a_zip_says_so() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("build.zip");

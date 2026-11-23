@@ -3,14 +3,15 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use qol_pr_try::{Host, Places, RestartsTray, Try, REPO};
+use qol_pr_try::{Host, Places, RestartsTray, TrayBack, Try, REPO};
 use qol_sync::Mutex;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use super::super::types::AppState;
 use super::http_json;
-use super::update_handlers::{action_error, action_ok, CoreActionRequest};
+use super::update_handlers::{self, action_error, action_ok, CoreActionRequest};
 use crate::features::plugin_store::github::Actions;
 use crate::features::profile::pull_request_builds;
 use qol_conventions::pr_try::{
@@ -23,6 +24,9 @@ const NO_NUMBER: &str = "Choose a pull request";
 const NO_PLACES: &str = "Couldn't find where qol keeps its files";
 const NO_START: &str = "Couldn't start getting the build";
 const LIST_FAILED: &str = "Couldn't list the pull request builds";
+const LIST_SLOW: &str = "Listing the pull request builds took too long";
+const LIST_DEADLINE: Duration = Duration::from_secs(25);
+const CHECK_POLL: Duration = Duration::from_millis(250);
 const OFF: &str = "Trying pull request builds is turned off";
 const SIGN_IN: &str = "Sign in to GitHub on the Profiles page to try pull request builds";
 const LOG: &str = "[pull-request-builds]";
@@ -60,7 +64,7 @@ pub(super) async fn get_list() -> Response {
         return (StatusCode::NOT_FOUND, OFF).into_response();
     }
     let runtime = tokio::runtime::Handle::current();
-    http_json::blocking("pull request builds query", move || {
+    let listing = http_json::blocking("pull request builds query", move || {
         let source = signed_in(runtime).ok_or_else(|| Box::new(unavailable(SIGN_IN)))?;
         let ready = qol_pr_try::host_build()
             .and_then(|build| qol_pr_try::ready(&source, build))
@@ -70,8 +74,10 @@ pub(super) async fn get_list() -> Response {
             })?;
         let json = http_json::encode_json(&ready, LIST_FAILED)?;
         Ok(http_json::json_response(json))
-    })
-    .await
+    });
+    tokio::time::timeout(LIST_DEADLINE, listing)
+        .await
+        .unwrap_or_else(|_| unavailable(LIST_SLOW))
 }
 
 fn signed_in(runtime: tokio::runtime::Handle) -> Option<Actions> {
@@ -83,10 +89,10 @@ pub(super) fn post_action(
     action: &str,
     request: &CoreActionRequest,
 ) -> Option<Response> {
+    if refused(action, pull_request_builds::enabled()) {
+        return Some(action_error(StatusCode::NOT_FOUND, OFF));
+    }
     let response = match action {
-        TRY | TRY_WITH_TRAY if !pull_request_builds::enabled() => {
-            action_error(StatusCode::NOT_FOUND, OFF)
-        }
         TRY => start(
             state,
             Run::Try(Try {
@@ -112,6 +118,10 @@ pub(super) fn post_action(
         _ => return None,
     };
     Some(response)
+}
+
+fn refused(action: &str, enabled: bool) -> bool {
+    !enabled && matches!(action, TRY | TRY_WITH_TRAY)
 }
 
 fn number(request: &CoreActionRequest) -> u64 {
@@ -248,13 +258,19 @@ impl Host for TrayHost {
         try_binary: &Path,
         installed: &Path,
         settle: &mut dyn FnMut() -> Result<()>,
-    ) -> Result<String> {
+    ) -> Result<TrayBack> {
         settle()?;
         if !qol_pr_try::runs_binary(std::process::id(), try_binary) {
-            return Ok("the installed tray already runs".to_string());
+            return Ok(TrayBack {
+                said: "the installed tray already runs".to_string(),
+                started: false,
+            });
         }
         self.hand_over(installed)?;
-        Ok(format!("{} runs again", installed.display()))
+        Ok(TrayBack {
+            said: format!("{} runs again", installed.display()),
+            started: true,
+        })
     }
 
     fn running_install(&self, downloads: &Path) -> Result<Option<PathBuf>> {
@@ -266,9 +282,22 @@ impl Host for TrayHost {
         if put_back.is_empty() || self.handed_over {
             return;
         }
-        if let Some(check) = super::super::update_check::claim(&self.state) {
-            self.runtime.spawn(check);
-        }
+        let check = super::super::update_check::claim(&self.state);
+        let state = self.state.clone();
+        let put_back = put_back.to_vec();
+        self.runtime.spawn(async move {
+            match check {
+                Some(check) => check.await,
+                None => {
+                    while super::super::update_check::running(&state) {
+                        tokio::time::sleep(CHECK_POLL).await;
+                    }
+                }
+            }
+            if crate::installer::trial::current().is_none() {
+                update_handlers::update_put_back(&state, &put_back);
+            }
+        });
     }
 }
 
@@ -359,6 +388,44 @@ mod tests {
         assert!(!shown(), "the old profile flag no longer turns them on");
         pull_request_builds::set(true).unwrap();
         assert!(shown());
+    }
+
+    #[test]
+    fn only_starting_a_try_needs_the_switch() {
+        for action in [TRY, TRY_WITH_TRAY] {
+            assert!(refused(action, false), "{action}");
+            assert!(!refused(action, true), "{action}");
+        }
+        for action in [END, DISMISS, "check_updates"] {
+            assert!(!refused(action, false), "{action}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_active_try_keeps_the_builds_shown_with_the_switch_off() {
+        let root = tempfile::tempdir().unwrap();
+        let _root = crate::paths::push_test_path_root(root.path());
+        let off = get_list().await;
+        assert_eq!(off.status(), StatusCode::NOT_FOUND);
+
+        let record = qol_conventions::pr_try::record_path(&crate::paths::base_data_dir().unwrap());
+        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        let tried = qol_conventions::pr_try::TryRecord {
+            pull_request: Some(621),
+            head_sha: Some("0123456789abcdef".into()),
+            plugins: vec![qol_conventions::pr_try::SwappedPlugin {
+                id: "qol-demo".into(),
+                target: "/p".into(),
+                backup: "/b".into(),
+            }],
+            ..Default::default()
+        };
+        std::fs::write(&record, serde_json::to_vec(&tried).unwrap()).unwrap();
+        assert!(shown());
+        let listed = get_list().await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(listed.into_body(), 64).await.unwrap();
+        assert_eq!(&body[..], b"[]");
     }
 
     #[test]
