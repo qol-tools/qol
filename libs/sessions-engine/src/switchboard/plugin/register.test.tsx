@@ -2847,7 +2847,7 @@ test("a row keyed by a newer duplicate record goes back to the oldest record's k
   expect(calls.some(call => call[0] === 'claim')).toBe(false)
 })
 
-test('a fork whose record is unfinished comes back after a restart even when the board lost its row, and a stopped one with no row stays closed', async ($, on) => {
+test('a fork whose record is unfinished comes back after a restart even when the board lost its row, a stopped one with no row stays closed, and a sub-fork rebuilt from its record stays under its parent or closes with it', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
   const calls: string[][] = []
@@ -2858,7 +2858,12 @@ test('a fork whose record is unfinished comes back after a restart even when the
     { key: 'lost-fork', friendly: 'lost words', cwd: '/', created_ms: 2, parts: [{ n: 1, agent_id: 'b0' }, { n: 2, agent_id: 'b1' }] },
     { key: 'done-fork', friendly: 'done words', cwd: '/', created_ms: 3, parts: [{ n: 1, agent_id: 'c1' }], done: { at_ms: 4, reason: 'merged' } },
     { key: 'stopped-fork', friendly: 'stopped words', cwd: '/', created_ms: 5, parts: [{ n: 1, agent_id: 'd1' }], stopped_ms: 6 },
+    { key: 'closed-parent', friendly: 'closed words', cwd: '/', created_ms: 7, parts: [{ n: 1, agent_id: 'p9' }], done: { at_ms: 8, reason: 'Closed by the user.' } },
+    { key: 'orphan-sub', friendly: 'orphan words', cwd: '/', created_ms: 9, parts: [{ n: 1, agent_id: 'e1', transcript: '/old/subagents/agent-e1.jsonl' }] },
+    { key: 'kept-fork-sub', friendly: 'sub words', cwd: '/', created_ms: 10, parts: [{ n: 1, agent_id: 'f1', transcript: '/old/subagents/agent-f1.jsonl' }] },
   ])
+  const metas: Record<string, string> = { '/old/subagents/agent-e1.meta.json': JSON.stringify({ parentAgentId: 'p9' }), '/old/subagents/agent-f1.meta.json': JSON.stringify({ parentAgentId: 'a1' }) }
+  on('fs.read', (_: unknown, e: { path: string }) => ({ value: metas[e.path] }))
   on('agent.list', () => ({ value: [] }))
   const timers: Array<() => void> = []
   on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
@@ -2872,6 +2877,8 @@ test('a fork whose record is unfinished comes back after a restart even when the
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(board).toContain('lost-fork')
   expect(board).not.toContain('done-fork')
+  expect(board).toMatch(/kept-fork-sub: +\(idle, agent id f1, listed under kept-fork\)/)
+  expect(board).toMatch(/orphan-sub: +\(done, agent id e1/)
 })
 
 test('missingForks adds an unfinished record whose last fork has no board row, once', () => {

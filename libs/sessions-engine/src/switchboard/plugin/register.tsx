@@ -1716,12 +1716,33 @@ const withRecords = async ($: EngineInterface, rows: Entry[]): Promise<Entry[]> 
   const keyless = owned.filter(row => row.key === undefined).slice(-BACKFILL_MAX)
   const filled = new Map<Entry, Entry>()
   for (const row of keyless) filled.set(row, await backfill($, row))
-  return owned.map(one => {
+  const named = owned.map(one => {
     const row = filled.get(one) ?? one
     const record = row.key === undefined ? undefined : records.get(row.key)
     if (record === undefined) return row
     return { ...row, name: recordName(record), ...(record.done === undefined ? {} : { isDone: true }), ...(typeof record.stopped_ms === 'number' ? { isStoppedByUser: true } : {}) }
   })
+  return Promise.all(
+    named.map(async row => {
+      const record = row.key === undefined ? undefined : records.get(row.key)
+      if (row.launcher !== undefined || row.isDismissed || row.isDone === true || record === undefined) return row
+      const launcher = await recordedLauncher($, record, row.agentId).catch(() => undefined)
+      if (launcher === undefined) return row
+      const parentKey = owners.get(launcher)
+      const isParentClosed = parentKey !== undefined && records.get(parentKey)?.done !== undefined
+      return { ...row, launcher, ...(isParentClosed ? { isDone: true } : {}) }
+    }),
+  )
+}
+
+const transcriptOf = (record: SessionRecord, agentId: string): string | undefined => {
+  const part = (record.parts ?? []).find(one => typeof one === 'object' && one !== null && (one as { agent_id?: unknown }).agent_id === agentId) as { transcript?: unknown } | undefined
+  return typeof part?.transcript === 'string' && part.transcript.endsWith('.jsonl') ? part.transcript : undefined
+}
+
+const recordedLauncher = async ($: EngineInterface, record: SessionRecord, agentId: string): Promise<string | undefined> => {
+  const transcript = transcriptOf(record, agentId)
+  return transcript === undefined ? undefined : parentIn(String(await $.fs.read(transcript.replace(/\.jsonl$/, '.meta.json'))))
 }
 
 const subagentFile = async ($: EngineInterface, agentId: string, suffix: string): Promise<string | undefined> => {
@@ -2916,7 +2937,11 @@ const pullNote = (all: readonly Pull[], agentId: string, details: Record<string,
 const metaLauncher = async ($: EngineInterface, agentId: string): Promise<string | undefined> => {
   const path = await subagentFile($, agentId, '.meta.json')
   if (path === undefined) return undefined
-  const meta = JSON.parse(String(await $.fs.read(path))) as { parentAgentId?: unknown }
+  return parentIn(String(await $.fs.read(path)))
+}
+
+const parentIn = (metaText: string): string | undefined => {
+  const meta = JSON.parse(metaText) as { parentAgentId?: unknown }
   return typeof meta.parentAgentId === 'string' && ID.test(meta.parentAgentId) ? meta.parentAgentId : undefined
 }
 
