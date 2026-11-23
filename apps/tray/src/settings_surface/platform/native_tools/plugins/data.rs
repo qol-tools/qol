@@ -5,7 +5,7 @@ use super::super::updates::data::action;
 use super::model::{RowAction, Snapshot};
 
 pub(super) fn load() -> anyhow::Result<Snapshot> {
-    let route = qol_conventions::api_routes::core_query(qol_conventions::api_routes::PLUGINS_QUERY);
+    let route = qol_conventions::api_routes::core_query(qol_conventions::core_queries::PLUGINS);
     request_json(Method::Get, &route, None, REQUEST_TIMEOUT)
 }
 

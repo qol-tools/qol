@@ -106,6 +106,11 @@ pub mod operations;
 pub mod plugin_id;
 pub mod pr_try;
 
+pub mod core_queries {
+    pub const UPDATES: &str = "updates";
+    pub const PLUGINS: &str = "plugins";
+}
+
 pub mod api_routes {
     pub const HOTKEYS: &str = "/api/hotkeys";
     pub const HOTKEY_ERRORS: &str = "/api/hotkeys/errors";
@@ -113,8 +118,6 @@ pub mod api_routes {
     pub const BUILD_INFO: &str = "/api/build-info";
     pub const AUTH_HEALTH: &str = "/api/auth/health";
     pub const CONFIG: &str = "/api/config";
-    pub const UPDATES_QUERY: &str = "updates";
-    pub const PLUGINS_QUERY: &str = "plugins";
 
     pub fn shortcut(id: &str) -> String {
         format!("{SHORTCUTS}/{id}")
@@ -455,7 +458,7 @@ mod tests {
             ),
             (api_routes::shortcut("abc"), "/api/shortcuts/abc"),
             (
-                api_routes::core_query(api_routes::UPDATES_QUERY),
+                api_routes::core_query(crate::core_queries::UPDATES),
                 "/api/core/queries/updates",
             ),
             (

@@ -100,7 +100,7 @@ fn query(client: &Client) -> Result<Snapshot> {
     let response = client
         .request(
             Method::Get,
-            &qol_conventions::api_routes::core_query(qol_conventions::api_routes::UPDATES_QUERY),
+            &qol_conventions::api_routes::core_query(qol_conventions::core_queries::UPDATES),
             None,
         )
         .context("asking the tray for updates")?;

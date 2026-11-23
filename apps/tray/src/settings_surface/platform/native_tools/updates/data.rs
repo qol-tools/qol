@@ -16,7 +16,7 @@ struct ActionResponse {
 }
 
 pub(super) fn load() -> anyhow::Result<UpdatesSnapshot> {
-    let route = qol_conventions::api_routes::core_query(qol_conventions::api_routes::UPDATES_QUERY);
+    let route = qol_conventions::api_routes::core_query(qol_conventions::core_queries::UPDATES);
     request_json(Method::Get, &route, None, REQUEST_TIMEOUT)
 }
 
