@@ -825,7 +825,7 @@ export const cutIn = (list: Entry[], entry: Entry): Entry[] => [entry, ...forksU
 export const stoppedFamilies = (list: Entry[]): Entry[] =>
   list.filter(entry => parentOf(list, entry) === undefined && !needsYou(entry) && cutIn(list, entry).length > 0)
 
-export const needYouCount = (list: Entry[]): number => list.filter(entry => asksYou(list, entry)).length + stoppedFamilies(list).length
+export const needYouCount = (list: Entry[]): number => list.filter(entry => needsYou(entry)).length + stoppedFamilies(list).length
 
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
@@ -859,7 +859,7 @@ export const isUnfinished = (entry: Entry): boolean =>
   !entry.isDismissed && entry.successor === undefined && entry.isDone !== true
 
 const needsYou = (entry: Entry): boolean =>
-  !entry.isDismissed && !entry.isWorking && !isCut(entry) && entry.isDone !== true && entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
+  entry.launcher === undefined && !entry.isDismissed && !entry.isWorking && !isCut(entry) && entry.isDone !== true && entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
 
 type StateLook = { color: string; isBold: boolean }
 type PullPart = { text: string; color?: string; isDim?: boolean }
@@ -925,8 +925,6 @@ export const forksUnder = (list: Entry[], parent: Entry): Entry[] => {
   return found
 }
 
-const asksYou = (list: Entry[], entry: Entry): boolean => needsYou(entry) && parentOf(list, entry) === undefined
-
 const isOwed = (entry: Entry): boolean => needsYou(entry) || isCut(entry)
 
 export const backAtRestart = (list: Entry[]): string[] =>
@@ -945,7 +943,7 @@ export const shownState = (entry: Entry, list: Entry[] = [], states: Record<stri
   if (entry.isWorking) return { label: 'working', state: WORKING_STATE }
   if (isEnded(entry)) return { label: 'closed' }
   if (isCut(entry)) return { label: 'stopped mid-turn' }
-  if (needsYou(entry)) return { label: entry.kind ?? 'ask', ...(parentOf(list, entry) === undefined ? { state: YOUR_TURN_STATE } : {}) }
+  if (needsYou(entry)) return { label: entry.kind ?? 'ask', state: YOUR_TURN_STATE }
   const live = forksUnder(list, entry).filter(sub => isBusy(sub, states)).length
   if (live > 0) return { label: `waits on ${live}`, state: WAITING_STATE }
   if (isWaiting(entry, states)) return { label: [WAITING_STATE, (states[entry.agentId]?.pulls ?? []).map(url => `#${url.split('/').pop() ?? '?'}`).join(',')].filter(part => part !== '').join(' '), state: WAITING_STATE }
@@ -959,7 +957,7 @@ export const hasUnread = (list: Entry[], entry: Entry): boolean => entry.hasNewR
 
 export const marksOf = (list: Entry[]): { fresh: string[]; asks: string[] } => ({
   fresh: list.filter(entry => !entry.isDismissed && entry.hasNewReply === true).map(entry => entry.agentId),
-  asks: list.filter(entry => asksYou(list, entry)).map(entry => entry.agentId),
+  asks: list.filter(entry => needsYou(entry)).map(entry => entry.agentId),
 })
 
 let marksWritten = ''
@@ -1877,7 +1875,7 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   )
   const entry = filed as Entry
   if (entry.key !== undefined) void recordRun($, 'archive', ['--key', entry.key])
-  if (isNew && !isShown && asksYou(await read($, board), entry)) {
+  if (isNew && !isShown && needsYou(entry)) {
     void $.ui.notify(entry.headline, { title: keyName(entry.name) }).catch(() => {})
   }
   return entry
