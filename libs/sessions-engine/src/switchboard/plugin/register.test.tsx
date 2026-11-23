@@ -5115,7 +5115,34 @@ test('a long check keeps its whole text when the pane has room for it', async ($
   await spawn($, 't5', 't5-fork: a fork')
   await settle()
   await refreshPages($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 100 } })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 120 } })
   expect(await ui.find({ type: 'Text', text: new RegExp(`^${long} +$`) })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a click on pass, fail or skip in a check row answers that row, with no key and no pick first', async ($, on) => {
+  const sent: any[] = []
+  const runs = pagesBoard(on, sent, testPage('t6-fork'))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't6', 't6-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ key: 'verdict-pass-grip' }))?.text).toBe('pass')
+  expect((await ui.find({ key: 'verdict-fail-grip' }))?.text).toBe('fail')
+  expect((await ui.find({ key: 'verdict-skip-grip' }))?.text).toBe('skip')
+
+  await ui.press({ key: 'verdict-skip-grip' })
+  expect(runs).toContainEqual(['answer', '--id', 'retail-test', '--item', 'grip', '--verdict', 'skip'])
+  expect(runs.some(run => run.includes('hip'))).toBe(false)
+
+  await ui.press({ key: 'verdict-fail-hip' })
+  await ui.input({ key: 'note', text: 'the beam drifts', kind: 'submit' })
+  expect(runs).toContainEqual(['answer', '--id', 'retail-test', '--item', 'hip', '--verdict', 'fail', '--note', 'the beam drifts'])
+  expect(JSON.stringify(sent[0])).toContain('Retail test: check hip failed')
+
+  await ui.press({ key: 'verdict-pass-hip' })
+  expect(runs).toContainEqual(['answer', '--id', 'retail-test', '--item', 'hip', '--verdict', 'pass'])
+  expect(await ui.find({ type: 'Text', text: '1 pass · 0 fail · 0 left' })).toBeDefined()
   await ui.unmount()
 })

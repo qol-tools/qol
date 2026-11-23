@@ -61,7 +61,7 @@ const FORKS_LABEL = 'forks'
 const ITEM_PREFIX = 'item-'
 const NOTE_KEY = 'note'
 const PAGE_INDENT = 5
-const PAGE_ROW_SPARE = 22
+const PAGE_ROW_SPARE = 37
 const NEW_REPLY = '◉'
 const NO_MARK = '  '
 const SINCE_WIDTH = 6
@@ -1519,6 +1519,8 @@ export const VERDICT_LOOK: Record<Verdict | 'untested', { icon: string; label: s
   fail: { icon: '✗', label: 'fail · sent', color: 'error' },
   skip: { icon: '–', label: 'skipped' },
 }
+const VERDICTS: Verdict[] = ['pass', 'fail', 'skip']
+const STATUS_WIDTH = Math.max(...Object.values(VERDICT_LOOK).map(look => look.label.length))
 
 export const checksOf = (page: Page): Check[] => page.blocks.flatMap(block => (block.kind === 'checklist' ? block.items : []))
 
@@ -4533,11 +4535,18 @@ export const register: Register = on => {
         const tone = look.color === undefined ? { dimColor: true } : { color: look.color }
         return (
           <Box key={`check-${check.id}`} flexDirection="column" {...(isPicked ? { backgroundColor: TARGET_BAND } : {})}>
-            <Button key={`${ITEM_PREFIX}${check.id}`} plain {...(digit <= 9 ? { hotkey: String(digit) } : {})} onPress={pick(check)}>
-              {digit <= 9 ? '' : '   '}
-              <Text {...tone}>{look.icon}</Text> <Text bold={isPicked}>{cell(check.text, textWidth)}</Text>
-              <Text {...tone}>{look.label}</Text>
-            </Button>
+            <Box flexDirection="row" gap={1}>
+              <Button key={`${ITEM_PREFIX}${check.id}`} plain {...(digit <= 9 ? { hotkey: String(digit) } : {})} onPress={pick(check)}>
+                {digit <= 9 ? '' : '   '}
+                <Text {...tone}>{look.icon}</Text> <Text bold={isPicked}>{cell(check.text, textWidth)}</Text>
+                <Text {...tone}>{look.label.padEnd(STATUS_WIDTH)}</Text>
+              </Button>
+              {VERDICTS.map(verdict => (
+                <Button key={`verdict-${verdict}-${check.id}`} plain dimColor onPress={() => void judge($, live, check, verdict)}>
+                  {verdict}
+                </Button>
+              ))}
+            </Box>
             {check.detail !== undefined && (
               <Box paddingLeft={PAGE_INDENT}>
                 <Text dimColor wrap="wrap">
