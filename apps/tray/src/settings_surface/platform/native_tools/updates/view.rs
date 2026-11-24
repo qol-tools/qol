@@ -375,6 +375,7 @@ impl UpdatesView {
             TrayAnswer::Keep => self.keep_tray(true, cx),
             TrayAnswer::Restart => {
                 let Some(number) = self.needs_tray() else {
+                    self.leave(cx);
                     return;
                 };
                 if let Some(question) = self.card.as_mut().and_then(|card| card.question.as_mut()) {

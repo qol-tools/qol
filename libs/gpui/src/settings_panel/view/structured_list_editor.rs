@@ -637,7 +637,8 @@ impl SettingsPanelView {
             self.kit,
             |answer| {
                 cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.answer_form_question(answer, None, cx);
+                    let walking = this.back_target.take();
+                    this.answer_form_question(answer, walking, cx);
                     cx.notify();
                 })
             },
