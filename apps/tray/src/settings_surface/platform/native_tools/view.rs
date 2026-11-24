@@ -14,9 +14,9 @@ use qol_gpui::settings_panel::components::{
     choose_hints, choose_step, settings_busy_message, settings_description, settings_label,
     settings_label_group, settings_message, settings_page, settings_tag,
     settings_tagged_label_group, settings_tile_rows, settings_value_group, tile_arts, tile_layout,
-    ChoiceArt, HintTone, RowGround, SettingsGroupHeader, SettingsHint, SettingsKeyCombination,
-    SettingsRow, SettingsTextField, SettingsTile, SettingsToggle, SettingsValueTone, SettingsWell,
-    TileArt,
+    ChoiceArt, QuestionKey, RowGround, SettingsGroupHeader, SettingsHint, SettingsKeyCombination,
+    SettingsQuestion, SettingsRow, SettingsTextField, SettingsTile, SettingsToggle,
+    SettingsValueTone, SettingsWell, TileArt,
 };
 use qol_gpui::settings_panel::number_slider::{
     compact_track, NumberRelease, NumberSlider, Scrub, SliderField,
@@ -34,15 +34,16 @@ use crate::shortcuts::model::Shortcut;
 
 use super::data::{self, ActionOption, PluginOption, RegistrationError};
 use super::model::{
-    available_actions, chord_from_keystroke, modifier_is_secondary, question_text,
-    shortcut_is_managed, shortcut_kind_label, shortcut_summary, AppRefKind, EditorQuestion,
-    HoldKey, HotkeyDraft, ShortcutActionKind, ShortcutDraft, ToolKind, HOLD_FIELD, HOTKEY_FIELDS,
-    OS_ONLY_FIELD,
+    available_actions, chord_from_keystroke, editor_question, modifier_is_secondary,
+    shortcut_is_managed, shortcut_kind_label, shortcut_summary, AppRefKind, EditorAnswer,
+    EditorQuestion, HoldKey, HotkeyDraft, ShortcutActionKind, ShortcutDraft, ToolKind, HOLD_FIELD,
+    HOTKEY_FIELDS, OS_ONLY_FIELD,
 };
 
 const MAX_VISIBLE: usize = 9;
 const EDITOR_DEPTH: usize = 1;
 const CHOOSE_DEPTH: usize = EDITOR_DEPTH + 1;
+const QUESTION_DEPTH: usize = EDITOR_DEPTH + 1;
 const OS_ONLY_LABEL: &str = "Only on this kind of computer";
 const HOLD_LABEL: (&str, &str) = (
     "Hold to run",
@@ -57,6 +58,7 @@ const SHOW_IN_LAUNCHER: (&str, &str) = (
 );
 const EDITOR_ANIMATION: &str = "native-tools-editor-slide";
 const CHOOSE_ANIMATION: &str = "native-tools-choose-slide";
+const QUESTION_ANIMATION: &str = "native-tools-question-slide";
 
 const ROW_HEIGHT: f32 = qol_gpui::theme::HEIGHT_SETTING_ROW;
 
@@ -70,7 +72,7 @@ enum Mode {
 struct Editor {
     initial: Mode,
     crumb: String,
-    question: Option<EditorQuestion>,
+    question: Option<SettingsQuestion<EditorAnswer>>,
     choose: Option<ToolChoose>,
 }
 
@@ -106,6 +108,7 @@ pub(super) struct NativeToolsView {
     editor_step: usize,
     editor_motion: Option<deck::Motion>,
     choose_closing: Option<ToolChoose>,
+    question_closing: Option<SettingsQuestion<EditorAnswer>>,
     marks: Vec<Option<f32>>,
     list_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     field_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
@@ -153,6 +156,7 @@ impl NativeToolsView {
             editor_step: 0,
             editor_motion: None,
             choose_closing: None,
+            question_closing: None,
             marks: Vec::new(),
             list_bounds: Rc::new(RefCell::new(HashMap::new())),
             field_bounds: Rc::new(RefCell::new(HashMap::new())),
@@ -323,6 +327,7 @@ impl NativeToolsView {
             .map(|editor| editor.crumb)
             .unwrap_or_default();
         self.choose_closing = None;
+        self.question_closing = None;
         self.marks.clear();
         self.editor_text_key = None;
         self.drop_hold_slider();
@@ -485,8 +490,7 @@ impl NativeToolsView {
             return;
         };
         if !draft.can_save() {
-            let question = EditorQuestion::for_empty(draft.first_empty());
-            self.set_question(Some(question));
+            self.open_question();
             return;
         }
         let existing_ids = self
@@ -498,6 +502,7 @@ impl NativeToolsView {
         let editing = draft.original_id.is_some();
         let selected_id = shortcut.id.clone();
         self.pending = true;
+        self.question_busy(true);
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -531,7 +536,10 @@ impl NativeToolsView {
                                 cx,
                             );
                         }
-                        Err(error) => view.fail(&format!("{error:#}"), cx),
+                        Err(error) => {
+                            view.question_busy(false);
+                            view.fail(&format!("{error:#}"), cx);
+                        }
                     }
                     cx.notify();
                 });
@@ -548,8 +556,7 @@ impl NativeToolsView {
             return;
         };
         if !draft.can_save() {
-            let question = EditorQuestion::for_empty(draft.first_empty());
-            self.set_question(Some(question));
+            self.open_question();
             return;
         }
         self.sequence = self.sequence.wrapping_add(1);
@@ -565,6 +572,7 @@ impl NativeToolsView {
             next.push(binding);
         }
         self.pending = true;
+        self.question_busy(true);
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -595,7 +603,10 @@ impl NativeToolsView {
                                 cx,
                             );
                         }
-                        Err(error) => view.fail(&format!("{error:#}"), cx),
+                        Err(error) => {
+                            view.question_busy(false);
+                            view.fail(&format!("{error:#}"), cx);
+                        }
                     }
                     cx.notify();
                 });
@@ -719,6 +730,9 @@ impl NativeToolsView {
             cx.notify();
             return;
         }
+        if self.on_question_key(event, cx) {
+            return;
+        }
         if self.loading || self.pending {
             if matches!(event.keystroke.key.as_str(), "escape" | "esc") {
                 self.go_back(window, cx);
@@ -726,9 +740,6 @@ impl NativeToolsView {
             return;
         }
         if self.on_choose_key(event, cx) {
-            return;
-        }
-        if self.on_question_key(event, cx) {
             return;
         }
         if matches!(self.mode, Mode::List) {
@@ -770,30 +781,34 @@ impl NativeToolsView {
     }
 
     fn on_question_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
-        let Some(question) = self.editor.as_ref().and_then(|editor| editor.question) else {
+        let key = event.keystroke.key.as_str();
+        let key_char = event.keystroke.key_char.as_deref();
+        let Some(question) = self
+            .editor
+            .as_mut()
+            .and_then(|editor| editor.question.as_mut())
+        else {
             return false;
         };
-        match event.keystroke.key.as_str() {
-            "enter" | "return" => {
-                match question {
-                    EditorQuestion::Save => self.save_current(cx),
-                    EditorQuestion::Blocked { field, .. } => {
-                        self.set_question(None);
-                        self.select_editor_field(field);
-                    }
-                }
-                cx.notify();
-                true
-            }
-            "escape" | "esc" => {
-                self.set_question(None);
-                self.close_editor(cx);
-                cx.notify();
-                true
-            }
-            _ => {
-                self.set_question(None);
-                false
+        match question.on_key(key, key_char) {
+            QuestionKey::Answer(answer) => self.answer_question(answer, cx),
+            QuestionKey::Back => self.close_question(cx),
+            QuestionKey::Moved | QuestionKey::Held => {}
+        }
+        cx.notify();
+        true
+    }
+
+    fn answer_question(&mut self, answer: EditorAnswer, cx: &mut Context<Self>) {
+        if self.pending {
+            return;
+        }
+        match answer {
+            EditorAnswer::Save => self.save_current(cx),
+            EditorAnswer::Discard => self.close_editor(cx),
+            EditorAnswer::Fill(field) => {
+                self.close_question(cx);
+                self.select_editor_field(field);
             }
         }
     }
@@ -820,9 +835,9 @@ impl NativeToolsView {
             if let Mode::Hotkey(draft) = &mut self.mode {
                 draft.commit_hold_edit();
             }
-            let question = EditorQuestion::for_empty(self.editor_first_empty());
-            self.set_question(Some(question));
-            if question == EditorQuestion::Save {
+            if self.editor_first_empty().is_some() {
+                self.open_question();
+            } else {
                 self.save_current(cx);
             }
             cx.notify();
@@ -929,6 +944,25 @@ impl NativeToolsView {
         let kit = qol_gpui::kit::kit();
         let width = self.body_width();
         let on_sliver = Self::sliver_click(cx);
+        if let Some(question) = self
+            .editor
+            .as_ref()
+            .and_then(|state| state.question.as_ref())
+        {
+            let deck = deck::render(
+                kit,
+                self.page(self.render_question_page(question, cx)),
+                deck::DeckFrame {
+                    depth: QUESTION_DEPTH,
+                    slide: deck::slide(self.editor_step, self.editor_motion, QUESTION_DEPTH, width),
+                    closing: None,
+                    animation_id: QUESTION_ANIMATION,
+                    marks: self.marks.iter().take(QUESTION_DEPTH).copied().collect(),
+                    on_sliver: Some(Rc::clone(&on_sliver)),
+                },
+            );
+            return deck::shell(deck);
+        }
         if let Some(choose) = self.editor.as_ref().and_then(|state| state.choose) {
             let deck = deck::render(
                 kit,
@@ -945,12 +979,17 @@ impl NativeToolsView {
             return deck::shell(deck);
         }
         if let Some(editor) = self.render_mode_card(&self.mode, &self.editor_crumb(), cx) {
-            let closing = self.choose_closing.map(|choose| {
-                (
-                    self.page(self.render_choose_page(choose, cx)),
+            let closing = match (&self.choose_closing, &self.question_closing) {
+                (Some(choose), _) => Some((
+                    self.page(self.render_choose_page(*choose, cx)),
                     deck::exit(self.editor_step, CHOOSE_DEPTH, width),
-                )
-            });
+                )),
+                (None, Some(question)) => Some((
+                    self.page(self.render_question_page(question, cx)),
+                    deck::exit(self.editor_step, QUESTION_DEPTH, width),
+                )),
+                (None, None) => None,
+            };
             let deck = deck::render(
                 kit,
                 self.page(editor),
@@ -1009,14 +1048,19 @@ impl NativeToolsView {
     }
 
     fn click_sliver(&mut self, level: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let choosing = self
-            .editor
-            .as_ref()
-            .is_some_and(|editor| editor.choose.is_some());
+        if self.pending {
+            return;
+        }
+        let (choosing, asking) = self.editor.as_ref().map_or((false, false), |editor| {
+            (editor.choose.is_some(), editor.question.is_some())
+        });
         if choosing && level >= EDITOR_DEPTH {
             self.close_choose(cx);
+        } else if asking && level >= EDITOR_DEPTH {
+            self.close_question(cx);
         } else {
             self.drop_choose();
+            self.drop_question();
             self.escape_editor(window, cx);
         }
         cx.notify();
@@ -1978,32 +2022,118 @@ impl NativeToolsView {
         }
     }
 
-    fn set_question(&mut self, question: Option<EditorQuestion>) {
+    fn editor_question(&self) -> Option<SettingsQuestion<EditorAnswer>> {
+        let question = EditorQuestion::for_empty(self.editor_first_empty());
+        let crumb = self.editor_crumb();
+        match &self.mode {
+            Mode::Shortcut(draft) => {
+                let name = draft.original_id.as_ref().map(|_| crumb.as_str());
+                let card = editor_question(question, "shortcut", name);
+                let target = draft.target.trim();
+                Some(match name {
+                    Some(name)
+                        if question == EditorQuestion::Save
+                            && draft.action_kind == ShortcutActionKind::Url
+                            && !target.is_empty() =>
+                    {
+                        card.detail(
+                            EditorAnswer::Save,
+                            format!("{name} opens {target} from now on."),
+                        )
+                    }
+                    _ => card,
+                })
+            }
+            Mode::Hotkey(draft) => {
+                let name = draft.original_id.as_ref().map(|_| crumb.as_str());
+                Some(editor_question(question, "hotkey", name))
+            }
+            Mode::List => None,
+        }
+    }
+
+    fn open_question(&mut self) {
+        let Some(question) = self.editor_question() else {
+            return;
+        };
+        let mark = self.field_mark(self.editor_selected());
+        let Some(editor) = self.editor.as_mut() else {
+            return;
+        };
+        if editor.question.is_some() {
+            return;
+        }
+        editor.question = Some(question);
+        self.question_closing = None;
+        self.marks.truncate(EDITOR_DEPTH);
+        self.marks.push(mark);
+        self.editor_step = self.editor_step.wrapping_add(1);
+        self.editor_motion = Some(deck::Motion::Push);
+    }
+
+    fn close_question(&mut self, cx: &mut Context<Self>) {
+        let Some(question) = self
+            .editor
+            .as_mut()
+            .and_then(|editor| editor.question.take())
+        else {
+            return;
+        };
+        self.question_closing = Some(question);
+        self.marks.truncate(EDITOR_DEPTH);
+        self.editor_motion = None;
+        self.editor_step = self.editor_step.wrapping_add(1);
+        deck::after_transition(cx, |view, cx| {
+            view.question_closing = None;
+            cx.notify();
+        });
+    }
+
+    fn drop_question(&mut self) {
         if let Some(editor) = self.editor.as_mut() {
-            editor.question = question;
+            editor.question = None;
+        }
+        self.question_closing = None;
+        self.editor_motion = None;
+        self.marks.truncate(EDITOR_DEPTH);
+    }
+
+    fn question_busy(&mut self, busy: bool) {
+        if let Some(question) = self
+            .editor
+            .as_mut()
+            .and_then(|editor| editor.question.as_mut())
+        {
+            question.set_busy(busy.then_some(EditorAnswer::Save));
         }
     }
 
     fn escape_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.editor_changed() {
-            let question = EditorQuestion::for_empty(self.editor_first_empty());
-            self.set_question(Some(question));
+            self.open_question();
         } else {
             self.escape(window, cx);
         }
     }
 
-    fn editor_question_text(&self, question: EditorQuestion) -> String {
-        let crumb = self.editor_crumb();
-        match &self.mode {
-            Mode::Shortcut(draft) => {
-                question_text(question, "shortcut", draft.original_id.is_none(), &crumb)
-            }
-            Mode::Hotkey(draft) => {
-                question_text(question, "hotkey", draft.original_id.is_none(), &crumb)
-            }
-            Mode::List => String::new(),
-        }
+    fn render_question_page(
+        &self,
+        question: &SettingsQuestion<EditorAnswer>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        question
+            .render(
+                "native-tools-question",
+                self.body_focused,
+                qol_gpui::kit::kit(),
+                |answer| {
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.answer_question(answer, cx);
+                        cx.notify();
+                    })
+                },
+            )
+            .into_any_element()
     }
 
     fn list_hints(&self) -> CustomHints {
@@ -2022,7 +2152,6 @@ impl NativeToolsView {
             left.push(SettingsHint::new(Key::letter('r'), "run"));
         }
         CustomHints {
-            question: None,
             left,
             right: Vec::new(),
         }
@@ -2032,7 +2161,6 @@ impl NativeToolsView {
         let selected = self.editor_selected();
         if self.capture_recording() {
             return CustomHints {
-                question: None,
                 left: Vec::new(),
                 right: vec![SettingsHint::new(Key::ESC, "cancel")],
             };
@@ -2048,13 +2176,11 @@ impl NativeToolsView {
             left.push(SettingsHint::new(Key::LEFT_RIGHT, "change"));
             left.push(SettingsHint::new(Key::TYPE, "type a time"));
             return CustomHints {
-                question: None,
                 left,
                 right: vec![SettingsHint::new(Key::ESC, "restore")],
             };
         }
         CustomHints {
-            question: None,
             left,
             right: vec![SettingsHint::new(
                 Key::ESC,
@@ -2180,49 +2306,41 @@ impl CustomSettingsBreadcrumbs for NativeToolsView {
             return Vec::new();
         };
         let choose = editor.choose.map(|choose| choose.select);
-        breadcrumbs(&editor.crumb, choose)
+        let question = editor
+            .question
+            .as_ref()
+            .map(|question| question.title().as_str());
+        breadcrumbs(&editor.crumb, choose, question)
     }
 
     fn settings_hints(&self) -> Option<CustomHints> {
         let Some(editor) = self.editor.as_ref() else {
             return Some(self.list_hints());
         };
-        let choose = editor.choose;
-        let question = editor.question;
-        if let Some(choose) = choose {
+        if let Some(choose) = editor.choose {
             return Some(CustomHints {
-                question: None,
                 left: choose_hints(self.choose_count(choose.select)),
                 right: Vec::new(),
             });
         }
+        if let Some(question) = editor.question.as_ref() {
+            return Some(question.hints());
+        }
         if self.pending {
             return Some(CustomHints {
-                question: question.map(|question| self.editor_question_text(question).into()),
                 left: vec![SettingsHint::busy("saving")],
                 right: vec![SettingsHint::new(Key::ESC, "back")],
-            });
-        }
-        if let Some(question) = question {
-            let left = match question {
-                EditorQuestion::Save => {
-                    vec![SettingsHint::new(Key::ENTER, "save").tone(HintTone::Save)]
-                }
-                EditorQuestion::Blocked { .. } => {
-                    vec![SettingsHint::new(Key::ENTER, "fill it in")]
-                }
-            };
-            return Some(CustomHints {
-                question: Some(self.editor_question_text(question).into()),
-                left,
-                right: vec![SettingsHint::new(Key::ESC, "discard").tone(HintTone::Discard)],
             });
         }
         Some(self.field_hints())
     }
 }
 
-fn breadcrumbs(crumb: &str, choose: Option<SelectField>) -> Vec<SettingsDestination> {
+fn breadcrumbs(
+    crumb: &str,
+    choose: Option<SelectField>,
+    question: Option<&str>,
+) -> Vec<SettingsDestination> {
     let mut destinations = Vec::new();
     if let Ok(destination) = SettingsDestination::new(crumb) {
         destinations.push(destination);
@@ -2231,6 +2349,9 @@ fn breadcrumbs(crumb: &str, choose: Option<SelectField>) -> Vec<SettingsDestinat
         if let Ok(destination) = SettingsDestination::new(choose_label(select)) {
             destinations.push(destination);
         }
+    }
+    if let Some(destination) = question.and_then(|title| SettingsDestination::new(title).ok()) {
+        destinations.push(destination);
     }
     destinations
 }
@@ -2506,12 +2627,12 @@ mod breadcrumb_tests {
     fn new_editors_trail_add() {
         let shortcut = Mode::Shortcut(ShortcutDraft::blank());
         assert_eq!(
-            labels(&breadcrumbs(&mode_crumb(&shortcut, &[]), None)),
+            labels(&breadcrumbs(&mode_crumb(&shortcut, &[]), None, None)),
             ["add"]
         );
         let hotkey = Mode::Hotkey(HotkeyDraft::blank(&[], &[]));
         assert_eq!(
-            labels(&breadcrumbs(&mode_crumb(&hotkey, &[]), None)),
+            labels(&breadcrumbs(&mode_crumb(&hotkey, &[]), None, None)),
             ["add"]
         );
     }
@@ -2523,7 +2644,7 @@ mod breadcrumb_tests {
         draft.name = "  Docs  ".to_string();
         let mode = Mode::Shortcut(draft);
         assert_eq!(
-            labels(&breadcrumbs(&mode_crumb(&mode, &[]), None)),
+            labels(&breadcrumbs(&mode_crumb(&mode, &[]), None, None)),
             ["Docs"]
         );
     }
@@ -2535,7 +2656,7 @@ mod breadcrumb_tests {
         draft.original_id = Some("hk-1".to_string());
         let mode = Mode::Hotkey(draft);
         assert_eq!(
-            labels(&breadcrumbs(&mode_crumb(&mode, &plugins), None)),
+            labels(&breadcrumbs(&mode_crumb(&mode, &plugins), None, None)),
             ["Open Switcher"]
         );
     }
@@ -2543,8 +2664,16 @@ mod breadcrumb_tests {
     #[test]
     fn a_choose_card_appends_its_label() {
         assert_eq!(
-            labels(&breadcrumbs("Docs", Some(SelectField::TargetKind))),
+            labels(&breadcrumbs("Docs", Some(SelectField::TargetKind), None)),
             ["Docs", "Find app by"]
+        );
+    }
+
+    #[test]
+    fn a_question_card_appends_its_title() {
+        assert_eq!(
+            labels(&breadcrumbs("Docs", None, Some("save changes"))),
+            ["Docs", "save changes"]
         );
     }
 }

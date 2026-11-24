@@ -908,7 +908,6 @@ impl CustomSettingsBreadcrumbs for PagesView {
                 let asked = (page.clone(), row.id.clone());
                 if self.asking.as_ref() == Some(&asked) {
                     return Some(CustomHints {
-                        question: None,
                         left: vec![
                             SettingsHint::new(Key::ENTER, ask.clone()).tone(HintTone::Discard),
                             SettingsHint::new(Key::UP_DOWN, "move"),
@@ -938,7 +937,6 @@ impl CustomSettingsBreadcrumbs for PagesView {
             None => "close".to_string(),
         };
         Some(CustomHints {
-            question: None,
             left,
             right: vec![SettingsHint::new(Key::ESC, escape)],
         })

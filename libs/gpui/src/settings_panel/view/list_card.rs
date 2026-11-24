@@ -1271,6 +1271,7 @@ fn list_card_level(
         choose: None,
         entries: None,
         form: None,
+        question: None,
         list_item: None,
     }
 }
@@ -1436,6 +1437,7 @@ fn list_item_card_level(
         choose: None,
         entries: None,
         form: None,
+        question: None,
         list_item: Some(ListItemCard {
             origin_row,
             item_id: item_id.to_string(),

@@ -1,4 +1,5 @@
 use qol_conventions::pr_try::{self, ListedBuild};
+use qol_gpui::settings_panel::components::{HintTone, SettingsAnswer, SettingsQuestion};
 use serde::Deserialize;
 
 use super::model::{RowAction, Summary, SummaryDot, Trial, UpdatesSnapshot};
@@ -64,7 +65,7 @@ pub(super) fn row(snapshot: &UpdatesSnapshot) -> BuildRow {
     match &snapshot.pull_request_build {
         Some(Job::Getting { number }) => BuildRow {
             value: format!("#{number}"),
-            description: format!("Getting #{number}'s CI build."),
+            description: getting(*number),
             spinner: true,
             attention: false,
             opens: false,
@@ -76,10 +77,7 @@ pub(super) fn row(snapshot: &UpdatesSnapshot) -> BuildRow {
             attention: false,
             opens: false,
         },
-        Some(Job::NeedsTray { number }) => BuildRow {
-            opens: false,
-            ..idle(format!("Trying #{number} restarts qol-tray."))
-        },
+        Some(Job::NeedsTray { number }) => idle(format!("Trying #{number} restarts qol-tray.")),
         Some(Job::Failed { message }) => BuildRow {
             attention: true,
             ..idle(sentence(message))
@@ -145,8 +143,44 @@ pub(super) fn needs_tray(snapshot: &UpdatesSnapshot) -> Option<u64> {
     }
 }
 
-pub(super) fn tray_question(number: u64) -> String {
-    format!("Trying #{number} restarts qol-tray, and the switchboard closes.")
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TrayAnswer {
+    Restart,
+    Keep,
+}
+
+pub(super) const RESTART_TITLE: &str = "restart qol-tray";
+
+pub(super) fn restart_question(number: u64) -> SettingsQuestion<TrayAnswer> {
+    let mut question = SettingsQuestion::new(
+        RESTART_TITLE,
+        format!("#{number}'s build carries qol-tray."),
+    )
+    .answer(
+        SettingsAnswer::new(
+            TrayAnswer::Restart,
+            format!("Restart on #{number}'s build"),
+            "qol-tray restarts, and the switchboard and its sessions close.",
+            "restart",
+        )
+        .tone(HintTone::Discard)
+        .busy(
+            format!("Restarting qol-tray on #{number}'s build."),
+            "restarting qol-tray",
+        ),
+    )
+    .answer(SettingsAnswer::new(
+        TrayAnswer::Keep,
+        "Keep the installed version",
+        format!("Nothing is installed. Choose #{number} again when you are ready."),
+        "keep",
+    ));
+    question.select(TrayAnswer::Keep);
+    question
+}
+
+pub(super) fn getting(number: u64) -> String {
+    format!("Getting #{number}'s CI build.")
 }
 
 pub(super) fn card_rows(builds: &[ListedBuild], trial: Option<&Trial>) -> Vec<CardRow> {
@@ -336,10 +370,24 @@ mod tests {
     }
 
     #[test]
-    fn the_tray_question_names_the_pull_request() {
+    fn the_restart_card_names_the_pull_request_and_keeps_by_default() {
+        let question = restart_question(621);
+        assert_eq!(question.title(), RESTART_TITLE);
+        assert_eq!(question.colophon(), "#621's build carries qol-tray.");
+        let labels: Vec<_> = question
+            .answers()
+            .iter()
+            .map(|answer| answer.label.as_ref())
+            .collect();
         assert_eq!(
-            tray_question(621),
-            "Trying #621 restarts qol-tray, and the switchboard closes."
+            labels,
+            ["Restart on #621's build", "Keep the installed version"]
+        );
+        assert_eq!(question.selected(), Some(TrayAnswer::Keep));
+        assert_eq!(question.answers()[0].tone, HintTone::Discard);
+        assert_eq!(
+            question.answers()[0].busy_detail,
+            "Restarting qol-tray on #621's build."
         );
     }
 

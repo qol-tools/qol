@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use gpui::{Keystroke, Modifiers};
 use qol_hotkeys::grammar::{self, Hotkey, Modifier};
 
+use qol_gpui::settings_panel::components::SettingsQuestion;
 use qol_gpui::settings_panel::number_slider::{number_key, NumberEdit, NumberKey, NumberSpec};
 
 use crate::hotkeys::hold::{clamp_hold_ms, HOLD_MS_MAX, HOLD_MS_STEP};
@@ -32,18 +33,29 @@ impl EditorQuestion {
     }
 }
 
-pub(super) fn question_text(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EditorAnswer {
+    Save,
+    Discard,
+    Fill(usize),
+}
+
+pub(super) fn editor_question(
     question: EditorQuestion,
     noun: &str,
-    is_new: bool,
-    crumb: &str,
-) -> String {
+    name: Option<&str>,
+) -> SettingsQuestion<EditorAnswer> {
     match question {
-        EditorQuestion::Save if is_new => format!("Save the new {noun}?"),
-        EditorQuestion::Save => format!("Save changes to {crumb}?"),
-        EditorQuestion::Blocked { label, .. } => {
-            format!("{label} is empty, so this {noun} cannot be saved yet.")
+        EditorQuestion::Save => {
+            SettingsQuestion::save_changes(name, noun, EditorAnswer::Save, EditorAnswer::Discard)
         }
+        EditorQuestion::Blocked { field, label } => SettingsQuestion::blocked(
+            label,
+            name,
+            noun,
+            EditorAnswer::Fill(field),
+            EditorAnswer::Discard,
+        ),
     }
 }
 
@@ -859,24 +871,23 @@ mod tests {
     }
 
     #[test]
-    fn question_text_asks_to_save_or_names_the_blocking_field() {
-        assert_eq!(
-            question_text(EditorQuestion::Save, "shortcut", true, "add"),
-            "Save the new shortcut?"
+    fn the_editor_asks_to_save_or_to_fill_in_the_blocking_field() {
+        let new = editor_question(EditorQuestion::Save, "shortcut", None);
+        assert_eq!(new.title(), "save changes");
+        assert_eq!(new.selected(), Some(EditorAnswer::Save));
+        assert_eq!(new.answers()[0].label, "Save the new shortcut");
+        let docs = editor_question(EditorQuestion::Save, "shortcut", Some("Docs"));
+        assert_eq!(docs.colophon(), "you changed docs.");
+        assert_eq!(docs.answers()[1].action, EditorAnswer::Discard);
+        assert_eq!(docs.answers()[1].detail, "Docs goes back the way it was.");
+        let blocked = editor_question(
+            EditorQuestion::for_empty(Some((4, "URL"))),
+            "shortcut",
+            None,
         );
-        assert_eq!(
-            question_text(EditorQuestion::Save, "shortcut", false, "Docs"),
-            "Save changes to Docs?"
-        );
-        assert_eq!(
-            question_text(
-                EditorQuestion::for_empty(Some((4, "URL"))),
-                "shortcut",
-                true,
-                "add"
-            ),
-            "URL is empty, so this shortcut cannot be saved yet."
-        );
+        assert_eq!(blocked.title(), "url is empty");
+        assert_eq!(blocked.selected(), Some(EditorAnswer::Fill(4)));
+        assert_eq!(blocked.answers()[0].label, "Fill in the url");
         assert_eq!(EditorQuestion::for_empty(None), EditorQuestion::Save);
         assert_eq!(
             EditorQuestion::for_empty(Some((2, "Name"))),

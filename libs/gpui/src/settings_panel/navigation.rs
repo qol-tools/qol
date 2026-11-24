@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
-use gpui::{App, SharedString};
+use gpui::App;
 
 use super::components::SettingsHint;
 
@@ -36,7 +36,6 @@ impl SettingsDestination {
 }
 
 pub struct CustomHints {
-    pub question: Option<SharedString>,
     pub left: Vec<SettingsHint>,
     pub right: Vec<SettingsHint>,
 }

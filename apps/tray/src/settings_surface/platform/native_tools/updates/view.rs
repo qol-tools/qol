@@ -13,8 +13,9 @@ use qol_gpui::kit::kit;
 use qol_gpui::kit::Kit;
 use qol_gpui::scroll_list::{wheel_steps, ListHeight, ScrollList};
 use qol_gpui::settings_panel::components::{
-    settings_label, settings_label_group, settings_page, settings_value_group, HintTone, RowGround,
-    SettingsFeedback, SettingsHint, DIMMED_OPACITY,
+    settings_action_spinner, settings_label, settings_label_group, settings_page,
+    settings_value_group, QuestionKey, RowGround, SettingsFeedback, SettingsHint, SettingsQuestion,
+    DIMMED_OPACITY,
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_action_word, settings_busy_message,
@@ -30,11 +31,14 @@ use super::model::{
     can_check, page, RowAction, Summary, SummaryDot, TargetRow, TargetState, UpdatesSnapshot,
     ValueTone,
 };
-use super::pull_request_build::{self, BuildRow, CardRow, Job};
+use super::pull_request_build::{self, BuildRow, CardRow, Job, TrayAnswer};
 
 const MAX_VISIBLE: usize = 10;
 const CARD_DEPTH: usize = 1;
 const CARD_ANIMATION: &str = "updates-card-slide";
+const QUESTION_DEPTH: usize = CARD_DEPTH + 1;
+const QUESTION_ANIMATION: &str = "updates-question-slide";
+const SPINNER_SIZE: f32 = 12.0;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const POLL_STALE_AFTER: Duration = Duration::from_secs(5);
 
@@ -64,6 +68,8 @@ struct Card {
     selected: usize,
     list: ScrollList,
     list_height: ListHeight,
+    trying: Option<u64>,
+    question: Option<SettingsQuestion<TrayAnswer>>,
 }
 
 impl Card {
@@ -73,6 +79,8 @@ impl Card {
             selected: 0,
             list: ScrollList::new(MAX_VISIBLE),
             list_height: ListHeight::default(),
+            trying: None,
+            question: None,
         }
     }
 }
@@ -160,6 +168,7 @@ pub(super) struct UpdatesView {
     reloading: bool,
     card: Option<Card>,
     closing: Option<Card>,
+    question_closing: Option<SettingsQuestion<TrayAnswer>>,
     step: usize,
     motion: Option<deck::Motion>,
     mark: Option<f32>,
@@ -192,6 +201,7 @@ impl UpdatesView {
             reloading: false,
             card: None,
             closing: None,
+            question_closing: None,
             step: 0,
             motion: None,
             mark: None,
@@ -216,7 +226,7 @@ impl UpdatesView {
                         let alive = this
                             .update(&mut async_cx, |view, cx| {
                                 if let Ok(snapshot) = result {
-                                    view.apply_snapshot(snapshot);
+                                    view.apply_snapshot(snapshot, cx);
                                 }
                                 cx.notify();
                             })
@@ -244,7 +254,7 @@ impl UpdatesView {
                 let _ = this.update(&mut async_cx, |view, cx| {
                     view.reloading = false;
                     if let Ok(snapshot) = result {
-                        view.apply_snapshot(snapshot);
+                        view.apply_snapshot(snapshot, cx);
                     }
                     cx.notify();
                 });
@@ -275,7 +285,7 @@ impl UpdatesView {
             .unwrap_or_default()
     }
 
-    fn apply_snapshot(&mut self, snapshot: UpdatesSnapshot) {
+    fn apply_snapshot(&mut self, snapshot: UpdatesSnapshot, cx: &mut Context<Self>) {
         if self.poll_skipped {
             self.poll_skipped = false;
             self.visited.retain(|id, _| {
@@ -287,6 +297,123 @@ impl UpdatesView {
         }
         self.note_visited(&snapshot);
         self.snapshot = Some(snapshot);
+        self.follow_try(cx);
+    }
+
+    fn follow_try(&mut self, cx: &mut Context<Self>) {
+        if self.pending {
+            return;
+        }
+        let job = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.pull_request_build.clone());
+        let Some(card) = self.card.as_mut() else {
+            return;
+        };
+        if card.question.as_ref().is_some_and(SettingsQuestion::busy) {
+            if !matches!(job, Some(Job::Getting { .. })) {
+                self.leave(cx);
+            }
+            return;
+        }
+        let Some(number) = card.trying else {
+            return;
+        };
+        match job {
+            Some(Job::Getting { number: getting }) if getting == number => {}
+            Some(Job::NeedsTray { number: needs }) if needs == number => {
+                card.trying = None;
+                self.open_question(number);
+            }
+            _ => {
+                card.trying = None;
+                self.leave(cx);
+            }
+        }
+    }
+
+    fn open_question(&mut self, number: u64) {
+        let Some(card) = self.card.as_mut() else {
+            return;
+        };
+        card.question = Some(pull_request_build::restart_question(number));
+        self.question_closing = None;
+        self.step = self.step.wrapping_add(1);
+        self.motion = Some(deck::Motion::Push);
+    }
+
+    fn close_question(&mut self, cx: &mut Context<Self>) {
+        let Some(question) = self.card.as_mut().and_then(|card| card.question.take()) else {
+            return;
+        };
+        self.question_closing = Some(question);
+        self.step = self.step.wrapping_add(1);
+        self.motion = None;
+        deck::after_transition(cx, |view, cx| {
+            view.question_closing = None;
+            cx.notify();
+        });
+    }
+
+    fn on_question_key(&mut self, key: &str, key_char: Option<&str>, cx: &mut Context<Self>) {
+        let Some(question) = self.card.as_mut().and_then(|card| card.question.as_mut()) else {
+            return;
+        };
+        match question.on_key(key, key_char) {
+            QuestionKey::Answer(answer) => self.answer_question(answer, cx),
+            QuestionKey::Back => self.keep_tray(false, cx),
+            QuestionKey::Moved | QuestionKey::Held => {}
+        }
+    }
+
+    fn answer_question(&mut self, answer: TrayAnswer, cx: &mut Context<Self>) {
+        if self.pending {
+            return;
+        }
+        match answer {
+            TrayAnswer::Keep => self.keep_tray(true, cx),
+            TrayAnswer::Restart => {
+                let Some(number) = self.needs_tray() else {
+                    return;
+                };
+                if let Some(question) = self.card.as_mut().and_then(|card| card.question.as_mut()) {
+                    question.set_busy(Some(TrayAnswer::Restart));
+                }
+                self.run_action(RowAction::TryWithTray(number), cx);
+            }
+        }
+    }
+
+    fn keep_tray(&mut self, close: bool, cx: &mut Context<Self>) {
+        if self.pending {
+            return;
+        }
+        let number = self.needs_tray();
+        self.run_action(RowAction::KeepTray, cx);
+        if close {
+            self.leave(cx);
+            return;
+        }
+        self.close_question(cx);
+        let Some(number) = number else {
+            return;
+        };
+        let Some(card) = &self.card else {
+            return;
+        };
+        let rows = self.card_rows(card);
+        let tried = RowAction::TryPullRequest(number);
+        if let Some(index) = rows
+            .iter()
+            .position(|row| row.action.as_ref() == Some(&tried))
+        {
+            if let Some(card) = self.card.as_mut() {
+                card.selected = index;
+                card.list.selected = index;
+                card.list.sync(rows.len());
+            }
+        }
     }
 
     fn note_visited(&mut self, snapshot: &UpdatesSnapshot) {
@@ -350,6 +477,9 @@ impl UpdatesView {
         self.card = Some(Card::new());
         self.step = self.step.wrapping_add(1);
         self.motion = Some(deck::Motion::Push);
+        if let Some(number) = self.needs_tray() {
+            self.open_question(number);
+        }
         let failed = self.snapshot.as_ref().is_some_and(|snapshot| {
             matches!(snapshot.pull_request_build, Some(Job::Failed { .. }))
         });
@@ -373,7 +503,16 @@ impl UpdatesView {
                     };
                     card.builds = Some(builds);
                     let rows = view.card_rows(&card);
-                    card.selected = rows.iter().position(|row| row.running).unwrap_or(0);
+                    let asked =
+                        view.needs_tray()
+                            .map(RowAction::TryPullRequest)
+                            .and_then(|tried| {
+                                rows.iter()
+                                    .position(|row| row.action.as_ref() == Some(&tried))
+                            });
+                    card.selected = asked
+                        .or_else(|| rows.iter().position(|row| row.running))
+                        .unwrap_or(0);
                     card.list.selected = card.selected;
                     card.list.sync(rows.len());
                     view.card = Some(card);
@@ -385,9 +524,12 @@ impl UpdatesView {
     }
 
     fn leave(&mut self, cx: &mut Context<Self>) {
-        let Some(card) = self.card.take() else {
+        let Some(mut card) = self.card.take() else {
             return;
         };
+        card.question = None;
+        card.trying = None;
+        self.question_closing = None;
         self.closing = Some(card);
         self.step = self.step.wrapping_add(1);
         self.motion = None;
@@ -399,9 +541,19 @@ impl UpdatesView {
 
     fn sliver_click(cx: &mut Context<Self>) -> deck::SliverClick {
         let view = cx.weak_entity();
-        Rc::new(move |_, _, cx| {
+        Rc::new(move |level, _, cx| {
             let _ = view.update(cx, |view, cx| {
-                view.leave(cx);
+                let asking = view
+                    .card
+                    .as_ref()
+                    .is_some_and(|card| card.question.is_some());
+                if asking && level >= CARD_DEPTH {
+                    view.keep_tray(false, cx);
+                } else if asking {
+                    view.keep_tray(true, cx);
+                } else {
+                    view.leave(cx);
+                }
                 cx.notify();
             });
         })
@@ -415,7 +567,7 @@ impl UpdatesView {
         let Some(card) = self
             .card
             .as_mut()
-            .filter(|card| card.builds.is_some() && total > 0)
+            .filter(|card| card.builds.is_some() && card.trying.is_none() && total > 0)
         else {
             return;
         };
@@ -426,17 +578,33 @@ impl UpdatesView {
     }
 
     fn choose(&mut self, cx: &mut Context<Self>) {
-        let Some(card) = self.card.as_ref().filter(|card| card.builds.is_some()) else {
+        let Some(card) = self
+            .card
+            .as_ref()
+            .filter(|card| card.builds.is_some() && card.trying.is_none())
+        else {
             return;
         };
+        if self.pending {
+            return;
+        }
         let action = self
             .card_rows(card)
             .get(card.selected)
             .and_then(|row| row.action.clone());
-        if let Some(action) = action {
-            self.run_action(action, cx);
+        match action {
+            Some(RowAction::TryPullRequest(number)) => {
+                if let Some(card) = self.card.as_mut() {
+                    card.trying = Some(number);
+                }
+                self.run_action(RowAction::TryPullRequest(number), cx);
+            }
+            Some(action) => {
+                self.run_action(action, cx);
+                self.leave(cx);
+            }
+            None => self.leave(cx),
         }
-        self.leave(cx);
     }
 
     fn sync_selection(&mut self, rows: &[PageRow]) {
@@ -525,7 +693,7 @@ impl UpdatesView {
                         let _ = this.update(&mut async_cx, |view, cx| {
                             view.pending = false;
                             if let Ok(snapshot) = snapshot {
-                                view.apply_snapshot(snapshot);
+                                view.apply_snapshot(snapshot, cx);
                             }
                             cx.notify();
                         });
@@ -534,6 +702,7 @@ impl UpdatesView {
                         let message = format!("{error:#}");
                         let _ = this.update(&mut async_cx, |view, cx| {
                             view.pending = false;
+                            view.stop_trying();
                             view.fail(&message, cx);
                             cx.notify();
                         });
@@ -542,6 +711,15 @@ impl UpdatesView {
             }
         })
         .detach();
+    }
+
+    fn stop_trying(&mut self) {
+        if let Some(card) = self.card.as_mut() {
+            card.trying = None;
+            if let Some(question) = card.question.as_mut() {
+                question.set_busy(None);
+            }
+        }
     }
 
     fn fail(&self, message: &str, cx: &mut Context<Self>) {
@@ -557,10 +735,6 @@ impl UpdatesView {
     }
 
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.card.is_none() && self.needs_tray().is_some() {
-            self.run_action(RowAction::KeepTray, cx);
-            return;
-        }
         match escape_step(
             usize::from(self.card.is_some()),
             false,
@@ -575,6 +749,15 @@ impl UpdatesView {
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         let key = event.keystroke.key.as_str();
+        if self
+            .card
+            .as_ref()
+            .is_some_and(|card| card.question.is_some())
+        {
+            self.on_question_key(key, event.keystroke.key_char.as_deref(), cx);
+            cx.notify();
+            return;
+        }
         if matches!(key, "escape" | "esc") {
             self.escape(window, cx);
             cx.notify();
@@ -588,13 +771,6 @@ impl UpdatesView {
                 _ => return,
             }
             cx.notify();
-            return;
-        }
-        if let Some(number) = self.needs_tray() {
-            if intent(key, None, false) == Some(Intent::Activate) {
-                self.run_action(RowAction::TryWithTray(number), cx);
-                cx.notify();
-            }
             return;
         }
         if key == "c" && !event.keystroke.modifiers.modified() {
@@ -619,14 +795,34 @@ impl UpdatesView {
         }
         let kit = kit();
         let width = deck::body_width(self.body_bounds.get());
+        if let Some(question) = self.card.as_ref().and_then(|card| card.question.as_ref()) {
+            return deck::shell(deck::render(
+                kit,
+                self.render_question(question, cx),
+                deck::DeckFrame {
+                    depth: QUESTION_DEPTH,
+                    slide: deck::slide(self.step, self.motion, QUESTION_DEPTH, width),
+                    closing: None,
+                    animation_id: QUESTION_ANIMATION,
+                    marks: vec![self.mark, None],
+                    on_sliver: Some(Self::sliver_click(cx)),
+                },
+            ));
+        }
         if let Some(card) = &self.card {
+            let closing = self.question_closing.as_ref().map(|question| {
+                (
+                    self.render_question(question, cx),
+                    deck::exit(self.step, QUESTION_DEPTH, width),
+                )
+            });
             return deck::shell(deck::render(
                 kit,
                 self.render_card(card, true, cx),
                 deck::DeckFrame {
                     depth: CARD_DEPTH,
                     slide: deck::slide(self.step, self.motion, CARD_DEPTH, width),
-                    closing: None,
+                    closing,
                     animation_id: CARD_ANIMATION,
                     marks: vec![self.mark],
                     on_sliver: Some(Self::sliver_click(cx)),
@@ -642,6 +838,24 @@ impl UpdatesView {
             page,
             self.render_card(leaving, false, cx),
             deck::exit(self.step, CARD_DEPTH, width),
+        ))
+    }
+
+    fn render_question(
+        &self,
+        question: &SettingsQuestion<TrayAnswer>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        settings_page().child(question.render(
+            "updates-question-answer",
+            self.body_focused,
+            kit(),
+            |answer| {
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.answer_question(answer, cx);
+                    cx.notify();
+                })
+            },
         ))
     }
 
@@ -680,9 +894,18 @@ impl UpdatesView {
                     cx.notify();
                 }),
             );
+        let getting = card.trying.map(RowAction::TryPullRequest);
         for index in range.clone() {
             let selected = live && card.selected == index;
-            list = list.child(self.render_card_row(index, &rows[index], selected, focused, cx));
+            let spins = live && getting.is_some() && rows[index].action == getting;
+            list = list.child(self.render_card_row(
+                index,
+                &rows[index],
+                selected,
+                focused,
+                spins.then(|| card.trying).flatten(),
+                cx,
+            ));
         }
         list.child(card.list_height.recorder(cx.weak_entity()))
             .child(kit().scroll_cue(
@@ -710,36 +933,41 @@ impl UpdatesView {
         row: &CardRow,
         selected: bool,
         focused: bool,
+        getting: Option<u64>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let kit = kit();
         let ground = RowGround::of(selected, focused);
+        let detail = match getting {
+            Some(number) => Some(pull_request_build::getting(number).into()),
+            None => (!row.detail.is_empty()).then(|| row.detail.clone().into()),
+        };
         SettingsRow::setting(("updates-card-row", index), kit)
             .selected(selected, focused)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if !event.standard_click() {
                     return;
                 }
-                if let Some(card) = this.card.as_mut() {
-                    card.selected = index;
-                }
+                let Some(card) = this.card.as_mut().filter(|card| card.trying.is_none()) else {
+                    return;
+                };
+                card.selected = index;
                 this.choose(cx);
                 cx.notify();
             }))
-            .child(settings_label_group(
-                row.label.clone(),
-                (!row.detail.is_empty()).then(|| row.detail.clone().into()),
-                ground,
-                kit,
-            ))
+            .child(settings_label_group(row.label.clone(), detail, ground, kit))
             .child(
                 settings_value_group()
+                    .children(getting.map(|_| {
+                        settings_action_spinner(("updates-card-spinner", index), kit)
+                            .size(px(SPINNER_SIZE))
+                    }))
                     .children(
                         row.running.then(|| {
                             settings_tag("running", SettingsValueTone::Muted, ground, kit)
                         }),
                     )
-                    .children(row.verb.map(|verb| {
+                    .children(row.verb.filter(|_| getting.is_none()).map(|verb| {
                         settings_action_word(
                             ("updates-card-action", index),
                             verb,
@@ -1009,16 +1237,30 @@ impl CustomSettingsBreadcrumbs for UpdatesView {
     }
 
     fn settings_breadcrumbs(&self) -> Vec<SettingsDestination> {
-        if self.card.is_none() {
+        let Some(card) = &self.card else {
             return Vec::new();
-        }
-        SettingsDestination::new(pull_request_build::TITLE)
-            .ok()
+        };
+        let asking = card
+            .question
+            .as_ref()
+            .map(|question| question.title().as_str());
+        [Some(pull_request_build::TITLE), asking]
             .into_iter()
+            .flatten()
+            .filter_map(|label| SettingsDestination::new(label).ok())
             .collect()
     }
 
     fn settings_hints(&self) -> Option<CustomHints> {
+        if let Some(question) = self.card.as_ref().and_then(|card| card.question.as_ref()) {
+            return Some(question.hints());
+        }
+        if let Some(number) = self.card.as_ref().and_then(|card| card.trying) {
+            return Some(CustomHints {
+                left: vec![SettingsHint::busy(format!("getting #{number}"))],
+                right: vec![SettingsHint::new(Key::ESC, "back")],
+            });
+        }
         if let Some(card) = &self.card {
             let mut left = Vec::new();
             let verb = self
@@ -1031,16 +1273,8 @@ impl CustomSettingsBreadcrumbs for UpdatesView {
             }
             left.push(SettingsHint::new(Key::UP_DOWN, "move"));
             return Some(CustomHints {
-                question: None,
                 left,
                 right: Vec::new(),
-            });
-        }
-        if let Some(number) = self.needs_tray() {
-            return Some(CustomHints {
-                question: Some(pull_request_build::tray_question(number).into()),
-                left: vec![SettingsHint::new(Key::ENTER, "restart").tone(HintTone::Discard)],
-                right: vec![SettingsHint::new(Key::ESC, "keep yours")],
             });
         }
         let (rows, _) = self.page_rows();
@@ -1055,7 +1289,6 @@ impl CustomSettingsBreadcrumbs for UpdatesView {
         }
         left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         Some(CustomHints {
-            question: None,
             left,
             right: Vec::new(),
         })
