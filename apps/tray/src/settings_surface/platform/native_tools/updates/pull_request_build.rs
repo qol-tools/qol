@@ -1,7 +1,7 @@
 use qol_conventions::pr_try::{self, ListedBuild};
 use serde::Deserialize;
 
-use super::model::{RowAction, Summary, Trial, UpdatesSnapshot};
+use super::model::{RowAction, Summary, SummaryDot, Trial, UpdatesSnapshot};
 
 pub(super) const TITLE: &str = "Pull request build";
 pub(super) const GROUP: &str = "Development";
@@ -113,6 +113,31 @@ pub(super) fn busy_summary(snapshot: &UpdatesSnapshot) -> Option<Summary> {
     })
 }
 
+pub(super) const NEWER_CHECKS: &str = "qol looks for a newer build every 10 minutes";
+
+pub(super) fn newer_summary(trial: &Trial) -> Option<Summary> {
+    let newer = trial.newer.as_ref()?;
+    let (action, finish) = if trial.tray {
+        (
+            RowAction::TryWithTray(trial.pull_request),
+            "qol restarts to finish.",
+        )
+    } else {
+        (
+            RowAction::TryPullRequest(trial.pull_request),
+            "Its plugins restart to finish.",
+        )
+    };
+    Some(Summary {
+        dot: Some(SummaryDot::Warning),
+        busy: false,
+        label: format!("New build of #{}", trial.pull_request),
+        description: format!("Built from {newer}. {finish}"),
+        action: Some(action),
+        action_label: Some("Update"),
+    })
+}
+
 pub(super) fn needs_tray(snapshot: &UpdatesSnapshot) -> Option<u64> {
     match snapshot.pull_request_build {
         Some(Job::NeedsTray { number }) => Some(number),
@@ -208,6 +233,8 @@ mod tests {
         Trial {
             pull_request: number,
             head: "d3b2832".to_string(),
+            tray: false,
+            newer: None,
         }
     }
 
@@ -240,6 +267,8 @@ mod tests {
         let tried = Trial {
             pull_request: 620,
             head: "0aa1bb2cc3".to_string(),
+            tray: false,
+            newer: None,
         };
         let rows = card_rows(&[build(621), build(620)], Some(&tried));
         let labels: Vec<_> = rows.iter().map(|row| row.label.as_str()).collect();

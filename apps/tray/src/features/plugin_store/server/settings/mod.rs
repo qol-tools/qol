@@ -39,6 +39,7 @@ pub(super) use plugin_config_handlers::get_plugin_config_form;
 #[cfg(feature = "dev")]
 pub(super) use plugin_config_handlers::notify_plugin_reload;
 pub(super) use plugin_config_handlers::set_plugin_config;
+pub(super) use pull_request_builds::{check_newer_build, NEWER_BUILD_EVERY};
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()

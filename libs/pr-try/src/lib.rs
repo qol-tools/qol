@@ -125,11 +125,15 @@ pub fn try_build(
         previous_tray.as_ref().map(|_| INSTALLED_TRAY_STARTS)
     };
     let mut waiting = Vec::new();
-    if state.pull_request.is_some_and(|other| other != number) {
+    let switching = state.pull_request.is_some_and(|other| other != number);
+    let dropped = |swapped: &install::Swapped| switching || !carried.replaces(&swapped.id);
+    if switching || state.plugins.iter().any(dropped) {
         let replaced = state.pull_request.unwrap_or(number);
-        host.say(&format!(
-            "putting back the builds pull request #{replaced} replaced"
-        ));
+        host.say(&if switching {
+            format!("putting back the builds pull request #{replaced} replaced")
+        } else {
+            format!("putting back the plugins #{number}'s new build no longer changes")
+        });
         let mut put_back = Vec::new();
         let restore_starts = state.tray.as_ref().and(tray_starts);
         let restored = restore_plugins(
@@ -139,6 +143,7 @@ pub fn try_build(
             &mut put_back,
             restore_starts,
             &mut waiting,
+            &dropped,
         );
         let kept = put_back
             .into_iter()
@@ -235,6 +240,20 @@ pub fn try_build(
     Ok(Tried::Installed)
 }
 
+pub fn newer_build(
+    source: &dyn Source,
+    build: &Build,
+    number: u64,
+    tried_head: &str,
+) -> Result<Option<String>> {
+    let pull = source::trusted(source.pull_request(number)?, REPO, number)?;
+    if short_sha(&pull.head_sha) == short_sha(tried_head) {
+        return Ok(None);
+    }
+    let built = source::live_test_run(source, &pull, build).is_ok();
+    Ok(built.then_some(pull.head_sha))
+}
+
 pub fn turn_off(host: &mut dyn Host, places: &Places) -> Result<Vec<String>> {
     let mut state = State::load(&places.state)?;
     let Some(number) = state.pull_request else {
@@ -254,6 +273,7 @@ pub fn turn_off(host: &mut dyn Host, places: &Places) -> Result<Vec<String>> {
         &mut put_back,
         tray_starts,
         &mut waiting,
+        &|_| true,
     )
     .and_then(|()| put_back_tray(places, &state, host, &mut put_back, &waiting));
     match result {
@@ -272,11 +292,19 @@ fn restore_plugins(
     put_back: &mut Vec<String>,
     tray_starts: Option<&str>,
     waiting: &mut Vec<Waiting>,
+    restores: &dyn Fn(&install::Swapped) -> bool,
 ) -> Result<()> {
-    while let Some(swapped) = state.plugins.last().cloned() {
+    let restoring: Vec<install::Swapped> = state
+        .plugins
+        .iter()
+        .rev()
+        .filter(|swapped| restores(swapped))
+        .cloned()
+        .collect();
+    for swapped in restoring {
         contracts::restore(folder(&swapped.target)?, folder(&swapped.backup)?)?;
         let restored = install::restore(&swapped)?;
-        state.plugins.pop();
+        state.plugins.retain(|kept| kept.id != swapped.id);
         put_back.push(swapped.id.clone());
         state.save(&places.state)?;
         if restored != Restored::PutBack {

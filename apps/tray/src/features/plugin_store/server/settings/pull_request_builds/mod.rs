@@ -14,6 +14,7 @@ use super::http_json;
 use super::update_handlers::{self, action_error, action_ok, CoreActionRequest};
 use crate::features::plugin_store::github::Actions;
 use crate::features::profile::pull_request_builds;
+use crate::installer::trial::Trial;
 use qol_conventions::pr_try::{
     DISMISS_ACTION as DISMISS, END_ACTION as END, TRY_ACTION as TRY,
     TRY_WITH_TRAY_ACTION as TRY_WITH_TRAY,
@@ -30,8 +31,25 @@ const CHECK_POLL: Duration = Duration::from_millis(250);
 const OFF: &str = "Trying pull request builds is turned off";
 const SIGN_IN: &str = "Sign in to GitHub on the Profiles page to try pull request builds";
 const LOG: &str = "[pull-request-builds]";
+pub(in crate::features::plugin_store::server) const NEWER_BUILD_EVERY: Duration =
+    Duration::from_secs(10 * 60);
 
 static JOB: Mutex<Option<Job>> = Mutex::new(None);
+static NEWER: Mutex<Option<Newer>> = Mutex::new(None);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Newer {
+    number: u64,
+    tried: String,
+    head: String,
+}
+
+impl Newer {
+    fn of(&self, trial: &Trial) -> Option<String> {
+        (self.number == trial.pull_request && self.tried == trial.head)
+            .then(|| qol_conventions::pr_try::short_sha(&self.head).to_string())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -54,6 +72,41 @@ pub(super) fn current() -> Option<Job> {
 
 pub(super) fn shown() -> bool {
     pull_request_builds::enabled()
+}
+
+pub(super) fn newer_build(trial: &Trial) -> Option<String> {
+    NEWER.lock().as_ref().and_then(|newer| newer.of(trial))
+}
+
+pub(in crate::features::plugin_store::server) async fn check_newer_build(trial: Trial) {
+    if !shown() {
+        return;
+    }
+    let runtime = tokio::runtime::Handle::current();
+    let number = trial.pull_request;
+    let checked = tokio::task::spawn_blocking(move || {
+        let source = signed_in(runtime).context(SIGN_IN)?;
+        let head =
+            qol_pr_try::newer_build(&source, qol_pr_try::host_build()?, number, &trial.head)?;
+        Ok::<_, anyhow::Error>(head.map(|head| Newer {
+            number,
+            tried: trial.head,
+            head,
+        }))
+    })
+    .await;
+    match checked {
+        Ok(Ok(newer)) => {
+            if let Some(newer) = &newer {
+                log::info!("{LOG} #{number} has a newer build at {}", newer.head);
+            }
+            *NEWER.lock() = newer;
+        }
+        Ok(Err(error)) => {
+            log::warn!("{LOG} checking #{number} for a newer build failed: {error:#}")
+        }
+        Err(error) => log::warn!("{LOG} checking #{number} for a newer build stopped: {error}"),
+    }
 }
 
 pub(super) async fn get_list() -> Response {
@@ -182,7 +235,6 @@ fn start(state: &AppState, run: Run) -> Response {
     let mut host = TrayHost {
         state: state.clone(),
         runtime,
-        handed_over: false,
     };
     let spawned = std::thread::Builder::new()
         .name("qol-pr-try".to_string())
@@ -221,19 +273,27 @@ fn places() -> Option<Places> {
 struct TrayHost {
     state: AppState,
     runtime: tokio::runtime::Handle,
-    handed_over: bool,
 }
 
 impl TrayHost {
-    fn hand_over(&mut self, binary: &Path) -> Result<()> {
-        let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-        let successor = crate::relaunch::spawn_successor(binary, &args)
-            .with_context(|| format!("starting {}", binary.display()))?;
-        log::info!("{LOG} {} takes over as pid {successor}", binary.display());
-        self.handed_over = true;
-        crate::tray::shutdown_plugins(&self.state.plugin_manager);
-        crate::tray::request_shutdown(&self.state.shutdown_tx);
-        Ok(())
+    fn hand_over(&self, binary: &Path) -> anyhow::Error {
+        log::info!("{LOG} restarting into {}", binary.display());
+        let plugin_manager = self.state.plugin_manager.clone();
+        let error = self
+            .runtime
+            .block_on(crate::relaunch::restart_into(binary, async move {
+                plugin_manager.lock().stop_for_restart();
+                Ok(())
+            }));
+        if let Err(restarted) = self
+            .state
+            .plugin_manager
+            .lock()
+            .start_after_failed_restart()
+        {
+            log::warn!("{LOG} plugins did not start again: {restarted:#}");
+        }
+        anyhow::anyhow!("starting {}: {error}", binary.display())
     }
 }
 
@@ -243,11 +303,7 @@ impl Host for TrayHost {
     }
 
     fn run_tray(&mut self, binary: &Path) -> Result<String> {
-        self.hand_over(binary)?;
-        Ok(format!(
-            "{} runs in place of the installed tray",
-            binary.display()
-        ))
+        Err(self.hand_over(binary))
     }
 
     fn put_back_tray(
@@ -263,11 +319,7 @@ impl Host for TrayHost {
                 started: false,
             });
         }
-        self.hand_over(installed)?;
-        Ok(TrayBack {
-            said: format!("{} runs again", installed.display()),
-            started: true,
-        })
+        Err(self.hand_over(installed))
     }
 
     fn running_install(&self, downloads: &Path) -> Result<Option<PathBuf>> {
@@ -276,7 +328,7 @@ impl Host for TrayHost {
     }
 
     fn catch_up(&mut self, put_back: &[String]) {
-        if put_back.is_empty() || self.handed_over {
+        if put_back.is_empty() {
             return;
         }
         let check = super::super::update_check::claim(&self.state);
