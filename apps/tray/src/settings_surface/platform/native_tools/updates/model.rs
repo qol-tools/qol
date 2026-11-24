@@ -25,6 +25,10 @@ pub(super) struct Trial {
     pub(super) pull_request: u64,
     #[serde(default)]
     pub(super) head: String,
+    #[serde(default)]
+    pub(super) tray: bool,
+    #[serde(default)]
+    pub(super) newer: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -365,6 +369,13 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
     if let Some(summary) = pull_request_build::busy_summary(snapshot) {
         return summary;
     }
+    if let Some(summary) = snapshot
+        .trial
+        .as_ref()
+        .and_then(pull_request_build::newer_summary)
+    {
+        return summary;
+    }
     if let Some(trial) = &snapshot.trial {
         return Summary {
             dot: None,
@@ -463,6 +474,28 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
 }
 
 fn check_row(snapshot: &UpdatesSnapshot) -> TargetRow {
+    if let Some(trial) = snapshot
+        .trial
+        .as_ref()
+        .filter(|_| snapshot.can_try_pull_requests)
+    {
+        let action = check_action(snapshot);
+        return TargetRow {
+            id: CHECK_ROW_ID.to_string(),
+            name: "Checks".to_string(),
+            value: if snapshot.checking {
+                "Checking".to_string()
+            } else {
+                format!("#{} only", trial.pull_request)
+            },
+            tone: ValueTone::Muted,
+            description: Some(pull_request_build::NEWER_CHECKS.to_string()),
+            action_label: Some("Check now"),
+            action,
+            attention: false,
+            spinner: snapshot.checking,
+        };
+    }
     if snapshot.trial.is_some() {
         return TargetRow {
             id: CHECK_ROW_ID.to_string(),
@@ -626,7 +659,9 @@ fn pending_count(snapshot: &UpdatesSnapshot, state: TargetState) -> usize {
 }
 
 pub(super) fn can_check(snapshot: &UpdatesSnapshot) -> bool {
-    snapshot.trial.is_none() && !snapshot.checking && !job_running(snapshot)
+    (snapshot.trial.is_none() || snapshot.can_try_pull_requests)
+        && !snapshot.checking
+        && !job_running(snapshot)
 }
 
 fn job_running(snapshot: &UpdatesSnapshot) -> bool {
@@ -739,7 +774,54 @@ mod tests {
         Trial {
             pull_request: 435,
             head: "eb1f5793b".to_string(),
+            tray: false,
+            newer: None,
         }
+    }
+
+    #[test]
+    fn a_newer_build_of_the_tried_pull_request_reads_as_an_update() {
+        let mut during = snapshot(
+            target("qol-tray", "qol-tray", TargetState::Trial),
+            vec![target("launcher", "Launcher", TargetState::Trial)],
+        );
+        during.can_try_pull_requests = true;
+        let cases = [
+            (false, None, None, "Updates paused"),
+            (
+                false,
+                Some("a1b2c3d4e"),
+                Some(RowAction::TryPullRequest(435)),
+                "New build of #435",
+            ),
+            (
+                true,
+                Some("a1b2c3d4e"),
+                Some(RowAction::TryWithTray(435)),
+                "New build of #435",
+            ),
+        ];
+        for (tray, newer, update, label) in cases {
+            during.trial = Some(Trial {
+                tray,
+                newer: newer.map(str::to_string),
+                ..trying()
+            });
+            let status = summary(&during);
+            assert_eq!(status.label, label, "tray={tray} newer={newer:?}");
+            if update.is_some() {
+                assert_eq!(status.action, update, "tray={tray}");
+                assert_eq!(status.action_label, Some("Update"));
+                assert_eq!(status.dot, Some(SummaryDot::Warning));
+            } else {
+                assert_eq!(status.action, Some(RowAction::Check));
+            }
+        }
+
+        let check = check_row(&during);
+        assert_eq!(check.value, "#435 only");
+        assert_eq!(check.action, Some(RowAction::Check));
+        assert!(can_check(&during));
     }
 
     #[test]

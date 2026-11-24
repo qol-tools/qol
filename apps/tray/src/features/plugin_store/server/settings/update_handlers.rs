@@ -54,6 +54,7 @@ struct UpdatesView {
     connection: ConnectionHealth,
     tray_start: SystemTime,
     trial: Option<Trial>,
+    newer_build: Option<String>,
     host: HostView,
     plugins: Vec<PluginView>,
 }
@@ -137,6 +138,10 @@ struct UpdatesPayload {
 struct TrialPayload {
     pull_request: u64,
     head: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    tray: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    newer: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -260,7 +265,7 @@ fn paused_message(trial: &Trial) -> String {
 }
 
 fn check_updates_action(state: &AppState) -> Response {
-    if let Some(refused) = trial_refusal() {
+    if let Some(refused) = trial_refusal().filter(|_| !super::pull_request_builds::shown()) {
         return refused;
     }
     let Some(check) = super::super::update_check::claim(state) else {
@@ -377,6 +382,9 @@ fn collect_view(state: &AppState) -> UpdatesView {
             job: jobs::get(jobs::HOST_ID),
             updated_from: crate::updates::updated_from(),
         },
+        newer_build: trial
+            .as_ref()
+            .and_then(super::pull_request_builds::newer_build),
         trial,
         plugins,
     }
@@ -452,6 +460,8 @@ fn build_updates_payload(view: &UpdatesView, now: SystemTime) -> UpdatesPayload 
         trial: view.trial.as_ref().map(|trial| TrialPayload {
             pull_request: trial.pull_request,
             head: trial.head.clone(),
+            tray: trial.tray,
+            newer: view.newer_build.clone(),
         }),
         can_try_pull_requests: false,
         pull_request_build: None,
@@ -555,8 +565,8 @@ fn job_row_state(job: &UpdateJob) -> RowState {
 }
 
 fn updates_attention(payload: &UpdatesPayload, tray_started_secs: u64) -> bool {
-    if payload.trial.is_some() {
-        return false;
+    if let Some(trial) = &payload.trial {
+        return trial.newer.is_some();
     }
     let needs_attention = |state: RowState| matches!(state, RowState::Available | RowState::Failed);
     if needs_attention(payload.host.state) {
@@ -757,6 +767,7 @@ mod tests {
             connection: ConnectionHealth::default(),
             tray_start: SystemTime::UNIX_EPOCH,
             trial: None,
+            newer_build: None,
             host,
             plugins,
         }
@@ -894,13 +905,27 @@ mod tests {
         let wire = serde_json::to_value(&payload).unwrap();
         assert_eq!(
             wire["trial"],
-            serde_json::json!({ "pull_request": 435, "head": "eb1f5793b" })
+            serde_json::json!({ "pull_request": 435, "head": "eb1f5793b", "tray": true })
         );
         assert_eq!(wire["host"]["state"], "trial");
         assert_eq!(wire["plugins"][0]["state"], "trial");
         assert_eq!(wire["plugins"][1]["state"], "available");
         assert!(!updates_attention(&payload, 0));
         assert_eq!(plugin_update_refusal(RowState::Trial), Some(NO_UPDATE));
+    }
+
+    #[test]
+    fn a_newer_build_of_the_tried_pull_request_asks_for_attention() {
+        let mut state = view(host("3.66.1", None), Vec::new());
+        state.trial = Some(trial(false, &["qol-launcher"]));
+        state.newer_build = Some("a1b2c3d4e".to_string());
+        let payload = build_updates_payload(&state, SystemTime::UNIX_EPOCH);
+        let wire = serde_json::to_value(&payload).unwrap();
+        assert_eq!(
+            wire["trial"],
+            serde_json::json!({ "pull_request": 435, "head": "eb1f5793b", "newer": "a1b2c3d4e" })
+        );
+        assert!(updates_attention(&payload, 0));
     }
 
     #[test]

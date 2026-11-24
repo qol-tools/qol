@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -14,6 +14,7 @@ use super::http_json;
 use super::update_handlers::{self, action_error, action_ok, CoreActionRequest};
 use crate::features::plugin_store::github::Actions;
 use crate::features::profile::pull_request_builds;
+use crate::installer::trial::Trial;
 use qol_conventions::pr_try::{
     DISMISS_ACTION as DISMISS, END_ACTION as END, TRY_ACTION as TRY,
     TRY_WITH_TRAY_ACTION as TRY_WITH_TRAY,
@@ -30,8 +31,25 @@ const CHECK_POLL: Duration = Duration::from_millis(250);
 const OFF: &str = "Trying pull request builds is turned off";
 const SIGN_IN: &str = "Sign in to GitHub on the Profiles page to try pull request builds";
 const LOG: &str = "[pull-request-builds]";
+pub(in crate::features::plugin_store::server) const NEWER_BUILD_EVERY: Duration =
+    Duration::from_secs(10 * 60);
 
 static JOB: Mutex<Option<Job>> = Mutex::new(None);
+static NEWER: Mutex<Option<Newer>> = Mutex::new(None);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Newer {
+    number: u64,
+    tried: String,
+    head: String,
+}
+
+impl Newer {
+    fn of(&self, trial: &Trial) -> Option<String> {
+        (self.number == trial.pull_request && self.tried == trial.head)
+            .then(|| qol_conventions::pr_try::short_sha(&self.head).to_string())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -54,6 +72,41 @@ pub(super) fn current() -> Option<Job> {
 
 pub(super) fn shown() -> bool {
     pull_request_builds::enabled()
+}
+
+pub(super) fn newer_build(trial: &Trial) -> Option<String> {
+    NEWER.lock().as_ref().and_then(|newer| newer.of(trial))
+}
+
+pub(in crate::features::plugin_store::server) async fn check_newer_build(trial: Trial) {
+    if !shown() {
+        return;
+    }
+    let runtime = tokio::runtime::Handle::current();
+    let number = trial.pull_request;
+    let checked = tokio::task::spawn_blocking(move || {
+        let source = signed_in(runtime).context(SIGN_IN)?;
+        let head =
+            qol_pr_try::newer_build(&source, qol_pr_try::host_build()?, number, &trial.head)?;
+        Ok::<_, anyhow::Error>(head.map(|head| Newer {
+            number,
+            tried: trial.head,
+            head,
+        }))
+    })
+    .await;
+    match checked {
+        Ok(Ok(newer)) => {
+            if let Some(newer) = &newer {
+                log::info!("{LOG} #{number} has a newer build at {}", newer.head);
+            }
+            *NEWER.lock() = newer;
+        }
+        Ok(Err(error)) => {
+            log::warn!("{LOG} checking #{number} for a newer build failed: {error:#}")
+        }
+        Err(error) => log::warn!("{LOG} checking #{number} for a newer build stopped: {error}"),
+    }
 }
 
 pub(super) async fn get_list() -> Response {
@@ -229,9 +282,17 @@ impl TrayHost {
         let error = self
             .runtime
             .block_on(crate::relaunch::restart_into(binary, async move {
-                crate::tray::shutdown_plugins(&plugin_manager);
+                plugin_manager.lock().stop_for_restart();
                 Ok(())
             }));
+        if let Err(restarted) = self
+            .state
+            .plugin_manager
+            .lock()
+            .start_after_failed_restart()
+        {
+            log::warn!("{LOG} plugins did not start again: {restarted:#}");
+        }
         anyhow::anyhow!("starting {}: {error}", binary.display())
     }
 }

@@ -381,8 +381,18 @@ impl PluginManager {
 
     pub fn shutdown(&mut self) {
         self.lifecycle_cancellation.cancel();
+        self.stop_for_restart();
+    }
+
+    pub fn stop_for_restart(&mut self) {
         self.pending_reloads.supersede_all();
         runtime::shutdown(self);
+    }
+
+    pub fn start_after_failed_restart(&mut self) -> Result<()> {
+        self.load_plugins()?;
+        self.autostart_daemons();
+        Ok(())
     }
 
     pub fn lifecycle_cancellation(&self) -> Arc<qol_process::CancellationToken> {

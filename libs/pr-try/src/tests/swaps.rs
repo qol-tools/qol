@@ -428,3 +428,107 @@ fn a_failed_hand_over_after_a_plugin_only_build_keeps_the_tray_build_recorded() 
     );
     assert!(!at.places.state.exists());
 }
+
+#[test]
+fn a_new_build_of_the_tried_pull_request_puts_back_the_plugins_it_no_longer_changes() {
+    let at = machine();
+    let mut host = Recorder::default();
+    let build = host_build().unwrap();
+    let fake = Fake {
+        number: 412,
+        tray: false,
+    };
+    try_build(&fake, &mut host, tried(412, true), build, &at.places).unwrap();
+    let gone = at.places.plugins.join("qol-gone").join("qol-gone");
+    let backup = at.places.backup_for("qol-gone", "qol-gone");
+    for (path, text) in [(&gone, "tried"), (&backup, "installed")] {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    let mut record = State::load(&at.places.state).unwrap();
+    record.plugins.insert(
+        0,
+        install::Swapped {
+            id: "qol-gone".into(),
+            target: gone.clone(),
+            backup,
+        },
+    );
+    record.save(&at.places.state).unwrap();
+
+    try_build(&fake, &mut host, tried(412, true), build, &at.places).unwrap();
+    assert_eq!(fs::read(&gone).unwrap(), b"installed");
+    assert_ne!(fs::read(&at.plugin).unwrap(), b"installed");
+    let record = State::load(&at.places.state).unwrap();
+    let ids: Vec<_> = record
+        .plugins
+        .iter()
+        .map(|swapped| swapped.id.as_str())
+        .collect();
+    assert_eq!(ids, [PLUGIN]);
+    assert_eq!(host.caught_up, [vec!["qol-gone".to_string()]]);
+    assert!(host
+        .lines
+        .iter()
+        .any(|line| line == "putting back the plugins #412's new build no longer changes"));
+
+    assert_eq!(turn_off(&mut host, &at.places).unwrap(), [PLUGIN]);
+    assert_eq!(fs::read(&at.plugin).unwrap(), b"installed");
+}
+
+struct Building;
+
+impl Source for Building {
+    fn pull_request(&self, number: u64) -> Result<PullRequest> {
+        Fake {
+            number,
+            tray: false,
+        }
+        .pull_request(number)
+    }
+
+    fn live_test_runs(&self, _pull: &PullRequest) -> Result<Vec<Run>> {
+        Ok(vec![Run {
+            id: 8,
+            status: "in_progress".into(),
+            conclusion: String::new(),
+            head_branch: BRANCH.into(),
+            url: "https://example.invalid/8".into(),
+        }])
+    }
+
+    fn job_succeeded(&self, _run: &Run, _job: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn download(&self, _run: &Run, _artifact: &str, _dir: &Path) -> Result<()> {
+        anyhow::bail!("nothing is built yet")
+    }
+
+    fn open_pulls(&self, _job: &str) -> Result<Vec<OpenPull>> {
+        Ok(Vec::new())
+    }
+}
+
+#[test]
+fn a_newer_build_is_a_moved_head_whose_live_test_built_this_machine() {
+    let build = host_build().unwrap();
+    let built = Fake {
+        number: 412,
+        tray: false,
+    };
+    let cases: [(&str, &dyn Source, &str, Option<&str>); 3] = [
+        ("the tried head is the newest", &built, HEAD, None),
+        ("the head moved and is built", &built, "0ld", Some(HEAD)),
+        ("the head moved and still builds", &Building, "0ld", None),
+    ];
+    for (case, source, tried_head, expected) in cases {
+        assert_eq!(
+            newer_build(source, build, 412, tried_head)
+                .unwrap()
+                .as_deref(),
+            expected,
+            "case: {case}"
+        );
+    }
+}
