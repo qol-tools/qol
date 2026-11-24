@@ -11,7 +11,7 @@ const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
   "version": "1.14.0",
-  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat and logs it as a row in the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, files a merged result without waking its fork, gives each fork any other watcher result, keeps each fork's identity, done mark and stop in one session record, brings each unfinished fork back into the agent list when the switchboard opens, and draws the workflow pages forks put on the board as its front page, sending a failed check's note to its fork as the user's words.",
+  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat and logs it as a row in the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, files a merged result without waking its fork, gives each fork any other watcher result, keeps each fork's identity, done mark and stop in one session record, brings each unfinished fork back into the agent list when the switchboard opens, hides each fork's agent list row while the board shows it, and draws a fork's workflow page under the fork list while that fork or one of its sub-forks is the one viewed or written to, sending a failed check's note to its fork as the user's words.",
   "types": "./types/index.d.ts"
 }
 "#;
@@ -336,6 +336,6 @@ mod tests {
             assert!(MODULE.contains(&needle), "{needle}");
         }
         assert!(STATE_TYPES.contains("pages: LivePage[]"));
-        assert!(MODULE_TESTS.contains("a fork's page is the board's front page"));
+        assert!(MODULE_TESTS.contains("a fork's page sits under the fork list"));
     }
 }
