@@ -230,6 +230,21 @@ impl UpdatesView {
         .detach();
     }
 
+    fn reload(cx: &mut Context<Self>) {
+        cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                if let Ok(snapshot) = async_cx.background_spawn(async { data::load() }).await {
+                    let _ = this.update(&mut async_cx, |view, cx| {
+                        view.apply_snapshot(snapshot);
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
     fn take_poll_tick(&mut self) -> bool {
         let due = self
             .last_render
@@ -1047,6 +1062,9 @@ impl Render for UpdatesView {
         if self.comes_into_view() {
             cx.background_spawn(async { super::super::check_updates() })
                 .detach();
+            if self.last_render.is_some() {
+                Self::reload(cx);
+            }
         }
         self.last_render = Some(Instant::now());
         self.forget_faded();
