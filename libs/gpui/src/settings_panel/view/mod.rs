@@ -1231,7 +1231,7 @@ impl SettingsPanelView {
         self.level().body_scroll.rewind();
         self.pause_runtime_poll();
         if let Some(shown) = self.custom_view().map(|custom| custom.shown_notice()) {
-            shown(&mut **cx);
+            shown(cx);
         }
         #[cfg(debug_assertions)]
         qol_runtime::probe!(

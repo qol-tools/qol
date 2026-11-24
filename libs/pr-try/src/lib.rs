@@ -298,7 +298,7 @@ fn restore_plugins(
         .plugins
         .iter()
         .rev()
-        .filter(|swapped| restores(*swapped))
+        .filter(|swapped| restores(swapped))
         .cloned()
         .collect();
     for swapped in restoring {
