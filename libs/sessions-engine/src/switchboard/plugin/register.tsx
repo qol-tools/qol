@@ -4269,7 +4269,7 @@ export const register: Register = on => {
     const liveSubs = (entry: Entry) => subsOf(entry).filter(sub => !isAtRest(sub))
     const subName = (parent: Entry, sub: Entry) => underParent(keyOf(parent), keyName(sub.name))
     const forkRow = (entry: Entry, parent?: Entry) => {
-      const key: { hotkey?: string } = parent === undefined ? hotkey() : letter()
+      const key: { hotkey?: string } = shownPage !== undefined ? {} : parent === undefined ? hotkey() : letter()
       return (
         <Box key={`row-${entry.agentId}`} flexDirection="row" {...(isPicked(entry) ? { backgroundColor: TARGET_BAND } : {})}>
           {parent !== undefined && <Text dimColor>{'   └ '}</Text>}
