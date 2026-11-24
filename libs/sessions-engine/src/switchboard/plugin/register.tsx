@@ -1565,13 +1565,33 @@ export const VERDICT_LOOK: Record<Verdict | 'untested', { icon: string; label: s
   skip: { icon: '–', label: 'skipped' },
 }
 const VERDICTS: Verdict[] = ['pass', 'fail', 'skip']
-const STATUS_WIDTH = Math.max(...Object.values(VERDICT_LOOK).map(look => look.label.length))
-
 const FAIL_NOT_SENT = 'fail · not sent'
+const STATUS_WIDTH = Math.max(FAIL_NOT_SENT.length, ...Object.values(VERDICT_LOOK).map(look => look.label.length))
+const NOTE_LABEL = 'note ›'
+const NOTE_ROWS_MAX = 10
+
+export const verdictKey = (verdict: Verdict, item: string): string => `verdict-${verdict}-${item}`
+
+export const checkOfElement = (element: string): string | undefined => {
+  if (element.startsWith(ITEM_PREFIX)) return element.slice(ITEM_PREFIX.length)
+  const verdict = VERDICTS.find(one => element.startsWith(verdictKey(one, '')))
+  return verdict === undefined ? undefined : element.slice(verdictKey(verdict, '').length) || undefined
+}
+
+export const noteRows = (typed: string, columns: number): number => {
+  const width = Math.max(10, columns)
+  const rows = typed.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil((line.length + 1) / width)), 0)
+  return Math.min(NOTE_ROWS_MAX, Math.max(2, rows + 1))
+}
 
 export const checksOf = (page: Page): Check[] => page.blocks.flatMap(block => (block.kind === 'checklist' ? block.items : []))
 
 export const answerOf = (live: LivePage, item: string): PageAnswer | undefined => live.answers.find(answer => answer.item === item)
+
+export const pickedCheck = (live: LivePage, cursor: string): Check | undefined => {
+  const checks = checksOf(live.page)
+  return checks.find(check => check.id === cursor) ?? checks.find(check => answerOf(live, check.id) === undefined) ?? checks[0]
+}
 
 export const pageCount = (live: LivePage): { total: number; pass: number; fail: number; left: number } => {
   const verdicts = checksOf(live.page).map(check => answerOf(live, check.id)?.verdict)
@@ -1681,13 +1701,29 @@ const tellOwner = async ($: EngineInterface, live: LivePage, said: string, onLos
   return undefined
 }
 
-export const judge = async ($: EngineInterface, live: LivePage, check: Check, verdict: Verdict): Promise<void> => {
+let verdicts: Promise<void> = Promise.resolve()
+let noteDraft = ''
+
+const oneAtATime = (work: () => Promise<void>): Promise<void> => {
+  const run = verdicts.then(work, work)
+  verdicts = run.catch(() => undefined)
+  return run
+}
+
+const livePage = async ($: EngineInterface, pageId: string): Promise<LivePage | undefined> => (await read($, pages)).find(live => live.page.id === pageId)
+
+const judgeNow = async ($: EngineInterface, pageId: string, item: string, verdict: Verdict): Promise<void> => {
+  const live = await livePage($, pageId)
+  const check = live === undefined ? undefined : checksOf(live.page).find(one => one.id === item)
+  if (live === undefined || check === undefined) return
   if (verdict === 'fail') {
+    noteDraft = ''
     await update($, pageNoting, () => check.id)
     $.ui.invalidate('ui.render')
     void $.ui.focus({ requestId: PANE, key: NOTE_KEY }).catch(() => undefined)
     return
   }
+  const before = await read($, pageCursor)
   await update($, pageNoting, () => '')
   const stored = await answerItem($, live, check.id, verdict)
   if (stored === undefined) {
@@ -1696,12 +1732,21 @@ export const judge = async ($: EngineInterface, live: LivePage, check: Check, ve
   }
   const checks = checksOf(stored.page)
   const next = checks[checks.findIndex(one => one.id === check.id) + 1]
-  if (next !== undefined) {
+  if (next !== undefined && (await read($, pageCursor)) === before) {
     await update($, pageCursor, () => next.id)
     void $.ui.focus({ requestId: PANE, key: `${ITEM_PREFIX}${next.id}` }).catch(() => undefined)
   }
   $.ui.invalidate('ui.render')
 }
+
+export const judge = ($: EngineInterface, pageId: string, item: string, verdict: Verdict): Promise<void> => oneAtATime(() => judgeNow($, pageId, item, verdict))
+
+export const judgePicked = ($: EngineInterface, pageId: string, verdict: Verdict): Promise<void> =>
+  oneAtATime(async () => {
+    const live = await livePage($, pageId)
+    const picked = live === undefined ? undefined : pickedCheck(live, await read($, pageCursor))
+    if (picked !== undefined) await judgeNow($, pageId, picked.id, verdict)
+  })
 
 export const sendFail = async ($: EngineInterface, live: LivePage, check: Check, typed: string): Promise<void> => {
   const note = typed.trim()
@@ -1710,6 +1755,7 @@ export const sendFail = async ($: EngineInterface, live: LivePage, check: Check,
     $.ui.toast(`${check.text}: the fail was not recorded.`)
     return
   }
+  noteDraft = ''
   await update($, pageNoting, () => '')
   const key = failKey(stored.page.id, check.id)
   unsentFails.delete(key)
@@ -4121,11 +4167,11 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
-    const element = e.element ?? ''
-    if (element.startsWith(ITEM_PREFIX)) {
-      const id = element.slice(ITEM_PREFIX.length)
+    const id = checkOfElement(e.element ?? '')
+    if (id !== undefined && id !== (await read($, pageCursor))) {
       await update($, pageCursor, () => id)
       if (![id, ''].includes(await read($, pageNoting))) await update($, pageNoting, () => '')
+      $.ui.invalidate('ui.render')
     }
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -4576,13 +4622,20 @@ export const register: Register = on => {
     const pick = (check: Check) => async () => {
       await update($, pageCursor, () => check.id)
       if (![check.id, ''].includes(noting)) await update($, pageNoting, () => '')
+      void $.ui.focus({ requestId: PANE, key: `${ITEM_PREFIX}${check.id}` }).catch(() => undefined)
       $.ui.invalidate('ui.render')
     }
     const dropNote = async () => {
+      noteDraft = ''
       await update($, pageNoting, () => '')
       $.ui.invalidate('ui.render')
     }
-    const cell = (text: string, width: number) => (text.length > width - 1 ? `${text.slice(0, Math.max(1, width - 2))}… ` : text.padEnd(width))
+    const noteColumns = e.props.bodyColumns - PAGE_INDENT - NOTE_LABEL.length - 2
+    const typeNote = (value: string) => {
+      const rows = noteRows(noteDraft, noteColumns)
+      noteDraft = value
+      if (noteRows(value, noteColumns) !== rows) $.ui.invalidate('ui.render')
+    }
     const sheet = (key: string, title: JSX.Children, right: JSX.Children | undefined, body: JSX.Children) => (
       <Box key={key} flexDirection="column" marginTop={1}>
         <Box flexDirection="row">
@@ -4597,25 +4650,32 @@ export const register: Register = on => {
       const { page } = live
       const counted = pageCount(live)
       const checks = checksOf(page)
-      const picked = checks.find(check => check.id === cursor) ?? checks.find(check => answerOf(live, check.id) === undefined) ?? checks[0]
-      const textWidth = Math.max(12, Math.min(e.props.bodyColumns - PAGE_ROW_SPARE, Math.max(...checks.map(check => check.text.length + 2))))
+      const picked = pickedCheck(live, cursor)
+      const textWidth = Math.max(12, Math.min(e.props.bodyColumns - PAGE_ROW_SPARE, Math.max(...checks.map(check => check.text.length))))
       let digit = 0
       const checkRow = (check: Check) => {
         digit += 1
-        const verdict = answerOf(live, check.id)?.verdict ?? 'untested'
+        const answer = answerOf(live, check.id)
+        const verdict = answer?.verdict ?? 'untested'
         const look = verdict === 'fail' && unsentFails.has(failKey(page.id, check.id)) ? { ...VERDICT_LOOK.fail, label: FAIL_NOT_SENT } : VERDICT_LOOK[verdict]
         const isPicked = check.id === picked?.id
         const tone = look.color === undefined ? { dimColor: true } : { color: look.color }
+        const note = verdict === 'fail' && noting !== check.id ? (answer?.note ?? '') : ''
         return (
           <Box key={`check-${check.id}`} flexDirection="column" {...(isPicked ? { backgroundColor: TARGET_BAND } : {})}>
             <Box flexDirection="row" gap={1}>
               <Button key={`${ITEM_PREFIX}${check.id}`} plain {...(digit <= 9 ? { hotkey: String(digit) } : {})} onPress={pick(check)}>
                 {digit <= 9 ? '' : '   '}
-                <Text {...tone}>{look.icon}</Text> <Text bold={isPicked}>{cell(check.text, textWidth)}</Text>
-                <Text {...tone}>{look.label.padEnd(STATUS_WIDTH)}</Text>
+                <Text {...tone}>{look.icon}</Text>
               </Button>
+              <Box width={textWidth} flexShrink={0}>
+                <Text bold={isPicked} wrap="wrap">
+                  {check.text}
+                </Text>
+              </Box>
+              <Text {...tone}>{look.label.padEnd(STATUS_WIDTH)}</Text>
               {VERDICTS.map(verdict => (
-                <Button key={`verdict-${verdict}-${check.id}`} plain dimColor onPress={() => void judge($, live, check, verdict)}>
+                <Button key={verdictKey(verdict, check.id)} plain dimColor onPress={() => void judge($, page.id, check.id, verdict)}>
                   {verdict}
                 </Button>
               ))}
@@ -4627,9 +4687,15 @@ export const register: Register = on => {
                 </Text>
               </Box>
             )}
+            {note !== '' && (
+              <Box paddingLeft={PAGE_INDENT} flexDirection="row" gap={1}>
+                <Text {...tone}>note</Text>
+                <Text wrap="wrap">{note}</Text>
+              </Box>
+            )}
             {noting === check.id && (
               <Box paddingLeft={PAGE_INDENT}>
-                <Input key={NOTE_KEY} label="note ›" placeholder="what went wrong" submitLabel="send" autoFocus onSubmit={value => void sendFail($, live, check, value)} />
+                <Input key={NOTE_KEY} label={NOTE_LABEL} placeholder="what went wrong" submitLabel="send" rows={noteRows(noteDraft, noteColumns)} autoFocus onInput={typeNote} onSubmit={value => void sendFail($, live, check, value)} />
               </Box>
             )}
           </Box>
@@ -4688,13 +4754,13 @@ export const register: Register = on => {
             <Box flexDirection="row" gap={2} marginTop={1}>
               {noting === '' ? (
                 <Box flexDirection="row" gap={2}>
-                  <Button key="verdict-pass" plain dimColor hotkey="p" onPress={() => void judge($, live, picked, 'pass')}>
+                  <Button key="verdict-pass" plain dimColor hotkey="p" onPress={() => void judgePicked($, page.id, 'pass')}>
                     pass
                   </Button>
-                  <Button key="verdict-fail" plain dimColor hotkey="f" onPress={() => void judge($, live, picked, 'fail')}>
+                  <Button key="verdict-fail" plain dimColor hotkey="f" onPress={() => void judgePicked($, page.id, 'fail')}>
                     fail with a note
                   </Button>
-                  <Button key="verdict-skip" plain dimColor hotkey="s" onPress={() => void judge($, live, picked, 'skip')}>
+                  <Button key="verdict-skip" plain dimColor hotkey="s" onPress={() => void judgePicked($, page.id, 'skip')}>
                     skip
                   </Button>
                 </Box>
