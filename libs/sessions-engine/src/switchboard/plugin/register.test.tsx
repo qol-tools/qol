@@ -5044,7 +5044,7 @@ const testPage = (owner: string) => ({
   ],
 })
 
-const pagesBoard = (on: any, sent: any[], page: any, isClearRefused = false, answer: Answer = () => ({ isDelivered: true })) => {
+const pagesBoard = (on: any, sent: any[], page: any, isClearRefused = false, answer: Answer = () => ({ isDelivered: true }), held?: Promise<void>) => {
   const runs: string[][] = []
   const live = { page, set_ms: 1, updated_ms: 1, answers: [] as any[] }
   let listing = [{ name: `${page.id}.json`, kind: 'file', size: 1, mtimeMs: 1, isLink: false }]
@@ -5054,11 +5054,13 @@ const pagesBoard = (on: any, sent: any[], page: any, isClearRefused = false, ans
   }))
   on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path === '/data/pages' }))
   on('fs.list', () => ({ value: listing }))
-  on('process.run', (_: unknown, e: { argv: string[] }) => {
+  on('ui.focus', () => ({}))
+  on('process.run', async (_: unknown, e: { argv: string[] }) => {
     const ok = (body: unknown) => ({ value: { exitCode: 0, stderr: '', stdout: JSON.stringify(body) } })
     if (isRecord(e.argv)) return { value: recordReply(e.argv, []) }
     if (e.argv[2] !== 'page') return { value: NO_RECORD }
     runs.push(e.argv.slice(3))
+    if (e.argv[3] === 'answer' && held !== undefined) await held
     const flag = (name: string) => e.argv[e.argv.indexOf(name) + 1] ?? ''
     if (e.argv[3] === 'read') return ok({ pages: [live] })
     if (e.argv[3] === 'clear') return isClearRefused ? { value: { exitCode: 1, stderr: '', stdout: '{"error":"busy"}' } } : ok({ cleared: [] })
@@ -5292,7 +5294,7 @@ test('a long check keeps its whole text when the pane has room for it', async ($
   await settle()
   await refreshPages($)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 120, view: { agentId: 't5' } } })
-  expect(await ui.find({ type: 'Text', text: new RegExp(`^${long} +$`) })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: long })).toBeDefined()
   await ui.unmount()
 })
 
@@ -5326,5 +5328,88 @@ test('a click on pass, fail or skip in a check row answers that row, with no key
   await ui.press({ key: 'verdict-pass-grip' })
   expect(await ui.find({ key: 'note' })).toBeUndefined()
   expect(runs).toContainEqual(['answer', '--id', 'retail-test', '--item', 'grip', '--verdict', 'pass'])
+  await ui.unmount()
+})
+
+const ring = ($: any, element: string) => $.ui.focus({ component: 'Pane', requestId: PANE.requestId, element, origin: { kind: 'person' } })
+
+const answersRun = (runs: string[][]) => runs.filter(run => run[0] === 'answer').map(run => `${run[4]} ${run[6]}`)
+
+test('p, f and s answer the check the focus ring is on, also when the ring moved by tab and nothing drew the board again', async ($, on) => {
+  const sent: any[] = []
+  const runs = pagesBoard(on, sent, testPage('t10-fork'))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't10', 't10-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 't10' } } })
+
+  await ring($, 'item-grip')
+  await ui.press({ key: 'verdict-pass' })
+  expect(answersRun(runs)).toEqual(['grip pass'])
+
+  await ring($, 'verdict-fail-hip')
+  await ui.press({ key: 'verdict-skip' })
+  expect(answersRun(runs)).toEqual(['grip pass', 'hip skip'])
+  await ui.unmount()
+})
+
+test('p pressed twice before the first answer is stored answers two checks in turn, never the first one twice', async ($, on) => {
+  const sent: any[] = []
+  const runs = pagesBoard(on, sent, testPage('t11-fork'))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't11', 't11-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 't11' } } })
+  await Promise.all([ui.press({ key: 'verdict-pass' }), ui.press({ key: 'verdict-pass' })])
+  expect(answersRun(runs)).toEqual(['hip pass', 'grip pass'])
+  expect(await ui.find({ type: 'Text', text: '2 pass · 0 fail · 0 left' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a check picked while an answer is still being stored stays picked, and the next p answers it', async ($, on) => {
+  const sent: any[] = []
+  let release = () => {}
+  const held = new Promise<void>(resolve => (release = resolve))
+  const page = { ...testPage('t12-fork'), blocks: [{ kind: 'checklist', items: [{ id: 'hip', text: 'Hip light' }, { id: 'grip', text: 'Grip pose' }, { id: 'beam', text: 'Beam on the gun' }] }] }
+  const runs = pagesBoard(on, sent, page, false, undefined, held)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't12', 't12-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 't12' } } })
+  const first = ui.press({ key: 'verdict-pass' })
+  await settle()
+  await ring($, 'item-beam')
+  release()
+  await first
+  await ui.press({ key: 'verdict-pass' })
+  expect(answersRun(runs)).toEqual(['hip pass', 'beam pass'])
+  await ui.unmount()
+})
+
+test('a long check and a long fail note wrap onto more rows instead of being cut, while the note is typed and after it is sent', async ($, on) => {
+  const sent: any[] = []
+  const long = 'Light on, jump while running forward, back, left and right, then land straight into a sprint'
+  const note = 'the arm snaps up on the second jump and stays bent until I sheathe and draw the rifle again, every time'
+  const page = { ...testPage('t13-fork'), blocks: [{ kind: 'checklist', items: [{ id: 'run', text: long }, { id: 'hip', text: 'Hip light' }] }] }
+  pagesBoard(on, sent, page)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't13', 't13-fork: a fork')
+  await settle()
+  await refreshPages($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 60, view: { agentId: 't13' } } })
+  const whole = await ui.find({ type: 'Text', text: long })
+  expect(whole?.props.wrap ?? 'wrap').toBe('wrap')
+  expect(await ui.find({ type: 'Text', text: /…/ })).toBeUndefined()
+
+  await ui.press({ key: 'verdict-fail' })
+  expect(Number((await ui.find({ key: 'note' }))?.props.rows ?? 1)).toBeGreaterThan(1)
+  await ui.input({ key: 'note', text: note, kind: 'change' })
+  expect(Number((await ui.find({ key: 'note' }))?.props.rows ?? 1)).toBeGreaterThanOrEqual(Math.ceil(note.length / 60) + 1)
+  await ui.input({ key: 'note', text: note, kind: 'submit' })
+  const kept = await ui.find({ type: 'Text', text: note })
+  expect(kept?.props.wrap ?? 'wrap').toBe('wrap')
   await ui.unmount()
 })
