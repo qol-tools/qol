@@ -56,7 +56,7 @@ const CLOSED_KEY = 'r'
 const SUB_FORK_KEYS = 'abcdefghjklmopqstuvwz'
 const PAGE_KEY = 't'
 const FORKS_TAB = '#forks'
-const FORKS_LABEL = 'forks'
+const FORKS_LABEL = 'fork detail'
 const ITEM_PREFIX = 'item-'
 const NOTE_KEY = 'note'
 const PAGE_INDENT = 5
@@ -4580,8 +4580,8 @@ export const register: Register = on => {
       $.ui.invalidate('ui.render')
     }
     const cell = (text: string, width: number) => (text.length > width - 1 ? `${text.slice(0, Math.max(1, width - 2))}… ` : text.padEnd(width))
-    const frame = (key: string, title: JSX.Children, right: JSX.Children | undefined, body: JSX.Children) => (
-      <Box key={key} flexDirection="column" borderStyle="single" borderDimColor paddingX={1} marginTop={1}>
+    const sheet = (key: string, title: JSX.Children, right: JSX.Children | undefined, body: JSX.Children) => (
+      <Box key={key} flexDirection="column" marginTop={1}>
         <Box flexDirection="row">
           <Text>{title}</Text>
           <Box flexGrow={1} />
@@ -4590,7 +4590,7 @@ export const register: Register = on => {
         {body}
       </Box>
     )
-    const pageFrame = (live: LivePage) => {
+    const pageSheet = (live: LivePage) => {
       const { page } = live
       const counted = pageCount(live)
       const checks = checksOf(page)
@@ -4664,7 +4664,7 @@ export const register: Register = on => {
             )
         }
       }
-      return frame(
+      return sheet(
         `page-${page.id}`,
         <Text bold>{page.title.toUpperCase()}</Text>,
         counted.total === 0 ? undefined : <Text dimColor>{`${counted.pass} pass · ${counted.fail} fail · ${counted.left} left`}</Text>,
@@ -4706,31 +4706,22 @@ export const register: Register = on => {
           {help}
         </Box>
       )
-    if (shownPage !== undefined)
-      return (
-        <Box flexDirection="column">
-          {loading !== '' && <Text color="claude">◐ {loading}</Text>}
-          {tabRow}
-          {help}
-          {pageFrame(shownPage)}
-        </Box>
-      )
     const rows = forkRows.flatMap(entry => [forkRow(entry), ...liveSubs(entry).map(sub => forkRow(sub, entry))])
-    const detail = shown === undefined ? undefined : detailOf(shown)
+    const below = shownPage !== undefined ? pageSheet(shownPage) : shown === undefined ? undefined : detailOf(shown)
     return (
       <Box flexDirection="column">
         {loading !== '' && <Text color="claude">◐ {loading}</Text>}
-        {tabRow}
         {help}
         {rows}
         {closedFold}
         {closedRows.map(entry => forkRow(entry))}
-        {detail !== undefined && (
+        {(below !== undefined || tabRow !== undefined) && (
           <Box marginTop={1}>
             <Text dimColor>{'─'.repeat(Math.max(1, e.props.bodyColumns ?? 1))}</Text>
           </Box>
         )}
-        {detail}
+        {tabRow}
+        {below}
       </Box>
     )
   })

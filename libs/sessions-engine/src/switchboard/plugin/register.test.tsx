@@ -5075,7 +5075,7 @@ const pagesBoard = (on: any, sent: any[], page: any, isClearRefused = false, ans
   return Object.assign(runs, { refile })
 }
 
-test("a fork's page is the board's front page: p records a pass and moves on, f sends the note to the fork as the user's words, and t shows the forks with the page's count on the fork's row", async ($, on) => {
+test("a fork's page sits under the fork list and the rule: p records a pass and moves on, f sends the note to the fork as the user's words, and t shows the fork detail with the page's count on the fork's row", async ($, on) => {
   const sent: any[] = []
   const runs = pagesBoard(on, sent, testPage('t1-fork'))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -5084,6 +5084,10 @@ test("a fork's page is the board's front page: p records a pass and moves on, f 
   await refreshPages($)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 't1' } } })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
+  const drawn = await boardLines(ui)
+  const rowAt = drawn.findIndex(line => line.includes('● t1-fork'))
+  const ruleAt = drawn.findIndex(line => line.startsWith('───'))
+  expect([rowAt >= 0, ruleAt > rowAt, drawn.findIndex(line => line.startsWith('tests · ')) > ruleAt, drawn.findIndex(line => line.includes('RETAIL TEST')) > ruleAt]).toEqual([true, true, true, true])
   expect(await ui.find({ type: 'Text', text: '0 pass · 0 fail · 2 left' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '1.4.2' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Hold the rifle at rest' })).toBeDefined()
