@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::io::IsTerminal;
 use std::process::Command;
 
-use super::download::gh;
+use super::gh::gh;
 
 const SHA_LENGTH: usize = 40;
 const FIELDS: &str = "number,headRefOid,url";

@@ -35,6 +35,7 @@ qol-plugin-ids = { path = "libs/plugin-ids" }
 qol-plugin-index = { path = "libs/plugin-index" }
 qol-peers = { path = "libs/peers" }
 qol-watch = { path = "libs/watch" }
+qol-pr-try = { path = "libs/pr-try" }
 qol-process = { path = "libs/process" }
 qol-runtime = { path = "libs/runtime" }
 qol-search = { path = "libs/search" }

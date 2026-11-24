@@ -237,46 +237,9 @@ pub(super) async fn download_and_install(
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     log::info!("Update installed, restarting...");
-    crate::window_reopen::capture_before_restart();
-    exec_restart_on_main_thread().inspect_err(|_| crate::window_reopen::discard_reopen_list())?;
-    Ok(())
-}
-
-fn exec_restart_on_main_thread() -> Result<()> {
     let binary = std::env::current_exe()?;
-    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-
-    extern "C" {
-        static _dispatch_main_q: std::ffi::c_void;
-        fn dispatch_async_f(
-            queue: *const std::ffi::c_void,
-            context: *mut std::ffi::c_void,
-            work: extern "C" fn(*mut std::ffi::c_void),
-        );
-    }
-
-    type ExecData = (PathBuf, Vec<std::ffi::OsString>);
-    let data = Box::into_raw(Box::new((binary, args))) as *mut std::ffi::c_void;
-
-    extern "C" fn do_exec(ctx: *mut std::ffi::c_void) {
-        let (binary, args) = unsafe { *Box::from_raw(ctx as *mut ExecData) };
-        log::debug!(
-            "relaunching: {} (exists={}, args={:?})",
-            binary.display(),
-            binary.exists(),
-            args
-        );
-        let error = crate::relaunch::spawn_successor_and_exit(&binary, &args);
-        log::error!("update restart failed: {error}");
-        std::process::exit(1);
-    }
-
-    unsafe {
-        dispatch_async_f(&_dispatch_main_q, data, do_exec);
-    }
-
-    std::thread::sleep(std::time::Duration::from_secs(10));
-    anyhow::bail!("exec did not happen within expected time")
+    let error = crate::relaunch::restart_into(&binary, std::future::ready(Ok(()))).await;
+    anyhow::bail!("update restart failed: {error}")
 }
 
 #[cfg(test)]

@@ -1,19 +1,19 @@
-use super::install::{back_up, swap_in};
-use super::manifest::CONTRACT_FILES;
+use crate::install::{back_up, swap_in};
+use crate::manifest::CONTRACT_FILES;
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const ABSENT_SUFFIX: &str = ".absent";
 
-pub(super) struct Swap<'a> {
-    pub(super) build: &'a Path,
-    pub(super) installed: &'a Path,
-    pub(super) backups: &'a Path,
-    pub(super) carried: &'a [String],
+pub(crate) struct Swap<'a> {
+    pub(crate) build: &'a Path,
+    pub(crate) installed: &'a Path,
+    pub(crate) backups: &'a Path,
+    pub(crate) carried: &'a [String],
 }
 
-pub(super) fn replace(swap: &Swap<'_>) -> Result<()> {
+pub(crate) fn replace(swap: &Swap<'_>) -> Result<()> {
     for name in CONTRACT_FILES {
         let target = swap.installed.join(name);
         remember(&target, &swap.backups.join(name))?;
@@ -26,7 +26,7 @@ pub(super) fn replace(swap: &Swap<'_>) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn restore(installed: &Path, backups: &Path) -> Result<()> {
+pub(crate) fn restore(installed: &Path, backups: &Path) -> Result<()> {
     for name in CONTRACT_FILES {
         let target = installed.join(name);
         let backup = backups.join(name);

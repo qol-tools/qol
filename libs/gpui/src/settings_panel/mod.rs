@@ -151,12 +151,14 @@ pub type CustomPanelCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 
 type CustomBreadcrumbReader = Rc<dyn Fn(&App) -> Vec<SettingsDestination>>;
 type CustomHintsReader = Rc<dyn Fn(&App) -> Option<CustomHints>>;
+type CustomShownNotice = Rc<dyn Fn(&mut App)>;
 
 pub struct CustomPanelView {
     view: AnyView,
     focus_handle: gpui::FocusHandle,
     breadcrumbs: CustomBreadcrumbReader,
     hints: CustomHintsReader,
+    shown: CustomShownNotice,
     _observation: gpui::Subscription,
 }
 
@@ -183,14 +185,23 @@ impl CustomPanelView {
                 .upgrade()
                 .and_then(|entity| entity.read(cx).settings_hints())
         });
+        let shown_entity = entity.downgrade();
+        let shown: CustomShownNotice = Rc::new(move |cx| {
+            let _ = shown_entity.update(cx, |view, cx| view.settings_page_shown(cx));
+        });
         let observation = cx.observe(&entity, move |_, cx| on_change(cx));
         Self {
             view: entity.into(),
             focus_handle,
             breadcrumbs,
             hints,
+            shown,
             _observation: observation,
         }
+    }
+
+    fn shown_notice(&self) -> CustomShownNotice {
+        Rc::clone(&self.shown)
     }
 
     fn breadcrumb_labels(&self, cx: &App) -> Vec<String> {

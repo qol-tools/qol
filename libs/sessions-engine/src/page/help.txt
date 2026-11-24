@@ -2,8 +2,8 @@ qol-cli-sessions sessions page <verb>
 
 Put a workflow page on the switchboard board, so steps and checks the user
 works through by hand live on the board and not in the chat. While a page is
-up it is the board's front page, the header reads `<tab> · forks`, and t
-switches between the page and the forks. Pages live in the CLI Sessions data
+up it sits under the fork list, the line under the rule reads
+`<tab> · fork detail`, and t switches between the page and the fork detail. Pages live in the CLI Sessions data
 folder, in pages/<id>.json. Any workflow can send one: a fork with the
 session_page tool, a script with this verb.
 

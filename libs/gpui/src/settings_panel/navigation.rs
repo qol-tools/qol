@@ -47,6 +47,12 @@ pub trait CustomSettingsBreadcrumbs {
     fn settings_hints(&self) -> Option<CustomHints> {
         None
     }
+
+    fn settings_page_shown(&mut self, _cx: &mut gpui::Context<Self>)
+    where
+        Self: Sized,
+    {
+    }
 }
 
 const fn require_visible_text(bytes: &[u8]) {

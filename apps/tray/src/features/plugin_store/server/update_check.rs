@@ -15,9 +15,17 @@ impl Drop for Claim {
 
 pub(super) fn claim(state: &AppState) -> Option<impl Future<Output = ()> + Send + 'static> {
     let claim = take(&state.update_check_running)?;
-    let catalog = plugin_services::claim_catalog_revalidation(state);
+    let trial = crate::installer::trial::current();
+    let catalog = match trial {
+        Some(_) => None,
+        None => plugin_services::claim_catalog_revalidation(state),
+    };
     Some(async move {
         let _claim = claim;
+        if let Some(trial) = trial {
+            super::settings::check_newer_build(trial).await;
+            return;
+        }
         let catalog = async {
             if let Some(revalidation) = catalog {
                 revalidation.await;

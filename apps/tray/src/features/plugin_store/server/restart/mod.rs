@@ -47,7 +47,8 @@ impl RestartPort for PlatformRestartPort {
     }
 
     fn exec_restart(&self, binary: &Path) -> Result<(), String> {
-        platform::exec_restart(binary)
+        crate::lifeline_handoff::prepare_for_exec();
+        Err(crate::relaunch::replace_process(binary))
     }
 }
 

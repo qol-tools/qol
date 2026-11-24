@@ -54,6 +54,7 @@ struct UpdatesView {
     connection: ConnectionHealth,
     tray_start: SystemTime,
     trial: Option<Trial>,
+    newer_build: Option<String>,
     host: HostView,
     plugins: Vec<PluginView>,
 }
@@ -137,6 +138,10 @@ struct UpdatesPayload {
 struct TrialPayload {
     pull_request: u64,
     head: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    tray: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    newer: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -192,9 +197,7 @@ pub(super) async fn get_updates(state: AppState) -> Response {
     http_json::blocking("updates query", move || {
         let view = collect_view(&state);
         let mut payload = build_updates_payload(&view, SystemTime::now());
-        if crate::features::profile::feature_flag_enabled(
-            &qol_config::feature_flags::PULL_REQUEST_BUILDS,
-        ) {
+        if super::pull_request_builds::shown() {
             payload.can_try_pull_requests = true;
             payload.pull_request_build = super::pull_request_builds::current();
         }
@@ -233,7 +236,7 @@ pub(super) async fn post_core_action(
         "update" => start_update_action(&state, request.id.as_deref()),
         "update_all" => start_update_all_action(&state),
         "stop_updates" => stop_updates_action(),
-        _ => super::pull_request_builds::post_action(&action, &request)
+        _ => super::pull_request_builds::post_action(&state, &action, &request)
             .or_else(|| super::plugins_handlers::post_plugins_action(&state, &action, &request))
             .unwrap_or_else(|| action_error(StatusCode::NOT_FOUND, "Unknown action")),
     }
@@ -262,7 +265,7 @@ fn paused_message(trial: &Trial) -> String {
 }
 
 fn check_updates_action(state: &AppState) -> Response {
-    if let Some(refused) = trial_refusal() {
+    if let Some(refused) = trial_refusal().filter(|_| !super::pull_request_builds::shown()) {
         return refused;
     }
     let Some(check) = super::super::update_check::claim(state) else {
@@ -379,6 +382,9 @@ fn collect_view(state: &AppState) -> UpdatesView {
             job: jobs::get(jobs::HOST_ID),
             updated_from: crate::updates::updated_from(),
         },
+        newer_build: trial
+            .as_ref()
+            .and_then(super::pull_request_builds::newer_build),
         trial,
         plugins,
     }
@@ -454,6 +460,8 @@ fn build_updates_payload(view: &UpdatesView, now: SystemTime) -> UpdatesPayload 
         trial: view.trial.as_ref().map(|trial| TrialPayload {
             pull_request: trial.pull_request,
             head: trial.head.clone(),
+            tray: trial.tray,
+            newer: view.newer_build.clone(),
         }),
         can_try_pull_requests: false,
         pull_request_build: None,
@@ -557,8 +565,8 @@ fn job_row_state(job: &UpdateJob) -> RowState {
 }
 
 fn updates_attention(payload: &UpdatesPayload, tray_started_secs: u64) -> bool {
-    if payload.trial.is_some() {
-        return false;
+    if let Some(trial) = &payload.trial {
+        return trial.newer.is_some();
     }
     let needs_attention = |state: RowState| matches!(state, RowState::Available | RowState::Failed);
     if needs_attention(payload.host.state) {
@@ -667,6 +675,29 @@ fn update_all_plan(plugins: &[PluginView], host_available: bool) -> Vec<PlannedJ
     plugin_ids.map(|id| (id, Operation::Update)).collect()
 }
 
+pub(super) fn update_put_back(state: &AppState, put_back: &[String]) {
+    let host_available =
+        crate::updates::checks_enabled() && crate::updates::host_update_available();
+    for (id, operation) in put_back_plan(plugin_views(state), put_back, host_available) {
+        if let Err(message) = jobs::push(&id, operation) {
+            log::warn!("[pull-request-builds] could not update {id}: {message}");
+        }
+    }
+}
+
+fn put_back_plan(
+    plugins: Vec<PluginView>,
+    put_back: &[String],
+    host_available: bool,
+) -> Vec<PlannedJob> {
+    let plugins: Vec<PluginView> = plugins
+        .into_iter()
+        .filter(|plugin| put_back.contains(&plugin.id))
+        .collect();
+    let host = host_available && put_back.iter().any(|id| id == HOST_PLUGIN_ID);
+    update_all_plan(&plugins, host)
+}
+
 pub(super) fn action_ok(message: &str) -> Response {
     Json(CoreActionResponse {
         success: true,
@@ -736,6 +767,7 @@ mod tests {
             connection: ConnectionHealth::default(),
             tray_start: SystemTime::UNIX_EPOCH,
             trial: None,
+            newer_build: None,
             host,
             plugins,
         }
@@ -873,13 +905,27 @@ mod tests {
         let wire = serde_json::to_value(&payload).unwrap();
         assert_eq!(
             wire["trial"],
-            serde_json::json!({ "pull_request": 435, "head": "eb1f5793b" })
+            serde_json::json!({ "pull_request": 435, "head": "eb1f5793b", "tray": true })
         );
         assert_eq!(wire["host"]["state"], "trial");
         assert_eq!(wire["plugins"][0]["state"], "trial");
         assert_eq!(wire["plugins"][1]["state"], "available");
         assert!(!updates_attention(&payload, 0));
         assert_eq!(plugin_update_refusal(RowState::Trial), Some(NO_UPDATE));
+    }
+
+    #[test]
+    fn a_newer_build_of_the_tried_pull_request_asks_for_attention() {
+        let mut state = view(host("3.66.1", None), Vec::new());
+        state.trial = Some(trial(false, &["qol-launcher"]));
+        state.newer_build = Some("a1b2c3d4e".to_string());
+        let payload = build_updates_payload(&state, SystemTime::UNIX_EPOCH);
+        let wire = serde_json::to_value(&payload).unwrap();
+        assert_eq!(
+            wire["trial"],
+            serde_json::json!({ "pull_request": 435, "head": "eb1f5793b", "newer": "a1b2c3d4e" })
+        );
+        assert!(updates_attention(&payload, 0));
     }
 
     #[test]
@@ -1244,6 +1290,37 @@ mod tests {
         for (running, plan, expected) in cases {
             assert_eq!(update_all_refusal(*running, plan), *expected);
         }
+    }
+
+    #[test]
+    fn what_a_try_put_back_is_updated_and_nothing_else() {
+        let plugins = || {
+            vec![
+                plugin("qol-alt-tab", "Alt Tab", "1.0.0", Some("1.1.0")),
+                plugin("qol-launcher", "Launcher", "1.0.0", Some("1.0.0")),
+                plugin("qol-lights", "Lights", "1.0.0", Some("1.1.0")),
+            ]
+        };
+        let put_back = ["qol-alt-tab".to_string(), "qol-launcher".to_string()];
+        assert_eq!(
+            put_back_plan(plugins(), &put_back, true),
+            vec![("qol-alt-tab".to_string(), Operation::Update)]
+        );
+        let with_tray = ["qol-alt-tab".to_string(), HOST_PLUGIN_ID.to_string()];
+        assert_eq!(
+            put_back_plan(plugins(), &with_tray, true),
+            vec![(
+                HOST_PLUGIN_ID.to_string(),
+                Operation::Host {
+                    confirm_after_restart: true,
+                    update_plugins: vec!["qol-alt-tab".to_string()],
+                }
+            )]
+        );
+        assert_eq!(
+            put_back_plan(plugins(), &with_tray, false),
+            vec![("qol-alt-tab".to_string(), Operation::Update)]
+        );
     }
 
     #[test]
