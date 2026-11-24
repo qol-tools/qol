@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, effortMeter, familyColor, folderParts, litBody, nowOf, taskBar, tasksDone, tokensText, withTaskCall, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, laneName, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, underParent, withoutCut, withoutHidden, withAction, withSent, writingMarks, actionSaid, failSaid, isOrphan, livePagesOf, pageCount, refreshPages } from '../hooks/register'
+import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, effortMeter, familyColor, folderParts, litBody, nowOf, taskBar, tasksDone, tokensText, withTaskCall, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, laneName, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, underParent, withoutCut, withoutHidden, withAction, withSent, writingMarks, actionSaid, failSaid, isOrphan, livePagesOf, pageCount, refreshPages, frontPageOf } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -5082,7 +5082,7 @@ test("a fork's page is the board's front page: p records a pass and moves on, f 
   await spawn($, 't1', 't1-fork: a fork')
   await settle()
   await refreshPages($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 't1' } } })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '0 pass · 0 fail · 2 left' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '1.4.2' })).toBeDefined()
@@ -5156,7 +5156,7 @@ test("a page whose owner has no row or has ended is taken down, so dead pages ne
   await settle()
   await refreshPages($)
   expect(runs.filter(run => run[0] === 'clear').length).toBeGreaterThan(1)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 't3' } } })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
   await ui.unmount()
 })
@@ -5168,7 +5168,7 @@ test('a page with the id forks is its own tab and the forks tab stays the forks'
   await spawn($, 't4', 't4-fork: a fork')
   await settle()
   await refreshPages($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 't4' } } })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
   await ui.press({ key: 'tab-forks' })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
@@ -5186,7 +5186,7 @@ test('a fail note that does not reach its fork reads not sent on its check', asy
   await spawn($, 't6', 't6-fork: a fork')
   await settle()
   await refreshPages($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 't6' } } })
   await ui.press({ key: 'verdict-fail' })
   await ui.input({ key: 'note', text: 'the light is off', kind: 'submit' })
   await settle()
@@ -5205,7 +5205,7 @@ test('a page cleared and filed again under the same id is the front page again',
   await spawn($, 't7', 't7-fork: a fork')
   await settle()
   await refreshPages($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 't7' } } })
   await ui.press({ key: 'tab-forks' })
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
   runs.refile()
@@ -5213,6 +5213,68 @@ test('a page cleared and filed again under the same id is the front page again',
   await settle()
   expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
   await ui.unmount()
+})
+
+test("a fork's page waits as a tab while the switchboard or another fork is in view, and a tab picked in one view stays in that view", async ($, on) => {
+  const sent: any[] = []
+  pagesBoard(on, sent, testPage('t8-fork'))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 't8', 't8-fork: a fork')
+  await spawn($, 't9', 't9-fork: another fork')
+  await settle()
+  await refreshPages($)
+  const mountAt = (view: { agentId?: string }) => $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view } })
+  const isPageShown = async (view: { agentId?: string }) => {
+    const ui = await mountAt(view)
+    const found = (await ui.find({ type: 'Text', text: 'RETAIL TEST' })) !== undefined
+    await ui.unmount()
+    return found
+  }
+  expect([await isPageShown({}), await isPageShown({ agentId: 't9' }), await isPageShown({ agentId: 't8' })]).toEqual([false, false, true])
+  const main = await mountAt({})
+  expect(await main.find({ type: 'Text', text: '2 of 2 left' })).toBeDefined()
+  await main.press({ key: 'tab-page-retail-test' })
+  expect(await main.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
+  await main.unmount()
+  expect([await isPageShown({}), await isPageShown({ agentId: 't9' }), await isPageShown({ agentId: 't8' })]).toEqual([true, false, true])
+})
+
+test('the front page is the picked tab, else the newest page of the fork in view or of a fork it started, else the forks', () => {
+  const live = (id: string, owner: string, set_ms: number) => ({ page: { ...testPage(owner), id }, set_ms, updated_ms: set_ms, answers: [] }) as any
+  const all = [live('old', 'kid-fork', 1), live('mine', 'top-fork', 2), live('new', 'kid-fork', 3), live('other', 'other-fork', 4)]
+  const family = new Set(['top-fork', 'kid-fork'])
+  expect(frontPageOf(all, family, '')?.page.id).toBe('new')
+  expect(frontPageOf(all, new Set(['top-fork']), '')?.page.id).toBe('mine')
+  expect(frontPageOf(all, new Set(), '')).toBeUndefined()
+  expect(frontPageOf(all, family, '#forks')).toBeUndefined()
+  expect(frontPageOf(all, new Set(), 'other')?.page.id).toBe('other')
+  expect(frontPageOf(all, family, 'gone')?.page.id).toBe('new')
+})
+
+test('while the board is shown, each fork on it leaves the agent list and other agents keep their rows; closing the board brings the forks back', async ($, on) => {
+  const hidden: Record<string, boolean> = {}
+  const bodies: Record<string, string> = {}
+  on('ui.render', { component: 'AgentRow' }, ($: any, e: any) => {
+    hidden[e.props.id] = e.props.isHidden
+    bodies[e.props.id] = e.props.body
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'h1', 'h1-fork: a fork')
+  await settle()
+  const rowOf = async (id: string) => {
+    const ui = await $.ui.mount(agentRow(id, `  ${id}  work`))
+    await ui.unmount()
+    return hidden[id]
+  }
+  expect([await rowOf('h1'), await rowOf('lane-1')]).toEqual([false, false])
+  expect((await typed($, 'qols board')).drop).toContain('Fork board opened.')
+  expect([await rowOf('h1'), await rowOf('lane-1')]).toEqual([true, false])
+  expect(bodies['h1']).toBe('  h1  work')
+  expect((await typed($, 'qols board')).drop).toContain('Fork board closed.')
+  expect([await rowOf('h1'), await rowOf('lane-1')]).toEqual([false, false])
 })
 
 test('a long check keeps its whole text when the pane has room for it', async ($, on) => {
@@ -5224,7 +5286,7 @@ test('a long check keeps its whole text when the pane has room for it', async ($
   await spawn($, 't5', 't5-fork: a fork')
   await settle()
   await refreshPages($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 100 } })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 100, view: { agentId: 't5' } } })
   expect(await ui.find({ type: 'Text', text: new RegExp(`^${long} +$`) })).toBeDefined()
   await ui.unmount()
 })

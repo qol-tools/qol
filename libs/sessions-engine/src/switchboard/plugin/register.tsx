@@ -160,7 +160,7 @@ const forkStates = atom({ plugin: 'qol-switchboard', key: 'forkStates' } as cons
 const idleShown = atom({ plugin: 'qol-switchboard', key: 'idleShown' } as const, false)
 const closedShown = atom({ plugin: 'qol-switchboard', key: 'closedShown' } as const, false)
 const pages = atom({ plugin: 'qol-switchboard', key: 'pages' } as const, [] as LivePage[])
-const pageShown = atom({ plugin: 'qol-switchboard', key: 'pageShown' } as const, '')
+const pageShown = atom({ plugin: 'qol-switchboard', key: 'pageShown' } as const, { tab: '', for: '' })
 const pageCursor = atom({ plugin: 'qol-switchboard', key: 'pageCursor' } as const, '')
 const pageNoting = atom({ plugin: 'qol-switchboard', key: 'pageNoting' } as const, '')
 
@@ -253,9 +253,10 @@ const stateOf = (entry: Entry, list: Entry[] = [], states: Record<string, RunSta
   return entry.isStoppedByUser === true ? 'stopped' : 'idle'
 }
 
+const isBoardShown = async ($: EngineInterface): Promise<boolean> => (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
+
 const toggleBoard = async ($: EngineInterface): Promise<string> => {
-  const isShown = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
-  if (isShown) {
+  if (await isBoardShown($)) {
     await $.ui.close({ id: PANE })
     return 'Fork board closed. qols board or /board opens it again.'
   }
@@ -556,6 +557,7 @@ const KEPT_OPEN = { deny: 'Esc leaves the current fork and keeps the board open.
 const openBoard = async ($: EngineInterface, armed: boolean, focus?: true): Promise<UiOpenResult> => {
   const opened = await $.ui.open({ id: PANE, title: TITLE, ...(focus === undefined ? {} : { focus }), ...(armed ? { closeOnEscape: true } : {}) })
   escArmed = armed
+  $.ui.invalidate('ui.render')
   return opened
 }
 
@@ -1611,6 +1613,13 @@ export const livePagesOf = (rows: readonly Entry[], all: readonly LivePage[]): L
     return owner !== undefined && !isEnded(owner)
   })
 
+export const frontPageOf = (livePages: readonly LivePage[], family: ReadonlySet<string>, picked: string): LivePage | undefined => {
+  if (picked === FORKS_TAB) return undefined
+  const chosen = livePages.find(live => live.page.id === picked)
+  if (chosen !== undefined) return chosen
+  return livePages.filter(live => family.has(live.page.owner)).reduce<LivePage | undefined>((newest, live) => (newest === undefined || live.set_ms >= newest.set_ms ? live : newest), undefined)
+}
+
 export const failSaid = (page: Page, check: Check, note: string): string => fromUser(`${page.title}: check ${check.id} failed (${check.text})${note === '' ? '.' : `: ${note}`}`)
 
 export const actionSaid = (page: Page, label: string): string => fromUser(`${page.title}: ${label}`)
@@ -1647,8 +1656,7 @@ export const refreshPages = async ($: EngineInterface): Promise<void> => {
     for (const key of pagesSeen) if (!kept.has(key)) pagesSeen.delete(key)
     for (const live of fresh) pagesSeen.add(seenKey(live))
     await update($, pages, () => all)
-    const newest = fresh[fresh.length - 1]
-    if (newest !== undefined) await update($, pageShown, () => newest.page.id)
+    if (fresh.length > 0) await update($, pageShown, () => ({ tab: '', for: '' }))
     $.ui.invalidate('ui.render')
   } catch {
   } finally {
@@ -3614,9 +3622,10 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AgentRow' }, async ($, e, next) => {
     const body = e.props.body
-    if (body === undefined) return next(e)
-    const lit = litBody(body, e.props.id, await read($, litRows))
-    return next(lit === body ? e : { ...e, props: { ...e.props, body: lit } })
+    const lit = body === undefined ? body : litBody(body, e.props.id, await read($, litRows))
+    const isOnBoard = (await read($, board)).some(entry => entry.agentId === e.props.id && !entry.isDismissed) && (await isBoardShown($))
+    if (lit === body && !isOnBoard) return next(e)
+    return next({ ...e, props: { ...e.props, ...(lit === undefined ? {} : { body: lit }), ...(isOnBoard ? { isHidden: true } : {}) } })
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Placed' }, async ($, e, next) => {
@@ -3808,6 +3817,7 @@ export const register: Register = on => {
     }
     await next(e)
     escArmed = false
+    $.ui.invalidate('ui.render')
     await update($, current, () => '')
     await writeTo($, undefined).catch(() => undefined)
   }).catch(($, e, next) => (next.called ? undefined : e.origin.kind === 'person' && escArmed ? KEPT_OPEN : next(e)))
@@ -4143,8 +4153,10 @@ export const register: Register = on => {
     const isOpen = (pull: Pull) => ['open', 'draft'].includes(stateOfPull(pull))
     const isFocused = e.props.isFocused
     const livePages = livePagesOf(everyRow, await read($, pages))
+    const focusedId = target?.agentId ?? ''
     const shownTab = await read($, pageShown)
-    const shownPage = shownTab === FORKS_TAB ? undefined : (livePages.find(live => live.page.id === shownTab) ?? livePages[livePages.length - 1])
+    const focusedFamily = new Set(target === undefined ? [] : [target, ...forksUnder(list, target)].map(keyOf))
+    const shownPage = frontPageOf(livePages, focusedFamily, shownTab.for === focusedId ? shownTab.tab : '')
     const cursor = await read($, pageCursor)
     const noting = await read($, pageNoting)
     const tabs = livePages.length === 0 ? [] : [...livePages.map(live => ({ id: live.page.id, label: live.page.tab ?? live.page.id })), { id: FORKS_TAB, label: FORKS_LABEL }]
@@ -4537,7 +4549,7 @@ export const register: Register = on => {
     )
 
     const showTab = (id: string) => async () => {
-      await update($, pageShown, () => id)
+      await update($, pageShown, () => ({ tab: id, for: focusedId }))
       $.ui.invalidate('ui.render')
     }
     const tabKey = (id: string) => (id === FORKS_TAB ? 'tab-forks' : `tab-page-${id}`)
