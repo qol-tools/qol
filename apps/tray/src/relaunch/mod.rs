@@ -1,4 +1,7 @@
+mod platform;
+
 use std::ffi::OsString;
+use std::future::Future;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -6,6 +9,24 @@ const ENV_RELAUNCH_AFTER_PID: &str = "QOL_TRAY_RELAUNCH_AFTER_PID";
 const PREDECESSOR_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const PREDECESSOR_CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 const PREDECESSOR_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+pub(crate) async fn restart_into(
+    binary: &Path,
+    cleanup: impl Future<Output = Result<(), String>>,
+) -> String {
+    crate::window_reopen::capture_before_restart();
+    let error = match cleanup.await {
+        Ok(()) => replace_process(binary),
+        Err(error) => error,
+    };
+    crate::window_reopen::discard_reopen_list();
+    error
+}
+
+pub(crate) fn replace_process(binary: &Path) -> String {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    platform::replace_process(binary, &args)
+}
 
 pub fn spawn_successor_and_exit(binary: &Path, args: &[OsString]) -> std::io::Error {
     match spawn_successor(binary, args) {

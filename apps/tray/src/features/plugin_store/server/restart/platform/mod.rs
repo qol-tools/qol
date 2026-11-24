@@ -27,15 +27,10 @@ use windows as imp;
 
 trait RestartPlatformOps {
     fn binary_name() -> &'static str;
-    fn exec_restart(binary: &std::path::Path) -> Result<(), String>;
 }
 
 pub(super) fn binary_name() -> &'static str {
     imp::Platform::binary_name()
-}
-
-pub(super) fn exec_restart(binary: &std::path::Path) -> Result<(), String> {
-    imp::Platform::exec_restart(binary)
 }
 
 const _: fallback_non_unix::Platform = fallback_non_unix::Platform;

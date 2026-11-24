@@ -1,42 +1,9 @@
 use super::RestartPlatformOps;
-use std::path::Path;
 
 pub(super) struct Platform;
 
 impl RestartPlatformOps for Platform {
     fn binary_name() -> &'static str {
         "qol-tray"
-    }
-
-    fn exec_restart(binary: &Path) -> Result<(), String> {
-        let binary = binary.to_path_buf();
-        let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-
-        extern "C" {
-            static _dispatch_main_q: std::ffi::c_void;
-            fn dispatch_async_f(
-                queue: *const std::ffi::c_void,
-                context: *mut std::ffi::c_void,
-                work: extern "C" fn(*mut std::ffi::c_void),
-            );
-        }
-
-        type ExecData = (std::path::PathBuf, Vec<std::ffi::OsString>);
-        let data = Box::into_raw(Box::new((binary, args))) as *mut std::ffi::c_void;
-
-        extern "C" fn do_exec(ctx: *mut std::ffi::c_void) {
-            let (binary, args) = unsafe { *Box::from_raw(ctx as *mut ExecData) };
-            crate::lifeline_handoff::prepare_for_exec();
-            let error = crate::relaunch::spawn_successor_and_exit(&binary, &args);
-            log::error!("restart failed: {}", error);
-            std::process::exit(1);
-        }
-
-        unsafe {
-            dispatch_async_f(&_dispatch_main_q, data, do_exec);
-        }
-
-        std::thread::sleep(std::time::Duration::from_secs(10));
-        Err("exec did not happen within expected time".to_string())
     }
 }

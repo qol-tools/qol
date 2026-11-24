@@ -157,6 +157,7 @@ pub(super) struct UpdatesView {
     pending: bool,
     last_render: Option<Instant>,
     poll_skipped: bool,
+    reloading: bool,
     card: Option<Card>,
     closing: Option<Card>,
     step: usize,
@@ -188,6 +189,7 @@ impl UpdatesView {
             pending: false,
             last_render: None,
             poll_skipped: false,
+            reloading: false,
             card: None,
             closing: None,
             step: 0,
@@ -230,16 +232,22 @@ impl UpdatesView {
         .detach();
     }
 
-    fn reload(cx: &mut Context<Self>) {
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        if self.reloading || self.snapshot.is_none() {
+            return;
+        }
+        self.reloading = true;
         cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
-                if let Ok(snapshot) = async_cx.background_spawn(async { data::load() }).await {
-                    let _ = this.update(&mut async_cx, |view, cx| {
+                let result = async_cx.background_spawn(async { data::load() }).await;
+                let _ = this.update(&mut async_cx, |view, cx| {
+                    view.reloading = false;
+                    if let Ok(snapshot) = result {
                         view.apply_snapshot(snapshot);
-                        cx.notify();
-                    });
-                }
+                    }
+                    cx.notify();
+                });
             }
         })
         .detach();
@@ -996,6 +1004,10 @@ impl UpdatesView {
 }
 
 impl CustomSettingsBreadcrumbs for UpdatesView {
+    fn settings_page_shown(&mut self, cx: &mut Context<Self>) {
+        self.reload(cx);
+    }
+
     fn settings_breadcrumbs(&self) -> Vec<SettingsDestination> {
         if self.card.is_none() {
             return Vec::new();
@@ -1062,9 +1074,7 @@ impl Render for UpdatesView {
         if self.comes_into_view() {
             cx.background_spawn(async { super::super::check_updates() })
                 .detach();
-            if self.last_render.is_some() {
-                Self::reload(cx);
-            }
+            self.reload(cx);
         }
         self.last_render = Some(Instant::now());
         self.forget_faded();
