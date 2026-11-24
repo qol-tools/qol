@@ -903,7 +903,7 @@ impl UpdatesView {
                 &rows[index],
                 selected,
                 focused,
-                spins.then(|| card.trying).flatten(),
+                card.trying.filter(|_| spins),
                 cx,
             ));
         }
