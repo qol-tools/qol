@@ -669,7 +669,16 @@ impl McpSessionServer {
             .iter()
             .filter_map(|row| row.key.clone())
             .collect::<Vec<_>>();
+        let pulls = crate::fork_watch::WatchStore::system()
+            .map(|store| store.pulls())
+            .unwrap_or_default();
         for record in self.records.open(&terminal_keys).unwrap_or_default() {
+            let agent_ids = record
+                .parts
+                .iter()
+                .map(|part| part.agent_id.as_str())
+                .collect::<Vec<_>>();
+            let prs = super::contract::fork_prs(&agent_ids, &pulls);
             let (unread, open_asks) = self
                 .mail
                 .counts(&record.key)
@@ -682,6 +691,7 @@ impl McpSessionServer {
                 key: record.key,
                 unread,
                 open_asks,
+                prs,
             }));
         }
         serde_json::to_string(&listed).map_err(|error| format!("serialization failed: {error}"))

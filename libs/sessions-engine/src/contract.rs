@@ -159,6 +159,21 @@ pub(crate) struct ForkRow {
     pub(crate) cwd: String,
     pub(crate) unread: usize,
     pub(crate) open_asks: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) prs: Vec<String>,
+}
+
+pub(crate) fn fork_prs(agent_ids: &[&str], pulls: &[crate::fork_watch::PullState]) -> Vec<String> {
+    let mut prs = Vec::new();
+    for pull in pulls {
+        if pull.merge_commit.is_none()
+            && agent_ids.contains(&pull.agent_id.as_str())
+            && !prs.contains(&pull.pull_request)
+        {
+            prs.push(pull.pull_request.clone());
+        }
+    }
+    prs
 }
 
 pub(crate) const AS_FORK: &str = "as_fork";
@@ -356,7 +371,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "sessions_list",
             label: "List terminal sessions",
-            description: "List live terminal sessions on this host with their role-neutral tool identity, display name, activity hint, cwd, capabilities, and stable session token. Use it once to choose the implementation terminal for session_bridge. Each row also carries its spawn key, its recorded parent key, master (true for the switchboard), its unread message and open ask counts, and attention (needs_you, your_turn, working, idle, parked or ready) from the CLI Sessions panel, with attention_stale true when that snapshot is older than 30 seconds. remote_control_url is the https://claude.ai/code link of a session with Remote Control on, and prs lists the GitHub pull request URLs the session linked in its session_send messages or parked on, and CLI Sessions leads its tab title with their numbers; both are left out when empty. transcript is the path of the conversation's transcript file when the tool's history holds it, which the switchboard's resume_session tool brings back as a fork while the tab keeps running on its own. After the terminal rows comes one row per switchboard fork whose record is not done, with fork true, its key, parent `switchboard`, its title, cwd and its unread message and open ask counts: a fork has no terminal, so it has no session token, and it takes session_send messages and session_board mentions by that key like any session.",
+            description: "List live terminal sessions on this host with their role-neutral tool identity, display name, activity hint, cwd, capabilities, and stable session token. Use it once to choose the implementation terminal for session_bridge. Each row also carries its spawn key, its recorded parent key, master (true for the switchboard), its unread message and open ask counts, and attention (needs_you, your_turn, working, idle, parked or ready) from the CLI Sessions panel, with attention_stale true when that snapshot is older than 30 seconds. remote_control_url is the https://claude.ai/code link of a session with Remote Control on, and prs lists the GitHub pull request URLs the session linked in its session_send messages or parked on, and CLI Sessions leads its tab title with their numbers; both are left out when empty. transcript is the path of the conversation's transcript file when the tool's history holds it, which the switchboard's resume_session tool brings back as a fork while the tab keeps running on its own. After the terminal rows comes one row per switchboard fork whose record is not done, with fork true, its key, parent `switchboard`, its title, cwd, its unread message and open ask counts, and prs, the pull requests its fork watched that have not merged (left out when empty): a fork has no terminal, so it has no session token, and it takes session_send messages and session_board mentions by that key like any session.",
             input_schema: json!({ "type": "object", "properties": {} }),
         },
         ToolSpec {
@@ -928,6 +943,28 @@ pub(crate) fn mcp_tool_specs_for(profile: McpProfile) -> Vec<qol_mcp::ToolSpec> 
 mod tests {
     use super::super::agent_policy::{AgentRequirement, AgentRole, ImageInput, VisualReview};
     use super::*;
+
+    #[test]
+    fn a_fork_row_lists_each_unmerged_pull_request_of_its_agents_once() {
+        let pull = |agent: &str, number: u64, merged: bool| crate::fork_watch::PullState {
+            agent_id: agent.to_owned(),
+            pull_request: format!("https://github.com/o/r/pull/{number}"),
+            number: Some(number),
+            merge_commit: merged.then(|| "1a4ac81".to_owned()),
+            is_watched: false,
+        };
+        let pulls = [
+            pull("first", 7, false),
+            pull("second", 7, false),
+            pull("second", 8, true),
+            pull("other", 9, false),
+        ];
+        assert_eq!(
+            fork_prs(&["first", "second"], &pulls),
+            ["https://github.com/o/r/pull/7"]
+        );
+        assert!(fork_prs(&["none"], &pulls).is_empty());
+    }
 
     #[test]
     fn contract_has_discovery_spawn_bridge_and_explicit_closure() {

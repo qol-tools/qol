@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, effortMeter, familyColor, folderParts, litBody, nowOf, taskBar, tasksDone, tokensText, withTaskCall, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, laneName, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, underParent, withoutCut, withoutHidden, withAction, withSent, writingMarks, actionSaid, failSaid, isOrphan, livePagesOf, pageCount, refreshPages, frontPageOf } from '../hooks/register'
+import { backAtRestart, headlineOf, lostPullOf, withMerging, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, effortMeter, familyColor, folderParts, litBody, nowOf, taskBar, tasksDone, tokensText, withTaskCall, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, laneName, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, underParent, withoutCut, withoutHidden, withAction, withSent, writingMarks, actionSaid, failSaid, isOrphan, livePagesOf, pageCount, refreshPages, frontPageOf } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -4088,6 +4088,45 @@ test("the board's text names a pull request merged or closed from its state on G
   expect(readText(list, undefined, pulls, {}, details)).toContain('[#7 merged; #8 closed, not merged; #9 open · no watcher]')
   expect(readText(list, 'audit-fork', pulls, {}, details)).toContain('pull requests: #7 merged https://github.com/o/r/pull/7; #8 closed, not merged https://github.com/o/r/pull/8; #9 open · no watcher https://github.com/o/r/pull/9')
   expect(readText(list, undefined, pulls)).toContain('[#7 open · no watcher; #8 open · no watcher; #9 open · no watcher]')
+})
+
+test('a fork whose watched pull requests all sit in the merge queue reads merging and counts done, not waiting', () => {
+  const url = (number: number) => `https://github.com/o/r/pull/${number}`
+  const detail = (extra: object): any => ({ at: 1, state: 'open', passed: 0, failed: 0, running: 0, total: 0, ...extra })
+  const details = { [url(7)]: detail({ merge: 'queued' }), [url(8)]: detail({}), [url(9)]: detail({ state: 'merged' }) }
+  const states = withMerging({ queued: { state: 'waiting', pulls: [url(7)] }, mixed: { state: 'waiting', pulls: [url(7), url(8)] }, landed: { state: 'waiting', pulls: [url(7), url(9)] }, bare: { state: 'waiting' }, busy: { state: 'running', pulls: [url(7)] } }, details)
+  expect(Object.fromEntries(Object.entries(states).map(([id, run]) => [id, run.state]))).toEqual({ queued: 'merging', mixed: 'waiting', landed: 'merging', bare: 'waiting', busy: 'running' })
+  const fork = (agentId: string): any => ({ agentId, name: `${agentId}-fork: words`, kind: 'note', headline: 'Done.', report: 'Done.', at: 1, isWorking: false, isDismissed: false, hasNewReply: false })
+  expect(shownState(fork('queued'), [], states)).toEqual({ label: 'merging #7' })
+  expect(shownState(fork('mixed'), [], states)).toEqual({ label: 'waiting #7,#8', state: 'waiting' })
+  expect(readText([fork('queued')], undefined, [{ agentId: 'queued', pullRequest: url(7), number: 7, isWatched: true }], states, details)).toContain('(merging, its pull request is in the merge queue, counted done, agent id queued) [#7 merging]')
+})
+
+test("a top-level fork's board line lists the open pull requests of its sub-forks and needs the user when nothing watches one", () => {
+  const fork = (agentId: string, extra: object = {}): any => ({ agentId, name: `${agentId}-fork: words`, kind: 'note', headline: 'Done.', report: 'Done.', at: 1, isWorking: false, isDismissed: false, hasNewReply: false, ...extra })
+  const pull = (agentId: string, number: number, isWatched: boolean): any => ({ agentId, pullRequest: `https://github.com/o/r/pull/${number}`, number, isWatched })
+  const list = [fork('top'), fork('pages', { launcher: 'top' }), fork('board', { launcher: 'top' })]
+  const watched = [pull('pages', 30, true), pull('board', 34, true)]
+  expect(lostPullOf(list, list[0], watched, {})).toBeUndefined()
+  const text = readText(list, undefined, watched)
+  expect(text).toContain('(idle, agent id top) [#30 open · CLI Sessions watching by pages-fork; #34 open · CLI Sessions watching by board-fork]')
+  const lost = [pull('pages', 30, false), pull('board', 34, true)]
+  expect(lostPullOf(list, list[0], lost, {})?.number).toBe(30)
+  expect(readText(list, undefined, lost)).toContain('(needs the user, nothing watches #30, agent id top)')
+  expect(lostPullOf(list, list[0], [...lost, pull('top', 30, true)], {})).toBeUndefined()
+  const detail = (state: string, extra: object = {}): any => ({ at: 1, state, passed: 0, failed: 0, running: 0, total: 0, ...extra })
+  expect(lostPullOf(list, list[0], lost, { 'https://github.com/o/r/pull/30': detail('merged') })).toBeUndefined()
+  expect(lostPullOf(list, list[0], lost, { 'https://github.com/o/r/pull/30': detail('open', { merge: 'queued' }) })).toBeUndefined()
+  expect(lostPullOf([fork('top'), fork('pages', { launcher: 'top', isWorking: true })], fork('top'), lost, {})).toBeUndefined()
+})
+
+test("a fork's board headline is the first line of its report, at most 80 characters", () => {
+  expect(headlineOf('Which colour should it be? I recommend amber.\nMore below.')).toBe('Which colour should it be? I recommend amber.')
+  expect(headlineOf('**Done**')).toBe('Done')
+  expect(headlineOf('')).toBe('no report')
+  const long = headlineOf(`${'word '.repeat(30)}end.`)
+  expect(long.length).toBe(80)
+  expect(long.endsWith('…')).toBe(true)
 })
 
 test('the board tool fetches the state of the pull requests it lists, so a merge no watcher saw reads merged with no board pane drawn, and a reopened one reads open again', async ($, on) => {

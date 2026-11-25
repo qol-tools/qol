@@ -106,6 +106,8 @@ const KEPT = 'Esc stopped this fork while it was idle, so the board brought it b
 const KEPT_SAID = 'Esc only left its view; it stays open.'
 const WORKING_STATE = 'working'
 const WAITING_STATE = 'waiting'
+const MERGING_STATE = 'merging'
+const HEADLINE_CHARS = 80
 const YOUR_TURN_STATE = 'your turn'
 const CONTINUE = 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'
 const BAND_WAIT_MS = 3_000
@@ -195,7 +197,7 @@ const firstLine = (text: string): string => text.split('\n').find(line => line.t
 
 const clip = (text: string, length: number): string => (text.length > length ? `${text.slice(0, length - 1)}…` : text)
 
-export const headlineOf = (report: string): string => clip(firstLine(report).replace(MARKUP, '') || 'no report', 100)
+export const headlineOf = (report: string): string => clip(firstLine(report).replace(MARKUP, '') || 'no report', HEADLINE_CHARS)
 
 export const parseSorting = (reply: string): Sorting | undefined => {
   const [first = '', ...rest] = reply.split('\n').map(line => line.replace(MARKUP, '')).filter(line => line !== '')
@@ -246,6 +248,7 @@ const stateOf = (entry: Entry, list: Entry[] = [], states: Record<string, RunSta
   const live = forksUnder(list, entry).filter(sub => isBusy(sub, states)).length
   if (live > 0) return `waits on ${live} sub-fork${live === 1 ? '' : 's'}`
   if (isWaiting(entry, states)) return 'waiting on its pull request'
+  if (isMerging(entry, states)) return 'merging, its pull request is in the merge queue, counted done'
   return entry.isStoppedByUser === true ? 'stopped' : 'idle'
 }
 
@@ -948,6 +951,19 @@ export const runStatesOf = (stdout: string): Record<string, RunState> => {
   }
 }
 
+export const withMerging = (states: Record<string, RunState>, details: Record<string, PullDetail>): Record<string, RunState> =>
+  Object.fromEntries(
+    Object.entries(states).map(([id, run]) => {
+      const pulls = run.pulls ?? []
+      const isMerging = run.state === WAITING_STATE && pulls.length > 0 && pulls.every(url => details[url]?.merge === 'queued' || details[url]?.state === 'merged')
+      return [id, isMerging ? { ...run, state: MERGING_STATE } : run]
+    }),
+  )
+
+const isMerging = (entry: Entry, states: Record<string, RunState>): boolean => !entry.isWorking && !isEnded(entry) && !isCut(entry) && states[entry.agentId]?.state === MERGING_STATE
+
+const pullTags = (states: Record<string, RunState>, agentId: string): string => (states[agentId]?.pulls ?? []).map(url => `#${url.split('/').pop() ?? '?'}`).join(',')
+
 const isWaiting = (entry: Entry, states: Record<string, RunState>): boolean =>
   !entry.isWorking && !entry.isDismissed && !isEnded(entry) && !isCut(entry) && states[entry.agentId]?.state === WAITING_STATE
 
@@ -996,7 +1012,8 @@ export const shownState = (entry: Entry, list: Entry[] = [], states: Record<stri
   if (needsYou(list, entry)) return { label: entry.kind ?? 'ask', state: YOUR_TURN_STATE }
   const live = forksUnder(list, entry).filter(sub => isBusy(sub, states)).length
   if (live > 0) return { label: `waits on ${live}`, state: WAITING_STATE }
-  if (isWaiting(entry, states)) return { label: [WAITING_STATE, (states[entry.agentId]?.pulls ?? []).map(url => `#${url.split('/').pop() ?? '?'}`).join(',')].filter(part => part !== '').join(' '), state: WAITING_STATE }
+  if (isWaiting(entry, states)) return { label: [WAITING_STATE, pullTags(states, entry.agentId)].filter(part => part !== '').join(' '), state: WAITING_STATE }
+  if (isMerging(entry, states)) return { label: [MERGING_STATE, pullTags(states, entry.agentId)].filter(part => part !== '').join(' ') }
   if (entry.isStoppedByUser === true) return { label: 'stopped' }
   return { label: entry.kind === undefined || entry.kind === 'waiting' || entry.kind === 'note' ? 'idle' : entry.kind }
 }
@@ -2166,8 +2183,8 @@ export const watcherArgs = (command: string, root: string | undefined): string[]
 export const watchCommand = (program: string, agentId: string, conversation: string, name: string | undefined, args: readonly string[]): string =>
   [program, 'fork-watch', '--agent', agentId, '--conversation', conversation, ...(name === undefined || name === '' ? [] : ['--title', name]), '--', ...args].map(quote).join(' ')
 
-export const pullText = (pull: Pull, state?: PullState): string =>
-  `#${pull.number ?? '?'} ${pull.mergeCommit !== undefined ? `merged ${pull.mergeCommit.slice(0, 7)}` : state === 'merged' ? 'merged' : state === 'closed' ? 'closed, not merged' : pull.isWatched ? 'open · CLI Sessions watching' : 'open · no watcher'}`
+export const pullText = (pull: Pull, state?: PullState, merge?: string): string =>
+  `#${pull.number ?? '?'} ${pull.mergeCommit !== undefined ? `merged ${pull.mergeCommit.slice(0, 7)}` : state === 'merged' ? 'merged' : state === 'closed' ? 'closed, not merged' : merge === 'queued' ? 'merging' : pull.isWatched ? 'open · CLI Sessions watching' : 'open · no watcher'}`
 
 const pullsOf = (all: readonly Pull[], agentId: string): Pull[] => all.filter(pull => pull.agentId === agentId)
 
@@ -3209,9 +3226,26 @@ const age = (ms: number): string => {
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`
 }
 
-const pullNote = (all: readonly Pull[], agentId: string, details: Record<string, PullDetail>): string => {
-  const own = pullsOf(all, agentId)
-  return own.length === 0 ? '' : ` [${own.map(pull => pullText(pull, details[pull.pullRequest]?.state)).join('; ')}]`
+const isUnmerged = (pull: Pull, details: Record<string, PullDetail>): boolean => pull.mergeCommit === undefined && ['open', 'draft'].includes(details[pull.pullRequest]?.state ?? 'open')
+
+export const lostPullOf = (list: Entry[], entry: Entry, all: readonly Pull[], details: Record<string, PullDetail>): Pull | undefined =>
+  [entry, ...forksUnder(list, entry)]
+    .filter(one => !one.isWorking && !isEnded(one))
+    .flatMap(one => pullsOf(all, one.agentId))
+    .find(pull => isUnmerged(pull, details) && details[pull.pullRequest]?.merge !== 'queued' && !all.some(other => other.pullRequest === pull.pullRequest && other.isWatched))
+
+const pullNote = (list: Entry[], entry: Entry, all: readonly Pull[], details: Record<string, PullDetail>): string => {
+  const own = pullsOf(all, entry.agentId).map(pull => pullText(pull, details[pull.pullRequest]?.state, details[pull.pullRequest]?.merge))
+  const family =
+    parentOf(list, entry) !== undefined
+      ? []
+      : forksUnder(list, entry).flatMap(sub =>
+          pullsOf(all, sub.agentId)
+            .filter(pull => isUnmerged(pull, details))
+            .map(pull => `${pullText(pull, details[pull.pullRequest]?.state, details[pull.pullRequest]?.merge)} by ${keyName(sub.name)}`),
+        )
+  const notes = [...own, ...family]
+  return notes.length === 0 ? '' : ` [${notes.join('; ')}]`
 }
 
 const metaLauncher = async ($: EngineInterface, agentId: string): Promise<string | undefined> => {
@@ -3258,7 +3292,7 @@ export const readText = (list: Entry[], fork: string | undefined, all: readonly 
     const entry = [...list].reverse().find(one => one.agentId === wanted || keyName(one.name) === wanted || one.name === wanted)
     if (entry === undefined) return `No fork board row for ${wanted}.`
     const own = pullsOf(all, entry.agentId)
-    const prs = own.length === 0 ? '' : `\npull requests: ${own.map(pull => `${pullText(pull, details[pull.pullRequest]?.state)} ${pull.pullRequest}`).join('; ')}`
+    const prs = own.length === 0 ? '' : `\npull requests: ${own.map(pull => `${pullText(pull, details[pull.pullRequest]?.state, details[pull.pullRequest]?.merge)} ${pull.pullRequest}`).join('; ')}`
     const under = listedUnder(list, entry)
     const place = under === undefined ? '' : `\nagent list: under ${under}, the fork that started it, not at the top level`
     return `${boardLine(entry)}\nagent id: ${entry.agentId}${place}${prs}\n\n${entry.report || '(no report yet)'}`
@@ -3269,7 +3303,9 @@ export const readText = (list: Entry[], fork: string | undefined, all: readonly 
     .map(entry => {
       const under = listedUnder(list, entry)
       const place = under === undefined ? '' : `, listed under ${under}`
-      return `${entry.isWorking ? `[fork board] ${keyName(entry.name)}` : boardLine(entry)} (${stateOf(entry, list, states)}, agent id ${entry.agentId}${place})${pullNote(all, entry.agentId, details)}`
+      const lost = entry.isWorking || parentOf(list, entry) !== undefined ? undefined : lostPullOf(list, entry, all, details)
+      const state = lost === undefined ? stateOf(entry, list, states) : `needs the user, nothing watches #${lost.number ?? '?'}`
+      return `${entry.isWorking ? `[fork board] ${keyName(entry.name)}` : boardLine(entry)} (${state}, agent id ${entry.agentId}${place})${pullNote(list, entry, all, details)}`
     })
     .join('\n')
 }
@@ -3444,7 +3480,7 @@ export const register: Register = on => {
         $.tool.register({
         name: TOOL,
         description:
-          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, asks the fork that started it, is waiting on its pull request, is idle, was stopped or is done; only a fork the user closed is done, and a merged pull request leaves its fork open. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
+          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, asks the fork that started it, is waiting on its pull request, is merging (its pull request sits in the merge queue, which counts as done), is idle, was stopped or is done; only a fork the user closed is done, and a merged pull request leaves its fork open. A top-level fork's line also lists the open pull requests of the sub-forks it started and reads needs the user when nothing watches one of them. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
         inputSchema: {
           type: 'object',
           properties: { fork: { type: 'string', description: "A fork's key-name or agent id; leave it out for every row." } },
@@ -3896,7 +3932,7 @@ export const register: Register = on => {
     const ledger = await read($, pulls)
     const listed = list.filter(entry => !entry.isDismissed || fork !== undefined)
     const details = await detailsRead($, ledger.filter(pull => listed.some(entry => entry.agentId === pull.agentId)))
-    return { result: readText(list, fork, ledger, await read($, forkStates), details) }
+    return { result: readText(list, fork, ledger, withMerging(await read($, forkStates), details), details) }
   }).catch(() => ({ deny: 'The fork board could not be read.' }))
 
   on('tool.call', { tool: RESUME_NAME }, async ($, e) => {
@@ -4130,7 +4166,7 @@ export const register: Register = on => {
     const loading = await read($, starting)
     const ledger = await read($, pulls)
     const details = await read($, pullDetails)
-    const states = await read($, forkStates)
+    const states = withMerging(await read($, forkStates), details)
     const isRestingShown = await read($, idleShown)
     const isClosedShown = await read($, closedShown)
     const choices = await read($, modelChoices)
@@ -4159,12 +4195,18 @@ export const register: Register = on => {
     const top = list.filter(entry => parentOf(list, entry) === undefined)
     const subsOf = (entry: Entry) => subForksOf(list, entry).sort((a, b) => a.at - b.at)
     const familyIn = (entry: Entry) => forksUnder(list, entry)
-    const needs = top.filter(entry => needsYou(list, entry)).sort((a, b) => a.at - b.at)
+    const lostSeen = new Map<string, Pull | undefined>()
+    const lostOf = (entry: Entry): Pull | undefined => {
+      if (entry.isWorking || isCut(entry) || isEnded(entry) || ledger.length === 0) return undefined
+      if (!lostSeen.has(entry.agentId)) lostSeen.set(entry.agentId, lostPullOf(list, entry, ledger, details))
+      return lostSeen.get(entry.agentId)
+    }
+    const needs = top.filter(entry => needsYou(list, entry) || lostOf(entry) !== undefined).sort((a, b) => a.at - b.at)
     const cut = stoppedFamilies(list).sort((a, b) => a.at - b.at)
     const working = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && (entry.isWorking || familyIn(entry).some(sub => isBusy(sub, states)))).sort((a, b) => a.at - b.at)
     const waiting = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && !working.includes(entry) && isWaiting(entry, states)).sort((a, b) => a.at - b.at)
     const idle = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && !working.includes(entry) && !waiting.includes(entry) && !isEnded(entry)).sort((a, b) => a.at - b.at)
-    const hasOpenPull = (entry: Entry) => [entry, ...familyIn(entry)].some(one => pullsOf(ledger, one.agentId).some(isOpen))
+    const hasOpenPull = (entry: Entry) => [entry, ...familyIn(entry)].some(one => pullsOf(ledger, one.agentId).some(pull => isOpen(pull) && details[pull.pullRequest]?.merge !== 'queued'))
     const isAtRest = (entry: Entry) => ![entry, ...familyIn(entry)].some(one => isLive(list, one, states) || isCut(one)) && !hasOpenPull(entry)
     const closedFoldable = recent.filter(entry => !hasOpenPull(entry)).length
     const closedRows = isClosedShown ? recent : recent.filter(hasOpenPull)
@@ -4178,11 +4220,13 @@ export const register: Register = on => {
     const models = await modelsOf($)
     const blue = looks.get(WAITING_STATE)?.color ?? 'blue'
     const green = looks.get(WORKING_STATE)?.color ?? 'green'
+    const isLostOnly = (entry: Entry) => parentOf(list, entry) === undefined && !needsYou(list, entry) && lostOf(entry) !== undefined
     const lookOf = (entry: Entry): StateLook | undefined => {
-      const state = sessionState(entry, list, states)
+      const state = isLostOnly(entry) ? YOUR_TURN_STATE : sessionState(entry, list, states)
       return state === undefined ? undefined : looks.get(state)
     }
     const wordOfState = (entry: Entry): string => {
+      if (isLostOnly(entry)) return `#${lostOf(entry)?.number ?? '?'} unwatched`
       const label = shownState(entry, list, states).label
       return label === 'ask' ? NEEDS_YOU_WORD : label
     }
@@ -4335,7 +4379,7 @@ export const register: Register = on => {
     const pullLine = (pull: Pull, isStopped: boolean) => {
       const detail = details[pull.pullRequest]
       const state = stateOfPull(pull)
-      const word = detail?.merge === 'queued' ? 'in queue' : detail?.merge === 'auto' ? 'auto-merge' : state
+      const word = detail?.merge === 'queued' ? MERGING_STATE : detail?.merge === 'auto' ? 'auto-merge' : state
       const wordColor = detail?.merge !== undefined ? 'suggestion' : state === 'draft' ? 'warning' : state === 'merged' ? 'success' : undefined
       const isLive = isOpen(pull)
       return (
@@ -4457,7 +4501,8 @@ export const register: Register = on => {
       const doingNow = entry.isWorking ? nowOf(agent, doing.get(entry.agentId)) : undefined
       const tasks = tasksDone(taskLists.get(entry.agentId))
       const own = pullsOf(ledger, entry.agentId)
-      const livePulls = own.filter(isOpen)
+      const familyPulls = parentOf(list, entry) === undefined ? familyIn(entry).flatMap(sub => pullsOf(ledger, sub.agentId)) : []
+      const livePulls = [...own, ...familyPulls].filter(isOpen).filter((pull, at, all) => all.findIndex(other => other.pullRequest === pull.pullRequest) === at)
       const shownPulls = livePulls.length > 0 ? livePulls : own.filter(pull => stateOfPull(pull) === 'merged').slice(0, 1)
       const folder = folderParts(entry.project ?? agent?.cwd)
       const tokens = typeof agent?.tokenCount === 'number' && agent.tokenCount > 0 ? agent.tokenCount : undefined
