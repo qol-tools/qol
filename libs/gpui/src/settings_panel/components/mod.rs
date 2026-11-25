@@ -22,6 +22,7 @@ mod modifier_chip;
 mod number_field;
 mod placement_preview;
 mod qr_code;
+mod question;
 mod row;
 mod text_field;
 mod tile;
@@ -53,6 +54,7 @@ pub use placement_preview::{
     placement_caption, placement_hold_progress, placement_toast, PlacementHold,
 };
 pub(super) use qr_code::{qr_block, qr_code_display, qr_heights, QrBlock};
+pub use question::{QuestionKey, SettingsAnswer, SettingsQuestion};
 pub use row::{settings_row_shade, SettingsRow};
 pub use text_field::SettingsTextField;
 pub use tile::{
@@ -466,6 +468,16 @@ pub fn settings_destroy_label_group(
     row: RowGround,
     kit: Kit,
 ) -> gpui::Div {
+    inked_label_group(label, description, kit.palette.danger, row, kit)
+}
+
+fn inked_label_group(
+    label: impl Into<SharedString>,
+    description: Option<SharedString>,
+    ink: u32,
+    row: RowGround,
+    kit: Kit,
+) -> gpui::Div {
     div()
         .flex_1()
         .min_w_0()
@@ -475,7 +487,7 @@ pub fn settings_destroy_label_group(
         .child(
             div()
                 .text(TextStyle::Name)
-                .text_color(rgb(kit.palette.danger))
+                .text_color(rgb(ink))
                 .child(label.into()),
         )
         .children(description.map(|text| settings_description(text, row, kit)))

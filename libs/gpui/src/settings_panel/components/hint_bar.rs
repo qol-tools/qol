@@ -1,7 +1,5 @@
-use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, App, Div, RenderOnce, SharedString, Window};
-use qol_theme::TextStyle;
 
 use crate::key::Key;
 use crate::kit::Kit;
@@ -59,7 +57,6 @@ pub fn hint_tone_color(tone: HintTone, kit: Kit) -> Option<u32> {
 #[derive(IntoElement)]
 pub struct SettingsHintBar {
     kit: Kit,
-    question: Option<SharedString>,
     left: Vec<SettingsHint>,
     right: Vec<SettingsHint>,
 }
@@ -68,15 +65,9 @@ impl SettingsHintBar {
     pub fn new(kit: Kit) -> Self {
         Self {
             kit,
-            question: None,
             left: Vec::new(),
             right: Vec::new(),
         }
-    }
-
-    pub fn question(mut self, text: impl Into<SharedString>) -> Self {
-        self.question = Some(text.into());
-        self
     }
 
     pub fn left(mut self, hints: Vec<SettingsHint>) -> Self {
@@ -94,22 +85,6 @@ impl RenderOnce for SettingsHintBar {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let kit = self.kit;
         let mut bar = kit.hint_bar();
-        if let Some(question) = self.question {
-            let ground = kit.grounds.pane;
-            bar = bar
-                .bg(rgba(qol_theme::translucent(
-                    ground.ink,
-                    qol_theme::Alpha::Wash,
-                )))
-                .text_color(rgb(ground.ink))
-                .child(
-                    div()
-                        .flex_none()
-                        .text(TextStyle::ListName)
-                        .text_color(rgb(ground.ink))
-                        .child(question),
-                );
-        }
         for hint in self.left {
             bar = bar.child(hint_element(hint, kit));
         }

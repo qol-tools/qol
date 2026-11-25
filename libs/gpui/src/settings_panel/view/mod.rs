@@ -28,8 +28,8 @@ use super::components::{
     settings_block_header, settings_destroy_label_group, settings_error_line,
     settings_finder_empty, settings_page, settings_query_spinner, settings_selected_text,
     settings_swatch, settings_tag, settings_tagged_label_group, settings_value_text, ChoiceArt,
-    RowGround, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow,
-    SettingsToggle, SettingsValueTone, SettingsWell, SliderStyle,
+    RowGround, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar,
+    SettingsQuestion, SettingsRow, SettingsToggle, SettingsValueTone, SettingsWell, SliderStyle,
 };
 use super::components::{
     settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
@@ -378,6 +378,7 @@ struct Level {
     choose: Option<choose_card::ChooseState>,
     entries: Option<structured_list_editor::EntriesCard>,
     form: Option<super::entry_form::EntryForm>,
+    question: Option<SettingsQuestion<super::entry_form::FormAnswer>>,
     list_item: Option<ListItemCard>,
 }
 
@@ -488,6 +489,7 @@ impl SettingsPanelView {
             choose: None,
             entries: None,
             form: None,
+            question: None,
             list_item: None,
         };
         let stream_token = std::env::var(qol_conventions::ENV_HTTP_TOKEN)
@@ -968,7 +970,7 @@ impl SettingsPanelView {
         }
         if let Some(target) = self.back_target {
             if target < self.stack.len() - 1 {
-                if !self.raise_top_form_question() {
+                if !self.raise_top_form_question(cx) {
                     self.pop_card(cx);
                 }
             } else {
@@ -982,7 +984,7 @@ impl SettingsPanelView {
             return;
         }
         self.back_target = Some(level);
-        if self.raise_top_form_question() {
+        if self.raise_top_form_question(cx) {
             cx.notify();
             return;
         }
@@ -2011,7 +2013,11 @@ impl SettingsPanelView {
             return;
         }
         if !self.filter_open && self.stack.len() > 1 && !self.rail_has_key_focus() {
-            if self.level().form.is_some() && self.on_form_card_key(event, walking, cx) {
+            if self.level().question.is_some() && self.on_question_card_key(event, walking, cx) {
+                cx.notify();
+                return;
+            }
+            if self.level().form.is_some() && self.on_form_card_key(event, cx) {
                 cx.notify();
                 return;
             }
@@ -4086,7 +4092,7 @@ impl SettingsPanelView {
             if !event.standard_click() {
                 return;
             }
-            if this.raise_top_form_question() {
+            if this.raise_top_form_question(cx) {
                 cx.notify();
                 return;
             }
@@ -4464,6 +4470,9 @@ impl Render for SettingsPanelView {
 
 impl SettingsPanelView {
     fn body_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if self.level().question.is_some() {
+            return self.render_question_card(cx);
+        }
         if self.level().choose.is_some() {
             return self.render_choose_card(cx);
         }
@@ -5148,15 +5157,15 @@ impl SettingsPanelView {
                 if right.is_empty() {
                     right.push(SettingsHint::new(Key::ESC, "back"));
                 }
-                let mut bar = bar.left(hints.left).right(right);
-                if let Some(question) = hints.question {
-                    bar = bar.question(question);
-                }
-                return bar;
+                return bar.left(hints.left).right(right);
             }
             return bar
                 .left(vec![SettingsHint::new(Key::UP_DOWN, "move")])
                 .right(vec![SettingsHint::new(Key::ESC, "back")]);
+        }
+        if let Some(question) = self.level().question.as_ref().filter(|_| !self.filter_open) {
+            let hints = question.hints();
+            return bar.left(hints.left).right(hints.right);
         }
         if self.level().choose.is_some() && !self.filter_open {
             return bar
@@ -5904,6 +5913,7 @@ fn live_card_level(
         choose: None,
         entries: None,
         form: None,
+        question: None,
         list_item: None,
     }
 }
@@ -8508,6 +8518,7 @@ active_value_from = "active"
             choose: None,
             entries: None,
             form: None,
+            question: None,
             list_item: None,
         }
     }

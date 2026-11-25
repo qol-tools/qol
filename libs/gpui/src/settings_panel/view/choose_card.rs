@@ -356,6 +356,7 @@ impl SettingsPanelView {
             }),
             entries: None,
             form: None,
+            question: None,
             list_item: None,
         };
         self.push_card(destination, child);

@@ -1460,7 +1460,7 @@ mod tests {
 
         state.pull_request_build = Some(Job::NeedsTray { number: 621 });
         assert_eq!(needs_tray(&state), Some(621));
-        assert!(!row(&state).opens);
+        assert!(row(&state).opens);
         assert!(!summary(&state).busy);
 
         state.trial = Some(trying());

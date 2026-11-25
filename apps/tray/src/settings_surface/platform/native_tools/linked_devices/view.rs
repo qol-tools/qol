@@ -759,7 +759,6 @@ impl CustomSettingsBreadcrumbs for LinkedDevicesView {
     fn settings_hints(&self) -> Option<CustomHints> {
         if !matches!(self.editing, Editing::None) {
             return Some(CustomHints {
-                question: None,
                 left: vec![
                     SettingsHint::new(Key::ENTER, "save"),
                     SettingsHint::new(Key::TYPE, "edit"),
@@ -780,7 +779,6 @@ impl CustomSettingsBreadcrumbs for LinkedDevicesView {
         }
         left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         Some(CustomHints {
-            question: None,
             left,
             right: Vec::new(),
         })

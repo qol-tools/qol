@@ -11,10 +11,12 @@ use qol_config::object_array::pretty_label;
 
 use super::super::components::{
     settings_arrow, settings_label_group, settings_mono_label, settings_tag, settings_value_group,
-    HintTone, RowGround, SettingsHint, SettingsHintBar, SettingsModifierChip, SettingsRow,
-    SettingsTextField, SettingsToggle, SettingsValueTone,
+    QuestionKey, RowGround, SettingsHint, SettingsHintBar, SettingsModifierChip, SettingsQuestion,
+    SettingsRow, SettingsTextField, SettingsToggle, SettingsValueTone,
 };
-use super::super::entry_form::{count_label, EntryForm, FormOutput, FormQuestion, FormValue};
+use super::super::entry_form::{
+    count_label, EntryForm, FormAnswer, FormOutput, FormQuestion, FormValue,
+};
 use super::super::object_array_row::{
     shared_key_chip, Chip, ChipTone, ItemChips, ObjectArrayState,
 };
@@ -219,44 +221,11 @@ impl SettingsPanelView {
     pub(super) fn on_form_card_key(
         &mut self,
         event: &KeyDownEvent,
-        walking: Option<usize>,
         cx: &mut Context<Self>,
     ) -> bool {
         let key = event.keystroke.key.as_str();
-        if let Some(question) = self.level().form.as_ref().and_then(|form| form.question) {
-            match key {
-                "enter" | "return" => {
-                    match question {
-                        FormQuestion::Save => {
-                            self.back_target = walking;
-                            self.save_form(cx);
-                        }
-                        FormQuestion::Blocked(index) => {
-                            if let Some(form) = self.level_mut().form.as_mut() {
-                                form.question = None;
-                            }
-                            self.select_form_row(index);
-                        }
-                    }
-                    return true;
-                }
-                "escape" => {
-                    if let Some(form) = self.level_mut().form.as_mut() {
-                        form.question = None;
-                    }
-                    self.back_target = walking;
-                    self.pop_card(cx);
-                    return true;
-                }
-                _ => {
-                    if let Some(form) = self.level_mut().form.as_mut() {
-                        form.question = None;
-                    }
-                }
-            }
-        }
         if key == "escape" {
-            if !self.raise_top_form_question() {
+            if !self.raise_top_form_question(cx) {
                 self.pop_card(cx);
             }
             return true;
@@ -544,12 +513,8 @@ impl SettingsPanelView {
     pub(super) fn card_hint_bar(&self, bar: SettingsHintBar) -> SettingsHintBar {
         let level = self.level();
         if let Some(form) = level.form.as_ref() {
-            let (question, left, right) = form_hints(form, level.selected);
-            let bar = bar.left(left).right(right);
-            return match question {
-                Some(text) => bar.question(text),
-                None => bar,
-            };
+            let (left, right) = form_hints(form, level.selected);
+            return bar.left(left).right(right);
         }
         if let Some(card) = level.entries.as_ref() {
             let (left, right) = entries_hints(card, level.selected == 0);
@@ -558,19 +523,127 @@ impl SettingsPanelView {
         bar
     }
 
-    pub(super) fn raise_top_form_question(&mut self) -> bool {
-        let Some(form) = self.level_mut().form.as_mut() else {
-            return false;
-        };
-        if form.question.is_some() {
+    pub(super) fn raise_top_form_question(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.level_mut().question.is_some() {
             return true;
         }
-        if !form.changed() {
-            return false;
-        }
-        let question = form.ask();
-        form.question = Some(question);
+        let question = match self.level_mut().form.as_ref() {
+            Some(form) if form.changed() => form.question(),
+            _ => return false,
+        };
+        self.push_question(question, cx);
         true
+    }
+
+    fn push_question(&mut self, question: SettingsQuestion<FormAnswer>, cx: &mut Context<Self>) {
+        let Some(destination) = self.card_destination(question.title(), cx) else {
+            return;
+        };
+        let source = self.level_mut().rows.first().map_or(0, |row| row.source);
+        let section = RowSection {
+            label: question.title().to_string(),
+            description: Some(question.colophon().to_string()),
+            rows: Vec::new(),
+            source,
+            device_kind: None,
+            page: None,
+        };
+        let level = Level {
+            rows: Vec::new(),
+            sections: vec![section],
+            selected: 0,
+            active_section: None,
+            selected_section: 0,
+            body_scroll: crate::scroll_list::SelectionScroll::new(),
+            active_control: None,
+            row_bounds: Vec::new(),
+            header: LevelHeader::Card(destination.clone()),
+            origin_row: None,
+            object_array: None,
+            display_layout: None,
+            list_card: false,
+            live_card: false,
+            choose: None,
+            entries: None,
+            form: None,
+            question: Some(question),
+            list_item: None,
+        };
+        self.push_card(destination, level);
+        self.sync_scroll();
+    }
+
+    pub(super) fn on_question_card_key(
+        &mut self,
+        event: &KeyDownEvent,
+        walking: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let key = event.keystroke.key.as_str();
+        let key_char = event.keystroke.key_char.as_deref();
+        let Some(question) = self.level_mut().question.as_mut() else {
+            return false;
+        };
+        match question.on_key(key, key_char) {
+            QuestionKey::Answer(answer) => self.answer_form_question(answer, walking, cx),
+            QuestionKey::Back => self.pop_card(cx),
+            QuestionKey::Moved | QuestionKey::Held => {}
+        }
+        true
+    }
+
+    fn answer_form_question(
+        &mut self,
+        answer: FormAnswer,
+        walking: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.level_mut().question.is_none() || self.stack.len() < 3 {
+            return;
+        }
+        match answer {
+            FormAnswer::Fill(index) => {
+                let below = self.stack.len() - 2;
+                self.select_form_row_at(below, index);
+                self.pop_card(cx);
+            }
+            FormAnswer::Save => {
+                self.drop_question();
+                self.back_target = walking;
+                self.save_form(cx);
+            }
+            FormAnswer::Discard => {
+                self.drop_question();
+                self.back_target = walking;
+                self.pop_card(cx);
+            }
+        }
+    }
+
+    fn drop_question(&mut self) {
+        if self.stack.len() > 1 && self.level_mut().question.is_some() {
+            self.stack.pop();
+            self.card_marks.pop();
+        }
+    }
+
+    pub(super) fn render_question_card(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some(question) = self.level().question.as_ref() else {
+            return Vec::new();
+        };
+        let body = question.render(
+            "settings-question-answer",
+            self.body_has_focus(),
+            self.kit,
+            |answer| {
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    let walking = this.back_target.take();
+                    this.answer_form_question(answer, walking, cx);
+                    cx.notify();
+                })
+            },
+        );
+        vec![body.into_any_element()]
     }
 
     fn open_entries_form(&mut self, entry: Option<usize>, cx: &mut Context<Self>) {
@@ -648,6 +721,7 @@ impl SettingsPanelView {
             choose: None,
             entries: None,
             form: Some(form),
+            question: None,
             list_item: None,
         };
         self.push_card(destination, level);
@@ -782,14 +856,12 @@ impl SettingsPanelView {
         if len < 2 {
             return;
         }
-        let blocked = match self.level().form.as_ref().map(EntryForm::ask) {
-            Some(FormQuestion::Blocked(index)) => Some(index),
+        let blocked = match self.level_mut().form.as_ref() {
+            Some(form) if matches!(form.ask(), FormQuestion::Blocked(_)) => Some(form.question()),
             _ => None,
         };
-        if let Some(index) = blocked {
-            if let Some(form) = self.level_mut().form.as_mut() {
-                form.question = Some(FormQuestion::Blocked(index));
-            }
+        if let Some(question) = blocked {
+            self.push_question(question, cx);
             return;
         }
         let (replacing, output) = {
@@ -836,9 +908,6 @@ impl SettingsPanelView {
             level.selected = saved + 1;
         }
         self.height_revision += 1;
-        if let Some(form) = self.level_mut().form.as_mut() {
-            form.question = None;
-        }
         self.write_entries_back(entries_index);
         self.pop_card(cx);
     }
@@ -881,25 +950,27 @@ impl SettingsPanelView {
     }
 
     fn select_form_row(&mut self, index: usize) {
-        let count = self
-            .level()
-            .form
-            .as_ref()
-            .map_or(0, |form| form.fields.len());
+        let top = self.stack.len() - 1;
+        self.select_form_row_at(top, index);
+        self.sync_scroll();
+    }
+
+    fn select_form_row_at(&mut self, at: usize, index: usize) {
+        let Some(level) = self.stack.get_mut(at) else {
+            return;
+        };
+        let Some(form) = level.form.as_mut() else {
+            return;
+        };
+        let count = form.fields.len();
         if count == 0 {
             return;
         }
         let index = index.min(count - 1);
-        self.level_mut().selected = index;
-        if let Some(field) = self
-            .level_mut()
-            .form
-            .as_mut()
-            .and_then(|form| form.text_mut(index))
-        {
+        if let Some(field) = form.text_mut(index) {
             field.select_all();
         }
-        self.sync_scroll();
+        level.selected = index;
     }
 
     fn level_index(&self) -> usize {
@@ -975,6 +1046,7 @@ fn entries_card_level(
         choose: None,
         entries: Some(origin.card),
         form: None,
+        question: None,
         list_item: None,
     }
 }
@@ -1183,15 +1255,7 @@ fn reorder_hints(card: &EntriesCard, on_add: bool) -> (Vec<SettingsHint>, Vec<Se
 pub(super) fn form_hints(
     form: &EntryForm,
     selected: usize,
-) -> (Option<String>, Vec<SettingsHint>, Vec<SettingsHint>) {
-    if let Some(question) = form.question {
-        let left = vec![match question {
-            FormQuestion::Save => SettingsHint::new(Key::ENTER, "save").tone(HintTone::Save),
-            FormQuestion::Blocked(_) => SettingsHint::new(Key::ENTER, "fill it in"),
-        }];
-        let right = vec![SettingsHint::new(Key::ESC, "discard").tone(HintTone::Discard)];
-        return (Some(form.question_text(question)), left, right);
-    }
+) -> (Vec<SettingsHint>, Vec<SettingsHint>) {
     let mut left = Vec::new();
     if let Some(field) = form.fields.get(selected) {
         left.push(SettingsHint::new(
@@ -1218,7 +1282,7 @@ pub(super) fn form_hints(
         true => SettingsHint::new(Key::ESC, "back, asks to save"),
         false => SettingsHint::new(Key::ESC, "back"),
     }];
-    (None, left, right)
+    (left, right)
 }
 
 fn plain_a_key(event: &KeyDownEvent) -> bool {
@@ -1268,7 +1332,7 @@ mod tests {
 
     use qol_config::object_array::ItemFieldKind;
 
-    use super::super::super::entry_form::{EntryForm, FormQuestion};
+    use super::super::super::entry_form::{EntryForm, FormAnswer};
     use super::super::super::object_array_row::{
         Chip, ChipTone, Entry, Item, ItemChips, ObjectArrayState,
     };
@@ -1724,8 +1788,7 @@ mod tests {
     #[test]
     fn form_hints_follow_the_selected_field() {
         let form = switchable_form();
-        let (question, left, right) = form_hints(&form, 0);
-        assert_eq!(question, None);
+        let (left, right) = form_hints(&form, 0);
         assert_eq!(hint_labels(&left), vec!["next", "move", "edit"]);
         assert_eq!(left[0].key, Some(Key::ENTER));
         assert_eq!(hint_labels(&right), vec!["back"]);
@@ -1735,38 +1798,33 @@ mod tests {
     fn form_hints_note_a_changed_form() {
         let mut form = switchable_form();
         form.text_mut(0).unwrap().insert_str("firefox");
-        let (question, _, right) = form_hints(&form, 0);
-        assert_eq!(question, None);
+        let (_, right) = form_hints(&form, 0);
         assert_eq!(hint_labels(&right), vec!["back, asks to save"]);
     }
 
     #[test]
-    fn form_hints_carry_the_save_question_in_its_tones() {
+    fn a_changed_form_asks_to_save_on_a_card_with_save_first() {
         let mut form = switchable_form();
         form.text_mut(0).unwrap().insert_str("firefox");
-        form.question = Some(FormQuestion::Save);
-        let (question, left, right) = form_hints(&form, 0);
-        assert_eq!(question.as_deref(), Some("Save the new switchable panel?"));
-        assert_eq!(hint_labels(&left), vec!["save"]);
-        assert_eq!(left[0].tone, HintTone::Save);
-        assert_eq!(hint_labels(&right), vec!["discard"]);
-        assert_eq!(right[0].tone, HintTone::Discard);
+        let question = form.question();
+        assert_eq!(question.title(), "save changes");
+        assert_eq!(question.selected(), Some(FormAnswer::Save));
+        let hints = question.hints();
+        assert_eq!(hint_labels(&hints.left), vec!["save", "move"]);
+        assert_eq!(hints.left[0].tone, HintTone::Save);
+        assert_eq!(hint_labels(&hints.right), vec!["back"]);
     }
 
     #[test]
-    fn form_hints_carry_the_blocked_question() {
+    fn a_blocked_form_asks_to_fill_in_the_empty_field() {
         let mut form = switchable_form();
         assert!(form.flip(1));
-        let question = form.ask();
-        form.question = Some(question);
-        let (question, left, right) = form_hints(&form, 0);
-        assert_eq!(
-            question.as_deref(),
-            Some("App is empty, so this switchable panel cannot be saved yet.")
-        );
-        assert_eq!(hint_labels(&left), vec!["fill it in"]);
-        assert_eq!(left[0].tone, HintTone::Plain);
-        assert_eq!(hint_labels(&right), vec!["discard"]);
+        let question = form.question();
+        assert_eq!(question.title(), "app is empty");
+        assert_eq!(question.selected(), Some(FormAnswer::Fill(0)));
+        let hints = question.hints();
+        assert_eq!(hint_labels(&hints.left), vec!["fill in", "move"]);
+        assert_eq!(hints.left[0].tone, HintTone::Plain);
     }
 
     #[test]

@@ -841,7 +841,6 @@ impl CustomSettingsBreadcrumbs for ProfilesView {
     fn settings_hints(&self) -> Option<CustomHints> {
         if self.naming {
             return Some(CustomHints {
-                question: None,
                 left: vec![
                     SettingsHint::new(Key::ENTER, "create"),
                     SettingsHint::new(Key::TYPE, "name"),
@@ -861,7 +860,6 @@ impl CustomSettingsBreadcrumbs for ProfilesView {
         }
         left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         Some(CustomHints {
-            question: None,
             left,
             right: Vec::new(),
         })

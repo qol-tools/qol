@@ -1,6 +1,7 @@
 use qol_config::contract::FieldDefault;
 use qol_config::object_array::{pretty_label, ItemFieldKind};
 
+use super::components::SettingsQuestion;
 use super::object_array_row::{
     chosen_options, format_number, item_is_empty, mod_options, Entry, Item, ObjectArrayState,
 };
@@ -45,13 +46,19 @@ pub(super) enum FormQuestion {
     Blocked(usize),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FormAnswer {
+    Save,
+    Discard,
+    Fill(usize),
+}
+
 #[derive(Debug)]
 pub(super) struct EntryForm {
     pub(super) replacing: Option<usize>,
     pub(super) item_label: String,
     pub(super) crumb: String,
     pub(super) fields: Vec<FormField>,
-    pub(super) question: Option<FormQuestion>,
     value_form: bool,
     initial: FormOutput,
 }
@@ -126,7 +133,6 @@ impl EntryForm {
             item_label: item_label.to_string(),
             crumb,
             fields,
-            question: None,
             value_form,
             initial,
         }
@@ -215,23 +221,31 @@ impl EntryForm {
         }
     }
 
-    pub(super) fn question_text(&self, question: FormQuestion) -> String {
-        match question {
-            FormQuestion::Save => match self.replacing {
-                None => format!("Save the new {}?", self.item_label),
-                Some(_) => format!("Save changes to {}?", self.crumb),
-            },
-            FormQuestion::Blocked(index) => {
-                let label = self
-                    .fields
+    pub(super) fn question(&self) -> SettingsQuestion<FormAnswer> {
+        let name = self.replacing.map(|_| {
+            if self.value_form {
+                format!("this {}", self.item_label)
+            } else {
+                self.crumb.clone()
+            }
+        });
+        match self.ask() {
+            FormQuestion::Save => SettingsQuestion::save_changes(
+                name.as_deref(),
+                &self.item_label,
+                FormAnswer::Save,
+                FormAnswer::Discard,
+            ),
+            FormQuestion::Blocked(index) => SettingsQuestion::blocked(
+                self.fields
                     .get(index)
                     .map(|field| field.label.as_str())
-                    .unwrap_or_default();
-                format!(
-                    "{label} is empty, so this {} cannot be saved yet.",
-                    self.item_label
-                )
-            }
+                    .unwrap_or_default(),
+                name.as_deref(),
+                &self.item_label,
+                FormAnswer::Fill(index),
+                FormAnswer::Discard,
+            ),
         }
     }
 
@@ -503,17 +517,21 @@ mod tests {
 
         assert!(form.flip(1));
         assert_eq!(form.ask(), FormQuestion::Blocked(0));
+        let question = form.question();
+        assert_eq!(question.title(), "app is empty");
+        assert_eq!(question.selected(), Some(FormAnswer::Fill(0)));
+        assert_eq!(question.answers()[0].label, "Fill in the app");
         assert_eq!(
-            form.question_text(FormQuestion::Blocked(0)),
-            "App is empty, so this switchable panel cannot be saved yet."
+            question.answers()[1].label,
+            "Discard the new switchable panel"
         );
 
         form.text_mut(0).unwrap().insert_str("firefox");
         assert_eq!(form.ask(), FormQuestion::Save);
-        assert_eq!(
-            form.question_text(FormQuestion::Save),
-            "Save the new switchable panel?"
-        );
+        let question = form.question();
+        assert_eq!(question.title(), "save changes");
+        assert_eq!(question.selected(), Some(FormAnswer::Save));
+        assert_eq!(question.answers()[0].label, "Save the new switchable panel");
     }
 
     #[test]
@@ -530,10 +548,7 @@ mod tests {
         assert_eq!(form.crumb, "zed");
         assert_eq!(form.sub_header(), "an application.");
         assert_eq!(form.output(), FormOutput::Entry(state.entries[0].clone()));
-        assert_eq!(
-            form.question_text(FormQuestion::Save),
-            "Save changes to zed?"
-        );
+        assert_eq!(form.question().colophon(), "you changed zed.");
 
         assert!(form.set_list(2, vec!["/opt/zed".to_string()]));
         assert!(form.changed());
@@ -549,10 +564,7 @@ mod tests {
 
         assert_eq!(form.name(), None);
         assert_eq!(form.ask(), FormQuestion::Blocked(0));
-        assert_eq!(
-            form.question_text(FormQuestion::Blocked(0)),
-            "From Mods is empty, so this scroll rule cannot be saved yet."
-        );
+        assert_eq!(form.question().title(), "from mods is empty");
     }
 
     #[test]
