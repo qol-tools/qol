@@ -62,7 +62,7 @@ jobs:
     steps:
       - name: Mint the versioning app token
         id: app
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.VERSIONING_APP_CLIENT_ID }}
           private-key: ${{ secrets.VERSIONING_APP_PRIVATE_KEY }}
@@ -601,7 +601,7 @@ jobs:
         run: cargo run --locked --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
 
       - name: Install cargo-deb
-        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
+        uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2
         with:
           tool: cargo-deb
 
@@ -858,7 +858,7 @@ jobs:
 
       - name: Mint the versioning app token
         id: app
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.VERSIONING_APP_CLIENT_ID }}
           private-key: ${{ secrets.VERSIONING_APP_PRIVATE_KEY }}

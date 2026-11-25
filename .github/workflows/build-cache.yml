@@ -81,7 +81,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: steps.rust_setup.outputs.build-cache-hit != 'true'
-        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
+        uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c
         with:
           tool: cargo-nextest@0.9.143
 
