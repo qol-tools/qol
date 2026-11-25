@@ -175,10 +175,6 @@ fn canonical(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn same_dir(left: &Path, right: &Path) -> bool {
-    canonical(left) == canonical(right)
-}
-
 fn configured_build_dir(root: &Path, cargo_home: &Path) -> Result<Option<String>> {
     let config_dirs = root
         .ancestors()
