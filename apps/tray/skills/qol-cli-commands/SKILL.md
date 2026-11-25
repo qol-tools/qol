@@ -55,6 +55,10 @@ already holds. Like Cargo, it reads and writes a legacy extensionless
 `.cargo/config` instead when one exists. A build-dir that is already set is
 left as it is, and the `build-dir` step prints the folder in use, or
 `not set:` and the reason when it could not write one; that never stops setup.
+It writes nothing when the folder above the main clone is the home folder or
+holds `CARGO_HOME`, since the setting would then reach every Rust project, or
+when the tree is not inside that folder (a separate git dir, a submodule or a
+worktree elsewhere), since Cargo would never read the file there.
 Each tree's `target/` then holds only its final binaries.
 
 Global flags:

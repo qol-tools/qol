@@ -145,9 +145,33 @@ fn ensure_build_dir(from_env: Option<OsString>, root: &Path, cargo_home: &Path) 
     let workspace_home = clone
         .parent()
         .ok_or_else(|| anyhow!("{} has no parent folder", clone.display()))?;
+    let cargo_dir = workspace_home.join(".cargo");
+    if same_dir(&cargo_dir, cargo_home)
+        || crate::host_facade::home_dir().is_some_and(|home| same_dir(&home, workspace_home))
+    {
+        bail!(
+            "{} would set it for every Rust project; set build.build-dir by hand",
+            cargo_dir.display()
+        );
+    }
+    if !canonical(root).starts_with(canonical(workspace_home)) {
+        bail!(
+            "{} is outside {}, so Cargo would not read a config written there",
+            root.display(),
+            workspace_home.display()
+        );
+    }
     let build_dir = workspace_home.join(SHARED_BUILD_DIR);
-    write_build_dir(&config_file_in(&workspace_home.join(".cargo")), &build_dir)?;
+    write_build_dir(&config_file_in(&cargo_dir), &build_dir)?;
     Ok(build_dir.display().to_string())
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn same_dir(left: &Path, right: &Path) -> bool {
+    canonical(left) == canonical(right)
 }
 
 fn configured_build_dir(root: &Path, cargo_home: &Path) -> Result<Option<String>> {
@@ -596,6 +620,51 @@ mod tests {
 
         assert_eq!(build_dir_in(&legacy).unwrap(), Some(build_dir));
         assert!(!home.path().join(".cargo/config.toml").exists());
+    }
+
+    #[test]
+    fn a_clone_whose_parent_holds_cargo_home_is_left_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let clone = clone_in(home.path());
+        let cargo_home = home.path().join(".cargo");
+        fs::create_dir_all(&cargo_home).unwrap();
+
+        let error = ensure_build_dir(None, &clone, &cargo_home).unwrap_err();
+
+        assert!(error.to_string().contains("every Rust project"), "{error}");
+        assert!(!cargo_home.join("config.toml").exists());
+    }
+
+    #[test]
+    fn a_tree_outside_the_main_clone_parent_is_left_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let clone = clone_in(home.path());
+        git(
+            &clone,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                "init",
+            ],
+        );
+        let elsewhere = tempfile::tempdir().unwrap();
+        let worktree = elsewhere.path().join("qol");
+        git(
+            &clone,
+            &["worktree", "add", "--quiet", worktree.to_str().unwrap()],
+        );
+        let cargo_home = home.path().join("cargo-home");
+
+        let error = ensure_build_dir(None, &worktree, &cargo_home).unwrap_err();
+
+        assert!(error.to_string().contains("is outside"), "{error}");
+        assert!(!home.path().join(".cargo").exists());
     }
 
     #[test]
