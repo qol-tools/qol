@@ -99,7 +99,7 @@ fn app() -> HeadlessApp {
             "setup",
             "Build and install local qol development tooling.",
             "qol setup",
-            "Updates local development binaries and repository-owned integration.",
+            "Updates local development binaries and repository-owned integration, and points Cargo at one shared build folder beside the main clone unless a build-dir is already set.",
             "Progress on stdout; diagnostics on stderr.",
             "Exits non-zero when setup cannot complete.",
         ))
