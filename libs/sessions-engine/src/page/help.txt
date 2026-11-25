@@ -1,10 +1,10 @@
 qol-cli-sessions sessions page <verb>
 
 Put a workflow page on the switchboard board, so steps and checks the user
-works through by hand live on the board and not in the chat. While a page is
-up it sits under the fork list, the line under the rule reads
-`<tab> · fork detail`, and t switches between the page and the fork detail. Pages live in the CLI Sessions data
-folder, in pages/<id>.json. Any workflow can send one: a fork with the
+works through by hand live on the board and not in the chat. While its owner,
+or the fork that started its owner, is the fork viewed or written to, the page
+sits above the fork list in place of that fork's detail. Pages live in the
+CLI Sessions data folder, in pages/<id>.json. Any workflow can send one: a fork with the
 session_page tool, a script with this verb.
 
 Usage:
@@ -54,8 +54,8 @@ Page JSON:
   id and owner are lowercase letters, digits and dashes, at most 64
   characters; owner is the spawn key of the fork that owns the page, and the
   board shows a page only while that fork is open. title is at most 80
-  characters; tab, the page's name in the board header, at most 16 and
-  defaults to the id. A page has 1 to 24 blocks and each block 1 to 40
+  characters; tab, a short name for the page, at most 16 and defaults to
+  the id. A page has 1 to 24 blocks and each block 1 to 40
   entries. Item ids (checklist and actions) are lowercase letters, digits
   and dashes, at most 32 characters, unique on the page. tone is info
   (default), good, warn or bad; state is done, now or todo (default). Text

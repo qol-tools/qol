@@ -54,9 +54,6 @@ const HOOK_NOTE = '\n\n<system-reminder>\nUserPromptSubmit hook additional conte
 const IDLE_KEY = 'i'
 const CLOSED_KEY = 'r'
 const SUB_FORK_KEYS = 'abcdefghjklmopqstuvwz'
-const PAGE_KEY = 't'
-const FORKS_TAB = '#forks'
-const FORKS_LABEL = 'fork detail'
 const ITEM_PREFIX = 'item-'
 const NOTE_KEY = 'note'
 const PAGE_INDENT = 5
@@ -160,7 +157,6 @@ const forkStates = atom({ plugin: 'qol-switchboard', key: 'forkStates' } as cons
 const idleShown = atom({ plugin: 'qol-switchboard', key: 'idleShown' } as const, false)
 const closedShown = atom({ plugin: 'qol-switchboard', key: 'closedShown' } as const, false)
 const pages = atom({ plugin: 'qol-switchboard', key: 'pages' } as const, [] as LivePage[])
-const pageShown = atom({ plugin: 'qol-switchboard', key: 'pageShown' } as const, { tab: '', for: '' })
 const pageCursor = atom({ plugin: 'qol-switchboard', key: 'pageCursor' } as const, '')
 const pageNoting = atom({ plugin: 'qol-switchboard', key: 'pageNoting' } as const, '')
 
@@ -1613,12 +1609,8 @@ export const livePagesOf = (rows: readonly Entry[], all: readonly LivePage[]): L
     return owner !== undefined && !isEnded(owner)
   })
 
-export const frontPageOf = (livePages: readonly LivePage[], family: ReadonlySet<string>, picked: string): LivePage | undefined => {
-  if (picked === FORKS_TAB) return undefined
-  const chosen = livePages.find(live => live.page.id === picked)
-  if (chosen !== undefined) return chosen
-  return livePages.filter(live => family.has(live.page.owner)).reduce<LivePage | undefined>((newest, live) => (newest === undefined || live.set_ms >= newest.set_ms ? live : newest), undefined)
-}
+export const frontPageOf = (livePages: readonly LivePage[], family: ReadonlySet<string>): LivePage | undefined =>
+  livePages.filter(live => family.has(live.page.owner)).reduce<LivePage | undefined>((newest, live) => (newest === undefined || live.set_ms >= newest.set_ms ? live : newest), undefined)
 
 export const failSaid = (page: Page, check: Check, note: string): string => fromUser(`${page.title}: check ${check.id} failed (${check.text})${note === '' ? '.' : `: ${note}`}`)
 
@@ -1656,7 +1648,6 @@ export const refreshPages = async ($: EngineInterface): Promise<void> => {
     for (const key of pagesSeen) if (!kept.has(key)) pagesSeen.delete(key)
     for (const live of fresh) pagesSeen.add(seenKey(live))
     await update($, pages, () => all)
-    if (fresh.length > 0) await update($, pageShown, () => ({ tab: '', for: '' }))
     $.ui.invalidate('ui.render')
   } catch {
   } finally {
@@ -3623,7 +3614,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'AgentRow' }, async ($, e, next) => {
     const body = e.props.body
     const lit = body === undefined ? body : litBody(body, e.props.id, await read($, litRows))
-    const isOnBoard = (await read($, board)).some(entry => entry.agentId === e.props.id && !entry.isDismissed) && (await isBoardShown($))
+    const isOnBoard = (await read($, board)).some(entry => entry.agentId === e.props.id) && (await isBoardShown($))
     if (lit === body && !isOnBoard) return next(e)
     return next({ ...e, props: { ...e.props, ...(lit === undefined ? {} : { body: lit }), ...(isOnBoard ? { isHidden: true } : {}) } })
   }).catch(($, e, next) => next(e))
@@ -4153,16 +4144,10 @@ export const register: Register = on => {
     const isOpen = (pull: Pull) => ['open', 'draft'].includes(stateOfPull(pull))
     const isFocused = e.props.isFocused
     const livePages = livePagesOf(everyRow, await read($, pages))
-    const focusedId = target?.agentId ?? ''
-    const shownTab = await read($, pageShown)
     const focusedFamily = new Set(target === undefined ? [] : [target, ...forksUnder(list, target)].map(keyOf))
-    const shownPage = frontPageOf(livePages, focusedFamily, shownTab.for === focusedId ? shownTab.tab : '')
+    const shownPage = frontPageOf(livePages, focusedFamily)
     const cursor = await read($, pageCursor)
     const noting = await read($, pageNoting)
-    const tabs = livePages.length === 0 ? [] : [...livePages.map(live => ({ id: live.page.id, label: live.page.tab ?? live.page.id })), { id: FORKS_TAB, label: FORKS_LABEL }]
-    const currentTab = shownPage?.page.id ?? FORKS_TAB
-    const nextTab = tabs[(tabs.findIndex(tab => tab.id === currentTab) + 1) % Math.max(1, tabs.length)]
-    const subKeys = livePages.length === 0 ? SUB_FORK_KEYS : SUB_FORK_KEYS.replace(PAGE_KEY, '')
     const pageTail = (entry: Entry) => {
       const counted = livePages.filter(live => live.page.owner === keyOf(entry)).map(pageCount)
       const total = counted.reduce((sum, one) => sum + one.total, 0)
@@ -4222,7 +4207,7 @@ export const register: Register = on => {
     }
     let letters = 0
     const letter = () => {
-      const one = subKeys[letters]
+      const one = SUB_FORK_KEYS[letters]
       letters += 1
       return one === undefined ? {} : { hotkey: one }
     }
@@ -4531,10 +4516,9 @@ export const register: Register = on => {
     }
     const hasSubs = list.some(entry => parentOf(list, entry) !== undefined)
     const keys = `digit opens a fork${hasSubs ? ' · letter opens a sub-fork' : ''}${closedFoldable > 0 ? ` · ${CLOSED_KEY} ${isClosedShown ? 'hides' : 'shows'} the closed forks` : ''} · tab walks${target === undefined ? '' : ' · tab to model or effort, arrows and enter pick'} · x closes · esc back to the prompt`
-    const nextKey = nextTab === undefined ? '' : ` · ${PAGE_KEY} ${nextTab.label}`
     const shownChecks = shownPage === undefined ? [] : checksOf(shownPage.page)
-    const pageKeys = noting !== '' ? '↵ send to the fork · esc then d drops the note · x closes' : `${shownChecks.length > 0 ? 'digit or tab picks a check · ' : ''}${nextKey.slice(3)} · x closes · esc back to the prompt`
-    const boardKeys = shownPage !== undefined ? pageKeys : `${keys}${nextKey}`
+    const pageKeys = noting !== '' ? '↵ send to the fork · esc then d drops the note · x closes' : `${shownChecks.length > 0 ? 'digit or tab picks a check · ' : ''}x closes · esc back to the prompt`
+    const boardKeys = shownPage !== undefined ? pageKeys : keys
     const help = isFocused && (
       <Box key="help" flexDirection="row" gap={2}>
         <Text dimColor wrap="wrap">
@@ -4548,28 +4532,6 @@ export const register: Register = on => {
       </Box>
     )
 
-    const showTab = (id: string) => async () => {
-      await update($, pageShown, () => ({ tab: id, for: focusedId }))
-      $.ui.invalidate('ui.render')
-    }
-    const tabKey = (id: string) => (id === FORKS_TAB ? 'tab-forks' : `tab-page-${id}`)
-    const tabRow =
-      tabs.length === 0 ? undefined : (
-        <Box key="tabs" flexDirection="row">
-          {tabs.flatMap((tab, index) => [
-            ...(index === 0 ? [] : [<Text key={`tab-gap-${tab.id}`} dimColor>{' · '}</Text>]),
-            tab.id === currentTab ? (
-              <Text key={tabKey(tab.id)} bold>
-                {tab.label}
-              </Text>
-            ) : (
-              <Button key={tabKey(tab.id)} plain dimColor {...(isFocused && tab.id === nextTab?.id ? { hotkey: PAGE_KEY } : {})} onPress={showTab(tab.id)}>
-                {tab.label}
-              </Button>
-            ),
-          ])}
-        </Box>
-      )
     const pick = (check: Check) => async () => {
       await update($, pageCursor, () => check.id)
       if (![check.id, ''].includes(noting)) await update($, pageNoting, () => '')
@@ -4709,19 +4671,20 @@ export const register: Register = on => {
     const rows = forkRows.flatMap(entry => [forkRow(entry), ...liveSubs(entry).map(sub => forkRow(sub, entry))])
     const below = shownPage !== undefined ? pageSheet(shownPage) : shown === undefined ? undefined : detailOf(shown)
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" minHeight={Math.max(0, e.props.scroll?.bodyRows ?? 0)}>
         {loading !== '' && <Text color="claude">◐ {loading}</Text>}
         {help}
-        {rows}
-        {closedFold}
-        {closedRows.map(entry => forkRow(entry))}
-        {(below !== undefined || tabRow !== undefined) && (
+        <Box flexDirection="column" flexGrow={1}>
+          {below}
+        </Box>
+        {below !== undefined && (
           <Box marginTop={1}>
             <Text dimColor>{'─'.repeat(Math.max(1, e.props.bodyColumns ?? 1))}</Text>
           </Box>
         )}
-        {tabRow}
-        {below}
+        {rows}
+        {closedFold}
+        {closedRows.map(entry => forkRow(entry))}
       </Box>
     )
   })

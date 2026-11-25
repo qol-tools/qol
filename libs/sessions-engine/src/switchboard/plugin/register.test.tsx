@@ -42,6 +42,8 @@ const linesOf = (node: Drawn | string): string[] => {
 
 const boardLines = async (ui: { drawn: () => Promise<unknown> }): Promise<string[]> => linesOf((await ui.drawn()) as Drawn)
 
+const listLines = async (ui: { drawn: () => Promise<unknown> }): Promise<string[]> => (await boardLines(ui)).filter(line => /^(◐|\d: |   └)/.test(line))
+
 const SORTED: [string, string][] = [
   ['Build artifacts', '**ask**\nbuild all three, in that order'],
   ['Which colour', 'ask\namber'],
@@ -181,11 +183,11 @@ test('a report reaches the model as its first sentence and the pane shows the fo
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect((await boardLines(ui)).filter(line => /needs you|asks|answer/.test(line))).toEqual([
-      '1: ● cc-agent-list-polish ◉  needs you',
       '● cc-agent-list-polish  needs you',
       'asks       Build artifacts, block hook and block stats?',
       'answer     build all three, in that order',
       '           y: send the answerdismiss',
+      '1: ● cc-agent-list-polish ◉  needs you',
     ])
     await ui.unmount()
   }
@@ -560,7 +562,7 @@ test('a sub-fork row an earlier board lost its parent on gets the parent back fr
   expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('agent id s1, listed under parent-fork')
   expect((store.get('board:switchboard-session') as any[]).filter(one => one.launcher === 'p1').map(one => one.agentId).sort()).toEqual(['s1', 's2'])
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, isFocused: false } })
-  expect((await boardLines(ui)).slice(0, 4)).toEqual(['◐ Bringing back 3 forks…', '1: ● parent-fork  stopped mid-turn', '   └ a: ● sub-two  stopped mid-turn', '   └ b: ● sub-one  stopped mid-turn'])
+  expect((await listLines(ui)).slice(0, 4)).toEqual(['◐ Bringing back 3 forks…', '1: ● parent-fork  stopped mid-turn', '   └ a: ● sub-two  stopped mid-turn', '   └ b: ● sub-one  stopped mid-turn'])
   await ui.unmount()
 })
 
@@ -785,11 +787,12 @@ test("in a fork's view the board details that fork as the one written to, and in
   await runBoard($)
   const propsIn = (agentId: string) => ({ ...PANE.props, isFocused: false, placement: 'inline', view: { agentId } }) as const
   const inFork = await $.ui.mount({ ...PANE, surface: 'terminal', props: propsIn('a8') })
-  expect((await boardLines(inFork)).slice(0, 4)).toEqual(['1: ● asking-fork  needs you', '', '─'.repeat(60), 'writing to  ● asking-fork  needs you'])
+  const forkDrawn = await boardLines(inFork)
+  expect([forkDrawn.find(line => line.startsWith('writing to')), ...forkDrawn.slice(-3)]).toEqual(['writing to  ● asking-fork  needs you', '', '─'.repeat(60), '1: ● asking-fork  needs you'])
   expect(await inFork.find({ type: 'Text', text: 'amber' })).toBeUndefined()
   await inFork.unmount()
   const inOther = await $.ui.mount({ ...PANE, surface: 'terminal', props: propsIn('not-a-fork') })
-  expect((await boardLines(inOther)).slice(3, 8)).toEqual(['● asking-fork  needs you', '', 'asks       Which colour?', 'answer     amber', '           y: send the answerdismiss'])
+  expect((await boardLines(inOther)).slice(0, 5)).toEqual(['● asking-fork  needs you', '', 'asks       Which colour?', 'answer     amber', '           y: send the answerdismiss'])
   await inOther.unmount()
 })
 
@@ -1118,7 +1121,7 @@ test('until the open reaches it, a fork cut off mid-turn waits in the board deta
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...PANE, surface, props: { ...PANE.props, isFocused: false } })
-    expect((await boardLines(ui)).slice(0, 4)).toEqual(['◐ Bringing back 3 forks…', '1: ● asked-fork  stopped mid-turn', '2: ● mid-fork  stopped mid-turn', '3: ● done-fork  merged'])
+    expect((await listLines(ui)).slice(0, 4)).toEqual(['◐ Bringing back 3 forks…', '1: ● asked-fork  stopped mid-turn', '2: ● mid-fork  stopped mid-turn', '3: ● done-fork  merged'])
     expect(await ui.find({ type: 'Text', text: 'mid-turn by a restart' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: NEEDS_YOU })).toBeUndefined()
     await ui.unmount()
@@ -1145,7 +1148,7 @@ test('sub-forks a restart stopped sit under their parent row and its detail, and
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, isFocused: false } })
-  expect((await boardLines(ui)).slice(0, 4)).toEqual(['◐ Bringing back 3 forks…', '1: ● parent-fork  idle', '   └ a: ● sub-two  stopped mid-turn', '   └ b: ● sub-one  stopped mid-turn'])
+  expect((await listLines(ui)).slice(0, 4)).toEqual(['◐ Bringing back 3 forks…', '1: ● parent-fork  idle', '   └ a: ● sub-two  stopped mid-turn', '   └ b: ● sub-one  stopped mid-turn'])
   expect(await ui.find({ type: 'Text', text: '2 sub-forks mid-turn by a restart' })).toBeDefined()
   await ui.press({ key: 'continue-p1' })
   expect(sent.map(one => one.to).sort()).toEqual(['s1', 's2'])
@@ -3364,14 +3367,16 @@ test('a fork that started forks holds them under its row: their questions stay w
   expect(await writing.find({ type: 'Text', text: /letter opens a sub-fork/ })).toBeDefined()
   expect((await boardLines(writing)).filter(line => /fork|closed/.test(line))).toEqual([
     'digit opens a fork · letter opens a sub-fork · tab walks · tab to model or effort, arrows and enter pick · x closes · esc back to the promptx: close',
-    '1: ● parent-fork  waits on 1',
-    '   └ a: ● helper-fork  working',
     'writing to  ● parent-fork  waits on 1',
     'sub-forks  helper-fork working  i: 1 closed',
+    '1: ● parent-fork  waits on 1',
+    '   └ a: ● helper-fork  working',
   ])
   expect(await writing.find({ type: 'Text', text: /◉/ })).toBeUndefined()
   await writing.press({ key: 'resting-fold' })
-  expect((await boardLines(writing)).slice(-2)).toEqual(['sub-forks  helper-fork working  i: hide closed', '           b: ● child-fork'])
+  const folded = await boardLines(writing)
+  const subsAt = folded.findIndex(line => line.startsWith('sub-forks'))
+  expect(folded.slice(subsAt, subsAt + 2)).toEqual(['sub-forks  helper-fork working  i: hide closed', '           b: ● child-fork'])
   await writing.press({ key: 'resting-fold' })
   await writing.press({ key: 'open-k2' })
   expect(viewed).toEqual(['k2'])
@@ -3488,7 +3493,8 @@ test('a fork reads waiting while it runs a watcher, from the fork state CLI Sess
   await ui.unmount()
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'watch-fork ', cursor: 11 })
   const writing = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, isFocused: false } })
-  expect((await boardLines(writing)).slice(0, 5)).toEqual(['1: ● watch-fork  waiting #7', '2: ● idle-fork ◉  idle', '', '─'.repeat(60), 'writing to  ● watch-fork  waiting #7'])
+  const watching = await boardLines(writing)
+  expect([watching[0], ...watching.slice(-4)]).toEqual(['writing to  ● watch-fork  waiting #7', '', '─'.repeat(60), '1: ● watch-fork  waiting #7', '2: ● idle-fork ◉  idle'])
   await writing.unmount()
   expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('(waiting on its pull request, agent id w1)')
 })
@@ -4980,11 +4986,6 @@ test('the board lists each fork on one line and details the fork written to with
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'colour-board ', cursor: 13 })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, isFocused: false } })
   expect(await boardLines(ui)).toEqual([
-    '1: ● other-fork ◉  needs you',
-    '2: ● colour-board  working',
-    '   └ a: ● pages  working',
-    '',
-    '─'.repeat(60),
     'writing to  ● colour-board  working',
     '',
     'now        Editing register.tsx',
@@ -4994,6 +4995,11 @@ test('the board lists each fork on one line and details the fork written to with
     'folder     work',
     'used       199.0k tokens, active 3m ago',
     'sub-forks  pages working  1 closed',
+    '',
+    '─'.repeat(60),
+    '1: ● other-fork ◉  needs you',
+    '2: ● colour-board  working',
+    '   └ a: ● pages  working',
   ])
   const props = async (text: string | RegExp) => (await ui.find({ type: 'Text', text }))?.props
   expect((await ui.find({ key: 'row-a1' }))?.props.backgroundColor).toBe('#1a1b20')
@@ -5075,7 +5081,7 @@ const pagesBoard = (on: any, sent: any[], page: any, isClearRefused = false, ans
   return Object.assign(runs, { refile })
 }
 
-test("a fork's page sits under the fork list and the rule, and its keys own the digits: p records a pass and moves on, f sends the note to the fork as the user's words, and t shows the fork detail with the page's count on the fork's row", async ($, on) => {
+test("the fork in view's page sits over the rule and the fork list, with no tab to switch, and its keys own the digits: p records a pass and moves on, f sends the note to the fork as the user's words, and the fork's row carries the page's count", async ($, on) => {
   const sent: any[] = []
   const runs = pagesBoard(on, sent, testPage('t1-fork'))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -5087,8 +5093,10 @@ test("a fork's page sits under the fork list and the rule, and its keys own the 
   const drawn = await boardLines(ui)
   const rowAt = drawn.findIndex(line => line.includes('● t1-fork'))
   const ruleAt = drawn.findIndex(line => line.startsWith('───'))
+  const titleAt = drawn.findIndex(line => line.includes('RETAIL TEST'))
   expect(drawn[rowAt]).not.toMatch(/^\d: /)
-  expect([rowAt >= 0, ruleAt > rowAt, drawn.findIndex(line => line.startsWith('tests · ')) > ruleAt, drawn.findIndex(line => line.includes('RETAIL TEST')) > ruleAt]).toEqual([true, true, true, true])
+  expect([titleAt >= 0, ruleAt > titleAt, rowAt > ruleAt]).toEqual([true, true, true])
+  expect(drawn.some(line => line.includes('fork detail'))).toBe(false)
   expect(await ui.find({ type: 'Text', text: '0 pass · 0 fail · 2 left' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '1.4.2' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Hold the rifle at rest' })).toBeDefined()
@@ -5111,12 +5119,8 @@ test("a fork's page sits under the fork list and the rule, and its keys own the 
   await ui.press({ key: 'action-rebuild' })
   expect(JSON.stringify(sent[1])).toContain('Retail test: Rebuild the pak')
 
-  await ui.press({ key: 'tab-forks' })
-  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '0 left · 1 failed' })).toBeDefined()
-  expect(await boardLines(ui)).toContain('1: ● t1-fork  0 left · 1 failed  working')
-  await ui.press({ key: 'tab-page-retail-test' })
-  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
+  expect(await boardLines(ui)).toContain('   ● t1-fork  0 left · 1 failed  working')
   await ui.unmount()
 })
 
@@ -5166,22 +5170,6 @@ test("a page whose owner has no row or has ended is taken down, so dead pages ne
   await ui.unmount()
 })
 
-test('a page with the id forks is its own tab and the forks tab stays the forks', async ($, on) => {
-  const sent: any[] = []
-  pagesBoard(on, sent, { ...testPage('t4-fork'), id: 'forks' })
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await spawn($, 't4', 't4-fork: a fork')
-  await settle()
-  await refreshPages($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 't4' } } })
-  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
-  await ui.press({ key: 'tab-forks' })
-  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
-  await ui.press({ key: 'tab-page-forks' })
-  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
-  await ui.unmount()
-})
-
 test('a fail note that does not reach its fork reads not sent on its check', async ($, on) => {
   const sent: any[] = []
   pagesBoard(on, sent, testPage('t6-fork'), false, () => ({ isDelivered: false, reason: "The user doesn't want to take this action right now." }))
@@ -5203,24 +5191,7 @@ test('a fail note that does not reach its fork reads not sent on its check', asy
   await ui.unmount()
 })
 
-test('a page cleared and filed again under the same id is the front page again', async ($, on) => {
-  const sent: any[] = []
-  const runs = pagesBoard(on, sent, testPage('t7-fork'))
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await spawn($, 't7', 't7-fork: a fork')
-  await settle()
-  await refreshPages($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 't7' } } })
-  await ui.press({ key: 'tab-forks' })
-  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeUndefined()
-  runs.refile()
-  await refreshPages($)
-  await settle()
-  expect(await ui.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
-  await ui.unmount()
-})
-
-test("a fork's page waits as a tab while the switchboard or another fork is in view, and a tab picked in one view stays in that view", async ($, on) => {
+test("a fork's page shows only while that fork is in view, and the switchboard or another fork shows its own detail with the page's count on the fork's row", async ($, on) => {
   const sent: any[] = []
   pagesBoard(on, sent, testPage('t8-fork'))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -5238,25 +5209,20 @@ test("a fork's page waits as a tab while the switchboard or another fork is in v
   expect([await isPageShown({}), await isPageShown({ agentId: 't9' }), await isPageShown({ agentId: 't8' })]).toEqual([false, false, true])
   const main = await mountAt({})
   expect(await main.find({ type: 'Text', text: '2 of 2 left' })).toBeDefined()
-  await main.press({ key: 'tab-page-retail-test' })
-  expect(await main.find({ type: 'Text', text: 'RETAIL TEST' })).toBeDefined()
+  expect(await main.find({ key: 'tab-page-retail-test' })).toBeUndefined()
   await main.unmount()
-  expect([await isPageShown({}), await isPageShown({ agentId: 't9' }), await isPageShown({ agentId: 't8' })]).toEqual([true, false, true])
 })
 
-test('the front page is the picked tab, else the newest page of the fork in view or of a fork it started, else the forks', () => {
+test('the front page is the newest page of the fork in view or of a fork it started, else none', () => {
   const live = (id: string, owner: string, set_ms: number) => ({ page: { ...testPage(owner), id }, set_ms, updated_ms: set_ms, answers: [] }) as any
   const all = [live('old', 'kid-fork', 1), live('mine', 'top-fork', 2), live('new', 'kid-fork', 3), live('other', 'other-fork', 4)]
   const family = new Set(['top-fork', 'kid-fork'])
-  expect(frontPageOf(all, family, '')?.page.id).toBe('new')
-  expect(frontPageOf(all, new Set(['top-fork']), '')?.page.id).toBe('mine')
-  expect(frontPageOf(all, new Set(), '')).toBeUndefined()
-  expect(frontPageOf(all, family, '#forks')).toBeUndefined()
-  expect(frontPageOf(all, new Set(), 'other')?.page.id).toBe('other')
-  expect(frontPageOf(all, family, 'gone')?.page.id).toBe('new')
+  expect(frontPageOf(all, family)?.page.id).toBe('new')
+  expect(frontPageOf(all, new Set(['top-fork']))?.page.id).toBe('mine')
+  expect(frontPageOf(all, new Set())).toBeUndefined()
 })
 
-test('while the board is shown, each fork on it leaves the agent list and other agents keep their rows; closing the board brings the forks back', async ($, on) => {
+test('while the board is shown, each fork on it, closed ones too, leaves the agent list and other agents keep their rows; closing the board brings the forks back', async ($, on) => {
   const hidden: Record<string, boolean> = {}
   const bodies: Record<string, string> = {}
   on('ui.render', { component: 'AgentRow' }, ($: any, e: any) => {
@@ -5265,7 +5231,9 @@ test('while the board is shown, each fork on it leaves the agent list and other 
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
-  engine(on)
+  const store = new Map<string, unknown>()
+  store.set('board:switchboard-session', [{ agentId: 'h2', name: 'h2-fork: a closed fork', headline: '', report: '', at: 1, isWorking: false, isDismissed: true, isClosed: true, isDone: true }])
+  engine(on, [], [], [], store)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'h1', 'h1-fork: a fork')
   await settle()
@@ -5274,12 +5242,12 @@ test('while the board is shown, each fork on it leaves the agent list and other 
     await ui.unmount()
     return hidden[id]
   }
-  expect([await rowOf('h1'), await rowOf('lane-1')]).toEqual([false, false])
+  expect([await rowOf('h1'), await rowOf('h2'), await rowOf('lane-1')]).toEqual([false, false, false])
   expect((await typed($, 'qols board')).drop).toContain('Fork board opened.')
-  expect([await rowOf('h1'), await rowOf('lane-1')]).toEqual([true, false])
+  expect([await rowOf('h1'), await rowOf('h2'), await rowOf('lane-1')]).toEqual([true, true, false])
   expect(bodies['h1']).toBe('  h1  work')
   expect((await typed($, 'qols board')).drop).toContain('Fork board closed.')
-  expect([await rowOf('h1'), await rowOf('lane-1')]).toEqual([false, false])
+  expect([await rowOf('h1'), await rowOf('h2'), await rowOf('lane-1')]).toEqual([false, false, false])
 })
 
 test('a long check keeps its whole text when the pane has room for it', async ($, on) => {
