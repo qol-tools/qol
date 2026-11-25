@@ -955,7 +955,7 @@ export const withMerging = (states: Record<string, RunState>, details: Record<st
   Object.fromEntries(
     Object.entries(states).map(([id, run]) => {
       const pulls = run.pulls ?? []
-      const isMerging = run.state === WAITING_STATE && pulls.length > 0 && pulls.every(url => details[url]?.merge === 'queued' || details[url]?.state === 'merged')
+      const isMerging = run.state === WAITING_STATE && pulls.length > 0 && pulls.every(url => details[url]?.merge === 'queued' || details[url]?.state === 'merged') && pulls.some(url => details[url]?.merge === 'queued')
       return [id, isMerging ? { ...run, state: MERGING_STATE } : run]
     }),
   )
@@ -3232,7 +3232,7 @@ export const lostPullOf = (list: Entry[], entry: Entry, all: readonly Pull[], de
   [entry, ...forksUnder(list, entry)]
     .filter(one => !one.isWorking && !isEnded(one))
     .flatMap(one => pullsOf(all, one.agentId))
-    .find(pull => isUnmerged(pull, details) && details[pull.pullRequest]?.merge !== 'queued' && !all.some(other => other.pullRequest === pull.pullRequest && other.isWatched))
+    .find(pull => details[pull.pullRequest] !== undefined && isUnmerged(pull, details) && details[pull.pullRequest]?.merge !== 'queued' && !all.some(other => other.pullRequest === pull.pullRequest && other.isWatched))
 
 const pullNote = (list: Entry[], entry: Entry, all: readonly Pull[], details: Record<string, PullDetail>): string => {
   const own = pullsOf(all, entry.agentId).map(pull => pullText(pull, details[pull.pullRequest]?.state, details[pull.pullRequest]?.merge))

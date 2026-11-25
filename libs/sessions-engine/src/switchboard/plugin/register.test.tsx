@@ -4094,8 +4094,8 @@ test('a fork whose watched pull requests all sit in the merge queue reads mergin
   const url = (number: number) => `https://github.com/o/r/pull/${number}`
   const detail = (extra: object): any => ({ at: 1, state: 'open', passed: 0, failed: 0, running: 0, total: 0, ...extra })
   const details = { [url(7)]: detail({ merge: 'queued' }), [url(8)]: detail({}), [url(9)]: detail({ state: 'merged' }) }
-  const states = withMerging({ queued: { state: 'waiting', pulls: [url(7)] }, mixed: { state: 'waiting', pulls: [url(7), url(8)] }, landed: { state: 'waiting', pulls: [url(7), url(9)] }, bare: { state: 'waiting' }, busy: { state: 'running', pulls: [url(7)] } }, details)
-  expect(Object.fromEntries(Object.entries(states).map(([id, run]) => [id, run.state]))).toEqual({ queued: 'merging', mixed: 'waiting', landed: 'merging', bare: 'waiting', busy: 'running' })
+  const states = withMerging({ queued: { state: 'waiting', pulls: [url(7)] }, mixed: { state: 'waiting', pulls: [url(7), url(8)] }, landed: { state: 'waiting', pulls: [url(7), url(9)] }, done: { state: 'waiting', pulls: [url(9)] }, bare: { state: 'waiting' }, busy: { state: 'running', pulls: [url(7)] } }, details)
+  expect(Object.fromEntries(Object.entries(states).map(([id, run]) => [id, run.state]))).toEqual({ queued: 'merging', mixed: 'waiting', landed: 'merging', done: 'waiting', bare: 'waiting', busy: 'running' })
   const fork = (agentId: string): any => ({ agentId, name: `${agentId}-fork: words`, kind: 'note', headline: 'Done.', report: 'Done.', at: 1, isWorking: false, isDismissed: false, hasNewReply: false })
   expect(shownState(fork('queued'), [], states)).toEqual({ label: 'merging #7' })
   expect(shownState(fork('mixed'), [], states)).toEqual({ label: 'waiting #7,#8', state: 'waiting' })
@@ -4111,13 +4111,15 @@ test("a top-level fork's board line lists the open pull requests of its sub-fork
   const text = readText(list, undefined, watched)
   expect(text).toContain('(idle, agent id top) [#30 open · CLI Sessions watching by pages-fork; #34 open · CLI Sessions watching by board-fork]')
   const lost = [pull('pages', 30, false), pull('board', 34, true)]
-  expect(lostPullOf(list, list[0], lost, {})?.number).toBe(30)
-  expect(readText(list, undefined, lost)).toContain('(needs the user, nothing watches #30, agent id top)')
-  expect(lostPullOf(list, list[0], [...lost, pull('top', 30, true)], {})).toBeUndefined()
   const detail = (state: string, extra: object = {}): any => ({ at: 1, state, passed: 0, failed: 0, running: 0, total: 0, ...extra })
+  const open = { 'https://github.com/o/r/pull/30': detail('draft') }
+  expect(lostPullOf(list, list[0], lost, {})).toBeUndefined()
+  expect(lostPullOf(list, list[0], lost, open)?.number).toBe(30)
+  expect(readText(list, undefined, lost, {}, open)).toContain('(needs the user, nothing watches #30, agent id top)')
+  expect(lostPullOf(list, list[0], [...lost, pull('top', 30, true)], open)).toBeUndefined()
   expect(lostPullOf(list, list[0], lost, { 'https://github.com/o/r/pull/30': detail('merged') })).toBeUndefined()
   expect(lostPullOf(list, list[0], lost, { 'https://github.com/o/r/pull/30': detail('open', { merge: 'queued' }) })).toBeUndefined()
-  expect(lostPullOf([fork('top'), fork('pages', { launcher: 'top', isWorking: true })], fork('top'), lost, {})).toBeUndefined()
+  expect(lostPullOf([fork('top'), fork('pages', { launcher: 'top', isWorking: true })], fork('top'), lost, open)).toBeUndefined()
 })
 
 test("a fork's board headline is the first line of its report, at most 80 characters", () => {
