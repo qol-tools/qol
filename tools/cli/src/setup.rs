@@ -11,6 +11,7 @@ use toml::Value as TomlValue;
 
 const CARGO_LOCK_DRIVER_CMD: &str = ".githooks/cargo-lock-merge %O %A %B %P";
 const GIT_HOOKS_PATH: &str = ".githooks";
+const SHARED_BUILD_DIR: &str = ".cargo-build";
 
 pub(crate) fn cmd_setup(args: &[OsString], verbose: bool) -> Result<()> {
     if !args.is_empty() {
@@ -36,6 +37,10 @@ pub(crate) fn run_setup_with_install(root: &Path, verbose: bool, install: bool) 
     step_label("merge", StepKind::Success, "Cargo.lock auto-resolve");
     register_git_hooks(root).context("failed to configure Git hooks")?;
     step_label("hooks", StepKind::Success, GIT_HOOKS_PATH);
+    match ensure_shared_build_dir(root) {
+        Ok(build_dir) => step_label("build-dir", StepKind::Success, &build_dir),
+        Err(error) => step_label("build-dir", StepKind::Info, &format!("not set: {error:#}")),
+    }
     if !install {
         step_label("install", StepKind::Info, "skipped (worktree target)");
         return Ok(());
@@ -123,6 +128,115 @@ fn git_config_unset(root: &Path, key: &str) {
         .arg(root)
         .args(["config", "--unset", key])
         .status();
+}
+
+fn ensure_shared_build_dir(root: &Path) -> Result<String> {
+    ensure_build_dir(env::var_os("CARGO_BUILD_BUILD_DIR"), root, &cargo_home()?)
+}
+
+fn ensure_build_dir(from_env: Option<OsString>, root: &Path, cargo_home: &Path) -> Result<String> {
+    if let Some(value) = from_env {
+        return Ok(value.to_string_lossy().into_owned());
+    }
+    if let Some(existing) = configured_build_dir(root, cargo_home)? {
+        return Ok(existing);
+    }
+    let clone = main_clone(root)?;
+    let workspace_home = clone
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no parent folder", clone.display()))?;
+    let build_dir = workspace_home.join(SHARED_BUILD_DIR);
+    write_build_dir(&config_file_in(&workspace_home.join(".cargo")), &build_dir)?;
+    Ok(build_dir.display().to_string())
+}
+
+fn configured_build_dir(root: &Path, cargo_home: &Path) -> Result<Option<String>> {
+    let config_dirs = root
+        .ancestors()
+        .map(|dir| dir.join(".cargo"))
+        .chain(std::iter::once(cargo_home.to_path_buf()));
+    for dir in config_dirs {
+        if let Some(found) = build_dir_in(&config_file_in(&dir))? {
+            return Ok(Some(found));
+        }
+    }
+    Ok(None)
+}
+
+fn config_file_in(cargo_dir: &Path) -> PathBuf {
+    let legacy = cargo_dir.join("config");
+    if legacy.is_file() {
+        legacy
+    } else {
+        cargo_dir.join("config.toml")
+    }
+}
+
+fn build_dir_in(config: &Path) -> Result<Option<String>> {
+    let text = match fs::read_to_string(config) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", config.display()))
+        }
+    };
+    let parsed: TomlValue =
+        toml::from_str(&text).with_context(|| format!("failed to parse {}", config.display()))?;
+    Ok(parsed
+        .get("build")
+        .and_then(|build| build.get("build-dir"))
+        .and_then(TomlValue::as_str)
+        .map(str::to_owned))
+}
+
+fn main_clone(root: &Path) -> Result<PathBuf> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+        .context("failed to run git rev-parse --git-common-dir")?;
+    if !output.status.success() {
+        bail!(
+            "git rev-parse --git-common-dir exited with {}",
+            output.status
+        );
+    }
+    let common_dir: PathBuf = Path::new(String::from_utf8_lossy(&output.stdout).trim())
+        .components()
+        .collect();
+    common_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| anyhow!("{} has no parent folder", common_dir.display()))
+}
+
+fn write_build_dir(config: &Path, build_dir: &Path) -> Result<()> {
+    let text = match fs::read_to_string(config) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", config.display()))
+        }
+    };
+    let mut document: toml_edit::DocumentMut = text
+        .parse()
+        .with_context(|| format!("failed to parse {}", config.display()))?;
+    let build = document
+        .entry("build")
+        .or_insert(toml_edit::table())
+        .as_table_like_mut()
+        .ok_or_else(|| anyhow!("`build` in {} is not a table", config.display()))?;
+    build.insert(
+        "build-dir",
+        toml_edit::value(build_dir.to_string_lossy().as_ref()),
+    );
+    let parent = config
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no parent folder", config.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    fs::write(config, document.to_string())
+        .with_context(|| format!("failed to write {}", config.display()))
 }
 
 fn install_is_current(root: &Path, package: &Path, target: &Path) -> Result<bool> {
@@ -290,9 +404,11 @@ mod tests {
 
     #[test]
     fn setup_registers_the_repository_hooks_before_any_install_work_can_fail() {
-        let repo = tempfile::tempdir().unwrap();
-        git(repo.path(), &["init", "--quiet"]);
-        let package = repo.path().join("tools/cli");
+        let home = tempfile::tempdir().unwrap();
+        let repo = home.path().join("qol");
+        fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "--quiet"]);
+        let package = repo.join("tools/cli");
         fs::create_dir_all(&package).unwrap();
         fs::write(
             package.join("Cargo.toml"),
@@ -300,9 +416,9 @@ mod tests {
         )
         .unwrap();
 
-        let _ = run_setup(repo.path(), false);
+        let _ = run_setup(&repo, false);
 
-        assert_eq!(configured_hooks_path(repo.path()), GIT_HOOKS_PATH);
+        assert_eq!(configured_hooks_path(&repo), GIT_HOOKS_PATH);
     }
 
     #[test]
@@ -399,6 +515,139 @@ mod tests {
                 "{file}"
             );
         }
+    }
+
+    fn clone_in(home: &Path) -> PathBuf {
+        let clone = home.join("qol");
+        fs::create_dir_all(&clone).unwrap();
+        git(&clone, &["init", "--quiet"]);
+        clone
+    }
+
+    #[test]
+    fn shared_build_dir_is_written_beside_the_clone_once() {
+        let home = tempfile::tempdir().unwrap();
+        let clone = clone_in(home.path());
+        let cargo_home = home.path().join("cargo-home");
+        let config = home.path().join(".cargo/config.toml");
+
+        let build_dir = ensure_build_dir(None, &clone, &cargo_home).unwrap();
+
+        assert_eq!(Path::new(&build_dir).file_name().unwrap(), SHARED_BUILD_DIR);
+        assert_eq!(
+            Path::new(&build_dir)
+                .parent()
+                .unwrap()
+                .canonicalize()
+                .unwrap(),
+            home.path().canonicalize().unwrap()
+        );
+        let written = fs::read_to_string(&config).unwrap();
+        assert_eq!(build_dir_in(&config).unwrap(), Some(build_dir.clone()));
+        assert_eq!(
+            ensure_build_dir(None, &clone, &cargo_home).unwrap(),
+            build_dir
+        );
+        assert_eq!(fs::read_to_string(&config).unwrap(), written);
+    }
+
+    #[test]
+    fn an_existing_build_dir_is_kept() {
+        let home = tempfile::tempdir().unwrap();
+        let clone = clone_in(home.path());
+        let cargo_home = home.path().join("cargo-home");
+        fs::create_dir_all(&cargo_home).unwrap();
+        fs::write(
+            cargo_home.join("config.toml"),
+            "[build]\nbuild-dir = \"/elsewhere\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            ensure_build_dir(None, &clone, &cargo_home).unwrap(),
+            "/elsewhere"
+        );
+        assert!(!home.path().join(".cargo").exists());
+    }
+
+    #[test]
+    fn a_build_dir_from_the_environment_is_kept() {
+        let home = tempfile::tempdir().unwrap();
+        let clone = clone_in(home.path());
+        let cargo_home = home.path().join("cargo-home");
+
+        assert_eq!(
+            ensure_build_dir(Some(OsString::from("/from-env")), &clone, &cargo_home).unwrap(),
+            "/from-env"
+        );
+        assert!(!home.path().join(".cargo").exists());
+    }
+
+    #[test]
+    fn a_legacy_config_file_gets_the_build_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let clone = clone_in(home.path());
+        let cargo_home = home.path().join("cargo-home");
+        let legacy = home.path().join(".cargo/config");
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, "[build]\njobs = 8\n").unwrap();
+
+        let build_dir = ensure_build_dir(None, &clone, &cargo_home).unwrap();
+
+        assert_eq!(build_dir_in(&legacy).unwrap(), Some(build_dir));
+        assert!(!home.path().join(".cargo/config.toml").exists());
+    }
+
+    #[test]
+    fn shared_build_dir_keeps_the_rest_of_an_existing_config() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".cargo/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, "# linker\n[target.x86_64-unknown-linux-gnu]\nlinker = \"clang\"\n\n[build]\njobs = 8\n").unwrap();
+        let build_dir = home.path().join(SHARED_BUILD_DIR);
+
+        write_build_dir(&config, &build_dir).unwrap();
+
+        let written = fs::read_to_string(&config).unwrap();
+        assert!(written.contains("# linker"), "{written}");
+        assert!(written.contains("linker = \"clang\""), "{written}");
+        assert!(written.contains("jobs = 8"), "{written}");
+        assert_eq!(
+            build_dir_in(&config).unwrap(),
+            Some(build_dir.display().to_string())
+        );
+    }
+
+    #[test]
+    fn the_main_clone_of_a_worktree_is_the_clone_it_came_from() {
+        let home = tempfile::tempdir().unwrap();
+        let clone = home.path().join("qol");
+        fs::create_dir_all(&clone).unwrap();
+        git(&clone, &["init", "--quiet"]);
+        git(
+            &clone,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                "init",
+            ],
+        );
+        let worktree = home.path().join("worktrees/topic/qol");
+        git(
+            &clone,
+            &["worktree", "add", "--quiet", worktree.to_str().unwrap()],
+        );
+
+        assert_eq!(
+            main_clone(&worktree).unwrap().canonicalize().unwrap(),
+            clone.canonicalize().unwrap()
+        );
     }
 
     #[test]

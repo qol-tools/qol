@@ -45,6 +45,18 @@ so they land even when the install is already current or fails. `core.hooksPath`
 is shared by every linked worktree, and a relative path resolves against each
 worktree's own root, so one registration in the main clone covers them all.
 
+`qol setup` also gives the clone and every worktree one shared Cargo build
+folder, so dependencies compile once instead of once per worktree. When no
+`build.build-dir` is set in `CARGO_BUILD_BUILD_DIR`, a `.cargo/config.toml` in
+a folder above the worktree or in `CARGO_HOME`, it writes
+`build.build-dir = "<folder above the main clone>/.cargo-build"` into
+`<folder above the main clone>/.cargo/config.toml`, keeping what that file
+already holds. Like Cargo, it reads and writes a legacy extensionless
+`.cargo/config` instead when one exists. A build-dir that is already set is
+left as it is, and the `build-dir` step prints the folder in use, or
+`not set:` and the reason when it could not write one; that never stops setup.
+Each tree's `target/` then holds only its final binaries.
+
 Global flags:
 
 ```bash
