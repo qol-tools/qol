@@ -146,9 +146,7 @@ fn ensure_build_dir(from_env: Option<OsString>, root: &Path, cargo_home: &Path) 
         .parent()
         .ok_or_else(|| anyhow!("{} has no parent folder", clone.display()))?;
     let cargo_dir = workspace_home.join(".cargo");
-    if same_dir(&cargo_dir, cargo_home)
-        || crate::host_facade::home_dir().is_some_and(|home| same_dir(&home, workspace_home))
-    {
+    if reaches_every_project(workspace_home, cargo_home, crate::host_facade::home_dir()) {
         bail!(
             "{} would set it for every Rust project; set build.build-dir by hand",
             cargo_dir.display()
@@ -164,6 +162,13 @@ fn ensure_build_dir(from_env: Option<OsString>, root: &Path, cargo_home: &Path) 
     let build_dir = workspace_home.join(SHARED_BUILD_DIR);
     write_build_dir(&config_file_in(&cargo_dir), &build_dir)?;
     Ok(build_dir.display().to_string())
+}
+
+fn reaches_every_project(workspace_home: &Path, cargo_home: &Path, home: Option<PathBuf>) -> bool {
+    let workspace_home = canonical(workspace_home);
+    workspace_home.parent().is_none()
+        || canonical(cargo_home) == workspace_home.join(".cargo")
+        || home.is_some_and(|home| canonical(&home).starts_with(&workspace_home))
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -633,6 +638,35 @@ mod tests {
 
         assert!(error.to_string().contains("every Rust project"), "{error}");
         assert!(!cargo_home.join("config.toml").exists());
+    }
+
+    #[test]
+    fn a_folder_above_home_or_cargo_home_reaches_every_project() {
+        let base = tempfile::tempdir().unwrap();
+        let home = base.path().join("users/me");
+        let elsewhere = base.path().join("work");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&elsewhere).unwrap();
+        let cargo_home = home.join(".cargo");
+        fs::create_dir_all(&cargo_home).unwrap();
+
+        assert!(reaches_every_project(Path::new("/"), &cargo_home, None));
+        assert!(reaches_every_project(&home, &cargo_home, None));
+        assert!(reaches_every_project(
+            &base.path().join("users"),
+            &base.path().join("tools/cargo"),
+            Some(home.clone())
+        ));
+        assert!(!reaches_every_project(
+            base.path(),
+            &base.path().join("tools/cargo"),
+            None
+        ));
+        assert!(!reaches_every_project(
+            &elsewhere,
+            &cargo_home,
+            Some(home.clone())
+        ));
     }
 
     #[test]
