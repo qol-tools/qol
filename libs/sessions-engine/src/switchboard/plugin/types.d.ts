@@ -50,6 +50,8 @@ export type PullDetail = {
   title?: string
 }
 
+export type StrayPull = { url: string; number: number; author: string; detail: PullDetail }
+
 export type ModelChoice = { model?: string; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; at: number }
 
 export type ModelSeen = { model: string; effort?: string; at: number }

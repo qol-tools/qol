@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { backAtRestart, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, effortMeter, familyColor, folderParts, litBody, nowOf, taskBar, tasksDone, tokensText, withTaskCall, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, laneName, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, underParent, withoutCut, withoutHidden, withAction, withSent, writingMarks, actionSaid, failSaid, isOrphan, livePagesOf, pageCount, refreshPages, frontPageOf } from '../hooks/register'
+import { backAtRestart, headlineOf, lostPullOf, withMerging, boundChords, chatTail, claimsUser, doneSoFar, draftedAs, echoesOnly, effortMeter, familyColor, folderParts, litBody, nowOf, taskBar, tasksDone, tokensText, withTaskCall, forkModels, forksUnder, fromUser, hasUnread, hookAnswer, isForgedUser, isKilledOnly, isTrusted, laneName, promptCommands, typedByUser, typedSince, keyCompletions, marksOf, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, pullText, reachable, readText, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, underParent, withoutCut, withoutHidden, withAction, withSent, writingMarks, actionSaid, failSaid, isOrphan, livePagesOf, pageCount, refreshPages, frontPageOf } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -3397,12 +3397,31 @@ test('a fork that started forks holds them under its row: their questions stay w
   expect(litBody('k2  work', 'k2', { writing: 'k2' })).toBe('k2  work')
 })
 
-test('the detail of the fork written to names its open pull requests, or its newest merged one when none is open, and the rows name none', async ($, on) => {
+test('a main fork row carries the numbers of its and its sub-forks\' pull requests coloured by what each needs, the detail lists them with who helped, and an open pull request no fork owns gets a no fork line', async ($, on) => {
   engine(on)
+  on('clock.after', () => new Promise(resolve => setTimeout(() => resolve({ value: undefined }), 0)))
   on('session.messages', () => ({ value: [] }))
   on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
-  watchEngine(on, { p1: { cwd: '/work', description: 'p1-fork: a fork' }, p2: { cwd: '/work', description: 'p2-fork: a fork' } })
+  watchEngine(on, { m1: { cwd: '/work', description: 'm1-fork: a fork' }, m2: { cwd: '/work', description: 'm2-fork: a fork' } })
+  const sha = 'a'.repeat(40)
+  const failing = [{ name: 'tests', status: 'COMPLETED', conclusion: 'FAILURE' }]
+  const views: Record<string, object> = {
+    '21': { state: 'OPEN', isDraft: false, headRefOid: sha, statusCheckRollup: [{ name: 'tests', status: 'COMPLETED', conclusion: 'SUCCESS' }] },
+    '22': { state: 'OPEN', isDraft: true, statusCheckRollup: failing },
+    '12': { state: 'MERGED', isDraft: false },
+  }
+  const listed: string[] = []
   on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (e.argv[0] === 'gh') {
+      if (e.argv[1] === 'pr' && e.argv[2] === 'view') return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify(views[String(e.argv[3]).replace(/^.*\//, '')] ?? {}) } }
+      if (e.argv[1] === 'pr' && e.argv[2] === 'list') {
+        listed.push(e.argv.slice(3, 5).join(' '))
+        const stray = { number: 37, url: 'https://github.com/o/r/pull/37', state: 'OPEN', isDraft: false, author: { login: 'app/dependabot' }, statusCheckRollup: failing }
+        return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify([{ number: 21, url: 'https://github.com/o/r/pull/21', state: 'OPEN', isDraft: false, author: { login: 'me' } }, stray]) } }
+      }
+      if (e.argv[2] === 'graphql') return { value: { exitCode: 0, stderr: '', stdout: 'false' } }
+      return { value: { exitCode: 0, stderr: '', stdout: 'Live test needed' } }
+    }
     if (e.argv[1] === 'fork-watch' && e.argv[2] === '--deliver')
       return {
         value: {
@@ -3411,9 +3430,9 @@ test('the detail of the fork written to names its open pull requests, or its new
           stdout: JSON.stringify({
             results: [],
             pulls: [
-              { agent_id: 'p2', pull_request: 'https://github.com/o/r/pull/12', number: 12, merge_commit: 'bbbbbbbbbbbb', is_watched: false },
-              { agent_id: 'p1', pull_request: 'https://github.com/o/r/pull/11', number: 11, merge_commit: null, is_watched: true },
-              { agent_id: 'p1', pull_request: 'https://github.com/o/r/pull/10', number: 10, merge_commit: 'aaaaaaaaaaaa', is_watched: false },
+              { agent_id: 'm1', pull_request: 'https://github.com/o/r/pull/21', number: 21, merge_commit: null, is_watched: true },
+              { agent_id: 's1', pull_request: 'https://github.com/o/r/pull/22', number: 22, merge_commit: null, is_watched: false },
+              { agent_id: 'm2', pull_request: 'https://github.com/o/r/pull/12', number: 12, merge_commit: 'bbbbbbbbbbbb', is_watched: false },
             ],
           }),
         },
@@ -3421,21 +3440,31 @@ test('the detail of the fork written to names its open pull requests, or its new
     return { value: NO_RECORD }
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  for (const id of ['p1', 'p2']) await spawn($, id, `${id}-fork: a fork`)
+  for (const id of ['m1', 'm2']) await spawn($, id, `${id}-fork: a fork`)
+  await spawn($, 's1', 'helper: helps', 'm1')
   await settle()
+  const first = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, isFocused: false } })
+  await first.unmount()
+  for (let turn = 0; turn < 5; turn += 1) await settle()
+  expect(listed).toEqual(['--repo o/r'])
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'm1-fork ', cursor: 8 })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, isFocused: false } })
-  expect(await boardLines(ui)).toEqual(['1: ● p1-fork  working', '2: ● p2-fork  working'])
-  await ui.unmount()
-  const pullOf = async (key: string) => {
-    await $.prompt.change({ origin: { kind: 'composer' }, text: `${key} `, cursor: key.length + 1 })
-    const forks = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    const lines = (await boardLines(forks)).filter(line => line.startsWith('pull '))
-    const link = (await forks.find({ type: 'Link' }))?.props.href
-    await forks.unmount()
-    return [lines, link]
+  const drawn = await boardLines(ui)
+  expect(drawn.slice(0, 4)).toEqual(['writing to  ● m1-fork  working', '', '#22   draft  1 check failed    helped by a: helper  unwatched', '#21   open   1/1 checks      live test needed  watched'])
+  expect(drawn.slice(-4)).toEqual(['1: ● m1-fork  #22 #21  working', '   └ a: ● helper  working', '2: ● m2-fork  #12  working', '   ○ no fork  #37 failing  dependabot'])
+  const tones: string[] = []
+  const walk = (node: Drawn | string) => {
+    if (typeof node === 'string') return
+    const only = node.children?.length === 1 ? node.children[0] : undefined
+    if (node.type === 'Text' && typeof only === 'object' && only.type === 'Link') tones.push(`${inline(node)} ${String(node.props?.color ?? (node.props?.dimColor === true ? 'dim' : ''))}`)
+    for (const child of node.children ?? []) walk(child)
   }
-  expect(await pullOf('p1-fork')).toEqual([['pull       #11 open  …'], 'https://github.com/o/r/pull/11'])
-  expect(await pullOf('p2-fork')).toEqual([['pull       #12 merged'], 'https://github.com/o/r/pull/12'])
+  walk((await ui.drawn()) as Drawn)
+  expect(tones).toEqual(['#22 blue', '#21 blue', '#22 error', '#21 warning', '#12 dim', '#37 blue'])
+  expect((await ui.find({ key: 'row-m2' }))?.props.backgroundColor).toBe('#2f323d')
+  expect((await ui.find({ key: 'pull-https://github.com/o/r/pull/22' }))?.props.backgroundColor).toBe('#2b2d35')
+  expect((await ui.find({ type: 'Link' }))?.props.href).toBe('https://github.com/o/r/pull/22')
+  await ui.unmount()
 })
 
 test("the board says what each fork works on: its description until the fork states its task, then that task and its definition of done, and only a fork states its own", async ($, on) => {
@@ -3596,7 +3625,7 @@ test('idle forks stay in the list, and the fork you write to folds its finished 
   await deliver($, notification('k3', 'test-sub: a sub-fork', 'Hip light needs a test in game.'))
   await settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, isFocused: false } })
-  expect(await boardLines(ui)).toEqual(['1: ● p2-fork ◉  waits on 1', '   └ a: ● busy-sub  working', '2: ● p1-fork ◉  idle', '3: ● p3-fork ◉  idle'])
+  expect(await boardLines(ui)).toEqual(['1: ● p2-fork ◉  waits on 1', '   └ a: ● busy-sub  working', '2: ● p1-fork ◉  #11  idle', '3: ● p3-fork ◉  idle'])
   await ui.unmount()
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'p2-fork ', cursor: 8 })
   const writing = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -4088,6 +4117,47 @@ test("the board's text names a pull request merged or closed from its state on G
   expect(readText(list, undefined, pulls, {}, details)).toContain('[#7 merged; #8 closed, not merged; #9 open · no watcher]')
   expect(readText(list, 'audit-fork', pulls, {}, details)).toContain('pull requests: #7 merged https://github.com/o/r/pull/7; #8 closed, not merged https://github.com/o/r/pull/8; #9 open · no watcher https://github.com/o/r/pull/9')
   expect(readText(list, undefined, pulls)).toContain('[#7 open · no watcher; #8 open · no watcher; #9 open · no watcher]')
+})
+
+test('a fork whose watched pull requests all sit in the merge queue reads merging and counts done, not waiting', () => {
+  const url = (number: number) => `https://github.com/o/r/pull/${number}`
+  const detail = (extra: object): any => ({ at: 1, state: 'open', passed: 0, failed: 0, running: 0, total: 0, ...extra })
+  const details = { [url(7)]: detail({ merge: 'queued' }), [url(8)]: detail({}), [url(9)]: detail({ state: 'merged' }) }
+  const states = withMerging({ queued: { state: 'waiting', pulls: [url(7)] }, mixed: { state: 'waiting', pulls: [url(7), url(8)] }, landed: { state: 'waiting', pulls: [url(7), url(9)] }, done: { state: 'waiting', pulls: [url(9)] }, bare: { state: 'waiting' }, busy: { state: 'running', pulls: [url(7)] } }, details)
+  expect(Object.fromEntries(Object.entries(states).map(([id, run]) => [id, run.state]))).toEqual({ queued: 'merging', mixed: 'waiting', landed: 'merging', done: 'waiting', bare: 'waiting', busy: 'running' })
+  const fork = (agentId: string): any => ({ agentId, name: `${agentId}-fork: words`, kind: 'note', headline: 'Done.', report: 'Done.', at: 1, isWorking: false, isDismissed: false, hasNewReply: false })
+  expect(shownState(fork('queued'), [], states)).toEqual({ label: 'merging #7' })
+  expect(shownState(fork('mixed'), [], states)).toEqual({ label: 'waiting #7,#8', state: 'waiting' })
+  expect(readText([fork('queued')], undefined, [{ agentId: 'queued', pullRequest: url(7), number: 7, isWatched: true }], states, details)).toContain('(merging, its pull request is in the merge queue, counted done, agent id queued) [#7 merging]')
+})
+
+test("a top-level fork's board line lists the open pull requests of its sub-forks and needs the user when nothing watches one", () => {
+  const fork = (agentId: string, extra: object = {}): any => ({ agentId, name: `${agentId}-fork: words`, kind: 'note', headline: 'Done.', report: 'Done.', at: 1, isWorking: false, isDismissed: false, hasNewReply: false, ...extra })
+  const pull = (agentId: string, number: number, isWatched: boolean): any => ({ agentId, pullRequest: `https://github.com/o/r/pull/${number}`, number, isWatched })
+  const list = [fork('top'), fork('pages', { launcher: 'top' }), fork('board', { launcher: 'top' })]
+  const watched = [pull('pages', 30, true), pull('board', 34, true)]
+  expect(lostPullOf(list, list[0], watched, {})).toBeUndefined()
+  const text = readText(list, undefined, watched)
+  expect(text).toContain('(idle, agent id top) [#30 open · CLI Sessions watching by pages-fork; #34 open · CLI Sessions watching by board-fork]')
+  const lost = [pull('pages', 30, false), pull('board', 34, true)]
+  const detail = (state: string, extra: object = {}): any => ({ at: 1, state, passed: 0, failed: 0, running: 0, total: 0, ...extra })
+  const open = { 'https://github.com/o/r/pull/30': detail('draft') }
+  expect(lostPullOf(list, list[0], lost, {})).toBeUndefined()
+  expect(lostPullOf(list, list[0], lost, open)?.number).toBe(30)
+  expect(readText(list, undefined, lost, {}, open)).toContain('(needs the user, nothing watches #30, agent id top)')
+  expect(lostPullOf(list, list[0], [...lost, pull('top', 30, true)], open)).toBeUndefined()
+  expect(lostPullOf(list, list[0], lost, { 'https://github.com/o/r/pull/30': detail('merged') })).toBeUndefined()
+  expect(lostPullOf(list, list[0], lost, { 'https://github.com/o/r/pull/30': detail('open', { merge: 'queued' }) })).toBeUndefined()
+  expect(lostPullOf([fork('top'), fork('pages', { launcher: 'top', isWorking: true })], fork('top'), lost, open)).toBeUndefined()
+})
+
+test("a fork's board headline is the first line of its report, at most 80 characters", () => {
+  expect(headlineOf('Which colour should it be? I recommend amber.\nMore below.')).toBe('Which colour should it be? I recommend amber.')
+  expect(headlineOf('**Done**')).toBe('Done')
+  expect(headlineOf('')).toBe('no report')
+  const long = headlineOf(`${'word '.repeat(30)}end.`)
+  expect(long.length).toBe(80)
+  expect(long.endsWith('…')).toBe(true)
 })
 
 test('the board tool fetches the state of the pull requests it lists, so a merge no watcher saw reads merged with no board pane drawn, and a reopened one reads open again', async ($, on) => {
@@ -5003,7 +5073,7 @@ test('the board lists each fork on one line and details the fork written to with
   ])
   const props = async (text: string | RegExp) => (await ui.find({ type: 'Text', text }))?.props
   expect((await ui.find({ key: 'row-a1' }))?.props.backgroundColor).toBe('#1a1b20')
-  expect((await ui.find({ key: 'row-b1' }))?.props.backgroundColor).toBeUndefined()
+  expect((await ui.find({ key: 'row-b1' }))?.props.backgroundColor).toBe('#2f323d')
   expect(await props(NEEDS_YOU)).toMatchObject({ color: 'yellow', bold: true })
   expect(await props(/^Editing register.tsx$/)).toMatchObject({ color: 'claude' })
   expect(await props(/^▰▰▰▰$/)).toMatchObject({ color: 'green' })
