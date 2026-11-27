@@ -24,7 +24,7 @@ use qol_runtime::protocol::DaemonRequest;
 
 use crate::bluetooth::{
     normalize_address, AdapterHealth, BackendCapabilities, DaemonAction, DaemonHooks, DaemonReply,
-    DeviceInfo, Pairing, ReconnectReport, ReconnectSelection,
+    DeviceInfo, Pairing, ReconnectReport, ReconnectSelection, SEARCH_WINDOW,
 };
 use crate::config::ReconnectConfig;
 
@@ -46,13 +46,13 @@ const AUDIO_SINK_UUID: &str = "0000110b-0000-1000-8000-00805f9b34fb";
 const IO_RETURN_SUCCESS: i32 = 0;
 const RSSI_UNAVAILABLE: i8 = 127;
 const RSSI_UNTRACKED: i8 = 0;
-const SEARCH_SECONDS: u8 = 10;
 const PAIR_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const RUN_LOOP_SLICE: Duration = Duration::from_millis(100);
 const ADAPTER_POWER_SYMBOL: &str = "IOBluetoothPreferenceSetControllerPowerState";
 const TRUST_UNSUPPORTED: &str =
     "macOS pairs and trusts in one step, so there is no separate trust to change";
+const INQUIRY_SECONDS: u8 = SEARCH_WINDOW.as_secs() as u8;
 const CONNECTED_PERIPHERAL_SERVICES: [&str; 4] = ["1800", "180A", "180F", "1812"];
 const BLUETOOTH_PRIVACY_SETTINGS: &str = "System Settings > Privacy & Security > Bluetooth";
 const LOW_ENERGY_LEFT_OUT: &str = "Bluetooth LE devices are left out of this search because";
@@ -561,7 +561,7 @@ pub fn search_devices(config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
     let inquiry = unsafe { IOBluetoothDeviceInquiry::inquiryWithDelegate(None) }
         .ok_or_else(|| anyhow!("macOS could not start a Bluetooth search"))?;
     unsafe {
-        inquiry.setInquiryLength(SEARCH_SECONDS);
+        inquiry.setInquiryLength(INQUIRY_SECONDS);
         inquiry.setUpdateNewDeviceNames(true);
     }
     let started = unsafe { inquiry.start() };
@@ -594,7 +594,7 @@ pub fn search_devices(config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
 }
 
 fn watch_search(inquiry: &IOBluetoothDeviceInquiry, mut low_energy: Option<&mut LowEnergyScan>) {
-    let deadline = Instant::now() + Duration::from_secs(u64::from(SEARCH_SECONDS));
+    let deadline = Instant::now() + SEARCH_WINDOW;
     while Instant::now() < deadline && paired::searching() {
         deliver_pending_iobluetooth_callbacks(RUN_LOOP_SLICE);
         if let Some(scan) = low_energy.as_deref_mut() {
