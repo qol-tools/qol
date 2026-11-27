@@ -23,10 +23,13 @@ use qol_headless::DoctorCheckResult;
 use qol_runtime::protocol::DaemonRequest;
 
 use crate::bluetooth::{
-    normalize_address, AdapterHealth, BackendCapabilities, DaemonAction, DaemonHooks, DaemonReply,
-    DeviceInfo, Pairing, ReconnectReport, ReconnectSelection, SEARCH_WINDOW,
+    low_energy_identifier, normalize_address, AdapterHealth, BackendCapabilities, DaemonAction,
+    DaemonHooks, DaemonReply, DeviceInfo, Pairing, ReconnectReport, ReconnectSelection,
+    SEARCH_WINDOW,
 };
 use crate::config::ReconnectConfig;
+
+mod low_energy_pair;
 
 use super::nearby::{self, Advertisement, Sightings};
 use super::paired::{self, PairedStack};
@@ -39,6 +42,7 @@ pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     audio_reclaim: crate::audio_claim::RECLAIM_SUPPORTED,
     settings_pairing: Some("System Settings"),
     settings_pane: Some(SETTINGS_PANE),
+    pairs_low_energy: true,
 };
 
 const AUDIO_SINK_UUID16: u16 = 0x110b;
@@ -526,6 +530,11 @@ pub fn disconnect_device(address: &str) -> Result<DeviceInfo> {
 
 pub fn pair_device(address: &str, power_on_adapter: bool) -> Result<DeviceInfo> {
     paired::ensure_powered::<MacOs>(power_on_adapter)?;
+    if let Some(identifier) = low_energy_identifier(address) {
+        let bonded = low_energy_pair::pair(&identifier, paired_addresses)?;
+        let device = device_handle(&bonded)?;
+        return device_info(&device, &paired_addresses());
+    }
     let device = device_handle(address)?;
     let known = device_info(&device, &paired_addresses())?;
     if known.paired {

@@ -43,9 +43,21 @@ pub fn device_address(value: &str, capabilities: BackendCapabilities) -> Result<
     else {
         return Err(error);
     };
+    if capabilities.pairs_low_energy {
+        bail!(
+            "{identifier} is a Bluetooth LE device this computer reports only by identifier, so qol can pair it but not connect or remove it; once paired it is listed by its address"
+        )
+    }
     bail!(
         "{identifier} is a Bluetooth LE device this computer reports only by identifier, so qol cannot pair, connect or remove it; pair it in {settings}"
     )
+}
+
+pub fn pair_address(value: &str, capabilities: BackendCapabilities) -> Result<String> {
+    match low_energy_identifier(value) {
+        Some(identifier) if capabilities.pairs_low_energy => Ok(identifier),
+        _ => device_address(value, capabilities),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -93,6 +105,7 @@ pub struct BackendCapabilities {
     pub audio_reclaim: bool,
     pub settings_pairing: Option<&'static str>,
     pub settings_pane: Option<&'static str>,
+    pub pairs_low_energy: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -255,6 +268,15 @@ impl DiscoveryState {
             .map(|device| (device.address.clone(), device))
             .collect();
         self.addresses = self.devices.keys().cloned().collect();
+    }
+
+    pub fn settle_pairing(&mut self, found_as: &str, paired: DeviceInfo) {
+        if let Some(found) = self.devices.get_mut(found_as) {
+            *found = DeviceInfo {
+                address: found_as.to_string(),
+                ..paired
+            };
+        }
     }
 
     pub fn remove(&mut self, address: &str) {
@@ -500,18 +522,21 @@ mod tests {
         audio_reclaim: false,
         settings_pairing: None,
         settings_pane: None,
+        pairs_low_energy: false,
     };
     const TRUST_FREE: BackendCapabilities = BackendCapabilities {
         separate_trust_flag: false,
         audio_reclaim: false,
         settings_pairing: None,
         settings_pane: None,
+        pairs_low_energy: false,
     };
     const SETTINGS_PAIRED: BackendCapabilities = BackendCapabilities {
         separate_trust_flag: false,
         audio_reclaim: false,
         settings_pairing: Some("System Settings"),
         settings_pane: None,
+        pairs_low_energy: false,
     };
     const LIFT: &str = "31CAE991-2662-5D9B-D7B9-8CE2CD5FF04C";
 
@@ -1087,6 +1112,42 @@ mod tests {
             device_address(" aa:bb:cc:dd:ee:ff ", SETTINGS_PAIRED).unwrap(),
             "AA:BB:CC:DD:EE:FF"
         );
+    }
+
+    #[test]
+    fn only_pairing_takes_an_identifier_where_the_backend_pairs_bluetooth_le() {
+        let pairs = BackendCapabilities {
+            pairs_low_energy: true,
+            ..SETTINGS_PAIRED
+        };
+        assert_eq!(pair_address(&LIFT.to_lowercase(), pairs).unwrap(), LIFT);
+        let connect = device_address(LIFT, pairs).unwrap_err().to_string();
+        assert!(connect.contains("can pair it but not connect"), "{connect}");
+        let settings_only = pair_address(LIFT, SETTINGS_PAIRED).unwrap_err().to_string();
+        assert!(
+            settings_only.ends_with("pair it in System Settings"),
+            "{settings_only}"
+        );
+        assert_eq!(
+            pair_address("aa:bb:cc:dd:ee:ff", pairs).unwrap(),
+            "AA:BB:CC:DD:EE:FF"
+        );
+    }
+
+    #[test]
+    fn a_paired_find_keeps_its_row_and_shows_paired() {
+        let mut state = DiscoveryState::default();
+        state.start();
+        state.record_device(low_energy_device(LIFT, "LIFT", Some(-40)));
+        state.settle_pairing(LIFT, device("7E", "LIFT", true, true, true, None));
+        let row = state.device(LIFT).unwrap();
+        assert_eq!(row.address, LIFT);
+        assert!(row.paired);
+        state.settle_pairing(
+            "AA:BB:CC:DD:EE:99",
+            device("99", "Gone", true, true, true, None),
+        );
+        assert_eq!(state.discovered_count(), 1);
     }
 
     #[test]

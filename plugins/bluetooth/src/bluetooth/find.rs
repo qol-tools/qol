@@ -134,9 +134,10 @@ fn nearby_item(
     let failed = action.is_some_and(|action| {
         !action.pending && action.intent == DeviceIntent::Pair && !device.paired
     });
-    let pairs_here = device.pairing == Pairing::Backend;
     let low_energy = device.pairing == Pairing::SystemSettings
         || low_energy_identifier(&device.address).is_some();
+    let pairs_here =
+        device.pairing == Pairing::Backend || (low_energy && capabilities.pairs_low_energy);
     let kind_name = kind.unwrap_or(UNKNOWN_KIND);
     let kind_line = match low_energy {
         true => format!("{kind_name} · {LOW_ENERGY}"),
@@ -317,12 +318,14 @@ mod tests {
         audio_reclaim: true,
         settings_pairing: None,
         settings_pane: None,
+        pairs_low_energy: false,
     };
     const MACOS: BackendCapabilities = BackendCapabilities {
         separate_trust_flag: false,
         audio_reclaim: false,
         settings_pairing: Some("System Settings"),
         settings_pane: Some("x-apple.systempreferences:com.apple.BluetoothSettings"),
+        pairs_low_energy: false,
     };
     const LIFT: &str = "31CAE991-2662-5D9B-D7B9-8CE2CD5FF04C";
 
@@ -636,6 +639,27 @@ mod tests {
             assert_eq!(item["low_energy"], true);
             assert_eq!(item["signal"], 3);
         }
+    }
+
+    #[test]
+    fn a_bluetooth_le_find_is_paired_here_where_the_backend_can() {
+        let mut discovery = DiscoveryState::default();
+        discovery.start();
+        discovery.record_device(DeviceInfo {
+            address: LIFT.into(),
+            pairing: Pairing::SystemSettings,
+            uuids: vec![HID_UUID.into()],
+            ..device("00", "LIFT", Some(-58), None)
+        });
+        let pairs = BackendCapabilities {
+            pairs_low_energy: true,
+            ..MACOS
+        };
+        let payload = nearby_payload(&[], &discovery, None, true, pairs, later(1));
+        let item = &payload["items"][0];
+        assert_eq!(item["can_pair"], true);
+        assert_eq!(item["can_open_settings"], false);
+        assert_eq!(item["badge"], "");
     }
 
     #[test]

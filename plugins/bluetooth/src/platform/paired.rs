@@ -10,7 +10,7 @@ use qol_sync::RwLock;
 
 use crate::bluetooth::{
     adapter_options, connection_ready, device_address, devices_payload, forget_failed_pair,
-    managed_device_options, nearby_payload, normalize_address,
+    managed_device_options, nearby_payload, normalize_address, pair_address,
     retry::{RetryPolicy, RetryState},
     search_status_payload, AdapterHealth, AdapterInfo, DaemonAction, DaemonHooks, DaemonReply,
     DeviceActionState, DeviceInfo, DeviceIntent, DeviceOption, DiscoveryState, ReconnectFailure,
@@ -224,7 +224,11 @@ pub(super) fn dispatch_request<S: PairedStack>(
         DaemonAction::EnableAdapter => DaemonReply::Command(DaemonCommand::SetAdapterPower(true)),
         DaemonAction::DisableAdapter => DaemonReply::Command(DaemonCommand::SetAdapterPower(false)),
         DaemonAction::PairDevice => {
-            device_daemon_command(request, DaemonCommand::Pair, DeviceIntent::Pair)
+            let reply = device_daemon_command(request, DaemonCommand::Pair, DeviceIntent::Pair);
+            if matches!(reply, DaemonReply::Command(_)) {
+                mark_search_stopped();
+            }
+            reply
         }
         DaemonAction::ConnectDevice => {
             device_daemon_command(request, DaemonCommand::Connect, DeviceIntent::Connect)
@@ -296,7 +300,7 @@ fn handoff_result(
     request: &DaemonRequest,
     operation: impl FnOnce(&str) -> Result<serde_json::Value>,
 ) -> DaemonReply<DaemonCommand> {
-    match request_address(request) {
+    match request_address(request, device_address) {
         Ok(address) => snapshot_result(operation(&address)),
         Err(error) => DaemonReply::Error(error),
     }
@@ -314,7 +318,11 @@ fn device_daemon_command(
     command: fn(String) -> DaemonCommand,
     intent: DeviceIntent,
 ) -> DaemonReply<DaemonCommand> {
-    match request_address(request) {
+    let parse = match intent {
+        DeviceIntent::Pair => pair_address,
+        _ => device_address,
+    };
+    match request_address(request, parse) {
         Ok(address) => match begin_device_action(&address, intent) {
             Ok(()) => DaemonReply::Command(command(address)),
             Err(error) => DaemonReply::Error(error.to_string()),
@@ -323,7 +331,10 @@ fn device_daemon_command(
     }
 }
 
-fn request_address(request: &DaemonRequest) -> std::result::Result<String, String> {
+fn request_address(
+    request: &DaemonRequest,
+    parse: fn(&str, crate::bluetooth::BackendCapabilities) -> Result<String>,
+) -> std::result::Result<String, String> {
     let Some(address) = request
         .input
         .get("address")
@@ -331,11 +342,11 @@ fn request_address(request: &DaemonRequest) -> std::result::Result<String, Strin
     else {
         return Err(format!("{} requires an address", request.action));
     };
-    device_address(address, super::CAPABILITIES).map_err(|error| error.to_string())
+    parse(address, super::CAPABILITIES).map_err(|error| error.to_string())
 }
 
 fn reclaim_command(request: &DaemonRequest) -> DaemonReply<DaemonCommand> {
-    match request_address(request) {
+    match request_address(request, device_address) {
         Ok(address) => match crate::audio_claim::reclaim_output(&address) {
             Ok(()) => DaemonReply::Handled,
             Err(error) => DaemonReply::Error(format!("{error:#}")),
@@ -434,7 +445,9 @@ fn handle_daemon_command<S: PairedStack>(
             S::set_adapter_powered(powered).map(std::mem::drop),
         ),
         DaemonCommand::Pair(address) => run_device_command(&address, "pair", || {
-            S::pair_device(&address, power_on_adapter).map(std::mem::drop)
+            let paired = S::pair_device(&address, power_on_adapter)?;
+            DISCOVERY_STATE.write().settle_pairing(&address, paired);
+            Ok(())
         }),
         DaemonCommand::Connect(address) => run_device_command(&address, "connect", || {
             crate::connect::for_user(&address, power_on_adapter, |address| {
