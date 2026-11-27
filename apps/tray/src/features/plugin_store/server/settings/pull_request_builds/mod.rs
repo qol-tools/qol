@@ -241,14 +241,20 @@ fn start(state: &AppState, run: Run) -> Response {
         .spawn(move || {
             let result = match (run, source) {
                 (Run::Try(tried), Some(source)) => qol_pr_try::host_build().and_then(|build| {
-                    qol_pr_try::try_build(&source, &mut host, tried, build, &places).map(drop)
+                    let number = tried.number;
+                    let replaced =
+                        crate::installer::trial::current().map(|trial| trial.pull_request);
+                    match qol_pr_try::try_build(&source, &mut host, tried, build, &places)? {
+                        qol_pr_try::Tried::Installed => Ok(()),
+                        qol_pr_try::Tried::Nothing => Err(nothing_tried(number, replaced)),
+                    }
                 }),
                 (Run::Try(_), None) => Err(anyhow::anyhow!(SIGN_IN)),
                 (Run::Off, _) => qol_pr_try::turn_off(&mut host, &places)
                     .map(|put_back| host.catch_up(&put_back)),
             };
             if let Err(error) = &result {
-                log::warn!("{LOG} {run:?} failed: {error:#}");
+                log::error!("{LOG} {run:?} failed: {error:#}");
             }
             *JOB.lock() = run.finished(&result);
         });
@@ -261,6 +267,20 @@ fn start(state: &AppState, run: Run) -> Response {
     }
     *job = Some(run.job());
     action_ok("Started")
+}
+
+fn nothing_tried(number: u64, replaced: Option<u64>) -> anyhow::Error {
+    match replaced {
+        Some(other) if other == number => anyhow::anyhow!(
+            "the new head of pull request #{number} changes no plugin installed here; the builds its earlier head swapped in were put back"
+        ),
+        Some(other) => anyhow::anyhow!(
+            "pull request #{number} changes no plugin installed here; the builds of #{other} were put back and nothing else changed"
+        ),
+        None => anyhow::anyhow!(
+            "pull request #{number} changes no plugin installed here, so nothing was swapped"
+        ),
+    }
 }
 
 fn places() -> Option<Places> {
@@ -361,6 +381,22 @@ fn unavailable(message: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_try_that_swapped_nothing_says_what_was_put_back() {
+        let put_back = nothing_tried(641, Some(640)).to_string();
+        assert!(
+            put_back.contains("builds of #640 were put back"),
+            "{put_back}"
+        );
+        let same = nothing_tried(641, Some(641)).to_string();
+        assert!(
+            same.contains("its earlier head swapped in were put back"),
+            "{same}"
+        );
+        let alone = nothing_tried(641, None).to_string();
+        assert!(alone.ends_with("so nothing was swapped"), "{alone}");
+    }
 
     fn tried(number: u64, keep_tray: bool) -> Run {
         Run::Try(Try { number, keep_tray })
