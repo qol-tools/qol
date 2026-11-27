@@ -13,6 +13,7 @@ pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     audio_reclaim: crate::audio_claim::RECLAIM_SUPPORTED,
     settings_pairing: None,
     settings_pane: None,
+    pairs_low_energy: false,
 };
 
 pub fn required_binaries_check() -> DoctorCheckResult {

@@ -5,8 +5,8 @@ use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTe
 use qol_host_fixes::HostFixes;
 
 use crate::bluetooth::{
-    device_address, normalize_address, AdapterHealth, DeviceInfo, Pairing, ReconnectReport,
-    ReconnectSelection,
+    device_address, normalize_address, pair_address, AdapterHealth, DeviceInfo, Pairing,
+    ReconnectReport, ReconnectSelection,
 };
 use crate::hostfix::{self, BluetoothHostFixes};
 use crate::{config, handoff, platform, PLUGIN_ID};
@@ -112,7 +112,7 @@ fn search_command() -> Command {
         .usage(format!("{PLUGIN_ID} search"))
         .detail("Press Ctrl+C to stop discovery early and print the devices found.")
         .detail(
-            "On macOS the search also scans for Bluetooth LE devices that advertise a name and accept connections. macOS reports such a device only by an identifier, not an address, and only System Settings can pair it, so its line ends in pairing=system_settings and pair, connect, disconnect and remove refuse that identifier. A device found both ways is listed once, under its address.",
+            "On macOS the search also scans for Bluetooth LE devices that advertise a name and accept connections. macOS reports such a device only by an identifier, not an address, so its line ends in pairing=system_settings. pair accepts that identifier: it connects, macOS shows its own pairing prompt, and the device is paired once you click Connect there within 30 seconds; connect, disconnect and remove refuse it. Rows are matched by address or identifier, never by name, so two devices with the same name stay two rows, and a peripheral connected to this Mac that offers a standard service (generic access, device information, battery or HID) is left out while it stays connected.",
         )
         .output(
             "Paired and discovered devices ordered by connection state and signal strength, one line each, or a JSON array with --json in which those Bluetooth LE devices carry \"pairing\": \"system_settings\".",
@@ -194,7 +194,7 @@ fn pair_command() -> Command {
         .usage(format!("{PLUGIN_ID} pair AA:BB:CC:DD:EE:FF"))
         .output("The resulting device state.")
         .exit_behavior(
-            "Exits non-zero when pairing or profile discovery fails, or when given a Bluetooth LE identifier from search, which only the system Bluetooth settings can pair.",
+            "Exits non-zero when pairing or profile discovery fails, or when macOS does not pair a Bluetooth LE identifier from search, because the device did not accept the connection or its pairing prompt was not accepted within 30 seconds.",
         )
         .run_plain_text(|context| {
             let address = one_address("pair", context.args())?;
@@ -577,7 +577,11 @@ fn one_address(command: &str, args: &[String]) -> Result<String> {
     if args.len() != 1 {
         bail!("{command} requires exactly one Bluetooth address")
     }
-    device_address(&args[0], platform::CAPABILITIES)
+    let parse = match command {
+        "pair" => pair_address,
+        _ => device_address,
+    };
+    parse(&args[0], platform::CAPABILITIES)
 }
 
 fn device_lines(devices: &[DeviceInfo]) -> String {

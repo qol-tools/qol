@@ -19,4 +19,5 @@ plugins/shot/src/capture/**
 plugins/shot/src/platform/**
 plugins/keyremap/src/platform/macos/karabiner/**
 plugins/window-actions/src/platform/**
+plugins/bluetooth/src/platform/**
 libs/peers/src/service/pointz/**

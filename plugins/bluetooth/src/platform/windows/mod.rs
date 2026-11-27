@@ -45,6 +45,7 @@ pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     audio_reclaim: crate::audio_claim::RECLAIM_SUPPORTED,
     settings_pairing: None,
     settings_pane: None,
+    pairs_low_energy: false,
 };
 
 const TRUST_UNSUPPORTED: &str =
@@ -720,9 +721,7 @@ pub fn search_devices(config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
         .map(|record| device_info(record, &endpoints))
         .collect::<Vec<_>>();
     if paired::searching() {
-        for device in &found {
-            paired::record_discovered_device(device.clone());
-        }
+        paired::record_discovered_devices(found.clone());
     }
     paired::mark_search_stopped();
     qol_runtime::probe!("BLUETOOTH_SEARCH", "stage=stop found={}", found.len());

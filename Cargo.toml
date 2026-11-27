@@ -84,11 +84,14 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
 objc2-core-bluetooth = { version = "0.3", default-features = false, features = [
   "std",
   "CBAdvertisementData",
+  "CBAttribute",
   "CBCentralManager",
   "CBCentralManagerConstants",
+  "CBCharacteristic",
   "CBManager",
   "CBPeer",
   "CBPeripheral",
+  "CBService",
   "CBUUID",
 ] }
 objc2-io-bluetooth = { version = "0.3", default-features = false, features = [

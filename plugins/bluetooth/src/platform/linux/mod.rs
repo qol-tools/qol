@@ -45,6 +45,7 @@ pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     audio_reclaim: crate::audio_claim::RECLAIM_SUPPORTED,
     settings_pairing: None,
     settings_pane: None,
+    pairs_low_energy: false,
 };
 
 static ADAPTER_SOURCE: OnceLock<fn() -> String> = OnceLock::new();

@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use super::{
-    low_energy_identifier, without_settings_twins, BackendCapabilities, DeviceActionState,
-    DeviceInfo, DeviceIntent, DiscoveryState, Pairing, SEARCH_WINDOW, SYSTEM_BLUETOOTH_SETTINGS,
+    low_energy_identifier, BackendCapabilities, DeviceActionState, DeviceInfo, DeviceIntent,
+    DiscoveryState, Pairing, SEARCH_WINDOW, SYSTEM_BLUETOOTH_SETTINGS,
 };
 
 const OTHER_DEVICES: &str = "other devices";
@@ -100,7 +100,7 @@ fn nearby_devices<'a>(
         .iter()
         .map(|device| device.address.as_str())
         .collect::<HashSet<_>>();
-    let everyone = devices
+    let mut nearby = devices
         .iter()
         .chain(
             discovery
@@ -108,9 +108,6 @@ fn nearby_devices<'a>(
                 .values()
                 .filter(|device| !listed.contains(device.address.as_str())),
         )
-        .collect::<Vec<_>>();
-    let mut nearby = without_settings_twins(everyone)
-        .into_iter()
         .filter(|device| discovery.contains(&device.address))
         .filter(|device| !device.paired || discovery.claimed.contains(&device.address))
         .map(|device| (device_kind(device), device))
@@ -137,9 +134,10 @@ fn nearby_item(
     let failed = action.is_some_and(|action| {
         !action.pending && action.intent == DeviceIntent::Pair && !device.paired
     });
-    let pairs_here = device.pairing == Pairing::Backend;
     let low_energy = device.pairing == Pairing::SystemSettings
         || low_energy_identifier(&device.address).is_some();
+    let pairs_here =
+        device.pairing == Pairing::Backend || (low_energy && capabilities.pairs_low_energy);
     let kind_name = kind.unwrap_or(UNKNOWN_KIND);
     let kind_line = match low_energy {
         true => format!("{kind_name} · {LOW_ENERGY}"),
@@ -320,12 +318,14 @@ mod tests {
         audio_reclaim: true,
         settings_pairing: None,
         settings_pane: None,
+        pairs_low_energy: false,
     };
     const MACOS: BackendCapabilities = BackendCapabilities {
         separate_trust_flag: false,
         audio_reclaim: false,
         settings_pairing: Some("System Settings"),
         settings_pane: Some("x-apple.systempreferences:com.apple.BluetoothSettings"),
+        pairs_low_energy: false,
     };
     const LIFT: &str = "31CAE991-2662-5D9B-D7B9-8CE2CD5FF04C";
 
@@ -642,6 +642,27 @@ mod tests {
     }
 
     #[test]
+    fn a_bluetooth_le_find_is_paired_here_where_the_backend_can() {
+        let mut discovery = DiscoveryState::default();
+        discovery.start();
+        discovery.record_device(DeviceInfo {
+            address: LIFT.into(),
+            pairing: Pairing::SystemSettings,
+            uuids: vec![HID_UUID.into()],
+            ..device("00", "LIFT", Some(-58), None)
+        });
+        let pairs = BackendCapabilities {
+            pairs_low_energy: true,
+            ..MACOS
+        };
+        let payload = nearby_payload(&[], &discovery, None, true, pairs, later(1));
+        let item = &payload["items"][0];
+        assert_eq!(item["can_pair"], true);
+        assert_eq!(item["can_open_settings"], false);
+        assert_eq!(item["badge"], "");
+    }
+
+    #[test]
     fn a_bluetooth_le_find_says_so_whatever_its_kind() {
         let cases = [
             (vec![HID_UUID.to_string()], "Input device · Bluetooth LE"),
@@ -662,17 +683,20 @@ mod tests {
     }
 
     #[test]
-    fn a_settings_twin_of_a_listed_device_is_shown_once() {
-        let listed = device("01", "MX KEYS B", Some(-52), Some("input-keyboard"));
-        let twin = DeviceInfo {
+    fn a_new_device_named_like_a_paired_one_is_still_found() {
+        let paired = DeviceInfo {
+            paired: true,
+            ..device("01", "LIFT", Some(-52), Some("input-mouse"))
+        };
+        let namesake = DeviceInfo {
             address: LIFT.into(),
             pairing: Pairing::SystemSettings,
-            ..device("00", " mx keys b ", Some(-60), None)
+            ..device("00", "LIFT", Some(-60), None)
         };
-        let mut discovery = searching_through(std::slice::from_ref(&listed));
-        discovery.record_device(twin);
+        let mut discovery = searching_through(std::slice::from_ref(&paired));
+        discovery.record_device(namesake);
         let payload = nearby_payload(
-            std::slice::from_ref(&listed),
+            std::slice::from_ref(&paired),
             &discovery,
             None,
             true,
@@ -680,7 +704,7 @@ mod tests {
             later(1),
         );
         assert_eq!(payload["count"], 1);
-        assert_eq!(payload["items"][0]["address"], listed.address);
+        assert_eq!(payload["items"][0]["address"], LIFT);
     }
 
     #[test]
