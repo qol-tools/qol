@@ -99,6 +99,12 @@ fn latest_run(
         return Ok(runs.swap_remove(index));
     }
     let newest = runs.swap_remove(0);
+    if newest.status == COMPLETED && newest.conclusion == SUCCESS {
+        bail!(
+            "the live test run for {head} built nothing for this machine: `{BUILD_JOB}` did not run, since no changed file is on .github/live-test-paths: {}",
+            newest.url
+        );
+    }
     if newest.status != COMPLETED {
         bail!(
             "the live test run for {head} is still {}; try again when `{BUILD_JOB}` finishes: {}",
@@ -114,14 +120,11 @@ fn latest_run(
 }
 
 fn usable_run(run: &Run, host_built: &impl Fn(&Run) -> Result<bool>) -> Result<bool> {
-    if run.status != COMPLETED {
+    let ended_cleanly = run.conclusion == SUCCESS || run.conclusion == FAILURE;
+    if run.status != COMPLETED || ended_cleanly {
         return host_built(run);
     }
-    match run.conclusion.as_str() {
-        SUCCESS => Ok(true),
-        FAILURE => host_built(run),
-        _ => Ok(false),
-    }
+    Ok(false)
 }
 
 pub(crate) fn fetch(source: &dyn Source, run: &Run, build: &Build, dir: &Path) -> Result<()> {
@@ -129,7 +132,11 @@ pub(crate) fn fetch(source: &dyn Source, run: &Run, build: &Build, dir: &Path) -
         std::fs::remove_dir_all(dir).with_context(|| format!("clearing {}", dir.display()))?;
     }
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    source.download(run, build.artifact, dir).map_err(|error| {
+    let downloaded = source.download(run, build.artifact, dir);
+    if downloaded.is_err() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    downloaded.map_err(|error| {
         if error.downcast_ref::<MissingArtifact>().is_none() {
             return error;
         }
@@ -185,6 +192,10 @@ mod tests {
 
     fn never_built(_: &Run) -> Result<bool> {
         Ok(false)
+    }
+
+    fn always_built(_: &Run) -> Result<bool> {
+        Ok(true)
     }
 
     fn pull(from_fork: bool) -> PullRequest {
@@ -247,6 +258,7 @@ mod tests {
             anyhow::anyhow!("the build of run 41 expired")
         }));
         assert_eq!(expired, "the build of run 41 expired");
+        assert!(!root.path().exists(), "a failed download leaves its folder");
     }
 
     #[test]
@@ -266,7 +278,7 @@ mod tests {
 
     #[test]
     fn a_finished_run_is_used() {
-        let found = latest_run(only(COMPLETED, SUCCESS), "abc", BRANCH, never_built).unwrap();
+        let found = latest_run(only(COMPLETED, SUCCESS), "abc", BRANCH, always_built).unwrap();
         assert_eq!(found.id, 41);
     }
 
@@ -285,7 +297,10 @@ mod tests {
             run(42, COMPLETED, SUCCESS, "feat/other"),
             run(41, COMPLETED, SUCCESS, BRANCH),
         ];
-        assert_eq!(latest_run(runs, "abc", BRANCH, never_built).unwrap().id, 41);
+        assert_eq!(
+            latest_run(runs, "abc", BRANCH, always_built).unwrap().id,
+            41
+        );
     }
 
     #[test]
@@ -321,11 +336,18 @@ mod tests {
             };
             let built = |found: &Run| Ok(found.id == 43);
             assert_eq!(latest_run(runs(), "abc", BRANCH, built).unwrap().id, 43);
-            assert_eq!(
-                latest_run(runs(), "abc", BRANCH, never_built).unwrap().id,
-                41
-            );
+            let earlier = |found: &Run| Ok(found.id == 41);
+            assert_eq!(latest_run(runs(), "abc", BRANCH, earlier).unwrap().id, 41);
         }
+    }
+
+    #[test]
+    fn a_successful_run_that_skipped_this_machines_build_is_refused() {
+        let error = latest_run(only(COMPLETED, SUCCESS), "abc", BRANCH, never_built)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("built nothing for this machine"), "{error}");
+        assert!(error.contains("live-test-paths"), "{error}");
     }
 
     #[test]

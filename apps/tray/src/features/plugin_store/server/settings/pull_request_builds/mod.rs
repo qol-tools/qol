@@ -241,14 +241,20 @@ fn start(state: &AppState, run: Run) -> Response {
         .spawn(move || {
             let result = match (run, source) {
                 (Run::Try(tried), Some(source)) => qol_pr_try::host_build().and_then(|build| {
-                    qol_pr_try::try_build(&source, &mut host, tried, build, &places).map(drop)
+                    let number = tried.number;
+                    match qol_pr_try::try_build(&source, &mut host, tried, build, &places)? {
+                        qol_pr_try::Tried::Installed => Ok(()),
+                        qol_pr_try::Tried::Nothing => Err(anyhow::anyhow!(
+                            "pull request #{number} changes no plugin installed here, so nothing was swapped"
+                        )),
+                    }
                 }),
                 (Run::Try(_), None) => Err(anyhow::anyhow!(SIGN_IN)),
                 (Run::Off, _) => qol_pr_try::turn_off(&mut host, &places)
                     .map(|put_back| host.catch_up(&put_back)),
             };
             if let Err(error) = &result {
-                log::warn!("{LOG} {run:?} failed: {error:#}");
+                log::error!("{LOG} {run:?} failed: {error:#}");
             }
             *JOB.lock() = run.finished(&result);
         });
