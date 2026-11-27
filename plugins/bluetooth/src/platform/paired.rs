@@ -320,7 +320,10 @@ fn device_daemon_command(
 ) -> DaemonReply<DaemonCommand> {
     let parse = match intent {
         DeviceIntent::Pair => pair_address,
-        _ => device_address,
+        DeviceIntent::Connect
+        | DeviceIntent::Disconnect
+        | DeviceIntent::Remove
+        | DeviceIntent::Trust(_) => device_address,
     };
     match request_address(request, parse) {
         Ok(address) => match begin_device_action(&address, intent) {
