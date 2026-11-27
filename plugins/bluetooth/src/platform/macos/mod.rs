@@ -53,6 +53,7 @@ const RUN_LOOP_SLICE: Duration = Duration::from_millis(100);
 const ADAPTER_POWER_SYMBOL: &str = "IOBluetoothPreferenceSetControllerPowerState";
 const TRUST_UNSUPPORTED: &str =
     "macOS pairs and trusts in one step, so there is no separate trust to change";
+const CONNECTED_PERIPHERAL_SERVICES: [&str; 4] = ["1800", "180A", "180F", "1812"];
 const BLUETOOTH_PRIVACY_SETTINGS: &str = "System Settings > Privacy & Security > Bluetooth";
 const LOW_ENERGY_LEFT_OUT: &str = "Bluetooth LE devices are left out of this search because";
 
@@ -339,7 +340,24 @@ impl LowEnergyScan {
     }
 
     fn devices(&self) -> Vec<DeviceInfo> {
+        if self.scanning {
+            let connected = self.connected_identifiers();
+            self.scanner.ivars().borrow_mut().connected_here(connected);
+        }
         self.scanner.ivars().borrow().devices()
+    }
+
+    fn connected_identifiers(&self) -> Vec<String> {
+        let services = CONNECTED_PERIPHERAL_SERVICES
+            .map(|uuid| unsafe { CBUUID::UUIDWithString(&NSString::from_str(uuid)) });
+        let services = NSArray::from_retained_slice(&services);
+        unsafe {
+            self.central
+                .retrieveConnectedPeripheralsWithServices(&services)
+        }
+        .iter()
+        .map(|peripheral| unsafe { peripheral.identifier() }.UUIDString().to_string())
+        .collect()
     }
 
     fn report_unscanned(&self) {

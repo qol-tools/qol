@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::bluetooth::{device_order, without_settings_twins, DeviceInfo, Pairing};
+use crate::bluetooth::{device_order, DeviceInfo, Pairing};
 
 const RSSI_UNAVAILABLE: i64 = 127;
 const BLUETOOTH_BASE_UUID_TAIL: &str = "-0000-1000-8000-00805f9b34fb";
@@ -64,6 +64,7 @@ impl Advertisement {
 #[derive(Debug, Default)]
 pub(super) struct Sightings {
     latest: HashMap<String, Advertisement>,
+    connected_here: HashSet<String>,
 }
 
 impl Sightings {
@@ -77,9 +78,14 @@ impl Sightings {
         }
     }
 
+    pub(super) fn connected_here(&mut self, identifiers: impl IntoIterator<Item = String>) {
+        self.connected_here.extend(identifiers);
+    }
+
     pub(super) fn devices(&self) -> Vec<DeviceInfo> {
         self.latest
             .values()
+            .filter(|advertisement| !self.connected_here.contains(&advertisement.identifier))
             .filter_map(Advertisement::device)
             .collect()
     }
@@ -118,15 +124,7 @@ fn full_uuid(uuid: &str) -> Option<String> {
 }
 
 pub(super) fn merge(devices: impl IntoIterator<Item = DeviceInfo>) -> Vec<DeviceInfo> {
-    let unique = unique(devices);
-    let kept = without_settings_twins(unique.iter().collect())
-        .into_iter()
-        .map(|device| device.address.clone())
-        .collect::<HashSet<_>>();
-    let mut merged = unique
-        .into_iter()
-        .filter(|device| kept.contains(&device.address))
-        .collect::<Vec<_>>();
+    let mut merged = unique(devices);
     merged.sort_by(device_order);
     merged
 }
@@ -158,7 +156,6 @@ mod tests {
     const LIFT: &str = "31CAE991-2662-5D9B-D7B9-8CE2CD5FF04C";
     const KEYBOARD: &str = "9F6F5B65-F881-6552-4B8E-85914E7FAFD7";
     const HEADSET: &str = "6821FD4A-BC6D-2C39-E44B-FB2906C8B38F";
-    const PHONE: &str = "5A1D7C3E-8B2F-4E6A-9C1D-3F7B2E8A6D4C";
     const BATTERY: &str = "0000180f-0000-1000-8000-00805f9b34fb";
     const DEVICE_INFORMATION: &str = "0000180a-0000-1000-8000-00805f9b34fb";
 
@@ -365,23 +362,25 @@ mod tests {
     }
 
     #[test]
-    fn a_low_energy_advertiser_named_like_a_known_device_is_folded_into_it() {
+    fn devices_sharing_a_name_stay_separate_rows() {
         let merged = merge(
-            [
-                classic("DF:6F:5A:74:63:71", "MX KEYS B", true, true),
-                classic("64:FF:0A:CE:FF:EE", "Galaxy S21 5G", false, false),
-            ]
-            .into_iter()
-            .chain(sighted([
-                advertisement(KEYBOARD, Some("mx keys b"), -60),
-                advertisement(PHONE, Some("Galaxy S21 5G "), -65),
-                advertisement(HEADSET, Some("A Headset KWE"), -71),
-            ])),
+            [classic("DA:04:03:7D:08:7E", "LIFT", true, false)]
+                .into_iter()
+                .chain(sighted([
+                    advertisement(LIFT, Some("LIFT"), -60),
+                    advertisement(KEYBOARD, Some("LIFT"), -70),
+                ])),
         );
-        assert_eq!(
-            addresses(&merged),
-            ["DF:6F:5A:74:63:71", HEADSET, "64:FF:0A:CE:FF:EE"]
-        );
+        assert_eq!(addresses(&merged), ["DA:04:03:7D:08:7E", LIFT, KEYBOARD]);
+    }
+
+    #[test]
+    fn a_peripheral_already_connected_here_is_not_listed_as_found() {
+        let mut sightings = Sightings::default();
+        sightings.record(advertisement(KEYBOARD, Some("MX KEYS B"), -55));
+        sightings.record(advertisement(LIFT, Some("LIFT"), -60));
+        sightings.connected_here([KEYBOARD.to_string()]);
+        assert_eq!(addresses(&sightings.devices()), [LIFT]);
     }
 
     #[test]

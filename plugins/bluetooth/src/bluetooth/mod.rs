@@ -308,24 +308,6 @@ pub fn device_order(left: &DeviceInfo, right: &DeviceInfo) -> Ordering {
         .then_with(|| left.address.cmp(&right.address))
 }
 
-pub fn without_settings_twins(devices: Vec<&DeviceInfo>) -> Vec<&DeviceInfo> {
-    let backend_names = devices
-        .iter()
-        .filter(|device| device.pairing == Pairing::Backend)
-        .map(|device| name_key(device))
-        .collect::<HashSet<_>>();
-    devices
-        .into_iter()
-        .filter(|device| {
-            device.pairing == Pairing::Backend || !backend_names.contains(&name_key(device))
-        })
-        .collect()
-}
-
-fn name_key(device: &DeviceInfo) -> String {
-    device.alias.trim().to_lowercase()
-}
-
 fn resting_status(
     device: &DeviceInfo,
     ready: bool,
@@ -356,11 +338,10 @@ pub fn devices_payload(
         .iter()
         .filter_map(|address| normalize_address(address).ok())
         .collect::<HashSet<_>>();
-    let visible = devices
+    let mut visible = devices
         .iter()
         .filter(|device| device.paired || device.trusted || device.connected)
         .collect::<Vec<_>>();
-    let mut visible = without_settings_twins(visible);
     visible.sort_by(|left, right| device_order(left, right));
     let connected_count = visible.iter().filter(|device| device.connected).count();
     let ready_count = visible
@@ -525,7 +506,6 @@ mod tests {
         settings_pane: None,
     };
     const LIFT: &str = "31CAE991-2662-5D9B-D7B9-8CE2CD5FF04C";
-    const KEYBOARD: &str = "9F6F5B65-F881-6552-4B8E-85914E7FAFD7";
 
     #[test]
     fn address_normalization_accepts_only_six_hex_octets() {
@@ -1098,15 +1078,5 @@ mod tests {
         assert_eq!(classic.get("pairing"), None);
         assert_eq!(low_energy["pairing"], "system_settings");
         assert_eq!(low_energy["address"], LIFT);
-    }
-
-    #[test]
-    fn settings_paired_devices_sharing_a_name_with_each_other_all_stay() {
-        let twins = [
-            low_energy_device(LIFT, "LIFT", Some(-58)),
-            low_energy_device(KEYBOARD, "LIFT", Some(-70)),
-        ];
-        let visible = without_settings_twins(twins.iter().collect());
-        assert_eq!(visible.len(), 2);
     }
 }

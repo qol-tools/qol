@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use super::{
-    low_energy_identifier, without_settings_twins, BackendCapabilities, DeviceActionState,
-    DeviceInfo, DeviceIntent, DiscoveryState, Pairing, SEARCH_WINDOW, SYSTEM_BLUETOOTH_SETTINGS,
+    low_energy_identifier, BackendCapabilities, DeviceActionState, DeviceInfo, DeviceIntent,
+    DiscoveryState, Pairing, SEARCH_WINDOW, SYSTEM_BLUETOOTH_SETTINGS,
 };
 
 const OTHER_DEVICES: &str = "other devices";
@@ -109,7 +109,7 @@ fn nearby_devices<'a>(
                 .filter(|device| !listed.contains(device.address.as_str())),
         )
         .collect::<Vec<_>>();
-    let mut nearby = without_settings_twins(everyone)
+    let mut nearby = everyone
         .into_iter()
         .filter(|device| discovery.contains(&device.address))
         .filter(|device| !device.paired || discovery.claimed.contains(&device.address))
@@ -662,17 +662,20 @@ mod tests {
     }
 
     #[test]
-    fn a_settings_twin_of_a_listed_device_is_shown_once() {
-        let listed = device("01", "MX KEYS B", Some(-52), Some("input-keyboard"));
-        let twin = DeviceInfo {
+    fn a_new_device_named_like_a_paired_one_is_still_found() {
+        let paired = DeviceInfo {
+            paired: true,
+            ..device("01", "LIFT", Some(-52), Some("input-mouse"))
+        };
+        let namesake = DeviceInfo {
             address: LIFT.into(),
             pairing: Pairing::SystemSettings,
-            ..device("00", " mx keys b ", Some(-60), None)
+            ..device("00", "LIFT", Some(-60), None)
         };
-        let mut discovery = searching_through(std::slice::from_ref(&listed));
-        discovery.record_device(twin);
+        let mut discovery = searching_through(std::slice::from_ref(&paired));
+        discovery.record_device(namesake);
         let payload = nearby_payload(
-            std::slice::from_ref(&listed),
+            std::slice::from_ref(&paired),
             &discovery,
             None,
             true,
@@ -680,7 +683,7 @@ mod tests {
             later(1),
         );
         assert_eq!(payload["count"], 1);
-        assert_eq!(payload["items"][0]["address"], listed.address);
+        assert_eq!(payload["items"][0]["address"], LIFT);
     }
 
     #[test]
