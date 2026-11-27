@@ -64,7 +64,6 @@ impl Advertisement {
 #[derive(Debug, Default)]
 pub(super) struct Sightings {
     latest: HashMap<String, Advertisement>,
-    connected_here: HashSet<String>,
 }
 
 impl Sightings {
@@ -78,14 +77,10 @@ impl Sightings {
         }
     }
 
-    pub(super) fn connected_here(&mut self, identifiers: impl IntoIterator<Item = String>) {
-        self.connected_here.extend(identifiers);
-    }
-
-    pub(super) fn devices(&self) -> Vec<DeviceInfo> {
+    pub(super) fn devices(&self, connected_here: &HashSet<String>) -> Vec<DeviceInfo> {
         self.latest
             .values()
-            .filter(|advertisement| !self.connected_here.contains(&advertisement.identifier))
+            .filter(|advertisement| !connected_here.contains(&advertisement.identifier))
             .filter_map(Advertisement::device)
             .collect()
     }
@@ -192,7 +187,7 @@ mod tests {
         for advertisement in advertisements {
             sightings.record(advertisement);
         }
-        let mut devices = sightings.devices();
+        let mut devices = sightings.devices(&HashSet::new());
         devices.sort_by(|left, right| left.address.cmp(&right.address));
         devices
     }
@@ -379,8 +374,9 @@ mod tests {
         let mut sightings = Sightings::default();
         sightings.record(advertisement(KEYBOARD, Some("MX KEYS B"), -55));
         sightings.record(advertisement(LIFT, Some("LIFT"), -60));
-        sightings.connected_here([KEYBOARD.to_string()]);
-        assert_eq!(addresses(&sightings.devices()), [LIFT]);
+        let connected = HashSet::from([KEYBOARD.to_string()]);
+        assert_eq!(addresses(&sightings.devices(&connected)), [LIFT]);
+        assert_eq!(addresses(&sightings.devices(&HashSet::new())).len(), 2);
     }
 
     #[test]

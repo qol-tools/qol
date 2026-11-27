@@ -340,14 +340,15 @@ impl LowEnergyScan {
     }
 
     fn devices(&self) -> Vec<DeviceInfo> {
-        if self.scanning {
-            let connected = self.connected_identifiers();
-            self.scanner.ivars().borrow_mut().connected_here(connected);
-        }
-        self.scanner.ivars().borrow().devices()
+        let connected = if self.scanning {
+            self.connected_identifiers()
+        } else {
+            HashSet::new()
+        };
+        self.scanner.ivars().borrow().devices(&connected)
     }
 
-    fn connected_identifiers(&self) -> Vec<String> {
+    fn connected_identifiers(&self) -> HashSet<String> {
         let services = CONNECTED_PERIPHERAL_SERVICES
             .map(|uuid| unsafe { CBUUID::UUIDWithString(&NSString::from_str(uuid)) });
         let services = NSArray::from_retained_slice(&services);
@@ -599,9 +600,7 @@ fn watch_search(inquiry: &IOBluetoothDeviceInquiry, mut low_energy: Option<&mut 
         if let Some(scan) = low_energy.as_deref_mut() {
             scan.scan_once_powered();
         }
-        for device in found_devices(inquiry, low_energy.as_deref()) {
-            paired::record_discovered_device(device);
-        }
+        paired::record_discovered_devices(found_devices(inquiry, low_energy.as_deref()));
     }
 }
 

@@ -100,7 +100,7 @@ fn nearby_devices<'a>(
         .iter()
         .map(|device| device.address.as_str())
         .collect::<HashSet<_>>();
-    let everyone = devices
+    let mut nearby = devices
         .iter()
         .chain(
             discovery
@@ -108,9 +108,6 @@ fn nearby_devices<'a>(
                 .values()
                 .filter(|device| !listed.contains(device.address.as_str())),
         )
-        .collect::<Vec<_>>();
-    let mut nearby = everyone
-        .into_iter()
         .filter(|device| discovery.contains(&device.address))
         .filter(|device| !device.paired || discovery.claimed.contains(&device.address))
         .map(|device| (device_kind(device), device))

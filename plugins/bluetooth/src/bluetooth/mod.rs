@@ -249,6 +249,14 @@ impl DiscoveryState {
         self.devices.insert(device.address.clone(), device);
     }
 
+    pub fn replace_devices(&mut self, devices: impl IntoIterator<Item = DeviceInfo>) {
+        self.devices = devices
+            .into_iter()
+            .map(|device| (device.address.clone(), device))
+            .collect();
+        self.addresses = self.devices.keys().cloned().collect();
+    }
+
     pub fn remove(&mut self, address: &str) {
         self.addresses.remove(address);
         self.devices.remove(address);
@@ -813,6 +821,25 @@ mod tests {
 
         state.remove("AA:BB:CC:DD:EE:04");
         assert_eq!(state.discovered_count(), 0);
+    }
+
+    #[test]
+    fn a_device_missing_from_the_latest_sightings_leaves_the_found_list() {
+        let mut state = DiscoveryState::default();
+        state.start();
+        state.replace_devices([
+            device("01", "LIFT", false, false, false, Some(-40)),
+            device("02", "LIFT", false, false, false, Some(-60)),
+        ]);
+        state.replace_devices([device("02", "LIFT", false, false, false, Some(-58))]);
+        assert!(!state.contains("AA:BB:CC:DD:EE:01"));
+        assert_eq!(state.discovered_count(), 1);
+        assert_eq!(
+            state
+                .device("AA:BB:CC:DD:EE:02")
+                .and_then(|found| found.rssi),
+            Some(-58)
+        );
     }
 
     #[test]

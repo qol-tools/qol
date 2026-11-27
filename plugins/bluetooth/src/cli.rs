@@ -112,7 +112,7 @@ fn search_command() -> Command {
         .usage(format!("{PLUGIN_ID} search"))
         .detail("Press Ctrl+C to stop discovery early and print the devices found.")
         .detail(
-            "On macOS the search also scans for Bluetooth LE devices that advertise a name and accept connections. macOS reports such a device only by an identifier, not an address, and only System Settings can pair it, so its line ends in pairing=system_settings and pair, connect, disconnect and remove refuse that identifier. Rows are matched by address or identifier, never by name, so two devices with the same name stay two rows, and a peripheral already connected to this Mac is not listed again by its identifier.",
+            "On macOS the search also scans for Bluetooth LE devices that advertise a name and accept connections. macOS reports such a device only by an identifier, not an address, and only System Settings can pair it, so its line ends in pairing=system_settings and pair, connect, disconnect and remove refuse that identifier. Rows are matched by address or identifier, never by name, so two devices with the same name stay two rows, and a peripheral connected to this Mac that offers a standard service (generic access, device information, battery or HID) is left out while it stays connected.",
         )
         .output(
             "Paired and discovered devices ordered by connection state and signal strength, one line each, or a JSON array with --json in which those Bluetooth LE devices carry \"pairing\": \"system_settings\".",

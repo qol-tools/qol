@@ -720,9 +720,7 @@ pub fn search_devices(config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
         .map(|record| device_info(record, &endpoints))
         .collect::<Vec<_>>();
     if paired::searching() {
-        for device in &found {
-            paired::record_discovered_device(device.clone());
-        }
+        paired::record_discovered_devices(found.clone());
     }
     paired::mark_search_stopped();
     qol_runtime::probe!("BLUETOOTH_SEARCH", "stage=stop found={}", found.len());

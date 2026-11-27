@@ -83,8 +83,8 @@ pub(super) fn reset_discovery_state() {
     DISCOVERY_STATE.write().reset();
 }
 
-pub(super) fn record_discovered_device(device: DeviceInfo) {
-    DISCOVERY_STATE.write().record_device(device);
+pub(super) fn record_discovered_devices(devices: Vec<DeviceInfo>) {
+    DISCOVERY_STATE.write().replace_devices(devices);
 }
 
 fn reconnect_candidates<S: PairedStack>(
